@@ -1,0 +1,25 @@
+/* Tailwind v4 entrypoint. The JS config (dark mode = "class", content globs,
+   and our custom keyframes/animations) is loaded via @config for backward
+   compatibility. Keep tailwind.config.ts as the source of that config. */
+@config "../tailwind.config.ts";
+@import "tailwindcss";
+
+/* Tailwind v4 dropped the default `cursor: pointer` on buttons (it now uses
+   the browser default). Restore the hand cursor on interactive elements. */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled),
+  summary {
+    cursor: pointer;
+  }
+
+  /* Tell the browser which scheme to paint native controls in (date pickers,
+     the calendar/spinner icons, scrollbars) so they match light/dark. The
+     `.dark` class is toggled on <html> by the theme script. */
+  html {
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
+}

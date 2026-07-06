@@ -1,0 +1,44 @@
+{
+  "name": "worship-scheduler",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "dotenv -e env/dev.env -- next dev",
+    "build": "prisma generate && next build",
+    "postinstall": "prisma generate",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "db:push": "dotenv -e env/dev.env -- prisma db push",
+    "db:push:prod": "prisma db push",
+    "db:seed": "dotenv -e env/dev.env -- prisma db seed",
+    "db:studio": "dotenv -e env/dev.env -- prisma studio",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:e2e": "dotenv -e env/test.env -- playwright test",
+    "e2e:server": "dotenv -e env/test.env -- next dev -p 3100"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "bcryptjs": "^3.0.3",
+    "next": "^16.2.10",
+    "next-auth": "^4.24.14",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@tailwindcss/postcss": "^4.3.2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "dotenv": "^16.4.5",
+    "dotenv-cli": "^7.4.2",
+    "postcss": "^8.4.39",
+    "prisma": "^7.8.0",
+    "tailwindcss": "^4.3.2",
+    "tsx": "^4.16.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  }
+}

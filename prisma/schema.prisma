@@ -1,0 +1,174 @@
+// Worship Scheduler data model.
+//
+// The core hierarchy:
+//   Set        — one worship set: a start time + duration.
+//   Assignment — one person filling one slot (role) on a set's team.
+//                The "team" is simply a set's list of assignments.
+//   User       — a person; can play multiple instruments and may be admin.
+//
+// Slot capacities (4 vocals, 1 worship leader, 2 keys, ...) are business
+// logic, not schema — see lib/constants.ts SLOT_CAPACITIES.
+
+generator client {
+  // Prisma 7: the Rust-free "prisma-client" generator with a required output.
+  // Import from "@/lib/generated/prisma/client" (see lib/prisma.ts).
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Instruments double as both a user's skills and a team slot's role.
+enum Instrument {
+  WORSHIP_LEADER
+  VOCALS // support vocals
+  ACOUSTIC_GUITAR
+  ELECTRIC_GUITAR
+  KEYS // piano / keys
+  STRINGS
+  DRUMS
+  BASS
+}
+
+// Lifecycle of an assignment:
+//   PENDING        — auto-scheduled ("scheduled pending"), awaiting the
+//                    user's manual confirmation.
+//   CONFIRMED      — user accepted the set.
+//   SWAP_REQUESTED — user wants out; visible to others with the same
+//                    instrument until someone takes it (back to PENDING
+//                    under the new user).
+enum AssignmentStatus {
+  PENDING
+  CONFIRMED
+  SWAP_REQUESTED
+}
+
+enum UnavailabilityType {
+  RECURRING // e.g. "every Tuesday morning"
+  DATE_RANGE // e.g. "Jan 5 – Jan 10"
+}
+
+model User {
+  id           String  @id @default(cuid())
+  username     String  @unique
+  passwordHash String
+  name         String
+  email        String? @unique
+  // Reserved for the future Slack integration: store the Slack member id
+  // (e.g. "U0123ABC") so we can DM reminders / match accounts by email.
+  slackUserId  String? @unique
+
+  isAdmin     Boolean      @default(false)
+  instruments Instrument[] // which slots this user can fill
+
+  // Set when the user hits "I'm done scheduling" on the Schedule tab.
+  // Null = hasn't finished entering availability. Admins see this.
+  scheduleCompletedAt DateTime?
+
+  assignments    Assignment[]
+  unavailability Unavailability[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+// The smallest schedulable unit: a block of time needing a team.
+model Set {
+  id              String   @id @default(cuid())
+  label           String? // e.g. "Sunday Morning Service"
+  startsAt        DateTime
+  durationMinutes Int
+  notes           String? // free-form notes shown in the set detail modal
+
+  // Per-set team shape: an Instrument→count map (e.g. { ELECTRIC_GUITAR: 2,
+  // ACOUSTIC_GUITAR: 0 }). Null = use the global SLOT_CAPACITIES default.
+  // Copied from the SetTemplate at generate time; editable per ad-hoc set.
+  slotCapacities Json?
+
+  assignments Assignment[]
+
+  createdAt DateTime @default(now())
+
+  @@map("sets")
+}
+
+// One user filling one role slot on one set.
+model Assignment {
+  id     String           @id @default(cuid())
+  set    Set              @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId  String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  role   Instrument
+  status AssignmentStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A person can only appear once per set (one body, one slot).
+  @@unique([setId, userId])
+  @@map("assignments")
+}
+
+// Times a user CANNOT serve. Two shapes share one table:
+//   RECURRING : dayOfWeek + startMinute..endMinute (minutes from midnight)
+//   DATE_RANGE: startDate..endDate (inclusive)
+model Unavailability {
+  id     String             @id @default(cuid())
+  user   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+  type   UnavailabilityType
+
+  // RECURRING fields — 0 = Sunday ... 6 = Saturday
+  dayOfWeek   Int?
+  startMinute Int?
+  endMinute   Int?
+
+  // DATE_RANGE fields
+  startDate DateTime?
+  endDate   DateTime?
+
+  note String?
+
+  createdAt DateTime @default(now())
+
+  @@map("unavailability")
+}
+
+// Admin-defined weekly recurrence, e.g. "every Monday 19:00 for 60 min".
+// The generate endpoint expands these into concrete Set rows.
+model SetTemplate {
+  id              String @id @default(cuid())
+  label           String
+  dayOfWeek       Int // 0 = Sunday ... 6 = Saturday
+  startMinute     Int // minutes from midnight, e.g. 19:00 = 1140
+  durationMinutes Int
+
+  // The team shape this template's sets should have — see Set.slotCapacities.
+  // Null = use the global SLOT_CAPACITIES default.
+  slotCapacities Json?
+
+  createdAt DateTime @default(now())
+
+  @@map("set_templates")
+}
+
+// An admin's request for the team to enter their availability over a date
+// range. The most recent row is the "active" request; a user needs to
+// respond until their scheduleCompletedAt is later than the request's
+// createdAt. Drives the Availabilities red dot + banner.
+model AvailabilityRequest {
+  id        String   @id @default(cuid())
+  // Optional admin-given name (e.g. "Fall 2026"); the UI falls back to the
+  // date range when it's null.
+  name      String?
+  startDate DateTime
+  endDate   DateTime
+  createdAt DateTime @default(now())
+
+  @@map("availability_requests")
+}

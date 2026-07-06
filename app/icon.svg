@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Worship Scheduler mark: a woven grid of colored bars with a central
+    crimson cross on top. Next.js App Router serves this as the favicon.
+    Darker squares are the "woven" overlaps where two bars cross.
+  -->
+  <!-- Full-height vertical bars -->
+  <rect x="116" y="30" width="56" height="456" fill="#E0913C"/>   <!-- orange -->
+  <rect x="340" y="30" width="56" height="456" fill="#3E8A9E"/>   <!-- teal -->
+
+  <!-- Yellow horizontal (two segments, gap for the center cross) -->
+  <rect x="66"  y="236" width="156" height="54" fill="#E8D06A"/>
+  <rect x="290" y="236" width="156" height="54" fill="#E8D06A"/>
+
+  <!-- Green horizontal (two segments) -->
+  <rect x="40"  y="350" width="182" height="54" fill="#2E6E5E"/>
+  <rect x="290" y="350" width="182" height="54" fill="#2E6E5E"/>
+
+  <!-- Woven overlaps: vertical bar x horizontal bar -->
+  <rect x="116" y="236" width="56" height="54" fill="#C86A2E"/>   <!-- orange x yellow -->
+  <rect x="340" y="236" width="56" height="54" fill="#2E5A3A"/>   <!-- teal x yellow -->
+  <rect x="116" y="350" width="56" height="54" fill="#1F4A34"/>   <!-- orange x green -->
+  <rect x="340" y="350" width="56" height="54" fill="#1C5555"/>   <!-- teal x green -->
+
+  <!-- Crimson cross, drawn last so it sits on top -->
+  <rect x="98"  y="122" width="316" height="54"  fill="#C13454"/> <!-- arm -->
+  <rect x="228" y="30"  width="56"  height="456" fill="#C13454"/> <!-- upright -->
+  <rect x="228" y="122" width="56"  height="54"  fill="#8E2438"/> <!-- crossing -->
+</svg>

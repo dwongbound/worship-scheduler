@@ -1,0 +1,134 @@
+# Single compose file for every environment. Pick one with a --profile.
+# Services are named per type so `docker ps` is self-explanatory.
+#
+#   Dev  (db + hot-reload app on :3000):
+#     docker compose --profile dev up
+#     # or just the db, and run `npm run dev` on your host:
+#     docker compose --profile dev up -d db-dev
+#
+#   Test (throwaway db + runs unit AND e2e tests, then exits):
+#     docker compose --profile test up --abort-on-container-exit
+#     # the worship-scheduler-test service's exit code is the test result.
+#
+#   Prod (built image + persistent db on :3000):
+#     docker compose --profile prod up -d --build
+#     # fill env/prod.env first.
+#
+# Profiles keep the environments isolated: a service only starts when its
+# profile is selected, so `--profile dev` never boots the test/prod db.
+
+services:
+  # ---- dev -----------------------------------------------------------------
+  db-dev:
+    profiles: ["dev"]
+    image: postgres:18-alpine
+    env_file: env/dev.env # provides POSTGRES_USER / PASSWORD / DB
+    ports:
+      - "5432:5432"
+    volumes:
+      # Postgres 18 stores data under a major-version-specific subdirectory.
+      # Mount the parent directory so the image can manage that layout.
+      - dev-db-data:/var/lib/postgresql
+    healthcheck:
+      # -d avoids the "database \"worship\" does not exist" FATAL that
+      # pg_isready logs when it defaults the db name to the username.
+      test: ["CMD-SHELL", "pg_isready -U worship -d worship_dev"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  worship-scheduler-dev:
+    profiles: ["dev"]
+    image: node:24
+    working_dir: /app
+    volumes:
+      - .:/app # bind mount for hot reload
+      - dev-node-modules:/app/node_modules # keep linux node_modules off the mac fs
+      - dev-next:/app/.next # isolate build output (Next 16 dev-server lock is per .next)
+    ports:
+      - "3000:3000"
+    env_file: env/dev.env
+    environment:
+      # Inside the compose network the db is reachable at its service name.
+      DATABASE_URL: postgresql://worship:worship@db-dev:5432/worship_dev
+    depends_on:
+      db-dev:
+        condition: service_healthy
+    # Install deps, generate the client, sync the schema, seed demo data
+    # (idempotent), run dev server.
+    command: sh -c "npm install && npx prisma generate && npx prisma db push && npx prisma db seed && npx next dev -H 0.0.0.0"
+
+  # ---- test ----------------------------------------------------------------
+  db-test:
+    profiles: ["test"]
+    image: postgres:18-alpine
+    env_file: env/test.env
+    ports:
+      - "5433:5432"
+    tmpfs:
+      # Data lives in memory — wiped when the container stops. Playwright's
+      # global-setup (tests/e2e/global-setup.ts) resets + reseeds before runs.
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worship -d worship_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  worship-scheduler-test:
+    profiles: ["test"]
+    image: mcr.microsoft.com/playwright:v1.61.1 # node + browsers preinstalled
+    working_dir: /app
+    volumes:
+      - .:/app
+      - test-node-modules:/app/node_modules
+      - test-next:/app/.next # own .next so e2e can run while `dev` is up (Next 16 lock)
+    env_file: env/test.env
+    environment:
+      # Point both the app and the tests at the in-network test db.
+      DATABASE_URL: postgresql://worship:worship@db-test:5432/worship_test
+    depends_on:
+      db-test:
+        condition: service_healthy
+    # Install deps, sync schema, then run BOTH suites. Unit first (fast fail),
+    # then e2e — playwright's webServer block boots the app on :3100 itself.
+    # The service exits with the test exit code.
+    command: >
+      sh -c "npm install &&
+             npx prisma generate &&
+             npx prisma db push &&
+             npm run test:unit &&
+             npm run test:e2e"
+
+  # ---- prod ----------------------------------------------------------------
+  db-prod:
+    profiles: ["prod"]
+    image: postgres:18-alpine
+    env_file: env/prod.env
+    volumes:
+      - prod-db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U worship -d worship_prod"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  worship-scheduler-prod:
+    profiles: ["prod"]
+    build: .
+    ports:
+      - "3000:3000"
+    env_file: env/prod.env
+    depends_on:
+      db-prod:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  dev-db-data:
+  dev-node-modules:
+  dev-next:
+  test-node-modules:
+  test-next:
+  prod-db-data:
