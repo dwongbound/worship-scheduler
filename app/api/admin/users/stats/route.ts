@@ -2,7 +2,7 @@
 // sets they're on within the given date range, broken down by set type (the
 // set's label). Powers the team stats panel on the Users tab. Admin only.
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminUser } from "@/lib/auth";
+import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 
 // Per-user list of set-type counts, e.g. [{ label: "Sunday Worship", count: 3 }].
@@ -12,7 +12,7 @@ export type UserSetBreakdown = { label: string; count: number };
 const NO_LABEL = "Worship Set";
 
 export async function GET(req: NextRequest) {
-  const admin = await getAdminUser();
+  const admin = await requireOrgAdmin(req);
   if (!admin) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   // then tally per user by label in memory (label lives on Set, so it can't be
   // a groupBy key on Assignment).
   const assignments = await prisma.assignment.findMany({
-    where: { set: { startsAt: { gte: start, lte: end } } },
+    where: { set: { orgId: admin.orgId, startsAt: { gte: start, lte: end } } },
     select: { userId: true, set: { select: { label: true } } },
   });
 

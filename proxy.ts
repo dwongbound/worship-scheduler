@@ -9,5 +9,11 @@ export const proxy = withAuth({
 });
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|login).*)"],
+  // icon.svg is excluded so the favicon still loads on the logged-out /login
+  // screen (otherwise the request for it would itself redirect to /login).
+  // manifest.webmanifest and apple-icon are excluded because phones fetch
+  // them without auth cookies when installing the app to the home screen.
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|icon.svg|manifest.webmanifest|apple-icon|login).*)",
+  ],
 };

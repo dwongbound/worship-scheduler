@@ -6,18 +6,28 @@ import { ReactNode, SelectHTMLAttributes } from "react";
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label: string;
+  // Keep the label for screen readers only — for compact controls that sit
+  // inline in a header row where a visible label would be noise.
+  hideLabel?: boolean;
   children: ReactNode;
 }
 
 export default function Select({
   label,
+  hideLabel = false,
   children,
   className = "",
   ...props
 }: SelectProps) {
   return (
     <label className="block">
-      <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+      <span
+        className={
+          hideLabel
+            ? "sr-only"
+            : "mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+        }
+      >
         {label}
       </span>
       <div className="relative">

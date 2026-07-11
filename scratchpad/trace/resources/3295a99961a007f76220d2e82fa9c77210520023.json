@@ -1,0 +1,1 @@
+{"credentials":{"id":"credentials","name":"Username / Email & Password","type":"credentials","signinUrl":"http://localhost:3100/api/auth/signin/credentials","callbackUrl":"http://localhost:3100/api/auth/callback/credentials"}}

@@ -11,6 +11,7 @@ import ExportIcsButton from "@/components/ExportIcsButton";
 import { usePageLoading } from "@/components/LoadingProvider";
 import StatusBadge from "@/components/StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
+import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray } from "@/lib/api";
 import { INSTRUMENT_LABELS } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
@@ -23,22 +24,30 @@ export default function SwapsPage() {
   // bulk "confirm all" button — so a mutation never remounts the whole page.
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  // Navbar org switcher: "all" or one org — filters both sections. Rows show
+  // an org chip while several orgs are mixed together.
+  const { orgs, viewOrgId } = useOrgs();
+  const showOrgChips = viewOrgId === "all" && (orgs?.length ?? 0) > 1;
 
   const reload = useCallback(async () => {
     // Both endpoints return arrays; fall back to [] on any error so a hiccup
     // shows an empty list instead of crashing on `.map`.
+    const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
     const [mineData, swapsData] = await Promise.all([
-      fetchJsonArray<ApiMyAssignment>("/api/assignments"),
-      fetchJsonArray<ApiSwapRequest>("/api/swaps"),
+      fetchJsonArray<ApiMyAssignment>(`/api/assignments${orgParam}`),
+      fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
     ]);
     setMine(mineData);
     setOpenSwaps(swapsData);
     // Nudge the navbar to refresh its red dot.
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
-  }, []);
+  }, [viewOrgId]);
 
   useEffect(() => {
     reload();
+    // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
+    window.addEventListener(ORGS_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(ORGS_CHANGED_EVENT, reload);
   }, [reload]);
 
   // PATCH one of my assignments: confirm / requestSwap / cancelSwap. Only the
@@ -95,12 +104,17 @@ export default function SwapsPage() {
         )}
         <ul className="space-y-3">
           {openSwaps.map((swap) => (
-            <li key={swap.id}>
+            // id anchors the calendar's "Take this set →" link (#cover-<id>);
+            // scroll-mt keeps it clear of the sticky navbar when jumped to.
+            <li key={swap.id} id={`cover-${swap.id}`} className="scroll-mt-24">
               <Card className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="font-semibold">
+                  <p className="flex flex-wrap items-center gap-2 font-semibold">
                     {swap.set.label ?? "Worship Set"} —{" "}
                     {INSTRUMENT_LABELS[swap.role]}
+                    {showOrgChips && swap.set.org && (
+                      <OrgChip name={swap.set.org.name} />
+                    )}
                   </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {formatDay(swap.set.startsAt)} ·{" "}
@@ -125,8 +139,9 @@ export default function SwapsPage() {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold">My Sets</h1>
           <div className="flex items-center gap-2">
-            {/* Plain link download: the browser sends session cookies along. */}
-            <a href="/api/export" download>
+            {/* Plain link download: the browser sends session cookies along.
+                Hidden on phones — no .ics export on narrow screens. */}
+            <a href="/api/export" download className="hidden sm:block">
               <Button variant="secondary">Export my sets (.ics)</Button>
             </a>
             {pendingCount > 0 && (
@@ -153,9 +168,12 @@ export default function SwapsPage() {
             <li key={a.id}>
               <Card className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="font-semibold">
+                  <p className="flex flex-wrap items-center gap-2 font-semibold">
                     {a.set.label ?? "Worship Set"} —{" "}
                     {INSTRUMENT_LABELS[a.role]}
+                    {showOrgChips && a.set.org && (
+                      <OrgChip name={a.set.org.name} />
+                    )}
                   </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {formatDay(a.set.startsAt)} · {formatTime(a.set.startsAt)}
@@ -205,5 +223,15 @@ export default function SwapsPage() {
         </ul>
       </section>
     </div>
+  );
+}
+
+// Small pill naming a set's org — shown only in "All orgs" view when the
+// user belongs to more than one.
+function OrgChip({ name }: { name: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+      {name}
+    </span>
   );
 }

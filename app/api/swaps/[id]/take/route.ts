@@ -1,7 +1,9 @@
 // POST /api/swaps/:id/take — take over someone's swap-requested slot.
-// The assignment moves to me with status PENDING (I still confirm it).
+// The assignment moves to me already CONFIRMED — taking a cover is itself the
+// commitment, so there's no separate confirm step.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { notifySwapTaken } from "@/lib/slack";
 
@@ -17,8 +19,16 @@ export async function POST(
 
   const assignment = await prisma.assignment.findUnique({
     where: { id },
+    include: { set: { select: { orgId: true } } },
   });
   if (!assignment || assignment.status !== "SWAP_REQUESTED") {
+    return NextResponse.json(
+      { error: "Swap request not found" },
+      { status: 404 }
+    );
+  }
+  // Covers can only be taken by members of the set's org.
+  if (!(await getMyOrgIds(user.id)).includes(assignment.set.orgId)) {
     return NextResponse.json(
       { error: "Swap request not found" },
       { status: 404 }
@@ -43,13 +53,20 @@ export async function POST(
     );
   }
 
-  // …and can't already be on the set in another slot.
-  const alreadyOnSet = await prisma.assignment.findUnique({
-    where: { setId_userId: { setId: assignment.setId, userId: user.id } },
+  // …and can't already fill THIS role on the set (holding a different role on
+  // the same set is fine — a person can play more than one).
+  const alreadyInRole = await prisma.assignment.findUnique({
+    where: {
+      setId_userId_role: {
+        setId: assignment.setId,
+        userId: user.id,
+        role: assignment.role,
+      },
+    },
   });
-  if (alreadyOnSet) {
+  if (alreadyInRole) {
     return NextResponse.json(
-      { error: "You're already on this set" },
+      { error: "You already play this role on this set" },
       { status: 400 }
     );
   }
@@ -59,7 +76,18 @@ export async function POST(
 
   const updated = await prisma.assignment.update({
     where: { id: assignment.id },
-    data: { userId: user.id, status: "PENDING" },
+    data: { userId: user.id, status: "CONFIRMED" },
+  });
+
+  await prisma.setHistoryEvent.create({
+    data: {
+      setId: assignment.setId,
+      role: assignment.role,
+      actorId: user.id,
+      targetUserId: user.id,
+      previousUserId: previousOwnerId,
+      type: "SWAP_TAKEN",
+    },
   });
 
   // Tell the person who gave up the slot that it's covered. Non-throwing and a

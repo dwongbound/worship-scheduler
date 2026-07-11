@@ -2,36 +2,57 @@
 // Admin-only "create a one-off set" form, opened from the calendar's inline
 // "+" button on a day cell. Pre-fills the clicked date; the admin picks a
 // time, duration, optional label, and (optionally) a custom team shape.
+// The set is created empty — to staff it, open it and use "Auto schedule"
+// (or assign people by hand) in the set detail modal.
 // Shares its body with the Create tab's TemplateModal via SetFormFields.
 import { FormEvent, useEffect, useState } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
 import LoadingDots from "./common/LoadingDots";
 import SetFormFields, { SetFormState, emptySetForm } from "./SetFormFields";
+import { useOrgs } from "./OrgProvider";
 import { formatDay, timeStringToMinutes } from "@/lib/dates";
-import type { StagedPlan } from "@/lib/types";
+import { fetchJsonArray } from "@/lib/api";
+import type { ApiTeam } from "@/lib/types";
 
 export default function CreateSetModal({
   date,
   onClose,
   onCreated,
-  onAutoSchedule,
 }: {
   date: Date | null; // null = closed
   onClose: () => void;
   onCreated: () => void | Promise<void>;
-  // Hand a proposed (unsaved) team up to the calendar so it can open the
-  // review modal. Called instead of creating the set directly.
-  onAutoSchedule: (plan: StagedPlan) => void;
 }) {
+  const { orgs, isAdminOf } = useOrgs();
   const [form, setForm] = useState<SetFormState>(emptySetForm);
-  // Which button is mid-request, so only that one spins ("auto" builds a
-  // proposed team to review).
-  const [busy, setBusy] = useState<"manual" | "auto" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [teams, setTeams] = useState<ApiTeam[]>([]);
 
-  // Reset the form each time a new day is opened.
+  // Reset the form each time a new day is opened. Teams are fetched only on
+  // the first open (they rarely change) and the picker defaults to the first.
+  // Only teams from orgs I ADMIN are offered (the server rejects the rest);
+  // when I admin several orgs, team names are suffixed with the org name.
+  // Deps are [date] on purpose: adding `teams` would re-run this after the
+  // fetch lands and wipe whatever the admin already typed.
   useEffect(() => {
-    if (date) setForm(emptySetForm());
+    if (!date) return;
+    setForm({ ...emptySetForm(), teamId: teams[0]?.id ?? "" });
+    if (teams.length === 0) {
+      fetchJsonArray<ApiTeam>("/api/teams").then((all) => {
+        const mine = all.filter((t) => isAdminOf(t.orgId));
+        const multiOrg = new Set(mine.map((t) => t.orgId)).size > 1;
+        const ts = multiOrg
+          ? mine.map((t) => ({
+              ...t,
+              name: `${t.name} (${orgs?.find((o) => o.id === t.orgId)?.name ?? "?"})`,
+            }))
+          : mine;
+        setTeams(ts);
+        setForm((f) => (f.teamId ? f : { ...f, teamId: ts[0]?.id ?? "" }));
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date]);
 
   if (!date) return null;
@@ -51,7 +72,7 @@ export default function CreateSetModal({
 
   // Create the set immediately, with no team.
   async function createSet() {
-    setBusy("manual");
+    setBusy(true);
     try {
       await fetch("/api/sets", {
         method: "POST",
@@ -60,38 +81,16 @@ export default function CreateSetModal({
           label: form.label,
           startsAt: startsAtISO(),
           durationMinutes: form.duration,
+          requiresMD: form.requiresMD,
           // null capacities → the set uses the global default team shape.
           slotCapacities: form.capacities ?? undefined,
+          teamId: form.teamId,
         }),
       });
       await onCreated();
       onClose();
     } finally {
-      setBusy(null);
-    }
-  }
-
-  // Ask the server to PROPOSE a team (spread away from neighboring days)
-  // without saving anything, then open it in the review modal.
-  async function autoSchedule() {
-    setBusy("auto");
-    try {
-      const res = await fetch("/api/admin/autofill", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          label: form.label,
-          startsAt: startsAtISO(),
-          durationMinutes: form.duration,
-          slotCapacities: form.capacities ?? undefined,
-        }),
-      });
-      if (!res.ok) return; // leave the form open on a bad request
-      const plan = (await res.json()) as StagedPlan;
-      onClose();
-      onAutoSchedule(plan);
-    } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
@@ -110,35 +109,23 @@ export default function CreateSetModal({
         <SetFormFields
           state={form}
           onChange={setForm}
-          disabled={!!busy}
+          teams={teams}
+          disabled={busy}
           labelPlaceholder="e.g. Special Prayer Night"
         />
 
-        {/* Auto schedule proposes a team (avoiding anyone serving the day
-            before/after) that you review before anything is saved. */}
-        <p className="pt-1 text-xs text-gray-500 dark:text-gray-400">
-          &ldquo;Auto schedule&rdquo; proposes a full team, skipping people who
-          serve on a neighboring day, for you to review before saving.
-        </p>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2 pt-1">
           <Button
             type="button"
             variant="secondary"
             onClick={onClose}
-            disabled={!!busy}
+            disabled={busy}
           >
             Cancel
           </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={autoSchedule}
-            disabled={!!busy}
-          >
-            {busy === "auto" ? <LoadingDots size="sm" /> : "Auto schedule"}
-          </Button>
-          <Button type="submit" disabled={!!busy}>
-            {busy === "manual" ? <LoadingDots size="sm" /> : "Create set"}
+          {/* Blocked until the teams list loads — every set needs a team. */}
+          <Button type="submit" disabled={busy || !form.teamId}>
+            {busy ? <LoadingDots size="sm" /> : "Create set"}
           </Button>
         </div>
       </form>

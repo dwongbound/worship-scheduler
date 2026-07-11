@@ -46,8 +46,89 @@ enum AssignmentStatus {
 }
 
 enum UnavailabilityType {
-  RECURRING // e.g. "every Tuesday morning"
-  DATE_RANGE // e.g. "Jan 5 – Jan 10"
+  RECURRING // "general block": every Tuesday morning (always applies)
+  SPECIFIC // "specific block": one date + time window, tied to a request
+  DATE_RANGE // legacy: "Jan 5 – Jan 10" (no longer created by the UI)
+}
+
+// One entry in a set's activity log (SetDetailModal's History section).
+//   ADDED          — a slot was filled: the auto-scheduler (actor = null) or
+//                    an admin (actor = that admin) put targetUser in role.
+//   REMOVED        — an admin cleared a filled slot.
+//   REASSIGNED     — an admin swapped previousUser out for targetUser.
+//   CONFIRMED      — targetUser confirmed their own slot.
+//   SWAP_REQUESTED — targetUser asked to be swapped out of their slot.
+//   SWAP_CANCELED  — targetUser withdrew their own swap request.
+//   SWAP_TAKEN     — targetUser took over previousUser's swap-requested slot.
+enum SetHistoryEventType {
+  ADDED
+  REMOVED
+  REASSIGNED
+  CONFIRMED
+  SWAP_REQUESTED
+  SWAP_CANCELED
+  SWAP_TAKEN
+}
+
+// An organization — the highest-level tenant boundary (e.g. one church).
+// Orgs are declared in the ORG_KEYS env var ("Name:key,Name:key"); rows here
+// are auto-upserted from it by name (lib/org.ts ensureOrgsSynced). Renaming
+// an org in env therefore creates a NEW org — existing data stays under the
+// old name until manually renamed in the db.
+model Org {
+  id   String @id @default(cuid())
+  name String @unique
+
+  memberships          OrgMembership[]
+  teams                Team[]
+  sets                 Set[]
+  templates            SetTemplate[]
+  availabilityRequests AvailabilityRequest[]
+
+  createdAt DateTime @default(now())
+
+  @@map("orgs")
+}
+
+// A user's membership in one org, created by redeeming that org's key.
+// Admin is PER-ORG: this flag replaces the old global User.isAdmin.
+model OrgMembership {
+  id      String  @id @default(cuid())
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId  String
+  org     Org     @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId   String
+  isAdmin Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, orgId])
+  @@map("org_memberships")
+}
+
+// A ministry team (e.g. "Sunday Team", "Prayer Room Team") within one org.
+// Users belong to any number of teams; every set (and template) targets one
+// team, and the auto-scheduler only proposes people who belong to it.
+model Team {
+  id   String @id @default(cuid())
+  name String
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  // Slack channel (C...) the bot posts this team's set summaries to. The bot
+  // must be invited to the channel; null = Slack summaries off for this team.
+  slackChannelId String?
+
+  users     User[]        @relation("TeamMembers")
+  sets      Set[]
+  templates SetTemplate[]
+
+  createdAt DateTime @default(now())
+
+  // Team names only need to be unique within their org.
+  @@unique([orgId, name])
+  @@map("teams")
 }
 
 model User {
@@ -60,15 +141,25 @@ model User {
   // (e.g. "U0123ABC") so we can DM reminders / match accounts by email.
   slackUserId  String? @unique
 
-  isAdmin     Boolean      @default(false)
+  // Musical director: can be the designated MD on a set that requires one.
+  // Note: isMD and instruments are global to the person, not per-org.
+  isMD        Boolean      @default(false)
   instruments Instrument[] // which slots this user can fill
+  // Orgs this person belongs to (admin is per-org — see OrgMembership).
+  memberships OrgMembership[]
+  // Teams this person serves on — only sets of these teams schedule them.
+  teams       Team[]       @relation("TeamMembers")
 
-  // Set when the user hits "I'm done scheduling" on the Schedule tab.
-  // Null = hasn't finished entering availability. Admins see this.
-  scheduleCompletedAt DateTime?
+  assignments           Assignment[]
+  unavailability        Unavailability[]
+  // One row per availability request the user has marked complete.
+  availabilityResponses AvailabilityResponse[]
 
-  assignments    Assignment[]
-  unavailability Unavailability[]
+  // Set history: actions this user performed, was the subject of, or was
+  // swapped/removed in favor of. See SetHistoryEvent for the relation roles.
+  historyActed    SetHistoryEvent[] @relation("SetHistoryActor")
+  historyTargeted SetHistoryEvent[] @relation("SetHistoryTarget")
+  historyPrevious SetHistoryEvent[] @relation("SetHistoryPrevious")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -84,12 +175,27 @@ model Set {
   durationMinutes Int
   notes           String? // free-form notes shown in the set detail modal
 
+  // When true, this set needs at least one musical director (a User with
+  // isMD) on its team; the scheduler tries to guarantee one.
+  requiresMD Boolean @default(false)
+
   // Per-set team shape: an Instrument→count map (e.g. { ELECTRIC_GUITAR: 2,
   // ACOUSTIC_GUITAR: 0 }). Null = use the global SLOT_CAPACITIES default.
   // Copied from the SetTemplate at generate time; editable per ad-hoc set.
   slotCapacities Json?
 
+  // The org this set belongs to — the tenant anchor even when teamId is null.
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  // The team this set is for — only its members are auto-scheduled onto it.
+  // Nullable so deleting a team orphans (not deletes) its sets; a null team
+  // means "open to everyone in the org".
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  teamId String?
+
   assignments Assignment[]
+  history     SetHistoryEvent[]
 
   createdAt DateTime @default(now())
 
@@ -109,14 +215,44 @@ model Assignment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // A person can only appear once per set (one body, one slot).
-  @@unique([setId, userId])
+  // A person can hold several roles on one set (e.g. worship leader + acoustic
+  // guitar) but never the same role twice.
+  @@unique([setId, userId, role])
   @@map("assignments")
 }
 
-// Times a user CANNOT serve. Two shapes share one table:
+// One line in a set's activity log — see SetHistoryEventType for what each
+// type means. Written alongside the assignment change it describes, never
+// edited afterwards.
+model SetHistoryEvent {
+  id     String              @id @default(cuid())
+  set    Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId  String
+  type   SetHistoryEventType
+  role   Instrument
+
+  // Who performed the action; null = the auto-scheduler (no human actor).
+  actor   User?   @relation("SetHistoryActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorId String?
+
+  // The person the slot belongs to after this event.
+  targetUser   User?   @relation("SetHistoryTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+  targetUserId String?
+
+  // For REASSIGNED and SWAP_TAKEN: who held the slot immediately before.
+  previousUser   User?   @relation("SetHistoryPrevious", fields: [previousUserId], references: [id], onDelete: SetNull)
+  previousUserId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([setId, createdAt])
+  @@map("set_history_events")
+}
+
+// Times a user CANNOT serve. Three shapes share one table:
 //   RECURRING : dayOfWeek + startMinute..endMinute (minutes from midnight)
-//   DATE_RANGE: startDate..endDate (inclusive)
+//   SPECIFIC  : startDate (the day) + startMinute..endMinute, tied to a request
+//   DATE_RANGE: startDate..endDate (inclusive) — legacy
 model Unavailability {
   id     String             @id @default(cuid())
   user   User               @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -125,12 +261,17 @@ model Unavailability {
 
   // RECURRING fields — 0 = Sunday ... 6 = Saturday
   dayOfWeek   Int?
+  // Time window (minutes from midnight) — RECURRING and SPECIFIC.
   startMinute Int?
   endMinute   Int?
 
-  // DATE_RANGE fields
+  // SPECIFIC uses startDate as the single day; DATE_RANGE uses both.
   startDate DateTime?
   endDate   DateTime?
+
+  // Set for SPECIFIC blocks (the TimeRange they belong to); null otherwise.
+  request   AvailabilityRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId String?
 
   note String?
 
@@ -148,9 +289,20 @@ model SetTemplate {
   startMinute     Int // minutes from midnight, e.g. 19:00 = 1140
   durationMinutes Int
 
+  // Sets expanded from this template inherit this "needs an MD" flag.
+  requiresMD Boolean @default(false)
+
   // The team shape this template's sets should have — see Set.slotCapacities.
   // Null = use the global SLOT_CAPACITIES default.
   slotCapacities Json?
+
+  // The org this template (and its expanded sets) belongs to.
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  // Sets expanded from this template belong to this team (see Set.team).
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  teamId String?
 
   createdAt DateTime @default(now())
 
@@ -158,9 +310,9 @@ model SetTemplate {
 }
 
 // An admin's request for the team to enter their availability over a date
-// range. The most recent row is the "active" request; a user needs to
-// respond until their scheduleCompletedAt is later than the request's
-// createdAt. Drives the Availabilities red dot + banner.
+// range. The most recent row PER ORG is that org's "active" request; a user
+// owes a response for each of their orgs' active requests. Drives the
+// Availabilities red dot + banner, and the Create tab's status panel.
 model AvailabilityRequest {
   id        String   @id @default(cuid())
   // Optional admin-given name (e.g. "Fall 2026"); the UI falls back to the
@@ -170,5 +322,31 @@ model AvailabilityRequest {
   endDate   DateTime
   createdAt DateTime @default(now())
 
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  // Specific blocks entered against this request + who has marked it complete.
+  unavailability Unavailability[]
+  responses      AvailabilityResponse[]
+
   @@map("availability_requests")
+}
+
+// One row per (user, request) once the user hits "I'm done scheduling" for
+// that request. Presence = complete; absence = still owes a response. Replaces
+// the old global User.scheduleCompletedAt so completion is tracked per request.
+model AvailabilityResponse {
+  id        String              @id @default(cuid())
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  request   AvailabilityRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId String
+  // null = the row exists but is currently marked "not submitted". The row
+  // persists across un/re-submits so we can remember it was edited.
+  completedAt DateTime?
+  // True once re-submitted after having been un-submitted at least once.
+  edited      Boolean           @default(false)
+
+  @@unique([userId, requestId])
+  @@map("availability_responses")
 }

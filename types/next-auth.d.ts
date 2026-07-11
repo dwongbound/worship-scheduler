@@ -1,5 +1,12 @@
-// Type augmentation so session.user.id / session.user.isAdmin typecheck.
+// Type augmentation so session.user.id / session.user.memberships typecheck.
 import "next-auth";
+
+// A user's org memberships as carried on the JWT/session. UI-ONLY hints
+// (tab visibility, org dropdown) — server routes always re-check the db.
+export interface SessionOrgMembership {
+  orgId: string;
+  isAdmin: boolean;
+}
 
 declare module "next-auth" {
   interface Session {
@@ -7,13 +14,12 @@ declare module "next-auth" {
       id: string;
       name?: string | null;
       email?: string | null;
-      isAdmin: boolean;
+      memberships: SessionOrgMembership[];
     };
   }
 
   interface User {
     id: string;
-    isAdmin?: boolean;
     // Set by the Slack OAuth provider's profile() callback so signIn() can
     // persist it; other providers leave it undefined.
     slackUserId?: string;
@@ -23,6 +29,6 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     id?: string;
-    isAdmin?: boolean;
+    memberships?: SessionOrgMembership[];
   }
 }

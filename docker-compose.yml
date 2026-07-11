@@ -23,6 +23,10 @@ services:
     profiles: ["dev"]
     image: postgres:18-alpine
     env_file: env/dev.env # provides POSTGRES_USER / PASSWORD / DB
+    environment:
+      # Keep the db container's clock/log timestamps on the same zone as the
+      # app container (see the app service below).
+      TZ: America/Los_Angeles
     ports:
       - "5432:5432"
     volumes:
@@ -51,6 +55,8 @@ services:
     environment:
       # Inside the compose network the db is reachable at its service name.
       DATABASE_URL: postgresql://worship:worship@db-dev:5432/worship_dev
+      # Recurring set times are interpreted in this zone (see lib/dates.ts).
+      TZ: America/Los_Angeles
     depends_on:
       db-dev:
         condition: service_healthy
@@ -63,6 +69,8 @@ services:
     profiles: ["test"]
     image: postgres:18-alpine
     env_file: env/test.env
+    environment:
+      TZ: America/Los_Angeles
     ports:
       - "5433:5432"
     tmpfs:
@@ -87,6 +95,7 @@ services:
     environment:
       # Point both the app and the tests at the in-network test db.
       DATABASE_URL: postgresql://worship:worship@db-test:5432/worship_test
+      TZ: America/Los_Angeles
     depends_on:
       db-test:
         condition: service_healthy
@@ -105,6 +114,8 @@ services:
     profiles: ["prod"]
     image: postgres:18-alpine
     env_file: env/prod.env
+    environment:
+      TZ: America/Los_Angeles
     volumes:
       - prod-db-data:/var/lib/postgresql
     healthcheck:
@@ -120,6 +131,9 @@ services:
     ports:
       - "3000:3000"
     env_file: env/prod.env
+    environment:
+      # Recurring set times are interpreted in this zone (see lib/dates.ts).
+      TZ: America/Los_Angeles
     depends_on:
       db-prod:
         condition: service_healthy
