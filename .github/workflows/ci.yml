@@ -1,13 +1,15 @@
 name: CI
 
 # Runs the full test suite (typecheck happens implicitly via next/vitest
-# transforms; unit + e2e run for real) on every PR and every push to the
-# dev → staging → main promotion branches, using the same docker compose
-# test profile you run locally.
+# transforms; unit + e2e run for real) using the same docker compose test
+# profile you run locally. PRs are the gate for the dev → staging → main
+# promotions; the push trigger covers only main (a post-merge confirmation
+# of exactly what production deploys). No separate push trigger for
+# dev/staging — that would double-run CI against an open PR's identical code.
 on:
   pull_request:
   push:
-    branches: [dev, staging, main]
+    branches: [main]
 
 jobs:
   test:
