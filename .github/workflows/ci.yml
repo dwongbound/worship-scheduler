@@ -1,12 +1,13 @@
 name: CI
 
 # Runs the full test suite (typecheck happens implicitly via next/vitest
-# transforms; unit + e2e run for real) on every PR and every push to main,
-# using the same docker compose test profile you run locally.
+# transforms; unit + e2e run for real) on every PR and every push to the
+# dev → staging → main promotion branches, using the same docker compose
+# test profile you run locally.
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [dev, staging, main]
 
 jobs:
   test:
