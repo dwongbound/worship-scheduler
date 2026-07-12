@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   // iOS needs these apple-mobile-web-app-* meta tags too.
   appleWebApp: {
     capable: true,
-    title: "Worship",
+    title: "TapWorship",
     statusBarStyle: "default",
   },
 };
