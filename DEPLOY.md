@@ -55,17 +55,22 @@ DATABASE_URL="<neon-direct-url>" npm run db:migrate:deploy:prod
 
 ## 5. Create your first admin
 
-The in-app "grant admin" page requires you to already be an admin, so bootstrap
-the first one directly:
+Admin is **per organization** (an `org_memberships.isAdmin` flag), and the
+in-app "grant admin" page requires you to already be an admin of that org —
+so bootstrap the first one directly:
 
-1. Open the deployed app and **sign up** a normal account for yourself.
-2. In the Neon **SQL Editor**, run:
+1. Make sure `ORG_KEYS` is set in Vercel (orgs and join keys come from it).
+2. Open the deployed app, **sign up**, and join your org with its key when
+   prompted (the /join screen).
+3. In the Neon **SQL Editor**, run:
 
    ```sql
-   UPDATE users SET "isAdmin" = true WHERE username = '<your-username>';
+   UPDATE org_memberships SET "isAdmin" = true
+   WHERE "userId" = (SELECT id FROM users WHERE username = '<your-username>');
    ```
 
-3. Log out/in. You now have admin access and can grant others from the app.
+4. Log out/in. You now have admin access there and can grant others from the
+   app's Team tab (per org — being admin in one org grants nothing in others).
 
 ## Ongoing deploys
 
