@@ -233,7 +233,37 @@ function LoginForm() {
             </>
           )}
         </div>
+
+        <VersionFooter />
       </Card>
     </div>
+  );
+}
+
+// Build stamp: app version + a link to the exact commit on GitHub. Both values
+// are inlined at build time by next.config.js. The commit link is hidden when
+// the sha is unknown (e.g. git unavailable in the build sandbox).
+function VersionFooter() {
+  const version = process.env.NEXT_PUBLIC_APP_VERSION;
+  const sha = process.env.NEXT_PUBLIC_COMMIT_SHA;
+  const repo = "https://github.com/dwongbound/worship-scheduler";
+
+  return (
+    <p className="mt-4 text-center text-xs text-gray-400">
+      v{version}
+      {sha && (
+        <>
+          {" · "}
+          <a
+            href={`${repo}/commit/${sha}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono hover:underline"
+          >
+            {sha.slice(0, 7)}
+          </a>
+        </>
+      )}
+    </p>
   );
 }

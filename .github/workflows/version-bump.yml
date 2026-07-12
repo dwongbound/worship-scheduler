@@ -1,0 +1,64 @@
+name: Bump patch version
+
+# On every push to main, auto-increment the patch version in package.json and
+# commit it back — UNLESS the push already changed the version (you bumped it
+# yourself, e.g. a minor/major), in which case we leave your value alone.
+#
+# The bump commit carries "[skip ci]", so GitHub skips all workflows for it:
+# that both avoids re-running the test suite for a one-line change and stops
+# this workflow from triggering itself in a loop.
+on:
+  push:
+    branches: [main]
+
+# Needed so the workflow's GITHUB_TOKEN can push the bump commit back.
+permissions:
+  contents: write
+
+concurrency:
+  group: version-bump-main
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need history so we can read the version at the previous tip.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Bump patch unless version already changed
+        run: |
+          set -euo pipefail
+          before="${{ github.event.before }}"
+          new_version="$(node -p "require('./package.json').version")"
+
+          # What was the version at the previous tip of main? If that tip is
+          # unknown (new branch / all-zero sha), treat it as "not changed".
+          old_version=""
+          if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ]; then
+            git show "$before:package.json" > /tmp/old-package.json 2>/dev/null || true
+            if [ -s /tmp/old-package.json ]; then
+              old_version="$(node -p "require('/tmp/old-package.json').version")"
+            fi
+          fi
+
+          if [ -n "$old_version" ] && [ "$old_version" != "$new_version" ]; then
+            echo "Version changed manually ($old_version → $new_version) — leaving it alone."
+            exit 0
+          fi
+
+          npm version patch --no-git-tag-version
+          bumped="$(node -p "require('./package.json').version")"
+          echo "Bumped $new_version → $bumped"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore: bump version to v$bumped [skip ci]"
+          git push origin HEAD:main
