@@ -4,11 +4,13 @@
 // ad-hoc CreateSetModal and the Create tab's TemplateModal — whatever differs
 // between them (a fixed date vs. a recurring day-of-week) is passed in as the
 // `scheduleField` slot, which renders right under the label.
-import { ReactNode, useState } from "react";
+import { ReactNode } from "react";
 import Input from "./common/Input";
 import Select from "./common/Select";
+import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import { resolveCapacities, type Instrument } from "@/lib/constants";
+import type { ApiTeam } from "@/lib/types";
 
 // Set durations, offered in half-hour steps (0.5h–8h) but stored as minutes.
 const DURATION_OPTIONS = Array.from({ length: 16 }, (_, i) => (i + 1) * 30);
@@ -24,18 +26,30 @@ export interface SetFormState {
   label: string;
   startTime: string; // "09:00"
   duration: number; // minutes
+  requiresMD: boolean; // set needs a musical director on its team
   capacities: Record<Instrument, number> | null;
+  // Which team the set is for. "" until the teams list loads; callers default
+  // it to the first team and block submit while it's empty.
+  teamId: string;
 }
 
 // A fresh, default form state (blank label, 9am, 90 min, default team shape).
 export function emptySetForm(): SetFormState {
-  return { label: "", startTime: "09:00", duration: 90, capacities: null };
+  return {
+    label: "",
+    startTime: "09:00",
+    duration: 90,
+    requiresMD: false,
+    capacities: null,
+    teamId: "",
+  };
 }
 
 export default function SetFormFields({
   state,
   onChange,
   scheduleField,
+  teams,
   labelRequired = false,
   labelPlaceholder = "e.g. Sunday Morning Service",
   disabled,
@@ -43,6 +57,7 @@ export default function SetFormFields({
   state: SetFormState;
   onChange: (next: SetFormState) => void;
   scheduleField?: ReactNode; // date (calendar) or day-of-week (template)
+  teams: ApiTeam[]; // the set is created FOR one of these (empty = loading)
   labelRequired?: boolean;
   labelPlaceholder?: string;
   disabled?: boolean;
@@ -62,6 +77,25 @@ export default function SetFormFields({
       />
 
       {scheduleField}
+
+      {/* Which team this set is for — only its members can be scheduled. */}
+      <Select
+        label="Team"
+        value={state.teamId}
+        onChange={(e) => patch({ teamId: e.target.value })}
+        required
+        disabled={disabled || teams.length === 0}
+      >
+        {teams.length === 0 ? (
+          <option value="">Loading teams…</option>
+        ) : (
+          teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))
+        )}
+      </Select>
 
       <div className="grid grid-cols-2 gap-3">
         <Input
@@ -85,6 +119,15 @@ export default function SetFormFields({
           ))}
         </Select>
       </div>
+
+      {/* On: the auto-scheduler seats a musical director on this set. Off: no
+          MD is assigned at all — MDs are excluded from this set's auto-fill. */}
+      <Checkbox
+        label="Add MD"
+        checked={state.requiresMD}
+        onChange={(e) => patch({ requiresMD: e.target.checked })}
+        disabled={disabled}
+      />
 
       {/* Team shape is opt-in: null capacities means "use the default team".
           Toggling on seeds the editor with the defaults; toggling off clears

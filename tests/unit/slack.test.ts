@@ -7,6 +7,9 @@ import {
   postDirectMessage,
   postToChannel,
   openGroupConversation,
+  setConversationTopic,
+  teamRosterText,
+  weeklySummaryText,
 } from "@/lib/slack";
 
 // Build a fetch mock that returns the given JSON bodies in sequence (one per
@@ -24,11 +27,15 @@ const ORIGINAL_TOKEN = process.env.SLACK_BOT_TOKEN;
 
 beforeEach(() => {
   process.env.SLACK_BOT_TOKEN = "xoxb-test-token";
+  // Ambient SLACK_DRY_RUN (e.g. a dev container running dry-run mode) would
+  // make slackEnabled() true even with no token — clear it for these tests.
+  delete process.env.SLACK_DRY_RUN;
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
   process.env.SLACK_BOT_TOKEN = ORIGINAL_TOKEN;
+  delete process.env.SLACK_DRY_RUN;
 });
 
 describe("slackEnabled", () => {
@@ -53,6 +60,20 @@ describe("when Slack is not configured", () => {
     const fetchMock = mockFetchSequence();
     const channel = await openGroupConversation(["U1", "U2"]);
     expect(channel).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("dry-run mode (SLACK_DRY_RUN=1)", () => {
+  it("enables Slack, reports success, and never calls fetch — even without a token", async () => {
+    delete process.env.SLACK_BOT_TOKEN;
+    process.env.SLACK_DRY_RUN = "1";
+    const fetchMock = mockFetchSequence();
+
+    expect(slackEnabled()).toBe(true);
+    // Full DM path: conversations.open (fake channel id) → chat.postMessage.
+    expect(await postDirectMessage("U123", "hi")).toBe(true);
+    expect(await openGroupConversation(["U1", "U2"])).toBe("C_DRY_RUN");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -122,5 +143,80 @@ describe("postToChannel", () => {
       vi.fn().mockRejectedValue(new Error("network down"))
     );
     await expect(postToChannel("C1", "hi")).resolves.toBe(false);
+  });
+});
+
+describe("setConversationTopic", () => {
+  it("posts the channel + topic and returns true on success", async () => {
+    const fetchMock = mockFetchSequence({ ok: true });
+    const ok = await setConversationTopic("G42", "Sunday Set (July 12 · 10:00 AM)");
+    expect(ok).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("conversations.setTopic");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      channel: "G42",
+      topic: "Sunday Set (July 12 · 10:00 AM)",
+    });
+  });
+
+  it("returns false when Slack reports not-ok", async () => {
+    mockFetchSequence({ ok: false, error: "method_not_supported_for_channel_type" });
+    expect(await setConversationTopic("G42", "topic")).toBe(false);
+  });
+});
+
+describe("teamRosterText", () => {
+  it("groups names by role in scarce-first order, skipping unfilled roles", () => {
+    const text = teamRosterText([
+      { role: "VOCALS", user: { name: "Bob" } },
+      { role: "WORSHIP_LEADER", user: { name: "Alice" } },
+      { role: "VOCALS", user: { name: "Carol" } },
+    ]);
+    const lines = text.split("\n");
+    expect(lines[0]).toBe("*Worship Leader:* Alice");
+    expect(lines[1]).toBe("*Vox:* Bob, Carol");
+    expect(lines).toHaveLength(2);
+  });
+
+  it("returns an empty string for no assignments", () => {
+    expect(teamRosterText([])).toBe("");
+  });
+});
+
+describe("weeklySummaryText", () => {
+  const range = {
+    start: new Date("2026-07-10T12:00:00"),
+    end: new Date("2026-07-17T12:00:00"),
+  };
+
+  it("lists each set's people in scarce-first role order with an (MD) marker", () => {
+    const text = weeklySummaryText("Sunday Team", range, [
+      {
+        label: "Sunday Worship",
+        startsAt: new Date("2026-07-12T10:00:00"),
+        assignments: [
+          { role: "DRUMS", user: { name: "Ryan", isMD: false } },
+          { role: "WORSHIP_LEADER", user: { name: "Alice", isMD: true } },
+        ],
+      },
+    ]);
+    // join("\n\n") → title, blank line, then the set block.
+    const lines = text.split("\n");
+    expect(lines[0]).toContain("*Sunday Team*");
+    expect(lines[2]).toContain("*Sunday Worship*");
+    expect(lines[3]).toBe("• Alice — Worship Leader (MD)");
+    expect(lines[4]).toBe("• Ryan — Drums");
+  });
+
+  it("uses a fallback name and placeholder line for empty unnamed sets", () => {
+    const text = weeklySummaryText("Sunday Team", range, [
+      {
+        label: null,
+        startsAt: new Date("2026-07-12T10:00:00"),
+        assignments: [],
+      },
+    ]);
+    expect(text).toContain("*Worship set*");
+    expect(text).toContain("• _No one assigned yet_");
   });
 });

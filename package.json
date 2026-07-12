@@ -9,7 +9,7 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "db:push": "dotenv -e env/dev.env -- prisma db push",
-    "db:push:prod": "prisma db push",
+    "db:migrate:deploy:prod": "prisma migrate deploy",
     "db:seed": "dotenv -e env/dev.env -- prisma db seed",
     "db:studio": "dotenv -e env/dev.env -- prisma studio",
     "test:unit": "vitest run",

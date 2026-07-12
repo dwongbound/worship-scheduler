@@ -3,14 +3,28 @@
 // optional Google SSO. Google only appears when it's configured on the
 // server (checked via getProviders).
 import { getProviders, signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import { FormEvent, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
 
+// useSearchParams() (used inside LoginForm to read ?callbackUrl) must sit
+// under a Suspense boundary, so the page export just wraps the form in one.
 export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
+  );
+}
+
+function LoginForm() {
   const router = useRouter();
+  // Where to go after a successful login. Middleware appends ?callbackUrl when
+  // it bounces you here from a protected page; otherwise default to /calendar.
+  const searchParams = useSearchParams();
+  const callbackUrl = searchParams.get("callbackUrl") || "/calendar";
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [googleAvailable, setGoogleAvailable] = useState(false);
   const [slackAvailable, setSlackAvailable] = useState(false);
@@ -53,7 +67,7 @@ export default function LoginPage() {
     if (result?.error) {
       setError("Invalid username or password.");
     } else {
-      router.push("/calendar");
+      router.push(callbackUrl);
       router.refresh();
     }
   }
@@ -84,7 +98,7 @@ export default function LoginPage() {
       setError("Account created — please sign in.");
       switchMode("signin");
     } else {
-      router.push("/calendar");
+      router.push(callbackUrl);
       router.refresh();
     }
   }
@@ -107,7 +121,7 @@ export default function LoginPage() {
                   type="button"
                   variant="secondary"
                   className="w-full"
-                  onClick={() => signIn("google", { callbackUrl: "/calendar" })}
+                  onClick={() => signIn("google", { callbackUrl })}
                 >
                   Continue with Google
                 </Button>
@@ -117,7 +131,7 @@ export default function LoginPage() {
                   type="button"
                   variant="secondary"
                   className="w-full"
-                  onClick={() => signIn("slack", { callbackUrl: "/calendar" })}
+                  onClick={() => signIn("slack", { callbackUrl })}
                 >
                   Continue with Slack
                 </Button>

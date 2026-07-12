@@ -26,19 +26,89 @@ test("admin can add a weekly template and generate a schedule", async ({ page })
   await modal.getByLabel("Start time").fill("09:00");
   await modal.getByLabel("Duration").selectOption("90"); // 1.5 Hrs
   await modal.getByRole("button", { name: "Add template" }).click();
-  await expect(page.getByText("every Sunday at")).toBeVisible();
+  // The new template shows as a table row: Name | "Sunday · 9:00 AM".
+  await expect(page.getByText(/Sunday · 9:00 AM/)).toBeVisible();
 
   // Run the scheduler for 4 weeks — this stages a preview, it doesn't save yet.
-  await page.getByLabel("Weeks ahead").fill("4");
+  // (Target the number input by role: "Weeks ahead" also appears as an option
+  // in the "Schedule for" select, so getByLabel alone is ambiguous.)
+  await page.getByRole("spinbutton", { name: "Weeks ahead" }).fill("4");
   await page.getByRole("button", { name: "Generate preview" }).click();
 
-  // The review modal opens; applying it commits the sets + assignments.
+  // The review modal opens; it shows the Team load panel (the "who plays
+  // often" rehaul) and set cards. Applying it commits the sets + assignments.
   const review = page.getByRole("dialog");
   await expect(
     review.getByRole("heading", { name: "Review generated schedule" })
   ).toBeVisible();
+  await expect(review.getByText("Team load")).toBeVisible();
   await review.getByRole("button", { name: "Apply schedule" }).click();
   await expect(page.getByText(/Created \d+ sets and \d+ assignments/)).toBeVisible();
+});
+
+test("review dropdowns flag people who are unavailable at a set's time", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/create");
+
+  // Generate a wide window — the seed has "Thursday Rehearsal", and Grace is
+  // unavailable every Thursday, so she must show as a flagged (but still
+  // listed) option in a Thursday set's roster dropdowns. Use a large window so
+  // there are always fresh (unstaffed) Thursdays to review, even if an earlier
+  // test already staffed the nearest few weeks.
+  await page.getByRole("spinbutton", { name: "Weeks ahead" }).fill("16");
+  await page.getByRole("button", { name: "Generate preview" }).click();
+
+  const review = page.getByRole("dialog");
+  await expect(
+    review.getByRole("heading", { name: "Review generated schedule" })
+  ).toBeVisible();
+  await expect(review.getByText("Thursday Rehearsal").first()).toBeVisible();
+
+  // Scope to a Thursday card (cards carry a testid; the sets are grouped in
+  // per-label rows), open its Vox dropdown, and confirm an "(unavailable)"
+  // candidate is offered (never silently hidden or assigned).
+  const card = review
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Thursday Rehearsal" })
+    .first();
+  const vocalsRow = card
+    .getByRole("listitem")
+    .filter({ hasText: "Vox" });
+  await vocalsRow.getByRole("button").first().click();
+  await expect(
+    page.getByRole("listbox").getByText(/unavailable/i).first()
+  ).toBeVisible();
+});
+
+test("admin can generate for an availability request's date range", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/create");
+
+  // Pick a request (the seed ships "Fall 2026") as the generate scope. The
+  // option value is "req:<id>"; select the first such option regardless of its
+  // (date-dependent) label.
+  const scope = page.getByLabel("Schedule for");
+  const reqValue = await scope
+    .locator('option[value^="req:"]')
+    .first()
+    .getAttribute("value");
+  expect(reqValue).toBeTruthy();
+  await scope.selectOption(reqValue!);
+
+  // A summary of the resolved range appears, then generating stages a preview.
+  await expect(page.getByText(/^Scheduling /)).toBeVisible();
+  await page.getByRole("button", { name: "Generate preview" }).click();
+
+  const review = page.getByRole("dialog");
+  await expect(
+    review.getByRole("heading", { name: "Review generated schedule" })
+  ).toBeVisible();
+  // Discard so we don't commit anything from this scope test.
+  await review.getByRole("button", { name: "Discard" }).click();
 });
 
 test("admin can set a custom team shape on a template", async ({ page }) => {
@@ -57,9 +127,9 @@ test("admin can set a custom team shape on a template", async ({ page }) => {
   await modal.getByLabel("Acoustic Guitar").fill("0");
   await modal.getByRole("button", { name: "Add template" }).click();
 
-  // The template's list row summarizes only the non-default roles (regex
+  // The template's table row summarizes only the non-default roles (regex
   // avoids the "×" glyph). Scope to the row so the assertion is unambiguous.
-  const row = page.getByRole("listitem").filter({ hasText: "Tuesday Morning" });
+  const row = page.getByRole("row").filter({ hasText: "Tuesday Morning" });
   await expect(row).toContainText(/3.* Electric Guitar/);
   await expect(row).toContainText("no Acoustic Guitar");
 });
@@ -69,8 +139,21 @@ test("admin sends an availability request to the team", async ({ page }) => {
   await page.goto("/create");
 
   await page.getByLabel("Name (optional)").fill("Fall 2026 Request");
-  await page.getByLabel("From", { exact: true }).fill("2026-08-01");
-  await page.getByLabel("To", { exact: true }).fill("2026-08-31");
+  // From/To are custom DateSelect popups (not native date inputs). Their button's
+  // accessible name is exactly "From"/"To", so open each with an EXACT label
+  // match (getByLabel("To") without exact is ambiguous — "Today" contains "to")
+  // and choose "Today" scoped to the open popup dialog. A single-day range is
+  // valid (startDate <= endDate).
+  const pickToday = async (field: "From" | "To") => {
+    await page.getByLabel(field, { exact: true }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: "Today", exact: true })
+      .click();
+  };
+
+  await pickToday("From");
+  await pickToday("To");
   await page.getByRole("button", { name: "Request availabilities" }).click();
   await expect(
     page.getByText("Availability request sent to the team.")

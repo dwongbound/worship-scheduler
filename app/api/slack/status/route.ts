@@ -1,5 +1,5 @@
 // GET /api/slack/status — whether the Slack bot is configured. Lets the UI
-// (e.g. the "Message team on Slack" button) hide itself when Slack is off.
+// (e.g. the "Slack Team" button) hide itself when Slack is off.
 import { NextResponse } from "next/server";
 import { slackEnabled } from "@/lib/slack";
 

@@ -26,6 +26,9 @@ export default function ProfilePage() {
   const [instruments, setInstruments] = useState<Instrument[]>([]);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  // Briefly true right after a successful save so the button can flash a
+  // checkmark instead of its normal label.
+  const [saved, setSaved] = useState(false);
 
   // Password-change modal state.
   const [pwOpen, setPwOpen] = useState(false);
@@ -77,6 +80,9 @@ export default function ProfilePage() {
       });
       if (res.ok) {
         setMessage("Saved!");
+        // Flash the checkmark on the button, then revert to the normal label.
+        setSaved(true);
+        setTimeout(() => setSaved(false), 2000);
         // Refresh the JWT so the navbar shows the new name immediately.
         await update({ name });
       } else {
@@ -195,8 +201,35 @@ export default function ProfilePage() {
               {message}
             </p>
           )}
-          <Button type="submit" disabled={saving}>
-            {saving ? <LoadingDots size="sm" /> : "Save changes"}
+          <Button type="submit" disabled={saving || saved}>
+            {saving ? (
+              <LoadingDots size="sm" />
+            ) : saved ? (
+              <>
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={3}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  {/* dasharray 24 ≈ path length; the check-draw animation
+                      sweeps dashoffset 24→0 so the tick appears to be drawn. */}
+                  <path
+                    d="M5 13l4 4L19 7"
+                    strokeDasharray={24}
+                    strokeDashoffset={24}
+                    className="animate-check-draw"
+                  />
+                </svg>
+                Saved
+              </>
+            ) : (
+              "Save changes"
+            )}
           </Button>
         </form>
       </Card>

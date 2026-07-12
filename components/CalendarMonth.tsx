@@ -4,13 +4,16 @@
 // day. Clicking a chip calls onSelectSet (the page opens SetDetailModal).
 // Days with more sets than fit show a "+N more" button that opens a small
 // day list. Fully Tailwind-styled; light + dark aware.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import Link from "next/link";
 import Modal from "./common/Modal";
 import StatusBadge from "./StatusBadge";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
+import LoadingDots from "./common/LoadingDots";
+import { INSTRUMENT_LABELS, type AssignmentStatus } from "@/lib/constants";
 import { formatTime } from "@/lib/dates";
 import { setStatus } from "@/lib/setStatus";
-import type { ApiSet } from "@/lib/types";
+import type { ApiSet, ApiSwapRequest } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 // How many chips to show in a cell before collapsing into "+N more".
@@ -51,12 +54,19 @@ export default function CalendarMonth({
   sets,
   myId,
   onSelectSet,
+  onConfirm,
+  takeableSwaps = [],
   isAdmin = false,
   onCreateOnDay,
 }: {
   sets: ApiSet[];
   myId?: string;
   onSelectSet: (set: ApiSet) => void;
+  // Confirm one of my assignments straight from its calendar popover.
+  onConfirm?: (assignmentId: string) => Promise<void>;
+  // Open cover requests the current user could take (from /api/swaps). A chip
+  // whose set has one shows a "you can cover this" popover linking to /swaps.
+  takeableSwaps?: ApiSwapRequest[];
   isAdmin?: boolean;
   // Admin only: clicking a day cell's hover "+" opens the create form there.
   onCreateOnDay?: (date: Date) => void;
@@ -105,6 +115,17 @@ export default function CalendarMonth({
   const isMine = (set: ApiSet) =>
     !!myId && set.assignments.some((a) => a.user.id === myId);
 
+  // setId → the cover requests on that set the current user could take.
+  const takeableBySet = useMemo(() => {
+    const map = new Map<string, ApiSwapRequest[]>();
+    for (const swap of takeableSwaps) {
+      const list = map.get(swap.set.id) ?? [];
+      list.push(swap);
+      map.set(swap.set.id, list);
+    }
+    return map;
+  }, [takeableSwaps]);
+
   const monthLabel = viewMonth.toLocaleDateString(undefined, {
     month: "long",
     year: "numeric",
@@ -119,10 +140,16 @@ export default function CalendarMonth({
     ? setsByDay.get(dayKey(openDay)) ?? []
     : [];
 
+  // Whole weeks (Sun–Sat) shown — drives the day grid's row template.
+  const weekRows = cells.length / 7;
+
   return (
-    <div className="rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    // A flex column so the header + weekday labels stay put while the day grid
+    // fills the remaining height (and scrolls inside itself if the viewport is
+    // too short — keeping the page itself from scrolling).
+    <div className="flex h-full flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
       {/* Header: month title + navigation */}
-      <div className="flex items-center justify-between gap-2 px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between gap-2 px-4 py-3">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
           {monthLabel}
         </h2>
@@ -151,7 +178,7 @@ export default function CalendarMonth({
       </div>
 
       {/* Weekday labels */}
-      <div className="grid grid-cols-7 border-t border-gray-200 dark:border-gray-700">
+      <div className="grid shrink-0 grid-cols-7 border-t border-gray-200 dark:border-gray-700">
         {WEEKDAYS.map((w) => (
           <div
             key={w}
@@ -162,9 +189,13 @@ export default function CalendarMonth({
         ))}
       </div>
 
-      {/* Day grid */}
-      <div className="grid grid-cols-7">
-        {cells.map((date) => {
+      {/* Day grid — fills the remaining height, its rows sharing it evenly
+          (min 6rem each) and scrolling only when the viewport can't fit them. */}
+      <div
+        className="grid min-h-0 flex-1 grid-cols-7 overflow-y-auto"
+        style={{ gridTemplateRows: `repeat(${weekRows}, minmax(6rem, 1fr))` }}
+      >
+        {cells.map((date, i) => {
           const inMonth = date.getMonth() === month;
           const isToday = sameDay(date, today);
           // Past days (and days outside this month) are dimmed.
@@ -176,7 +207,7 @@ export default function CalendarMonth({
           return (
             <div
               key={date.toISOString()}
-              className={`group relative min-h-[104px] border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
+              className={`group relative min-h-0 overflow-hidden border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
                 muted
                   ? "bg-gray-50 text-gray-400 dark:bg-gray-900/50"
                   : "bg-white dark:bg-gray-800"
@@ -218,6 +249,8 @@ export default function CalendarMonth({
                     mine={isMine(set)}
                     myId={myId}
                     onClick={() => onSelectSet(set)}
+                    onConfirm={onConfirm}
+                    covers={takeableBySet.get(set.id) ?? []}
                   />
                 ))}
                 {overflow > 0 && (
@@ -282,25 +315,107 @@ export default function CalendarMonth({
 
 // One set rendered as a compact, clickable chip inside a day cell. A colored
 // dot shows the set's confirmation status; hovering a set you're on reveals a
-// popover with the role(s) you're playing and whether you've confirmed.
+// popover with the role(s) you're playing, where you can confirm each.
 function SlotChip({
   set,
   mine,
   myId,
   onClick,
+  onConfirm,
+  covers,
 }: {
   set: ApiSet;
   mine: boolean;
   myId?: string;
   onClick: () => void;
+  onConfirm?: (assignmentId: string) => Promise<void>;
+  // Cover requests on this set the current user could take (may be empty).
+  covers: ApiSwapRequest[];
 }) {
   const dot = setStatusDot(set);
   const myAssignments = myId
     ? set.assignments.filter((a) => a.user.id === myId)
     : [];
+  // Id of the assignment whose confirm is in flight (shows dots on that row).
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  // A popover shows for sets I'm on (confirm my roles) and/or sets with a cover
+  // request I could take (link to the swaps tab).
+  const hasPopover = myAssignments.length > 0 || covers.length > 0;
+  const chipRef = useRef<HTMLDivElement>(null);
+  // Popover viewport position, or null when hidden. We render the popover into
+  // a body portal with `fixed` positioning so the calendar card's
+  // `overflow-hidden` (there for its rounded corners) can't clip it — the old
+  // absolute popover was cut off at the card's edge.
+  const [pop, setPop] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+  } | null>(null);
+  // Grace timer so the pointer can travel from chip into the popover across the
+  // small gap without it closing.
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const POPOVER_WIDTH = 288; // matches w-72
+
+  function openPopover() {
+    if (!hasPopover || !chipRef.current) return;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    const rect = chipRef.current.getBoundingClientRect();
+    const margin = 8;
+    // Keep the popover on-screen horizontally.
+    const left = Math.min(
+      Math.max(rect.left, margin),
+      window.innerWidth - POPOVER_WIDTH - margin
+    );
+    // Flip above the chip when there's not enough room below and more room up.
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUp = spaceBelow < 200 && rect.top > spaceBelow;
+    setPop(
+      openUp
+        ? { left, bottom: window.innerHeight - rect.top }
+        : { left, top: rect.bottom }
+    );
+  }
+
+  function scheduleClose() {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setPop(null), 80);
+  }
+
+  function cancelClose() {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+  }
+
+  // A fixed-positioned popover would drift on scroll/resize — just close it.
+  useEffect(() => {
+    if (!pop) return;
+    const close = () => setPop(null);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [pop]);
+
+  async function confirm(assignmentId: string) {
+    if (!onConfirm) return;
+    setBusyId(assignmentId);
+    try {
+      await onConfirm(assignmentId);
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   return (
-    <div className="group relative">
+    <div
+      ref={chipRef}
+      className="relative"
+      onMouseEnter={openPopover}
+      onMouseLeave={scheduleClose}
+    >
       <button
         onClick={onClick}
         title={`${set.label ?? "Worship Set"} · ${formatTime(set.startsAt)}`}
@@ -321,26 +436,110 @@ function SlotChip({
         </span>
       </button>
 
-      {/* Hover popover: the roles I'm playing on this set + my status. */}
-      {mine && myAssignments.length > 0 && (
-        <div className="pointer-events-none absolute left-0 top-full z-30 mt-1 hidden min-w-[11rem] rounded-lg border border-gray-200 bg-white p-2 text-xs shadow-lg group-hover:block dark:border-gray-700 dark:bg-gray-800">
-          <p className="mb-1 font-semibold text-gray-900 dark:text-gray-100">
-            {set.label ?? "Worship Set"}
-          </p>
-          <ul className="space-y-1">
-            {myAssignments.map((a) => (
-              <li
-                key={a.id}
-                className="flex items-center justify-between gap-3 text-gray-700 dark:text-gray-300"
-              >
-                <span>{INSTRUMENT_LABELS[a.role]}</span>
-                <StatusBadge status={a.status} />
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* Hover popover: the roles I'm playing on this set, each with a confirm
+          control. Portaled to <body> so it escapes the calendar card's clip.
+          The py padding bridges the gap to the chip so the pointer can travel
+          into the popover without it closing. */}
+      {hasPopover &&
+        pop &&
+        createPortal(
+          <div
+            className="fixed z-50 w-72 max-w-[calc(100vw-1rem)]"
+            style={{ left: pop.left, top: pop.top, bottom: pop.bottom }}
+            onMouseEnter={cancelClose}
+            onMouseLeave={scheduleClose}
+          >
+            <div className={pop.bottom !== undefined ? "pb-1" : "pt-1"}>
+              <div className="rounded-lg border border-gray-200 bg-white p-2.5 text-xs shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                <p className="mb-1.5 font-semibold text-gray-900 dark:text-gray-100">
+                  {set.label ?? "Worship Set"}
+                </p>
+                {myAssignments.length > 0 && (
+                  <ul className="space-y-1.5">
+                    {myAssignments.map((a) => (
+                      <li
+                        key={a.id}
+                        className="flex items-center justify-between gap-3 whitespace-nowrap text-gray-700 dark:text-gray-300"
+                      >
+                        <span>{INSTRUMENT_LABELS[a.role]}</span>
+                        <ConfirmControl
+                          status={a.status}
+                          busy={busyId === a.id}
+                          canConfirm={!!onConfirm}
+                          onConfirm={() => confirm(a.id)}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Cover requests I could take on this set — link straight to
+                    the matching entry on the swaps tab to hit "Take this set". */}
+                {covers.length > 0 && (
+                  <div
+                    className={
+                      myAssignments.length > 0
+                        ? "mt-2 border-t border-gray-200 pt-2 dark:border-gray-700"
+                        : ""
+                    }
+                  >
+                    <p className="mb-1 text-gray-500 dark:text-gray-400">
+                      Cover needed — you can take{" "}
+                      {covers.map((c) => INSTRUMENT_LABELS[c.role]).join(", ")}.
+                    </p>
+                    <Link
+                      href={`/swaps#cover-${covers[0].id}`}
+                      className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      Take this set →
+                    </Link>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
+  );
+}
+
+// The per-role confirm control in a chip's popover: a yellow "Confirm" button
+// while pending that flips to a green "Confirmed" pill once done. Swap requests
+// keep their red status badge (nothing to confirm there).
+function ConfirmControl({
+  status,
+  busy,
+  canConfirm,
+  onConfirm,
+}: {
+  status: AssignmentStatus;
+  busy: boolean;
+  canConfirm: boolean;
+  onConfirm: () => void;
+}) {
+  if (busy) {
+    return <LoadingDots className="text-indigo-600 dark:text-indigo-400" />;
+  }
+  if (status === "CONFIRMED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-green-500 px-2.5 py-0.5 text-xs font-semibold text-white">
+        ✓ Confirmed
+      </span>
+    );
+  }
+  if (status === "SWAP_REQUESTED") {
+    return <StatusBadge status={status} />;
+  }
+  // PENDING (and no confirm handler falls back to the plain badge).
+  if (!canConfirm) return <StatusBadge status={status} />;
+  return (
+    <button
+      onClick={onConfirm}
+      className="rounded-full bg-yellow-400 px-2.5 py-0.5 text-xs font-semibold text-yellow-950 transition-colors hover:bg-yellow-500"
+    >
+      Confirm
+    </button>
   );
 }
 

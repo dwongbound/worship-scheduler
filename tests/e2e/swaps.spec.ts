@@ -34,7 +34,7 @@ test("kate sees the red dot and the open swap request", async ({ page }) => {
   await expect(request).toBeVisible();
 });
 
-test("kate takes the swap and the set becomes hers (pending)", async ({ page }) => {
+test("kate takes the swap and the set becomes hers (confirmed)", async ({ page }) => {
   await login(page, "kate");
   await page.goto("/swaps");
 
@@ -44,12 +44,13 @@ test("kate takes the swap and the set becomes hers (pending)", async ({ page }) 
     .getByRole("button", { name: "Take this set" })
     .click();
 
-  // It now appears under MY sets as pending confirmation.
+  // Taking a cover is itself the commitment, so it lands already confirmed —
+  // no separate confirm step needed.
   const myCard = page
     .locator("li")
     .filter({ hasText: "Sunday Morning — Drums" })
     .first();
-  await expect(myCard.getByText("Pending confirmation")).toBeVisible();
+  await expect(myCard.getByText("Confirmed")).toBeVisible();
 
   // And bob's request is gone from the open list.
   await expect(page.getByText("requested by Bob Baker")).not.toBeVisible();

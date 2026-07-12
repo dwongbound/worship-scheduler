@@ -41,11 +41,13 @@ git push -u origin main
 
 ## 4. Create the database tables (one-time)
 
-The app uses `prisma db push` (no migration files). Point it at Neon **once**:
+The app uses `prisma migrate deploy` against the committed migration history
+in `prisma/migrations/`. Point it at Neon **once**:
 
 ```bash
-# Uses your real env, NOT env/dev.env:
-DATABASE_URL="<neon-pooled-url>" npm run db:push:prod
+# Uses your real env, NOT env/dev.env. Use the DIRECT (non-pooled) connection
+# string here — migrations should not run through the pooler.
+DATABASE_URL="<neon-direct-url>" npm run db:migrate:deploy:prod
 ```
 
 > ⚠️ Do **not** run `npm run db:seed` against production — the seed wipes all
@@ -68,15 +70,16 @@ the first one directly:
 ## Ongoing deploys
 
 Every `git push` to `main` triggers an automatic Vercel build + deploy. When you
-change `prisma/schema.prisma`, re-run the `db:push:prod` command from step 4
-against Neon (Vercel does not touch the schema).
+change `prisma/schema.prisma`, first generate a migration locally
+(`npx prisma migrate dev --name <description>`), commit the new
+`prisma/migrations/` folder, then re-run the `db:migrate:deploy:prod` command
+from step 4 against Neon (Vercel does not touch the schema).
 
 ## Notes / gotchas
 
 - **Timezone:** recurring set times use the server `TZ`. If it's wrong, times
   shift. Keep `TZ` set on Vercel.
-- **Pooled vs direct URL:** use the `-pooler` URL for the app. If you ever add
-  real Prisma migrations, use the **direct** (non-pooled) URL for
-  `prisma migrate` / `db push`.
+- **Pooled vs direct URL:** use the `-pooler` URL for the app at runtime, but
+  the **direct** (non-pooled) URL when running `prisma migrate deploy`.
 - **Vercel Hobby is non-commercial / single-developer.** Fine for a church
   team; upgrade to Pro ($20/mo) if you need collaborators on the dashboard.
