@@ -56,7 +56,6 @@ export const authOptions: NextAuthOptions = {
           id: user.id,
           name: user.name,
           email: user.email ?? undefined,
-          isAdmin: user.isAdmin,
         };
       },
     }),
@@ -149,12 +148,10 @@ export const authOptions: NextAuthOptions = {
           });
           if (dbUser) {
             token.id = dbUser.id;
-            token.isAdmin = dbUser.isAdmin;
             token.name = dbUser.name;
           }
         } else {
           token.id = user.id;
-          token.isAdmin = (user as { isAdmin?: boolean }).isAdmin ?? false;
         }
       }
       // Profile page calls useSession().update({ name }) after edits so
@@ -162,12 +159,23 @@ export const authOptions: NextAuthOptions = {
       if (trigger === "update" && session?.name) {
         token.name = session.name;
       }
+      // Org memberships ride on the token as UI hints (tab visibility, org
+      // dropdown) — the server re-checks the db on every admin request. Load
+      // them on sign-in and on ANY useSession().update() call, which is how
+      // the /join page refreshes tabs right after redeeming a key.
+      if (token.id && (user || trigger === "update")) {
+        const rows = await prisma.orgMembership.findMany({
+          where: { userId: token.id },
+          select: { orgId: true, isAdmin: true },
+        });
+        token.memberships = rows;
+      }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
         session.user.id = token.id as string;
-        session.user.isAdmin = (token.isAdmin as boolean) ?? false;
+        session.user.memberships = token.memberships ?? [];
       }
       return session;
     },
@@ -178,19 +186,18 @@ export const authOptions: NextAuthOptions = {
 export async function getSessionUser() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) return null;
+  // The JWT stays cryptographically valid even after its user row is gone
+  // (e.g. the account was deleted, or a dev reseed rebuilt the table with new
+  // ids). Re-check the id against the db so a "ghost" session is treated as
+  // logged-out — every API route then 401s and the client guard boots it to
+  // /login instead of silently rendering an empty app.
+  const exists = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { id: true },
+  });
+  if (!exists) return null;
   return session.user;
 }
 
-/**
- * Like getSessionUser but re-checks isAdmin against the DB — so revoking
- * admin takes effect immediately instead of waiting for the JWT to expire.
- */
-export async function getAdminUser() {
-  const user = await getSessionUser();
-  if (!user) return null;
-  const dbUser = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { isAdmin: true },
-  });
-  return dbUser?.isAdmin ? user : null;
-}
+// Admin checks are per-org now — see requireOrgAdmin / requireOrgAdminFor in
+// lib/org.ts (the old global getAdminUser() was removed with User.isAdmin).

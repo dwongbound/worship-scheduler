@@ -3,22 +3,34 @@
 Web app to schedule worship teams, request set swaps, track availability, and
 auto-generate rosters.
 
-**Stack:** Next.js 14 (App Router) · React 18 · TypeScript · Tailwind
-(class-based dark mode) · NextAuth (credentials + bcrypt) · Prisma · PostgreSQL
-· Vitest (unit) · Playwright (e2e) · Docker.
+**Stack:** Next.js 16 (App Router) · React 19 · TypeScript 6 · Tailwind v4
+(`@tailwindcss/postcss`; class-based dark mode — `darkMode: "class"`, `.dark`
+toggled on `<html>`) · NextAuth 4 (credentials + bcryptjs; optional Google
+OAuth, env-gated) · Prisma 7 (`prisma-client` generator → `lib/generated/prisma`,
+via driver adapter `@prisma/adapter-pg`) · PostgreSQL · Vitest (unit) ·
+Playwright (e2e) · Docker.
 
 ## Layout
 
-- `app/` — App Router pages: `calendar`, `swaps`, `schedule`, `create`
-  (admin), `profile`, `login`, plus `api/**` route handlers. `layout.tsx`
-  holds the pre-hydration theme script; `loading.tsx` renders the splash.
+- `app/` — App Router pages: home dashboard (`page.tsx`), `calendar`, `swaps`,
+  `schedule`, `create` (admin), `users` (admin team management — grant/revoke admin,
+  edit instruments), `profile`, `login`, plus `api/**` route handlers.
+  `layout.tsx` holds the pre-hydration theme script; `loading.tsx` renders the
+  splash; `providers.tsx` wraps NextAuth + theme.
 - `components/` — `Navbar.tsx`, `Logo.tsx` (the "tw" monogram), modals,
   and `components/common/` reusable primitives.
 - `lib/` — pure logic: `scheduler.ts` (greedy roster fill, unit-tested),
-  `auth.ts`, `dates.ts`, `ics.ts`, `stats.ts`, `theme.ts`, `prisma.ts`,
-  `constants.ts` (`SLOT_CAPACITIES` = team shape).
-- `prisma/` — `schema.prisma` + `seed.ts`. A `Set` has `Assignment`s; each
-  assignment = one `User` in one role slot.
+  `auth.ts`, `dates.ts`, `ics.ts`, `stats.ts`, `theme.ts`, `setStatus.ts`
+  (set → empty/confirmed/unconfirmed/cover), `constants.ts` (`SLOT_CAPACITIES`
+  = team shape; `resolveCapacities` is THE way to read a set's shape),
+  `api.ts` (`fetchJsonArray` client helper), `types.ts` (`Api*` server shapes
+  and `Staged*` create-flow shapes). `prisma.ts` wraps the generated client
+  (`lib/generated/prisma`, gitignored); always import from `@/lib/prisma`.
+- `prisma/` — `schema.prisma` + `seed.ts` + `migrations/` (SQL history,
+  applied via `prisma migrate deploy`). A `Set` has `Assignment`s; each
+  assignment = one `User` in one role slot, and one user may fill several roles
+  on a set (unique key = `setId + userId + role`). `seed.ts` wipes and reseeds
+  demo data (`password123`) — dev/test only, never run in prod.
 - `tests/unit/` (vitest, lib logic only) · `tests/e2e/` (playwright).
 
 ## Commands (need node 20; on this machine node runs inside Docker)
@@ -27,6 +39,10 @@ auto-generate rosters.
 - Unit: `npm run test:unit` · E2E: `npm run test:e2e` (needs test db up)
 - All tests in a container: `docker compose --profile test up --abort-on-container-exit`
 - `npm run typecheck` · `npm run db:push` · `npm run db:seed`
+- Deploy: Vercel (app) + Neon (Postgres), free tier — see `DEPLOY.md`. The
+  `build` script runs `prisma generate` first (the client is gitignored).
+  `npm run db:migrate:deploy:prod` applies committed migrations to a prod DB
+  from ambient env (generate new ones locally with `prisma migrate dev`).
 
 ## Conventions
 
@@ -52,5 +68,7 @@ auto-generate rosters.
 ## Gotchas
 
 - Timezones: recurring times are interpreted in the server `TZ` (env files,
-  default `America/Los_Angeles`). Keep app + db containers on the same TZ.
+  default `America/Los_Angeles`). Keep app + db containers on the same TZ. In
+  serverless prod (Vercel) the default is UTC — set the `TZ` env var or times shift.
 - Playwright `global-setup.ts` force-resets + reseeds the test db every run.
+- We use proxy.ts instead of middleware.ts in this version of nextAuth.

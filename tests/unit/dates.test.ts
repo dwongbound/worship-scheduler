@@ -1,6 +1,6 @@
 // Unit tests for recurrence expansion (lib/dates.ts).
 import { describe, expect, it } from "vitest";
-import { upcomingOccurrences } from "@/lib/dates";
+import { occurrencesInRange, upcomingOccurrences } from "@/lib/dates";
 
 describe("upcomingOccurrences", () => {
   // Thursday Jan 1 2026, 10:00 local time.
@@ -43,5 +43,31 @@ describe("upcomingOccurrences", () => {
     const dates = upcomingOccurrences(1, 1170, 1, FROM);
     expect(dates[0].getHours()).toBe(19);
     expect(dates[0].getMinutes()).toBe(30);
+  });
+});
+
+describe("occurrencesInRange", () => {
+  it("returns every matching weekday within [from, to] inclusive", () => {
+    // Mondays at 19:00 from Jan 1 (Thu) through Jan 26 (Mon).
+    const from = new Date(2026, 0, 1);
+    const to = new Date(2026, 0, 26, 23, 59);
+    const dates = occurrencesInRange(1, 19 * 60, from, to);
+    // Jan 5, 12, 19, 26.
+    expect(dates.map((d) => d.getDate())).toEqual([5, 12, 19, 26]);
+    for (const d of dates) expect(d.getDay()).toBe(1);
+  });
+
+  it("excludes occurrences before `from`", () => {
+    // Start mid-week: the Monday Jan 5 is the first hit after Jan 2.
+    const from = new Date(2026, 0, 2, 12, 0);
+    const to = new Date(2026, 0, 20);
+    const dates = occurrencesInRange(1, 9 * 60, from, to);
+    expect(dates[0].getDate()).toBe(5);
+  });
+
+  it("returns nothing when no matching day falls in the window", () => {
+    const from = new Date(2026, 0, 6); // Tue
+    const to = new Date(2026, 0, 8); // Thu — no Sunday between
+    expect(occurrencesInRange(0, 9 * 60, from, to)).toHaveLength(0);
   });
 });

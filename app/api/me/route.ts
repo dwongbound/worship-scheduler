@@ -20,10 +20,23 @@ export async function GET() {
       email: true,
       slackUserId: true,
       instruments: true,
+      // AuthGate reads this to route membership-less accounts to /join.
+      memberships: {
+        select: { orgId: true, isAdmin: true, org: { select: { name: true } } },
+      },
     },
   });
+  if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  return NextResponse.json(me);
+  const { memberships, ...fields } = me;
+  return NextResponse.json({
+    ...fields,
+    memberships: memberships.map((m) => ({
+      orgId: m.orgId,
+      orgName: m.org.name,
+      isAdmin: m.isAdmin,
+    })),
+  });
 }
 
 export async function PUT(req: NextRequest) {

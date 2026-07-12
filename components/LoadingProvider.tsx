@@ -34,6 +34,9 @@ export function usePageLoading(loading: boolean) {
   const { report } = useContext(LoadingContext);
   useEffect(() => {
     report(loading);
+    // A page that unmounts while still loading (e.g. AuthGate redirecting to
+    // /join mid-fetch) must release the overlay, or it covers the next page.
+    return () => report(false);
   }, [loading, report]);
 }
 

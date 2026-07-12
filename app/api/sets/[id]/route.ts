@@ -1,9 +1,10 @@
-// PATCH /api/sets/:id — edit a set's notes. Allowed for admins and for the
-// set's worship leader (they run the set, so they own its notes).
-// DELETE /api/sets/:id — an admin removes a set entirely (its assignments
+// PATCH /api/sets/:id — edit a set's notes. Allowed for the set's org admins
+// and for the set's worship leader (they run the set, so they own its notes).
+// DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser, getAdminUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/auth";
+import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 
 export async function PATCH(
@@ -21,8 +22,16 @@ export async function PATCH(
     return NextResponse.json({ error: "notes is required" }, { status: 400 });
   }
 
-  // Permission: an admin, or the worship leader assigned to this set.
-  const admin = await getAdminUser();
+  const set = await prisma.set.findUnique({
+    where: { id },
+    select: { orgId: true },
+  });
+  if (!set) {
+    return NextResponse.json({ error: "Set not found" }, { status: 404 });
+  }
+
+  // Permission: an admin of the set's org, or its assigned worship leader.
+  const admin = await requireOrgAdminFor(set.orgId);
   let allowed = !!admin;
   if (!allowed) {
     const leaderSlot = await prisma.assignment.findFirst({
@@ -34,31 +43,31 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  try {
-    const set = await prisma.set.update({
-      where: { id },
-      data: { notes: body.notes.trim() || null },
-    });
-    return NextResponse.json(set);
-  } catch {
-    return NextResponse.json({ error: "Set not found" }, { status: 404 });
-  }
+  const updated = await prisma.set.update({
+    where: { id },
+    data: { notes: body.notes.trim() || null },
+  });
+  return NextResponse.json(updated);
 }
 
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const admin = await getAdminUser();
+  const { id } = await params;
+  const set = await prisma.set.findUnique({
+    where: { id },
+    select: { orgId: true },
+  });
+  if (!set) {
+    return NextResponse.json({ error: "Set not found" }, { status: 404 });
+  }
+  const admin = await requireOrgAdminFor(set.orgId);
   if (!admin) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { id } = await params;
   // Assignments cascade on Set delete (see schema onDelete: Cascade).
-  const result = await prisma.set.deleteMany({ where: { id } });
-  if (result.count === 0) {
-    return NextResponse.json({ error: "Set not found" }, { status: 404 });
-  }
+  await prisma.set.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }

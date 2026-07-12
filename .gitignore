@@ -56,3 +56,7 @@ Thumbs.db
 *.pem
 *.tsbuildinfo
 next-env.d.ts
+
+# Local debug artifacts (Playwright traces etc.)
+scratchpad/
+test-results/

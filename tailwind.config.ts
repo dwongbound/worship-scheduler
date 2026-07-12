@@ -48,12 +48,19 @@ const config: Config = {
           "0%": { transform: "scale(0.6)", opacity: "0.6" },
           "100%": { transform: "scale(1.8)", opacity: "0" },
         },
+        // Draws a checkmark by animating the SVG stroke into view (the path
+        // sets `stroke-dasharray/-dashoffset: 24` so it starts hidden).
+        "check-draw": {
+          "0%": { strokeDashoffset: "24" },
+          "100%": { strokeDashoffset: "0" },
+        },
       },
       animation: {
         jump: "jump 1.2s ease-in-out infinite",
         equalize: "equalize 1s ease-in-out infinite",
         "pulse-name": "pulse-name 1.8s ease-in-out infinite",
         radiate: "radiate 2s ease-out infinite",
+        "check-draw": "check-draw 0.4s ease-out forwards",
       },
     },
   },

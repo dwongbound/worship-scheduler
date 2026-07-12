@@ -1,8 +1,10 @@
-// GET /api/availability-request — the active (most recent) availability
-// request, plus whether the current user still needs to respond to it.
-// Powers the Availabilities red dot + reminder banner + the schedule page.
+// GET /api/availability-request — each of my orgs' active (most recent)
+// availability request, plus whether I still need to respond to it.
+// Powers the Availabilities red dot + reminder banner (dot lights if ANY
+// org has an unanswered active request).
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
@@ -11,19 +13,32 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [request, me] = await Promise.all([
-    prisma.availabilityRequest.findFirst({ orderBy: { createdAt: "desc" } }),
-    prisma.user.findUnique({
-      where: { id: user.id },
-      select: { scheduleCompletedAt: true },
-    }),
-  ]);
+  const orgIds = await getMyOrgIds(user.id);
 
-  // The user needs to respond if there's a request and they haven't marked
-  // their availability complete since it was made.
-  const needsResponse =
-    !!request &&
-    (!me?.scheduleCompletedAt || me.scheduleCompletedAt < request.createdAt);
+  // The most recent request per org (small N — one query per org is fine),
+  // joined with my response for it.
+  const items = (
+    await Promise.all(
+      orgIds.map(async (orgId) => {
+        const request = await prisma.availabilityRequest.findFirst({
+          where: { orgId },
+          orderBy: { createdAt: "desc" },
+          include: { org: { select: { id: true, name: true } } },
+        });
+        if (!request) return null;
+        const response = await prisma.availabilityResponse.findUnique({
+          where: {
+            userId_requestId: { userId: user.id, requestId: request.id },
+          },
+          select: { completedAt: true },
+        });
+        return { request, needsResponse: !response?.completedAt };
+      })
+    )
+  ).filter((item) => item !== null);
 
-  return NextResponse.json({ request, needsResponse });
+  return NextResponse.json({
+    items,
+    needsResponse: items.some((i) => i.needsResponse),
+  });
 }

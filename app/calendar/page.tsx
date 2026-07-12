@@ -2,18 +2,24 @@
 // Calendar tab (default): a full month calendar with every set shown as a
 // clickable slot chip (click → team roster modal) and .ics export. "See my
 // sets" expands a resizable sidebar listing the sets I'm on (see MySetsPanel).
+// The open set is mirrored in the URL as ?set=<id>, so its modal is the single
+// source of truth: link a set (copy the URL) and it reopens straight to that
+// set's roster.
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import Button from "@/components/common/Button";
+import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
 import CalendarMonth from "@/components/CalendarMonth";
 import SetDetailModal from "@/components/SetDetailModal";
 import CreateSetModal from "@/components/CreateSetModal";
-import StagedScheduleModal from "@/components/StagedScheduleModal";
 import MySetsPanel from "@/components/MySetsPanel";
-import { fetchJsonArray } from "@/lib/api";
+import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
+import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
+import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { setStatus, type SetStatus } from "@/lib/setStatus";
-import type { ApiAdminUser, ApiSet, StagedPlan, StagedSet } from "@/lib/types";
+import type { ApiAdminUser, ApiSet, ApiSwapRequest } from "@/lib/types";
 
 // Sidebar resize bounds. Dragging the divider so the panel would be narrower
 // than MIN_PANEL_WIDTH closes it (drag all the way right to dismiss).
@@ -21,49 +27,118 @@ const MIN_PANEL_WIDTH = 220;
 const maxPanelWidth = () =>
   typeof window === "undefined" ? 600 : Math.round(window.innerWidth * 0.6);
 
+// useSearchParams() must sit under a Suspense boundary, so the page export
+// just wraps the real component in one (see app/login/page.tsx).
 export default function CalendarPage() {
+  return (
+    <Suspense>
+      <CalendarView />
+    </Suspense>
+  );
+}
+
+function CalendarView() {
   const { data: session } = useSession();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [sets, setSets] = useState<ApiSet[] | null>(null);
-  const [selectedSet, setSelectedSet] = useState<ApiSet | null>(null);
+  // Cover requests the current user could take (already instrument-filtered by
+  // /api/swaps). Powers the "you can cover this" hover popover on the calendar.
+  const [takeableSwaps, setTakeableSwaps] = useState<ApiSwapRequest[]>([]);
+  // The open set is derived from the URL's ?set=<id>, not its own state — that
+  // way the URL and the modal can never drift apart.
+  const selectedSetId = searchParams.get("set");
+  const selectedSet = useMemo(
+    () => (selectedSetId ? sets?.find((s) => s.id === selectedSetId) ?? null : null),
+    [sets, selectedSetId]
+  );
   // Day whose inline "+" (admin) create form is open, or null.
   const [createDate, setCreateDate] = useState<Date | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
-  // Sidebar width; defaults to a quarter of the screen once mounted.
-  const [panelWidth, setPanelWidth] = useState(360);
-  // Admins get the team list to populate the modal's assignment dropdowns.
-  const [adminUsers, setAdminUsers] = useState<ApiAdminUser[]>([]);
-  // Calendar filters: show only my sets, and/or only sets in these statuses
-  // (empty set = all statuses).
-  const [mineOnly, setMineOnly] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<Set<SetStatus>>(new Set());
-  // A proposed team (from "Auto schedule") awaiting review, and whether the
-  // admin's "Apply" is in flight.
-  const [stagedPlan, setStagedPlan] = useState<StagedPlan | null>(null);
-  const [applying, setApplying] = useState(false);
+  // Sidebar width; defaults to ~30% of the screen once mounted.
+  const [panelWidth, setPanelWidth] = useState(420);
+  // Per-org admin user lists (assignment dropdowns are scoped to the open
+  // set's org; the person filter merges all of them).
+  const [adminUsersByOrg, setAdminUsersByOrg] = useState<
+    Record<string, ApiAdminUser[]>
+  >({});
+  // Calendar filters, both dropdowns. personFilter: "" = everyone, otherwise a
+  // userId — admins can pick anyone, non-admins get just "My sets" (their own
+  // id). statusFilter: "all" or one SetStatus.
+  const [personFilter, setPersonFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<SetStatus | "all">("all");
 
-  const isAdmin = !!session?.user?.isAdmin;
+  // Org context: the navbar switcher's view filter ("all" or one org), and
+  // which orgs I administer (gates the admin affordances per set).
+  const { orgs, viewOrgId, isAdminOf, isAdminAny } = useOrgs();
+  const isAdmin = isAdminAny;
 
   const refetchSets = useCallback(async () => {
-    const fresh = await fetchJsonArray<ApiSet>("/api/sets");
+    const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
+    const [fresh, swaps] = await Promise.all([
+      fetchJsonArray<ApiSet>(`/api/sets${orgParam}`),
+      fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
+    ]);
     setSets(fresh);
-    // Keep the open modal pointed at the refreshed copy of its set.
-    setSelectedSet((cur) =>
-      cur ? fresh.find((s) => s.id === cur.id) ?? null : cur
-    );
-  }, []);
+    setTakeableSwaps(swaps);
+  }, [viewOrgId]);
+
+  // Confirm one of my assignments straight from its calendar hover popover
+  // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot
+  // refreshes).
+  const confirmAssignment = useCallback(
+    async (assignmentId: string) => {
+      await fetch(`/api/assignments/${assignmentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "confirm" }),
+      });
+      await refetchSets();
+      window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
+    },
+    [refetchSets]
+  );
+
+  // Open a set: mirror its id into the URL so the modal can be linked/shared.
+  const selectSet = useCallback(
+    (set: ApiSet) => {
+      router.replace(`${pathname}?set=${set.id}`, { scroll: false });
+    },
+    [router, pathname]
+  );
+
+  // Close the modal by dropping ?set from the URL.
+  const closeSet = useCallback(() => {
+    router.replace(pathname, { scroll: false });
+  }, [router, pathname]);
 
   useEffect(() => {
     refetchSets();
+    // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
+    window.addEventListener(ORGS_CHANGED_EVENT, refetchSets);
+    return () => window.removeEventListener(ORGS_CHANGED_EVENT, refetchSets);
   }, [refetchSets]);
 
+  // One admin-users fetch per org I admin (the header names the org).
   useEffect(() => {
-    if (isAdmin) {
-      fetchJsonArray<ApiAdminUser>("/api/admin/users").then(setAdminUsers);
-    }
-  }, [isAdmin]);
+    const adminOrgIds = (orgs ?? []).filter((o) => o.isAdmin).map((o) => o.id);
+    if (adminOrgIds.length === 0) return;
+    Promise.all(
+      adminOrgIds.map(
+        async (orgId) =>
+          [
+            orgId,
+            await fetchJsonArray<ApiAdminUser>("/api/admin/users", {
+              headers: orgHeaders(orgId),
+            }),
+          ] as const
+      )
+    ).then((pairs) => setAdminUsersByOrg(Object.fromEntries(pairs)));
+  }, [orgs]);
 
   useEffect(() => {
-    setPanelWidth(Math.round(window.innerWidth * 0.25));
+    setPanelWidth(Math.round(window.innerWidth * 0.3));
   }, []);
 
   // Drag the divider to resize. The sidebar is flush to the viewport's right
@@ -97,47 +172,69 @@ export default function CalendarPage() {
   usePageLoading(!sets);
   if (!sets) return null;
 
-  // Commit a reviewed auto-scheduled team: the apply endpoint creates the set
-  // + its PENDING assignments (and, later, sends the notifications).
-  const applyPlan = async (stagedSets: StagedSet[]) => {
-    setApplying(true);
-    try {
-      await fetch("/api/admin/generate/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sets: stagedSets }),
-      });
-      setStagedPlan(null);
-      await refetchSets();
-    } finally {
-      setApplying(false);
-    }
-  };
-
-  // Toggle a status in/out of the active filter set.
-  const toggleStatus = (s: SetStatus) =>
-    setStatusFilter((prev) => {
-      const next = new Set(prev);
-      if (next.has(s)) next.delete(s);
-      else next.add(s);
-      return next;
-    });
-
-  // Apply the filters: "my sets" (I'm assigned) AND a status match (when any
-  // status chip is active; no chips = all statuses).
+  // Apply the filters: sets the chosen person is on (personFilter = "" is
+  // everyone) AND a status match (statusFilter = "all" matches every status).
   const visibleSets = sets.filter((s) => {
-    if (mineOnly && !s.assignments.some((a) => a.user.id === myId)) return false;
-    if (statusFilter.size > 0 && !statusFilter.has(setStatus(s))) return false;
+    if (personFilter && !s.assignments.some((a) => a.user.id === personFilter))
+      return false;
+    if (statusFilter !== "all" && setStatus(s) !== statusFilter) return false;
     return true;
   });
+
+  // People the admin person-filter can pick — every member across my admin
+  // orgs (deduped), except the current user (covered by "My sets").
+  const seen = new Set<string>();
+  const otherPeople = Object.values(adminUsersByOrg)
+    .flat()
+    .filter((u) => {
+      if (u.id === myId || seen.has(u.id)) return false;
+      seen.add(u.id);
+      return true;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // Header + calendar. Rendered either centered (panel closed) or as the
   // flex-1 left side that the sidebar pushes over (panel open).
   const mainColumn = (
-    <div className="min-w-0 flex-1 space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold">Calendar</h1>
-        <div className="flex items-center gap-2">
+    <div className="flex min-w-0 flex-1 flex-col gap-4">
+      {/* Screen-reader page title — the visual layout leads with the filters. */}
+      <h1 className="sr-only">Calendar</h1>
+      {/* Filters (by person + set status) with the actions pushed to the right,
+          all bottom-aligned so the buttons line up with the dropdowns. */}
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="w-52">
+          <Select
+            label={isAdmin ? "Show sets for" : "Show"}
+            value={personFilter}
+            onChange={(e) => setPersonFilter(e.target.value)}
+          >
+            <option value="">{isAdmin ? "Everyone" : "All sets"}</option>
+            {myId && <option value={myId}>My sets</option>}
+            {isAdmin &&
+              otherPeople.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+          </Select>
+        </div>
+        <div className="w-52">
+          <Select
+            label="Set status"
+            value={statusFilter}
+            onChange={(e) =>
+              setStatusFilter(e.target.value as SetStatus | "all")
+            }
+          >
+            <option value="all">All statuses</option>
+            <option value="confirmed">Confirmed</option>
+            <option value="unconfirmed">Unconfirmed</option>
+            <option value="cover">Cover requested</option>
+          </Select>
+        </div>
+
+        {/* Actions: right-aligned, bottom-aligned with the dropdown controls. */}
+        <div className="ml-auto flex items-center gap-2">
           {/* Plain link download: the browser sends session cookies along. */}
           <a href="/api/export" download>
             <Button variant="secondary">Export my sets (.ics)</Button>
@@ -147,52 +244,25 @@ export default function CalendarPage() {
             onClick={() => setPanelOpen((open) => !open)}
             aria-expanded={panelOpen}
           >
-            See my sets
+            My Upcoming Sets
             <ExpanderChevron open={panelOpen} />
           </Button>
         </div>
       </div>
 
-      {/* Filters: narrow to my sets and/or by confirmation status. */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
-          Filter:
-        </span>
-        <FilterChip active={mineOnly} onClick={() => setMineOnly((v) => !v)}>
-          My sets
-        </FilterChip>
-        <span className="mx-1 hidden h-5 w-px bg-gray-200 dark:bg-gray-700 sm:block" />
-        <FilterChip
-          active={statusFilter.has("confirmed")}
-          onClick={() => toggleStatus("confirmed")}
-          dot="bg-green-500"
-        >
-          Confirmed
-        </FilterChip>
-        <FilterChip
-          active={statusFilter.has("unconfirmed")}
-          onClick={() => toggleStatus("unconfirmed")}
-          dot="bg-amber-500"
-        >
-          Unconfirmed
-        </FilterChip>
-        <FilterChip
-          active={statusFilter.has("cover")}
-          onClick={() => toggleStatus("cover")}
-          dot="bg-red-500"
-        >
-          Cover requested
-        </FilterChip>
+      {/* The month calendar fills the leftover height; it scrolls internally
+          rather than growing the page. Click any slot chip for its full team. */}
+      <div className="min-h-0 flex-1">
+        <CalendarMonth
+          sets={visibleSets}
+          myId={myId}
+          onSelectSet={selectSet}
+          onConfirm={confirmAssignment}
+          takeableSwaps={takeableSwaps}
+          isAdmin={isAdmin}
+          onCreateOnDay={setCreateDate}
+        />
       </div>
-
-      {/* The month calendar. Click any slot chip for its full team. */}
-      <CalendarMonth
-        sets={visibleSets}
-        myId={myId}
-        onSelectSet={setSelectedSet}
-        isAdmin={isAdmin}
-        onCreateOnDay={setCreateDate}
-      />
     </div>
   );
 
@@ -200,54 +270,57 @@ export default function CalendarPage() {
     <>
       {/* Mobile: the month grid is far too dense for a phone and the resize
           sidebar needs a pointer, so we drop both and show just the "My sets"
-          list (tap a set for its full roster / to confirm / request cover). */}
-      <div className="space-y-6 md:hidden">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold">My sets</h1>
-          <a href="/api/export" download>
-            <Button variant="secondary">Export (.ics)</Button>
-          </a>
-        </div>
+          list (tap a set for its full roster / to confirm / request cover).
+          The panel brings its own heading + sort control; no .ics export on
+          phones. */}
+      <div className="md:hidden">
         <MySetsPanel
           sets={sets}
           myId={myId}
-          onSelectSet={setSelectedSet}
+          onSelectSet={selectSet}
           onChanged={refetchSets}
         />
       </div>
 
       {/* Desktop (md+): the full month calendar, with the optional resizable
-          "My sets" sidebar. */}
+          "My sets" sidebar. Each layout is capped to the viewport height so the
+          page itself never scrolls — the calendar (and the open sidebar) scroll
+          inside themselves instead. */}
       <div className="hidden md:block">
         {panelOpen ? (
           // Break out of the centered <main> to full viewport width so the
           // sidebar is a true quarter of the screen and pushes the calendar
-          // over. min-h + the default items-stretch make the panel column (and
-          // therefore its divider) span the full page height.
+          // over. The fixed height + items-stretch make the panel column (and
+          // therefore its divider) span the full available height.
           <div className="relative left-1/2 w-screen -translate-x-1/2 px-4">
-            <div className="flex min-h-[calc(100vh-8rem)]">
+            <div className="flex h-[calc(100dvh-7rem)] min-h-0">
               {mainColumn}
               <PanelDivider onPointerDown={startResize} />
               <MySetsPanel
                 width={panelWidth}
                 sets={sets}
                 myId={myId}
-                onSelectSet={setSelectedSet}
+                onSelectSet={selectSet}
                 onChanged={refetchSets}
               />
             </div>
           </div>
         ) : (
-          mainColumn
+          <div className="flex h-[calc(100dvh-7rem)] min-h-0">{mainColumn}</div>
         )}
       </div>
 
+      {/* Admin powers inside the modal are PER SET: only admins of the set's
+          org can edit it, and the assignment dropdowns list that org's
+          members. */}
       <SetDetailModal
         set={selectedSet}
-        onClose={() => setSelectedSet(null)}
+        onClose={closeSet}
         currentUserId={myId}
-        isAdmin={isAdmin}
-        users={adminUsers}
+        isAdmin={isAdminOf(selectedSet?.org?.id)}
+        users={
+          selectedSet?.org ? adminUsersByOrg[selectedSet.org.id] ?? [] : []
+        }
         onChanged={refetchSets}
       />
 
@@ -255,17 +328,6 @@ export default function CalendarPage() {
         date={createDate}
         onClose={() => setCreateDate(null)}
         onCreated={refetchSets}
-        onAutoSchedule={setStagedPlan}
-      />
-
-      {/* Review step for an auto-scheduled custom set — nothing is saved (or
-          announced) until the admin applies it. */}
-      <StagedScheduleModal
-        plan={stagedPlan}
-        users={adminUsers}
-        busy={applying}
-        onApply={applyPlan}
-        onClose={() => setStagedPlan(null)}
       />
     </>
   );
@@ -289,35 +351,6 @@ function PanelDivider({
     >
       <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-gray-200 transition-colors group-hover:bg-indigo-400 dark:bg-gray-700 dark:group-hover:bg-indigo-500" />
     </div>
-  );
-}
-
-// A toggle "pill" for the calendar filter bar. Active = filled teal; an
-// optional status dot precedes the label.
-function FilterChip({
-  active,
-  onClick,
-  dot,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  dot?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-pressed={active}
-      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-medium transition-colors ${
-        active
-          ? "border-indigo-600 bg-indigo-600 text-white"
-          : "border-gray-300 text-gray-700 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-      }`}
-    >
-      {dot && <span className={`h-2 w-2 rounded-full ${dot}`} />}
-      {children}
-    </button>
   );
 }
 

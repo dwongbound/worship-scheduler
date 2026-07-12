@@ -6,7 +6,7 @@
 // all derive from it.
 export const SLOT_CAPACITIES = {
   WORSHIP_LEADER: 1,
-  VOCALS: 4, // support vocalists
+  VOCALS: 4, // vox
   ACOUSTIC_GUITAR: 1,
   ELECTRIC_GUITAR: 2,
   KEYS: 2, // pianos
@@ -75,9 +75,32 @@ export const ROLE_ORDER: Instrument[] = [
   "VOCALS",
 ];
 
+// The only roles a musical director can lead from. A required-MD set is only
+// "covered" when an MD is assigned to one of these; the auto-scheduler seats a
+// reserved MD into one of them (never drums/vocals/etc.).
+export const MD_ROLES: Instrument[] = ["KEYS", "ELECTRIC_GUITAR", "BASS"];
+
+// A person normally fills at most one role on a set. The only sanctioned
+// double-ups are these unordered pairs: worship leader + acoustic guitar, and
+// acoustic guitar + vox. No other pairing is allowed (e.g. keys + electric
+// guitar), and a person may only double up when EVERY pair among their roles is
+// listed here — so worship leader + vox (not adjacent to acoustic) is out, as
+// is the three-way worship leader + acoustic + vox. See `rolesMayOverlap`.
+export const OVERLAP_ALLOWED_PAIRS: [Instrument, Instrument][] = [
+  ["WORSHIP_LEADER", "ACOUSTIC_GUITAR"],
+  ["ACOUSTIC_GUITAR", "VOCALS"],
+];
+
+// True if two distinct roles may be held by the same person on one set.
+export function rolesMayOverlap(a: Instrument, b: Instrument): boolean {
+  return OVERLAP_ALLOWED_PAIRS.some(
+    ([x, y]) => (x === a && y === b) || (x === b && y === a)
+  );
+}
+
 export const INSTRUMENT_LABELS: Record<Instrument, string> = {
   WORSHIP_LEADER: "Worship Leader",
-  VOCALS: "Support Vocals",
+  VOCALS: "Vox",
   ACOUSTIC_GUITAR: "Acoustic Guitar",
   ELECTRIC_GUITAR: "Electric Guitar",
   KEYS: "Piano / Keys",
@@ -91,6 +114,15 @@ export const STATUS_LABELS: Record<AssignmentStatus, string> = {
   CONFIRMED: "Confirmed",
   SWAP_REQUESTED: "Requesting cover",
 };
+
+export type SetHistoryEventType =
+  | "ADDED"
+  | "REMOVED"
+  | "REASSIGNED"
+  | "CONFIRMED"
+  | "SWAP_REQUESTED"
+  | "SWAP_CANCELED"
+  | "SWAP_TAKEN";
 
 export const DAY_LABELS = [
   "Sunday",

@@ -1,6 +1,6 @@
 // E2E: login flow + route protection.
 import { expect, test } from "@playwright/test";
-import { login } from "./helpers";
+import { login, orgKey } from "./helpers";
 
 test("redirects unauthenticated visitors to the login page", async ({ page }) => {
   await page.goto("/calendar");
@@ -30,9 +30,12 @@ test("logs out via the user dropdown", async ({ page }) => {
   await expect(page).toHaveURL(/\/login/);
 });
 
-// Login strategy 1: self-service sign-up (credentials). Creates a brand-new
-// profile and lands on the calendar, signed in.
-test("signs up a new account and lands on the calendar", async ({ page }) => {
+// Login strategy 1: self-service sign-up (credentials). A brand-new account
+// has no org membership, so it's gated at /join until it redeems an org key;
+// a bad key is rejected, the real one lands on the calendar, signed in.
+test("signs up a new account, joins an org by key, and lands on the calendar", async ({
+  page,
+}) => {
   await page.goto("/login");
   // Switch to the sign-up form via the bottom toggle.
   await page.getByRole("button", { name: "Sign up" }).click();
@@ -44,6 +47,22 @@ test("signs up a new account and lands on the calendar", async ({ page }) => {
   // Submit (the form's own "Sign up" button).
   await page.getByRole("button", { name: "Sign up" }).click();
 
+  // No memberships yet → the org-key gate, with no app chrome around it.
+  await expect(page).toHaveURL(/\/join/);
+  await expect(
+    page.getByRole("heading", { name: "Join your organization" })
+  ).toBeVisible();
+
+  // A wrong key is rejected in place…
+  await page.getByLabel("Organization key").fill("not-a-real-key");
+  await page.getByRole("button", { name: "Join" }).click();
+  await expect(
+    page.getByText("That key doesn't match any organization")
+  ).toBeVisible();
+
+  // …the real key gets us in.
+  await page.getByLabel("Organization key").fill(orgKey(0));
+  await page.getByRole("button", { name: "Join" }).click();
   await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
   await expect(page.getByText("New Member")).toBeVisible(); // navbar name
 });
