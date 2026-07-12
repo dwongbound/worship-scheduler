@@ -5,9 +5,9 @@ import type { MetadataRoute } from "next";
 // at /manifest.webmanifest and links it from every page automatically.
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Worship Scheduler",
+    name: "TapWorship",
     // Label under the home-screen icon (keep it short or iOS truncates it).
-    short_name: "Tap Worship",
+    short_name: "TapWorship",
     description: "Schedule worship teams, cover sets, and manage availability.",
     start_url: "/",
     // Open without browser chrome, like a native app.
