@@ -32,7 +32,7 @@ jobs:
           SEED_ADMIN_USERNAME=admin
           SEED_ADMIN_PASSWORD=password123
           ORG_KEYS=Sunday Church:test-sunday-key,Youth Ministry:test-youth-key
-          TZ=America/Los_Angeles
+          APP_TZ=America/Los_Angeles
           EOF
 
       # Same command as local: boots a throwaway postgres, installs deps,
