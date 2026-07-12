@@ -19,6 +19,14 @@ const nextConfig = {
     NEXT_PUBLIC_APP_VERSION: pkg.version,
     NEXT_PUBLIC_COMMIT_SHA: resolveCommitSha(),
   },
+  // "/" → the Calendar tab, as a plain HTTP redirect. This used to be an RSC
+  // redirect() in app/page.tsx, but that crashes production hydration with
+  // React #310 inside Next's app-router when an AUTHENTICATED user lands on
+  // "/" (e.g. right after an OAuth sign-in, whose default callback is "/") —
+  // see vercel/next.js#63121. An HTTP redirect runs before any React does.
+  async redirects() {
+    return [{ source: "/", destination: "/calendar", permanent: false }];
+  },
 };
 
 module.exports = nextConfig;
