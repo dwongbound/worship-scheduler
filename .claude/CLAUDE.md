@@ -69,6 +69,8 @@ Playwright (e2e) · Docker.
 
 - Timezones: recurring times are interpreted in the server `TZ` (env files,
   default `America/Los_Angeles`). Keep app + db containers on the same TZ. In
-  serverless prod (Vercel) the default is UTC — set the `TZ` env var or times shift.
+  serverless prod (Vercel) the default is UTC and `TZ` is a RESERVED env var —
+  set `APP_TZ` instead; `instrumentation.ts` pins `process.env.TZ` from it at
+  server startup (falls back to America/Los_Angeles).
 - Playwright `global-setup.ts` force-resets + reseeds the test db every run.
 - We use proxy.ts instead of middleware.ts in this version of nextAuth.
