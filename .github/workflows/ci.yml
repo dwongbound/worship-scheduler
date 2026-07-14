@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # env/ is gitignored (real secrets live there locally), so CI writes the
       # throwaway TEST values itself. Nothing here is secret.
       - name: Create env/test.env
@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Create env/test.env
         run: |
           mkdir -p env
