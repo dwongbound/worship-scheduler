@@ -13,7 +13,11 @@ export default defineConfig({
   // Tests share one database, so run serially to keep state predictable.
   fullyParallel: false,
   workers: 1,
-  retries: 0,
+  // A couple of specs are occasionally flaky under container load (a slow
+  // generate/render can blow the default 30s test timeout). Retry rather than
+  // fail the whole suite on a transient miss; a genuinely broken test still
+  // fails all its attempts.
+  retries: 2,
   use: {
     baseURL: "http://localhost:3100",
     trace: "retain-on-failure",

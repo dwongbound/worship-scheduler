@@ -18,23 +18,40 @@ export async function GET() {
       username: true,
       name: true,
       email: true,
-      slackUserId: true,
       instruments: true,
-      // AuthGate reads this to route membership-less accounts to /join.
+      // OAuth-only accounts (Google) are created with an empty passwordHash;
+      // the profile page hides "Change password" when there's no usable one.
+      passwordHash: true,
+      // AuthGate reads this to route membership-less accounts to /join; the
+      // profile page reads the per-org Slack fields for its connect UI.
       memberships: {
-        select: { orgId: true, isAdmin: true, org: { select: { name: true } } },
+        select: {
+          orgId: true,
+          isAdmin: true,
+          slackUserId: true,
+          org: {
+            select: { name: true, slackTeamName: true, slackBotToken: true },
+          },
+        },
       },
     },
   });
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { memberships, ...fields } = me;
+  // Never leak the hash itself — just whether one exists.
+  const { memberships, passwordHash, ...fields } = me;
   return NextResponse.json({
     ...fields,
+    hasPassword: !!passwordHash,
     memberships: memberships.map((m) => ({
       orgId: m.orgId,
       orgName: m.org.name,
       isAdmin: m.isAdmin,
+      slackUserId: m.slackUserId,
+      // Whether the ORG has connected Slack (bot installed) — Connect only
+      // helps once an admin has installed the bot for that workspace.
+      orgSlackConnected: !!m.org.slackBotToken,
+      slackTeamName: m.org.slackTeamName,
     })),
   });
 }
@@ -57,10 +74,11 @@ export async function PUT(req: NextRequest) {
     ? body.instruments.filter((i: string) => validInstruments.includes(i))
     : [];
 
+  // Slack member ids are per-org now (OrgMembership.slackUserId, set via the
+  // profile connect UI / PUT /api/memberships/[orgId]/slack) — not written here.
   const data: Record<string, unknown> = {
     name: body.name.trim(),
     email: body.email || null,
-    slackUserId: body.slackUserId || null,
     instruments,
   };
   if (typeof body.password === "string" && body.password.length > 0) {
@@ -77,11 +95,11 @@ export async function PUT(req: NextRequest) {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data,
-      select: { name: true, email: true, slackUserId: true, instruments: true },
+      select: { name: true, email: true, instruments: true },
     });
     return NextResponse.json(updated);
   } catch {
-    // Most likely a unique-constraint hit on email/slackUserId.
+    // Most likely a unique-constraint hit on email.
     return NextResponse.json(
       { error: "Email or Slack ID already in use" },
       { status: 400 }

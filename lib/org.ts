@@ -11,7 +11,7 @@
 //                             (routes addressed by resource id)
 import type { NextRequest } from "next/server";
 import { prisma } from "./prisma";
-import { getSessionUser } from "./auth";
+import { getSessionUser, isSuperAdmin } from "./auth";
 import { MIGRATION_PLACEHOLDER, parseOrgKeys } from "./orgKeys";
 
 // Sync env orgs into the db once per server process. The migration's
@@ -41,8 +41,18 @@ export function ensureOrgsSynced(): Promise<void> {
       }
     }
 
-    for (const { name } of entries) {
-      await prisma.org.upsert({ where: { name }, update: {}, create: { name } });
+    for (const { name, key } of entries) {
+      await prisma.org.upsert({
+        where: { name },
+        update: {},
+        create: { name, joinKey: key },
+      });
+      // Backfill the join key for orgs created before keys moved to the db.
+      // Only fill when null so a key rotated via the platform admin page wins.
+      await prisma.org.updateMany({
+        where: { name, joinKey: null },
+        data: { joinKey: key },
+      });
     }
   })().catch((err) => {
     // Allow a retry on the next call instead of caching the failure forever.
@@ -61,15 +71,15 @@ export async function redeemOrgKey(
   userId: string,
   key: string
 ): Promise<{ orgId: string; name: string } | null> {
+  // ensureOrgsSynced backfills any env-declared orgs/keys into the db first;
+  // after that the join key lives in the db (rotatable via the platform page).
   await ensureOrgsSynced();
-  const entry = parseOrgKeys().find((e) => e.key === key);
-  if (!entry) return null;
-
-  const org = await prisma.org.upsert({
-    where: { name: entry.name },
-    update: {},
-    create: { name: entry.name },
+  const org = await prisma.org.findFirst({
+    where: { joinKey: key },
+    select: { id: true, name: true },
   });
+  if (!org) return null;
+
   await prisma.orgMembership.upsert({
     where: { userId_orgId: { userId, orgId: org.id } },
     update: {},
@@ -105,6 +115,13 @@ export async function resolveOrgScope(
   userId: string,
   requestedOrgId: string | null
 ): Promise<string[]> {
+  // Super-admins can view any org, so their scope isn't clamped to memberships.
+  const user = await getSessionUser();
+  if (isSuperAdmin(user?.email)) {
+    if (requestedOrgId && requestedOrgId !== "all") return [requestedOrgId];
+    const all = await prisma.org.findMany({ select: { id: true } });
+    return all.map((o) => o.id);
+  }
   const mine = await getMyOrgIds(userId);
   if (requestedOrgId && requestedOrgId !== "all") {
     return mine.includes(requestedOrgId) ? [requestedOrgId] : [];
@@ -132,6 +149,9 @@ export async function requireOrgAdminFor(
 ): Promise<{ user: { id: string } } | null> {
   const user = await getSessionUser();
   if (!user) return null;
+  // Platform super-admins have admin rights in EVERY org (even ones they
+  // haven't joined) — they're the app owners.
+  if (isSuperAdmin(user.email)) return { user: { id: user.id } };
   const membership = await prisma.orgMembership.findUnique({
     where: { userId_orgId: { userId: user.id, orgId } },
     select: { isAdmin: true },

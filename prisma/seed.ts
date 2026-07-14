@@ -62,6 +62,10 @@ const USERS: {
   { username: "paul", name: "Paul Park", instruments: ["WORSHIP_LEADER", "ACOUSTIC_GUITAR", "VOCALS", "KEYS"], isAdmin: true, isMD: true, completed: true, prayer: true, college: true },
   { username: "quinn", name: "Quinn Quezada", instruments: ["STRINGS", "VOCALS"] },
   { username: "ruth", name: "Ruth Rivera", instruments: ["DRUMS", "BASS"], prayer: true, college: true },
+  // A brand-new member who has joined an org but not yet finished their
+  // profile: no instruments/roles picked. Drives the "finish setup" reminder
+  // dot + banner (see Navbar) — leave this account's instruments empty.
+  { username: "newbie", name: "Noah New", instruments: [] },
 ];
 
 /** Next future occurrence of a weekday at a given time (local tz). */

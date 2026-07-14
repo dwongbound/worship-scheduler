@@ -525,10 +525,21 @@ function TeamMembersModal({
   const [slackMsg, setSlackMsg] = useState<{ ok: boolean; text: string } | null>(
     null
   );
+  // Whether THIS team's org has connected its Slack bot. Posting a summary
+  // needs the org's token, so a channel id alone isn't enough.
+  const [orgSlackConnected, setOrgSlackConnected] = useState(false);
   useEffect(() => {
     setChannelId(team?.slackChannelId ?? "");
     setSlackMsg(null);
-  }, [team?.id, team?.slackChannelId]);
+    if (!team?.orgId) {
+      setOrgSlackConnected(false);
+      return;
+    }
+    fetch(`/api/slack/status?orgId=${team.orgId}`)
+      .then((r) => r.json())
+      .then((d) => setOrgSlackConnected(!!d.enabled))
+      .catch(() => setOrgSlackConnected(false));
+  }, [team?.id, team?.slackChannelId, team?.orgId]);
 
   if (!team) return null;
 
@@ -676,10 +687,15 @@ function TeamMembersModal({
           <Button
             size="sm"
             onClick={() => sendSummary(team)}
-            disabled={slackBusy || !team.slackChannelId}
+            disabled={slackBusy || !team.slackChannelId || !orgSlackConnected}
           >
             Send this week&rsquo;s sets
           </Button>
+          {!orgSlackConnected && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Connect this org&rsquo;s Slack first (org menu → settings).
+            </p>
+          )}
           {slackMsg && (
             <p
               className={`text-sm font-medium ${
