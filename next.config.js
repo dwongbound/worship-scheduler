@@ -14,9 +14,29 @@ function resolveCommitSha() {
   }
 }
 
+// Resolve the app version at build time. The version is the release marker,
+// so we read it from the nearest git tag (`vX.Y.Z`) instead of hard-coding it
+// — cut a release by tagging main, no bot committing back to the branch.
+// Order: explicit APP_VERSION env override (handy where git tags aren't in the
+// build sandbox, e.g. Vercel) → nearest git tag → package.json as a fallback.
+function resolveVersion() {
+  if (process.env.APP_VERSION) return process.env.APP_VERSION.replace(/^v/, "");
+  try {
+    const tag = execSync("git describe --tags --abbrev=0", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+    if (tag) return tag.replace(/^v/, "");
+  } catch {
+    // No tags yet, or git unavailable — fall through to package.json.
+  }
+  return pkg.version;
+}
+
 const nextConfig = {
   env: {
-    NEXT_PUBLIC_APP_VERSION: pkg.version,
+    NEXT_PUBLIC_APP_VERSION: resolveVersion(),
     NEXT_PUBLIC_COMMIT_SHA: resolveCommitSha(),
   },
   // "/" → the Calendar tab, as a plain HTTP redirect. This used to be an RSC

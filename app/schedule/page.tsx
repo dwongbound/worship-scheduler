@@ -335,7 +335,7 @@ export default function SchedulePage() {
           (the right column is desktop-only — hidden on mobile). */}
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         {/* ── Editors: desktop LEFT, mobile BELOW the Busy Blocks list ── */}
-        <div className="order-2 min-w-0 flex-1 space-y-6 lg:order-1">
+        <div data-tour="avail-editors" className="order-2 min-w-0 flex-1 space-y-6 lg:order-1">
           {/* Specific dates: respond to an admin's availability request by
               blocking out the dates you can't serve, then submit. */}
           <section className="space-y-3">
@@ -626,7 +626,7 @@ export default function SchedulePage() {
         <div className="order-1 min-w-0 flex-1 space-y-3 lg:order-2">
           <h2 className="text-xl font-bold">Busy Blocks</h2>
           {/* Calendar is desktop-only — too cramped on a phone. */}
-          <div className="hidden lg:block">
+          <div data-tour="avail-calendar" className="hidden lg:block">
             <AvailabilityCalendar
               entries={entries}
               onBlockDays={blockDays}

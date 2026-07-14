@@ -116,7 +116,14 @@ export default function CreatePage() {
     setStatusRequestId(reqs[0]?.id || "");
   }, [adminOrgId]);
 
+  // `reload`'s identity only changes when adminOrgId does, so this fires on an
+  // org switch (not the in-place reloads mutations trigger). Blank the page
+  // first so the full-page loader covers the swap and the previous org's data
+  // never lingers on screen; reload() then refills everything as one unit.
   useEffect(() => {
+    setTemplates(null);
+    setUsers(null);
+    setRequests(null);
     reload();
   }, [reload]);
 
@@ -453,7 +460,7 @@ export default function CreatePage() {
           {requests.length > 0 && (
             <div className="mb-3">
               <Select
-                label="TimeRange"
+                label="Request Name"
                 value={statusRequestId}
                 onChange={(e) => setStatusRequestId(e.target.value)}
               >
