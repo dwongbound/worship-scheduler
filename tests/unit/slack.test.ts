@@ -3,7 +3,6 @@
 // no-op path. The notify* helpers aren't tested here — they query prisma.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  slackEnabled,
   postDirectMessage,
   postToChannel,
   openGroupConversation,
@@ -38,19 +37,11 @@ afterEach(() => {
   delete process.env.SLACK_DRY_RUN;
 });
 
-describe("slackEnabled", () => {
-  it("is true only when SLACK_BOT_TOKEN is set", () => {
-    expect(slackEnabled()).toBe(true);
-    delete process.env.SLACK_BOT_TOKEN;
-    expect(slackEnabled()).toBe(false);
-  });
-});
-
 describe("when Slack is not configured", () => {
   it("postDirectMessage no-ops without calling fetch", async () => {
     delete process.env.SLACK_BOT_TOKEN;
     const fetchMock = mockFetchSequence();
-    const ok = await postDirectMessage("U123", "hi");
+    const ok = await postDirectMessage(null, "U123", "hi");
     expect(ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -58,7 +49,7 @@ describe("when Slack is not configured", () => {
   it("openGroupConversation returns null without calling fetch", async () => {
     delete process.env.SLACK_BOT_TOKEN;
     const fetchMock = mockFetchSequence();
-    const channel = await openGroupConversation(["U1", "U2"]);
+    const channel = await openGroupConversation(null, ["U1", "U2"]);
     expect(channel).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -70,10 +61,9 @@ describe("dry-run mode (SLACK_DRY_RUN=1)", () => {
     process.env.SLACK_DRY_RUN = "1";
     const fetchMock = mockFetchSequence();
 
-    expect(slackEnabled()).toBe(true);
     // Full DM path: conversations.open (fake channel id) → chat.postMessage.
-    expect(await postDirectMessage("U123", "hi")).toBe(true);
-    expect(await openGroupConversation(["U1", "U2"])).toBe("C_DRY_RUN");
+    expect(await postDirectMessage(null, "U123", "hi")).toBe(true);
+    expect(await openGroupConversation(null, ["U1", "U2"])).toBe("C_DRY_RUN");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -85,7 +75,7 @@ describe("postDirectMessage", () => {
       { ok: true } // chat.postMessage
     );
 
-    const ok = await postDirectMessage("U123", "hello");
+    const ok = await postDirectMessage("xoxb-test-token", "U123", "hello");
     expect(ok).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
@@ -107,7 +97,7 @@ describe("postDirectMessage", () => {
 
   it("returns false and stops if opening the DM fails", async () => {
     const fetchMock = mockFetchSequence({ ok: false, error: "user_not_found" });
-    const ok = await postDirectMessage("U123", "hello");
+    const ok = await postDirectMessage("xoxb-test-token", "U123", "hello");
     expect(ok).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1); // never reached postMessage
   });
@@ -116,7 +106,7 @@ describe("postDirectMessage", () => {
 describe("openGroupConversation", () => {
   it("opens an MPIM with the comma-joined ids and returns its channel id", async () => {
     const fetchMock = mockFetchSequence({ ok: true, channel: { id: "G42" } });
-    const channel = await openGroupConversation(["U1", "U2", "U3"]);
+    const channel = await openGroupConversation("xoxb-test-token", ["U1", "U2", "U3"]);
     expect(channel).toBe("G42");
     const [, init] = fetchMock.mock.calls[0];
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
@@ -126,7 +116,7 @@ describe("openGroupConversation", () => {
 
   it("returns null for an empty user list without calling fetch", async () => {
     const fetchMock = mockFetchSequence();
-    expect(await openGroupConversation([])).toBeNull();
+    expect(await openGroupConversation("xoxb-test-token", [])).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -134,7 +124,7 @@ describe("openGroupConversation", () => {
 describe("postToChannel", () => {
   it("returns false when Slack reports not-ok", async () => {
     mockFetchSequence({ ok: false, error: "channel_not_found" });
-    expect(await postToChannel("C1", "hi")).toBe(false);
+    expect(await postToChannel("xoxb-test-token", "C1", "hi")).toBe(false);
   });
 
   it("swallows fetch errors instead of throwing", async () => {
@@ -142,14 +132,14 @@ describe("postToChannel", () => {
       "fetch",
       vi.fn().mockRejectedValue(new Error("network down"))
     );
-    await expect(postToChannel("C1", "hi")).resolves.toBe(false);
+    await expect(postToChannel("xoxb-test-token", "C1", "hi")).resolves.toBe(false);
   });
 });
 
 describe("setConversationTopic", () => {
   it("posts the channel + topic and returns true on success", async () => {
     const fetchMock = mockFetchSequence({ ok: true });
-    const ok = await setConversationTopic("G42", "Sunday Set (July 12 · 10:00 AM)");
+    const ok = await setConversationTopic("xoxb-test-token", "G42", "Sunday Set (July 12 · 10:00 AM)");
     expect(ok).toBe(true);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("conversations.setTopic");
@@ -161,7 +151,7 @@ describe("setConversationTopic", () => {
 
   it("returns false when Slack reports not-ok", async () => {
     mockFetchSequence({ ok: false, error: "method_not_supported_for_channel_type" });
-    expect(await setConversationTopic("G42", "topic")).toBe(false);
+    expect(await setConversationTopic("xoxb-test-token", "G42", "topic")).toBe(false);
   });
 });
 

@@ -121,15 +121,22 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SEED_ADMIN_USERNAME` / `_PASSWORD` | used by `npm run db:seed` | — (don't seed) | — (**never** seed prod) |
 | `SLACK_DRY_RUN` | `1` (log, never send) | `1` (optional) | unset (send for real) |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² |
-| `SLACK_CLIENT_ID` / `_SECRET` / `_BOT_TOKEN` | optional³ | optional³ | set to enable Slack³ |
+| `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
+| `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
 ¹ Inside `docker compose` the compose file overrides the host `localhost` → the
 in-network service name (`db`), so the same file works host-side and in-container.
 ² Set **both** to enable "Continue with Google". Google/Slack OAuth need a stable
 public HTTPS URL, so they only work on staging/prod, not `localhost`.
-³ `lib/slack.ts` no-ops entirely when the bot token is unset; see `env/dev.env`
-for the Slack app-setup notes (scopes, redirect URIs).
+³ Slack is now a **per-org integration**, not a login method. `CLIENT_ID/SECRET`
+identify one distributed Slack app; each org installs the bot to its own
+workspace (org settings → "Connect to Slack"), which stores that workspace's bot
+token (encrypted) + members' per-org Slack ids on the `Org`/`OrgMembership` rows.
+There's no global `SLACK_BOT_TOKEN` for sending anymore. `SLACK_DRY_RUN=1` still
+logs instead of sending. Redirect URLs: `…/api/slack/{install,connect}/callback`.
+⁴ Comma-separated allowlist of platform super-admins (see the "Platform admin"
+menu → `/platform`). Env-only (bootstrap); everything else is managed in-app.
 
 ### Deploying (Vercel + Neon, free tier)
 

@@ -3,9 +3,13 @@ name: Migrate database
 # Applies the committed migration history (prisma/migrations/) to the Neon
 # branch that matches the git branch:
 #
-#   git dev     → GitHub environment "dev"        → Neon branch dev
-#   git staging → GitHub environment "staging"    → Neon branch staging
-#   git main    → GitHub environment "production" → Neon branch production
+#   git staging → GitHub environment "Preview"    → Neon branch staging
+#   git main    → GitHub environment "Production" → Neon branch production
+# (Names match the GitHub Environments UI exactly, incl. capitalization.)
+#
+# Auto-runs ONLY on merges into staging/main (the promotion points). The dev
+# Neon branch is kept current manually (npm run db:push, or a workflow_dispatch
+# run on the dev branch → "dev" environment).
 #
 # Each GitHub environment (repo → Settings → Environments) holds ONE secret:
 #   DATABASE_URL — that Neon branch's DIRECT (non "-pooler") connection
@@ -16,11 +20,11 @@ name: Migrate database
 # re-run any time (workflow_dispatch runs it for whichever branch you pick).
 on:
   push:
-    branches: [dev, staging, main]
+    branches: [staging, main]
     # Only fire when the migration history actually changes…
     paths:
       - "prisma/migrations/**"
-  # …but keep a manual trigger for first-time setup / re-runs.
+  # …but keep a manual trigger for first-time setup / re-runs (incl. dev).
   workflow_dispatch:
 
 concurrency:
@@ -32,8 +36,18 @@ jobs:
   migrate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # main deploys to the "production" environment; dev/staging match by name.
-    environment: ${{ github.ref_name == 'main' && 'production' || github.ref_name }}
+    # Map the git branch to its GitHub Environment (which holds that Neon
+    # branch's DATABASE_URL secret): main→production, staging→preview, else the
+    # branch name (dev→dev) for manual workflow_dispatch runs.
+    environment: >-
+      ${{ github.ref_name == 'main' && 'Production'
+       || github.ref_name == 'staging' && 'Preview'
+       || github.ref_name }}
+    # Job-wide (not just the deploy step): `npm ci` runs the postinstall
+    # `prisma generate`, which loads prisma.config.ts, which requires
+    # DATABASE_URL to resolve — even though generate never connects.
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -42,6 +56,4 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Apply committed migrations
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: npm run db:migrate:deploy:prod

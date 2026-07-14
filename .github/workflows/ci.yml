@@ -1,26 +1,26 @@
 name: CI
 
-# Runs the full test suite (typecheck happens implicitly via next/vitest
-# transforms; unit + e2e run for real) using the same docker compose test
-# profile you run locally. PRs are the gate for the dev → staging → main
-# promotions; the push trigger covers only main (a post-merge confirmation
-# of exactly what production deploys). No separate push trigger for
-# dev/staging — that would double-run CI against an open PR's identical code.
+# Unit and e2e run as SEPARATE jobs (in parallel) so a flaky e2e doesn't mask
+# unit results and either can be re-run on its own. Both use the same docker
+# compose "test" profile you run locally, so the environment (TZ, db, browsers)
+# matches exactly — just with the command overridden per job.
+#
+# PRs are the gate for dev → staging → main; the push trigger covers only main
+# (a post-merge confirmation of what production deploys). No push trigger for
+# dev/staging — that would double-run against an open PR's identical code.
 on:
   pull_request:
   push:
     branches: [main]
 
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       # env/ is gitignored (real secrets live there locally), so CI writes the
-      # throwaway TEST values itself. Nothing here is secret: the db only
-      # exists inside the compose network for the duration of the job.
+      # throwaway TEST values itself. Nothing here is secret.
       - name: Create env/test.env
         run: |
           mkdir -p env
@@ -34,17 +34,40 @@ jobs:
           SEED_ADMIN_USERNAME=admin
           SEED_ADMIN_PASSWORD=password123
           ORG_KEYS=Sunday Church:test-sunday-key,Youth Ministry:test-youth-key
+          SUPERADMIN_EMAILS=superadmin@example.com
           APP_TZ=America/Los_Angeles
           EOF
-
-      # Same command as local: boots a throwaway postgres, installs deps,
-      # pushes the schema, runs vitest then playwright, exits with the result.
-      - name: Unit + e2e tests
+      # --no-deps: unit tests never touch the db, so don't boot postgres.
+      - name: Unit tests (vitest)
         run: >
-          docker compose --profile test up
-          --abort-on-container-exit
-          --exit-code-from worship-scheduler-test
+          docker compose --profile test run --rm --no-deps worship-scheduler-test
+          sh -c "npm install && npx prisma generate && npm run test:unit"
 
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create env/test.env
+        run: |
+          mkdir -p env
+          cat > env/test.env <<'EOF'
+          POSTGRES_USER=worship
+          POSTGRES_PASSWORD=worship
+          POSTGRES_DB=worship_test
+          DATABASE_URL=postgresql://worship:worship@localhost:5433/worship_test
+          NEXTAUTH_URL=http://localhost:3100
+          NEXTAUTH_SECRET=test-only-secret
+          SEED_ADMIN_USERNAME=admin
+          SEED_ADMIN_PASSWORD=password123
+          ORG_KEYS=Sunday Church:test-sunday-key,Youth Ministry:test-youth-key
+          SUPERADMIN_EMAILS=superadmin@example.com
+          APP_TZ=America/Los_Angeles
+          EOF
+      - name: E2e tests (playwright)
+        run: >
+          docker compose --profile test run --rm worship-scheduler-test
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e"
       # Playwright traces/screenshots for debugging a red run.
       - name: Upload test artifacts
         if: failure()

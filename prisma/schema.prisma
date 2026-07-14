@@ -79,6 +79,19 @@ model Org {
   id   String @id @default(cuid())
   name String @unique
 
+  // The key someone redeems to join this org. Moved off the ORG_KEYS env var
+  // into the db so orgs + keys are managed in-app (platform admin page) with
+  // no redeploy. Nullable during the env→db backfill; rotatable.
+  joinKey String? @unique
+
+  // Per-org Slack workspace install (Flow B). The bot token is encrypted at
+  // rest (lib/crypto) — never store it plaintext. Null = Slack not connected
+  // for this org (lib/slack falls back to the env token during transition).
+  slackTeamId    String?
+  slackTeamName  String?
+  slackBotToken  String?
+  slackBotUserId String?
+
   memberships          OrgMembership[]
   teams                Team[]
   sets                 Set[]
@@ -100,9 +113,16 @@ model OrgMembership {
   orgId   String
   isAdmin Boolean @default(false)
 
+  // This user's Slack member id (U…) IN THIS ORG's workspace. Member ids are
+  // workspace-scoped, so the same person has a different one per org — hence
+  // it lives here, per membership, rather than once on User.
+  slackUserId String?
+
   createdAt DateTime @default(now())
 
   @@unique([userId, orgId])
+  // A Slack member id is unique within its workspace (= one org).
+  @@unique([orgId, slackUserId])
   @@map("org_memberships")
 }
 
@@ -137,9 +157,6 @@ model User {
   passwordHash String
   name         String
   email        String? @unique
-  // Reserved for the future Slack integration: store the Slack member id
-  // (e.g. "U0123ABC") so we can DM reminders / match accounts by email.
-  slackUserId  String? @unique
 
   // Musical director: can be the designated MD on a set that requires one.
   // Note: isMD and instruments are global to the person, not per-org.

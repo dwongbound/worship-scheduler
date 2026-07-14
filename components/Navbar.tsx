@@ -18,6 +18,9 @@ export const SWAPS_CHANGED_EVENT = "swaps-changed";
 // Fired by the Availabilities tab when a user marks availability complete, so
 // the reminder dot/banner clear immediately.
 export const AVAILABILITY_CHANGED_EVENT = "availability-changed";
+// Fired by the Profile page after a save, so the "finish your profile" reminder
+// dot/banner clear the moment the user picks their first instrument.
+export const PROFILE_CHANGED_EVENT = "profile-changed";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -27,6 +30,10 @@ export default function Navbar() {
   // Per-org active requests + whether ANY still needs my response.
   const [availStatus, setAvailStatus] = useState<ApiAvailabilityStatus | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  // True until the user has picked at least one instrument/role — new accounts
+  // start empty, so this drives a "finish your profile" reminder dot + banner.
+  const [needsInstruments, setNeedsInstruments] = useState(false);
+  const [instrumentsBannerDismissed, setInstrumentsBannerDismissed] = useState(false);
   // Href of the tab just clicked, so it highlights immediately instead of
   // waiting for `pathname` to update after the new page mounts.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -88,22 +95,38 @@ export default function Navbar() {
     }
   }, []);
 
+  // Whether I still owe my instruments/roles (empty = brand-new account that
+  // hasn't finished setting up its profile).
+  const refreshProfile = useCallback(async () => {
+    try {
+      const res = await fetch("/api/me");
+      if (!res.ok) return;
+      const me = await res.json();
+      setNeedsInstruments((me.instruments?.length ?? 0) === 0);
+    } catch {
+      // keep old state
+    }
+  }, []);
+
   useEffect(() => {
     if (!session) return;
     refreshSwapCount();
     refreshAvailability();
+    refreshProfile();
     const interval = setInterval(() => {
       refreshSwapCount();
       refreshAvailability();
     }, 60_000);
     window.addEventListener(SWAPS_CHANGED_EVENT, refreshSwapCount);
     window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshAvailability);
+    window.addEventListener(PROFILE_CHANGED_EVENT, refreshProfile);
     return () => {
       clearInterval(interval);
       window.removeEventListener(SWAPS_CHANGED_EVENT, refreshSwapCount);
       window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshAvailability);
+      window.removeEventListener(PROFILE_CHANGED_EVENT, refreshProfile);
     };
-  }, [session, refreshSwapCount, refreshAvailability]);
+  }, [session, refreshSwapCount, refreshAvailability, refreshProfile]);
 
   // No chrome on the login or join-org pages. Placed after all hooks so hook
   // order stays stable across renders (never return before a hook).
@@ -134,8 +157,10 @@ export default function Navbar() {
       dotTestId: "availability-dot",
     },
     // Admin-only tabs — shown to admins of ANY org (each page then scopes to
-    // the org picked in the switcher). Styled amber + shield via tabClassName.
-    ...(session?.user?.memberships?.some((m) => m.isAdmin)
+    // the org picked in the switcher), and always to platform super-admins.
+    // Styled amber + shield via tabClassName.
+    ...(session?.user?.isSuperAdmin ||
+    session?.user?.memberships?.some((m) => m.isAdmin)
       ? [
           { href: "/create", label: "Create", icon: PLUS_ICON, admin: true },
           { href: "/users", label: "Team", icon: USERS_ICON, admin: true },
@@ -169,9 +194,9 @@ export default function Navbar() {
           {/* Tab strip — hidden on phones, where the floating bottom bar
               (below) takes over. `overflow-x-auto` guards awkward mid-size
               widths, but it also clips vertically, which would cut off the
-              notification dots that stick out above each tab — the `py-1 -my-1`
+              notification dots that stick out above each tab — the `py-2 -my-2`
               gives them room inside the clip box without changing the layout. */}
-          <div className="hidden gap-1 overflow-x-auto py-1 -my-1 sm:flex">
+          <div className="hidden gap-1 overflow-x-auto py-2 -my-2 sm:flex">
             {tabs.map((tab) => {
             const isAdminTab = "admin" in tab && tab.admin === true;
             return (
@@ -216,8 +241,15 @@ export default function Navbar() {
             <Dropdown
               trigger={
                 <span className="flex items-center gap-2">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">
+                  <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">
                     {(session.user.name ?? "?").charAt(0).toUpperCase()}
+                    {needsInstruments && (
+                      // Nudge new users to finish their profile.
+                      <span
+                        data-testid="profile-dot"
+                        className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-red-500 dark:border-gray-800"
+                      />
+                    )}
                   </span>
                   <span className="hidden text-sm font-medium sm:block">
                     {session.user.name}
@@ -227,10 +259,21 @@ export default function Navbar() {
             >
               <Link
                 href="/profile"
-                className="block px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                className="flex items-center justify-between gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
               >
                 Edit profile
+                {needsInstruments && (
+                  <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />
+                )}
               </Link>
+              {session.user.isSuperAdmin && (
+                <Link
+                  href="/platform"
+                  className="block px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  Platform admin
+                </Link>
+              )}
               <button
                 onClick={() => signOut({ callbackUrl: "/login" })}
                 className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
@@ -241,6 +284,18 @@ export default function Navbar() {
           )}
         </div>
       </div>
+
+      {/* Onboarding banner: shown until a new user picks the instruments/roles
+          they play, so the scheduler can actually assign them. */}
+      {needsInstruments && !instrumentsBannerDismissed && (
+        <Banner tone="indigo" onDismiss={() => setInstrumentsBannerDismissed(true)}>
+          Finish setting up your profile:{" "}
+          <Link href="/profile" className="font-semibold underline">
+            add the instruments and roles you play
+          </Link>{" "}
+          so you can be scheduled.
+        </Banner>
+      )}
 
       {/* Reminder banner: shown until the user submits their availability
           for every org's active request (spotlights the first one waiting). */}

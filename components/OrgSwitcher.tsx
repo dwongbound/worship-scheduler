@@ -31,11 +31,32 @@ export default function OrgSwitcher() {
   const [orgKey, setOrgKey] = useState("");
   const [addError, setAddError] = useState("");
   const [addBusy, setAddBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [orgSlack, setOrgSlack] = useState<{ connected: boolean; team: string | null } | null>(null);
 
   if (!orgs) return null; // first load — the navbar renders without it briefly
 
   const mode = modeFor(pathname);
   const adminOrgs = orgs.filter((o) => o.isAdmin);
+  // The concrete org the settings action targets: whatever's selected, if the
+  // user administers it (hidden on "All orgs").
+  let selectedOrgId: string | null = null;
+  if (mode === "admin") {
+    selectedOrgId = adminOrgId;
+  } else if (viewOrgId !== "all") {
+    selectedOrgId = viewOrgId;
+  }
+  const settingsOrg = orgs.find((o) => o.id === selectedOrgId && o.isAdmin) ?? null;
+
+  async function openSettings() {
+    setOrgSlack(null);
+    setSettingsOpen(true);
+    const me = await fetch("/api/me").then((r) => r.json()).catch(() => null);
+    const m = me?.memberships?.find(
+      (x: { orgId: string }) => x.orgId === settingsOrg?.id
+    );
+    setOrgSlack({ connected: !!m?.orgSlackConnected, team: m?.slackTeamName ?? null });
+  }
 
   const label =
     mode === "locked"
@@ -122,6 +143,15 @@ export default function OrgSwitcher() {
             {org.name}
           </button>
         ))}
+        {settingsOrg && (
+          <button
+            onClick={openSettings}
+            className="block w-full border-t border-gray-200 px-4 py-2 text-left text-sm
+              text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700"
+          >
+            ⚙ {settingsOrg.name} settings
+          </button>
+        )}
         <button
           onClick={() => {
             setAddError("");
@@ -162,6 +192,49 @@ export default function OrgSwitcher() {
               </Button>
             </div>
           </form>
+        </Modal>
+      )}
+
+      {settingsOpen && settingsOrg && (
+        <Modal
+          open
+          onClose={() => setSettingsOpen(false)}
+          title={`${settingsOrg.name} settings`}
+        >
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm font-medium">Slack workspace</p>
+              <p className="text-sm text-gray-500">
+                {orgSlack === null
+                  ? "Checking…"
+                  : orgSlack.connected
+                    ? `Connected to ${orgSlack.team ?? "Slack"} ✓`
+                    : "Not connected — the bot can't message this org yet."}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                onClick={() => {
+                  window.location.href = `/api/slack/install?orgId=${settingsOrg.id}`;
+                }}
+              >
+                {orgSlack?.connected ? "Reconnect Slack" : "Connect to Slack"}
+              </Button>
+              {orgSlack?.connected && (
+                <Button
+                  variant="secondary"
+                  onClick={async () => {
+                    await fetch(`/api/slack/install?orgId=${settingsOrg.id}`, {
+                      method: "DELETE",
+                    });
+                    setOrgSlack({ connected: false, team: null });
+                  }}
+                >
+                  Disconnect
+                </Button>
+              )}
+            </div>
+          </div>
         </Modal>
       )}
     </>

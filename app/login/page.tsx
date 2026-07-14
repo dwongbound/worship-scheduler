@@ -27,7 +27,6 @@ function LoginForm() {
   const callbackUrl = searchParams.get("callbackUrl") || "/calendar";
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [googleAvailable, setGoogleAvailable] = useState(false);
-  const [slackAvailable, setSlackAvailable] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -40,11 +39,11 @@ function LoginForm() {
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
+  const [signupPassword2, setSignupPassword2] = useState("");
 
   useEffect(() => {
     getProviders().then((providers) => {
       setGoogleAvailable(!!providers?.google);
-      setSlackAvailable(!!providers?.slack);
     });
   }, []);
 
@@ -75,6 +74,10 @@ function LoginForm() {
   async function onSignUp(e: FormEvent) {
     e.preventDefault();
     setError("");
+    if (signupPassword !== signupPassword2) {
+      setError("Passwords don't match.");
+      return;
+    }
     setSubmitting(true);
     const res = await fetch("/api/signup", {
       method: "POST",
@@ -113,29 +116,17 @@ function LoginForm() {
           {mode === "signin" ? "Sign in to your account" : "Create your account"}
         </p>
 
-        {(googleAvailable || slackAvailable) && (
+        {googleAvailable && (
           <>
             <div className="space-y-2">
-              {googleAvailable && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full"
-                  onClick={() => signIn("google", { callbackUrl })}
-                >
-                  Continue with Google
-                </Button>
-              )}
-              {slackAvailable && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="w-full"
-                  onClick={() => signIn("slack", { callbackUrl })}
-                >
-                  Continue with Slack
-                </Button>
-              )}
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full"
+                onClick={() => signIn("google", { callbackUrl })}
+              >
+                Continue with Google
+              </Button>
             </div>
             <div className="my-4 flex items-center gap-3 text-xs text-gray-400">
               <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
@@ -198,6 +189,14 @@ function LoginForm() {
               type="password"
               value={signupPassword}
               onChange={(e) => setSignupPassword(e.target.value)}
+              autoComplete="new-password"
+              required
+            />
+            <Input
+              label="Confirm password"
+              type="password"
+              value={signupPassword2}
+              onChange={(e) => setSignupPassword2(e.target.value)}
               autoComplete="new-password"
               required
             />
