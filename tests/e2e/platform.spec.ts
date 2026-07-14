@@ -1,10 +1,11 @@
 // E2E: the super-admin platform surface — org creation + key rotation, plus
 // admin-of-every-org access. Gated by the SUPERADMIN_EMAILS allowlist, which
 // env/test.env sets to a throwaway address (never a real person's email).
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { login, orgKey } from "./helpers";
 
 const SUPER_EMAIL = "superadmin@example.com";
+const PW = "password123";
 
 /** The nth org's NAME from the test env's ORG_KEYS ("Name:key,Name:key"). */
 function orgName(index: number): string {
@@ -12,20 +13,38 @@ function orgName(index: number): string {
   return entry.slice(0, entry.lastIndexOf(":")).trim();
 }
 
-/** Sign up the allowlisted super-admin, join an org, land on the calendar. */
-async function signUpSuperAdmin(page: import("@playwright/test").Page) {
+/**
+ * Log in as the allowlisted super-admin, landing on the calendar. Idempotent:
+ * creates the account on first use, and just signs in afterward. This matters
+ * because Playwright retries reuse the same db (global-setup reseeds per RUN,
+ * not per attempt), so a second sign-up of the same email would collide.
+ */
+async function loginAsSuperAdmin(page: Page) {
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign up" }).click();
   await page.getByLabel("First name").fill("Super");
   await page.getByLabel("Last name").fill("Admin");
   await page.getByLabel("Email").fill(SUPER_EMAIL);
-  await page.getByLabel("Password", { exact: true }).fill("password123");
-  await page.getByLabel("Confirm password").fill("password123");
+  await page.getByLabel("Password", { exact: true }).fill(PW);
+  await page.getByLabel("Confirm password").fill(PW);
   await page.getByRole("button", { name: "Sign up" }).click();
 
-  await expect(page).toHaveURL(/\/join/);
-  await page.getByLabel("Organization key").fill(orgKey(0));
-  await page.getByRole("button", { name: "Join" }).click();
+  // New account → the join gate. Existing account → the sign-up errors and we
+  // stay on /login, so sign in with the existing credentials instead.
+  const newAccount = await page
+    .waitForURL(/\/join/, { timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (newAccount) {
+    await page.getByLabel("Organization key").fill(orgKey(0));
+    await page.getByRole("button", { name: "Join" }).click();
+  } else {
+    await page.goto("/login"); // fresh sign-in form
+    await page.getByLabel("Username / Email").fill(SUPER_EMAIL);
+    await page.getByLabel("Password", { exact: true }).fill(PW);
+    await page.getByRole("button", { name: "Sign in" }).click();
+  }
   await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
 }
 
@@ -41,16 +60,16 @@ test("the API rejects platform calls from non-super-admins", async ({ page }) =>
   expect(res.status()).toBe(403);
 });
 
-// One signup drives both super-admin capabilities (the account persists for the
-// whole run, so a second signup of the same email would collide).
+// One sign-up drives both super-admin capabilities (the account persists for
+// the whole run, so a second sign-up of the same email would collide).
 test("super-admin manages the platform and administers every org", async ({
   page,
 }) => {
-  await signUpSuperAdmin(page); // joins org 0 only, admin of none via membership
+  await loginAsSuperAdmin(page); // joins org 0 only, admin of none via membership
 
-  // 1) Platform page: create an org (blank key → auto-generated) + rotate key.
-  await page.getByText("Super Admin").click(); // avatar menu (super-admin only)
-  await page.getByRole("link", { name: "Platform admin" }).click();
+  // 1) Platform page (super-admins only; non-supers are bounced — tested
+  // above). Navigate directly rather than via the avatar menu.
+  await page.goto("/platform");
   await expect(page.getByRole("heading", { name: "Platform admin" })).toBeVisible();
 
   await page.getByLabel("Name").fill("E2E New Org");
