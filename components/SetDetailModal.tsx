@@ -110,7 +110,9 @@ export default function SetDetailModal({
   // (and a doubled one under React's dev Strict Mode) on every calendar load.
   useEffect(() => {
     if (!isAdmin || !set) return;
-    fetch("/api/slack/status")
+    // Per-org: the "Slack Team" button only works if the set's OWN org has
+    // connected Slack, so ask about that org specifically.
+    fetch(`/api/slack/status?orgId=${set.org?.id ?? ""}`)
       .then((r) => r.json())
       .then((d) => setSlackConfigured(!!d.enabled))
       .catch(() => setSlackConfigured(false));

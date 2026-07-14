@@ -2,8 +2,9 @@
 // oldest org first. Also the app's regular touchpoint for syncing env-declared
 // orgs into the db (OrgProvider hits this on every page load).
 import { NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { ensureOrgsSynced, getMyMemberships } from "@/lib/org";
+import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -12,6 +13,19 @@ export async function GET() {
   }
 
   await ensureOrgsSynced();
+
+  // Super-admins administer every org, so they see them all (each as admin) —
+  // not just the ones they've joined.
+  if (isSuperAdmin(user.email)) {
+    const orgs = await prisma.org.findMany({
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true },
+    });
+    return NextResponse.json(
+      orgs.map((o) => ({ id: o.id, name: o.name, isAdmin: true }))
+    );
+  }
+
   const memberships = await getMyMemberships(user.id);
   return NextResponse.json(
     memberships.map((m) => ({ id: m.orgId, name: m.orgName, isAdmin: m.isAdmin }))

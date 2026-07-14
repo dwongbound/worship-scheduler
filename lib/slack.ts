@@ -2,22 +2,47 @@
 // the high-level notification helpers the app calls after schedule changes.
 //
 // Two hard rules keep this safe to sprinkle through the mutation routes:
-//   1. Everything no-ops when SLACK_BOT_TOKEN is unset, so the app runs
-//      identically without Slack configured (dev/test/CI need no keys).
+//   1. Everything no-ops when the org hasn't connected Slack (no bot token),
+//      so the app runs identically without Slack configured (dev/test/CI).
 //   2. Nothing throws — a Slack outage must never break a db mutation. Failures
 //      are logged and swallowed; helpers return false/null instead.
 //
 // This module is server-only (it imports prisma). The client talks to it via
 // the API routes, never by importing it directly.
 import { prisma } from "./prisma";
+import { decryptSecret } from "./crypto";
 import { INSTRUMENT_LABELS, ROLE_ORDER, type Instrument } from "./constants";
 import { formatDay, formatTime, shortDateLabel } from "./dates";
 
 const SLACK_API = "https://slack.com/api";
 
-/** True when the bot token is configured; gates every Slack feature. */
-export function slackEnabled(): boolean {
-  return !!process.env.SLACK_BOT_TOKEN || slackDryRun();
+/**
+ * Whether an org can currently send Slack messages: its bot is installed, or
+ * we're in dry-run mode. Slack is per-org now, so this is always org-scoped —
+ * the UI uses it to show/hide that org's Slack actions.
+ */
+export async function isOrgSlackConnected(orgId: string): Promise<boolean> {
+  if (slackDryRun()) return true;
+  return (await orgBotToken(orgId)) !== null;
+}
+
+/**
+ * The decrypted bot token for one org's Slack workspace, or null if that org
+ * hasn't connected Slack. Tokens are per-workspace (Flow B install), so DMs to
+ * org A must use A's token — never a shared/env token, which would post into
+ * the wrong workspace.
+ */
+async function orgBotToken(orgId: string): Promise<string | null> {
+  const org = await prisma.org.findUnique({
+    where: { id: orgId },
+    select: { slackBotToken: true },
+  });
+  if (!org?.slackBotToken) return null;
+  try {
+    return decryptSecret(org.slackBotToken);
+  } catch {
+    return null; // key rotated or corrupt — treat as not connected
+  }
 }
 
 // Dry-run mode (SLACK_DRY_RUN=1): run every Slack code path — queries,
@@ -32,14 +57,14 @@ function slackDryRun(): boolean {
 // (Slack sets `ok: true`) or null on any failure. Never throws.
 async function slackApi(
   method: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  token: string | null
 ): Promise<Record<string, any> | null> {
   if (slackDryRun()) {
     console.log(`[slack] DRY RUN ${method}:`, JSON.stringify(body));
     // Fake the only response field callers read back: the opened channel id.
     return method === "conversations.open" ? { channel: { id: "C_DRY_RUN" } } : {};
   }
-  const token = process.env.SLACK_BOT_TOKEN;
   if (!token) return null;
   try {
     const res = await fetch(`${SLACK_API}/${method}`, {
@@ -64,50 +89,92 @@ async function slackApi(
 
 // Open (or reuse) a conversation with one or more users and return its channel
 // id. One user → a DM channel; several → a group DM (MPIM).
-async function openConversation(slackUserIds: string[]): Promise<string | null> {
+async function openConversation(
+  token: string | null,
+  slackUserIds: string[]
+): Promise<string | null> {
   if (slackUserIds.length === 0) return null;
-  const data = await slackApi("conversations.open", {
-    users: slackUserIds.join(","),
-  });
+  const data = await slackApi(
+    "conversations.open",
+    { users: slackUserIds.join(",") },
+    token
+  );
   return (data?.channel?.id as string | undefined) ?? null;
 }
 
-/** Post a message to an already-known channel id. */
+/** Post a message to an already-known channel id, using an org's bot token. */
 export async function postToChannel(
+  token: string | null,
   channelId: string,
   text: string
 ): Promise<boolean> {
-  return !!(await slackApi("chat.postMessage", { channel: channelId, text }));
+  return !!(await slackApi("chat.postMessage", { channel: channelId, text }, token));
 }
 
-/** DM a single user by their Slack member id (U...). */
+/** DM a single user by their Slack member id (U...) in one org's workspace. */
 export async function postDirectMessage(
+  token: string | null,
   slackUserId: string,
   text: string
 ): Promise<boolean> {
-  const channelId = await openConversation([slackUserId]);
+  const channelId = await openConversation(token, [slackUserId]);
   if (!channelId) return false;
-  return postToChannel(channelId, text);
+  return postToChannel(token, channelId, text);
 }
 
 /** Open a group DM among several users; returns the channel id for posting. */
 export async function openGroupConversation(
+  token: string | null,
   slackUserIds: string[]
 ): Promise<string | null> {
-  return openConversation(slackUserIds);
+  return openConversation(token, slackUserIds);
 }
 
 // MPIMs have no "name" field the way channels do — conversations.rename
 // only works on channels. The closest equivalent is the conversation topic,
 // which Slack does support setting on an mpim (requires mpim:write.topic).
 export async function setConversationTopic(
+  token: string | null,
   channelId: string,
   topic: string
 ): Promise<boolean> {
-  return !!(await slackApi("conversations.setTopic", {
-    channel: channelId,
-    topic,
-  }));
+  return !!(await slackApi("conversations.setTopic", { channel: channelId, topic }, token));
+}
+
+/**
+ * Resolve a user's member id in an org's workspace by their email
+ * (users.lookupByEmail). Lets us auto-populate OrgMembership.slackUserId at
+ * install time so most people never click "Connect". Returns null on any miss.
+ */
+async function lookupMemberByEmail(
+  token: string | null,
+  email: string
+): Promise<string | null> {
+  const data = await slackApi("users.lookupByEmail", { email }, token);
+  return (data?.user?.id as string | undefined) ?? null;
+}
+
+/**
+ * Best-effort: for every member of an org that has no slackUserId yet, try to
+ * resolve it by email and cache it on their OrgMembership. Called after a bot
+ * install. Never throws.
+ */
+export async function autoPopulateSlackIds(orgId: string): Promise<void> {
+  const token = await orgBotToken(orgId);
+  if (!token && !slackDryRun()) return;
+  const rows = await prisma.orgMembership.findMany({
+    where: { orgId, slackUserId: null, user: { email: { not: null } } },
+    select: { id: true, user: { select: { email: true } } },
+  });
+  for (const row of rows) {
+    const id = await lookupMemberByEmail(token, row.user.email!);
+    if (!id) continue;
+    // The (orgId, slackUserId) unique guard can trip if two app accounts share
+    // a Slack id — skip silently rather than fail the whole install.
+    await prisma.orgMembership
+      .update({ where: { id: row.id }, data: { slackUserId: id } })
+      .catch(() => {});
+  }
 }
 
 // ── Message-text helpers ──────────────────────────────────────────────────
@@ -153,22 +220,23 @@ function appUrl(path = ""): string {
  * that instrument so they can pick it up.
  */
 export async function notifySwapRequested(assignmentId: string): Promise<void> {
-  if (!slackEnabled()) return;
-
   const assignment = await prisma.assignment.findUnique({
     where: { id: assignmentId },
     include: { set: { select: { label: true, startsAt: true, orgId: true } } },
   });
   if (!assignment) return;
 
+  const token = await orgBotToken(assignment.set.orgId);
+  if (!token && !slackDryRun()) return;
+
   // Same eligibility rule as GET /api/swaps: plays this role, isn't the
-  // requester, belongs to the set's org, and — here — has linked Slack.
-  const eligible = await prisma.user.findMany({
+  // requester, is in the set's org, and has linked Slack in THAT org.
+  const eligible = await prisma.orgMembership.findMany({
     where: {
-      id: { not: assignment.userId },
-      instruments: { has: assignment.role },
+      orgId: assignment.set.orgId,
+      userId: { not: assignment.userId },
       slackUserId: { not: null },
-      memberships: { some: { orgId: assignment.set.orgId } },
+      user: { instruments: { has: assignment.role } },
     },
     select: { slackUserId: true },
   });
@@ -180,7 +248,7 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
     (url ? ` Take it here: ${url}` : "");
 
   await Promise.all(
-    eligible.map((u) => postDirectMessage(u.slackUserId!, text))
+    eligible.map((m) => postDirectMessage(token, m.slackUserId!, text))
   );
 }
 
@@ -194,24 +262,25 @@ export async function notifySwapTaken(
   previousOwnerId: string,
   takerName: string
 ): Promise<void> {
-  if (!slackEnabled()) return;
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    include: { set: { select: { label: true, startsAt: true, orgId: true } } },
+  });
+  if (!assignment) return;
 
-  const [assignment, owner] = await Promise.all([
-    prisma.assignment.findUnique({
-      where: { id: assignmentId },
-      include: { set: { select: { label: true, startsAt: true } } },
-    }),
-    prisma.user.findUnique({
-      where: { id: previousOwnerId },
-      select: { slackUserId: true },
-    }),
-  ]);
-  if (!assignment || !owner?.slackUserId) return;
+  const token = await orgBotToken(assignment.set.orgId);
+  if (!token && !slackDryRun()) return;
+
+  const owner = await prisma.orgMembership.findUnique({
+    where: { userId_orgId: { userId: previousOwnerId, orgId: assignment.set.orgId } },
+    select: { slackUserId: true },
+  });
+  if (!owner?.slackUserId) return;
 
   const text =
     `✅ ${takerName} took your ${INSTRUMENT_LABELS[assignment.role]} slot on ` +
     `${setLabel(assignment.set)}. You're off the hook!`;
-  await postDirectMessage(owner.slackUserId, text);
+  await postDirectMessage(token, owner.slackUserId, text);
 }
 
 /**
@@ -224,13 +293,11 @@ export async function notifyAvailabilityRequest(request: {
   endDate: Date;
   orgId: string;
 }): Promise<void> {
-  if (!slackEnabled()) return;
+  const token = await orgBotToken(request.orgId);
+  if (!token && !slackDryRun()) return;
 
-  const users = await prisma.user.findMany({
-    where: {
-      slackUserId: { not: null },
-      memberships: { some: { orgId: request.orgId } },
-    },
+  const members = await prisma.orgMembership.findMany({
+    where: { orgId: request.orgId, slackUserId: { not: null } },
     select: { slackUserId: true },
   });
 
@@ -242,7 +309,9 @@ export async function notifyAvailabilityRequest(request: {
     `📅 Please enter your availability for *${label}*.` +
     (url ? ` ${url}` : "");
 
-  await Promise.all(users.map((u) => postDirectMessage(u.slackUserId!, text)));
+  await Promise.all(
+    members.map((m) => postDirectMessage(token, m.slackUserId!, text))
+  );
 }
 
 /**
@@ -255,36 +324,49 @@ export async function notifyAvailabilityRequest(request: {
 export async function messageSetTeamOnSlack(
   setId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!slackEnabled()) return { ok: false, error: "Slack is not configured." };
-
   const set = await prisma.set.findUnique({
     where: { id: setId },
-    include: {
+    select: {
+      label: true,
+      startsAt: true,
+      orgId: true,
       assignments: {
-        include: { user: { select: { name: true, slackUserId: true } } },
+        select: { userId: true, role: true, user: { select: { name: true } } },
       },
     },
   });
   if (!set) return { ok: false, error: "Set not found." };
 
-  const ids = set.assignments
-    .map((a) => a.user.slackUserId)
-    .filter((id): id is string => !!id);
+  const token = await orgBotToken(set.orgId);
+  if (!token && !slackDryRun()) {
+    return { ok: false, error: "Slack isn't connected for this org yet." };
+  }
+
+  // Per-org member ids for the assigned people (member ids are workspace-scoped).
+  const linked = await prisma.orgMembership.findMany({
+    where: {
+      orgId: set.orgId,
+      slackUserId: { not: null },
+      userId: { in: set.assignments.map((a) => a.userId) },
+    },
+    select: { slackUserId: true },
+  });
+  const ids = linked.map((m) => m.slackUserId!);
   if (ids.length === 0) {
     return { ok: false, error: "No one on this set has linked their Slack yet." };
   }
 
-  const channelId = await openGroupConversation(ids);
+  const channelId = await openGroupConversation(token, ids);
   if (!channelId) return { ok: false, error: "Could not open the group chat." };
 
   // Best-effort: some workspace configs restrict topic writes on mpims, but
   // that shouldn't stop the roster message from going out.
-  await setConversationTopic(channelId, setTopicName(set));
+  await setConversationTopic(token, channelId, setTopicName(set));
 
   const text =
     `🙏 Thanks for serving! Your upcoming set is ${setLabel(set)}.\n\n` +
     `Here's everyone playing in it:\n${teamRosterText(set.assignments)}`;
-  const posted = await postToChannel(channelId, text);
+  const posted = await postToChannel(token, channelId, text);
   return posted
     ? { ok: true }
     : { ok: false, error: "Could not post the message." };
@@ -339,15 +421,18 @@ export function weeklySummaryText(
 export async function sendTeamWeeklySummary(
   teamId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (!slackEnabled()) return { ok: false, error: "Slack is not configured." };
-
   const team = await prisma.team.findUnique({
     where: { id: teamId },
-    select: { name: true, slackChannelId: true },
+    select: { name: true, slackChannelId: true, orgId: true },
   });
   if (!team) return { ok: false, error: "Team not found." };
   if (!team.slackChannelId) {
     return { ok: false, error: "Set a Slack channel ID for this team first." };
+  }
+
+  const token = await orgBotToken(team.orgId);
+  if (!token && !slackDryRun()) {
+    return { ok: false, error: "Slack isn't connected for this org yet." };
   }
 
   const start = new Date();
@@ -366,6 +451,7 @@ export async function sendTeamWeeklySummary(
   }
 
   const posted = await postToChannel(
+    token,
     team.slackChannelId,
     weeklySummaryText(team.name, { start, end }, sets)
   );

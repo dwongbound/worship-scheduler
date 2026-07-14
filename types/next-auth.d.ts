@@ -15,14 +15,14 @@ declare module "next-auth" {
       name?: string | null;
       email?: string | null;
       memberships: SessionOrgMembership[];
+      // True when the email is in the SUPERADMIN_EMAILS allowlist. Gates the
+      // navbar "Platform admin" link; server routes re-check via requireSuperAdmin.
+      isSuperAdmin: boolean;
     };
   }
 
   interface User {
     id: string;
-    // Set by the Slack OAuth provider's profile() callback so signIn() can
-    // persist it; other providers leave it undefined.
-    slackUserId?: string;
   }
 }
 

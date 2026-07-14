@@ -13,6 +13,40 @@ test("non-admins don't see the Create tab and can't use the page", async ({ page
   ).toBeVisible();
 });
 
+// Runs BEFORE the "generate + apply" test below on purpose: applying commits
+// sets across the next few weeks, which would consume most of the seeded
+// request's window and leave this request-scoped generate empty. Generating
+// against the pristine window keeps it deterministic. It only previews +
+// discards, so it doesn't pollute later tests.
+test("admin can generate for an availability request's date range", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/create");
+
+  // Pick a request (the seed ships "Fall 2026") as the generate scope. The
+  // option value is "req:<id>"; select the first such option regardless of its
+  // (date-dependent) label.
+  const scope = page.getByLabel("Schedule for");
+  const reqValue = await scope
+    .locator('option[value^="req:"]')
+    .first()
+    .getAttribute("value");
+  expect(reqValue).toBeTruthy();
+  await scope.selectOption(reqValue!);
+
+  // A summary of the resolved range appears, then generating stages a preview.
+  await expect(page.getByText(/^Scheduling /)).toBeVisible();
+  await page.getByRole("button", { name: "Generate preview" }).click();
+
+  const review = page.getByRole("dialog");
+  await expect(
+    review.getByRole("heading", { name: "Review generated schedule" })
+  ).toBeVisible();
+  // Discard so we don't commit anything from this scope test.
+  await review.getByRole("button", { name: "Discard" }).click();
+});
+
 test("admin can add a weekly template and generate a schedule", async ({ page }) => {
   await login(page, "admin");
   await page.getByRole("link", { name: "Create" }).click();
@@ -80,35 +114,6 @@ test("review dropdowns flag people who are unavailable at a set's time", async (
   await expect(
     page.getByRole("listbox").getByText(/unavailable/i).first()
   ).toBeVisible();
-});
-
-test("admin can generate for an availability request's date range", async ({
-  page,
-}) => {
-  await login(page, "admin");
-  await page.goto("/create");
-
-  // Pick a request (the seed ships "Fall 2026") as the generate scope. The
-  // option value is "req:<id>"; select the first such option regardless of its
-  // (date-dependent) label.
-  const scope = page.getByLabel("Schedule for");
-  const reqValue = await scope
-    .locator('option[value^="req:"]')
-    .first()
-    .getAttribute("value");
-  expect(reqValue).toBeTruthy();
-  await scope.selectOption(reqValue!);
-
-  // A summary of the resolved range appears, then generating stages a preview.
-  await expect(page.getByText(/^Scheduling /)).toBeVisible();
-  await page.getByRole("button", { name: "Generate preview" }).click();
-
-  const review = page.getByRole("dialog");
-  await expect(
-    review.getByRole("heading", { name: "Review generated schedule" })
-  ).toBeVisible();
-  // Discard so we don't commit anything from this scope test.
-  await review.getByRole("button", { name: "Discard" }).click();
 });
 
 test("admin can set a custom team shape on a template", async ({ page }) => {

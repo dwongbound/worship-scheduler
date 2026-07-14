@@ -1,9 +1,6 @@
-// NextAuth configuration: username + password (credentials provider).
-//
-// Slack note: user records already carry `email` and `slackUserId` fields.
-// When you add Slack later, you can either add a Slack OAuth provider here
-// and link accounts by email, or use slackUserId to push DMs — no schema
-// changes needed.
+// NextAuth configuration: username + password (credentials), plus optional
+// Google OAuth. Slack is NOT a login provider — it's a per-org integration
+// connected after login (see lib/slack + the /api/slack/* routes).
 import type { NextAuthOptions } from "next-auth";
 import { getServerSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
@@ -15,10 +12,6 @@ import { prisma } from "./prisma";
 // are configured, so the app still runs (credentials-only) without them.
 const googleEnabled =
   !!process.env.GOOGLE_CLIENT_ID && !!process.env.GOOGLE_CLIENT_SECRET;
-
-// "Sign in with Slack" is likewise optional. Same env-gating pattern as Google.
-const slackEnabled =
-  !!process.env.SLACK_CLIENT_ID && !!process.env.SLACK_CLIENT_SECRET;
 
 export const authOptions: NextAuthOptions = {
   // Credentials logins require JWT sessions (no db session rows).
@@ -68,53 +61,21 @@ export const authOptions: NextAuthOptions = {
           }),
         ]
       : []),
-    // Optional "Sign in with Slack" (OpenID Connect). We define it by hand
-    // rather than using next-auth's built-in Slack provider so the `profile`
-    // callback can pull the Slack member id — Slack returns it under the
-    // "https://slack.com/user_id" key of the OIDC userinfo — which we persist
-    // as `slackUserId` so the bot can DM this person later.
-    ...(slackEnabled
-      ? [
-          {
-            id: "slack",
-            name: "Slack",
-            type: "oauth" as const,
-            wellKnown:
-              "https://slack.com/.well-known/openid-configuration",
-            authorization: { params: { scope: "openid email profile" } },
-            idToken: true,
-            clientId: process.env.SLACK_CLIENT_ID!,
-            clientSecret: process.env.SLACK_CLIENT_SECRET!,
-            profile(profile: Record<string, any>) {
-              const slackUserId = profile["https://slack.com/user_id"] as string;
-              return {
-                id: slackUserId,
-                name: profile.name as string,
-                email: profile.email as string | undefined,
-                slackUserId,
-              };
-            },
-          },
-        ]
-      : []),
+    // NOTE: "Sign in with Slack" was removed as a LOGIN provider — Slack
+    // identity is workspace-scoped, which clashes with our multi-org (multi-
+    // workspace) model. Slack is now a per-org INTEGRATION connected after
+    // login (see the Slack connect/install flow), not a way to sign in.
   ],
   callbacks: {
-    // OAuth sign-ins (Google, Slack) have no row in our User table yet:
-    // find-or-create one by email so they map onto our own accounts.
-    // Credentials logins are already validated in authorize(), so they pass
-    // through. For Slack we additionally persist the member id (`slackUserId`)
-    // so the bot can DM this person — backfilling it on accounts that first
-    // signed up with a password or Google.
+    // Google OAuth sign-ins have no row in our User table yet: find-or-create
+    // one by email so they map onto our own accounts. Credentials logins are
+    // already validated in authorize(), so they pass through.
     async signIn({ user, account }) {
-      const provider = account?.provider;
-      if (provider !== "google" && provider !== "slack") return true;
+      // Only OAuth sign-ins (Google) need a find-or-create by email; credentials
+      // are already validated in authorize() and pass straight through.
+      if (account?.provider !== "google") return true;
       const email = user.email;
       if (!email) return false;
-
-      const slackUserId =
-        provider === "slack"
-          ? (user as { slackUserId?: string }).slackUserId
-          : undefined;
 
       const existing = await prisma.user.findUnique({ where: { email } });
       if (!existing) {
@@ -125,13 +86,7 @@ export const authOptions: NextAuthOptions = {
             username: email,
             passwordHash: "", // OAuth account — no usable password
             instruments: [],
-            slackUserId: slackUserId ?? null,
           },
-        });
-      } else if (slackUserId && existing.slackUserId !== slackUserId) {
-        await prisma.user.update({
-          where: { id: existing.id },
-          data: { slackUserId },
         });
       }
       return true;
@@ -140,8 +95,7 @@ export const authOptions: NextAuthOptions = {
       // First sign-in: copy our custom fields onto the token. For Google the
       // `user` is the OAuth profile, so resolve our real user row by email.
       if (user) {
-        const isOAuth =
-          account?.provider === "google" || account?.provider === "slack";
+        const isOAuth = account?.provider === "google";
         if (isOAuth && user.email) {
           const dbUser = await prisma.user.findUnique({
             where: { email: user.email },
@@ -176,6 +130,9 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = token.id as string;
         session.user.memberships = token.memberships ?? [];
+        // Re-evaluated from the env allowlist on every session read, so adding
+        // a super-admin takes effect without the user re-logging in.
+        session.user.isSuperAdmin = isSuperAdmin(token.email as string | undefined);
       }
       return session;
     },
@@ -201,3 +158,24 @@ export async function getSessionUser() {
 
 // Admin checks are per-org now — see requireOrgAdmin / requireOrgAdminFor in
 // lib/org.ts (the old global getAdminUser() was removed with User.isAdmin).
+
+// Platform super-admins (create orgs, rotate keys, manage the app itself) are a
+// small env allowlist — a bootstrap capability that changes ~never, so it stays
+// in env rather than the db. Comma-separated emails, case-insensitive.
+function superAdminEmails(): string[] {
+  return (process.env.SUPERADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function isSuperAdmin(email: string | null | undefined): boolean {
+  return !!email && superAdminEmails().includes(email.toLowerCase());
+}
+
+/** Guard for /platform routes + APIs. Returns the user, or null if not a super-admin. */
+export async function requireSuperAdmin() {
+  const user = await getSessionUser();
+  if (!isSuperAdmin(user?.email)) return null;
+  return user;
+}

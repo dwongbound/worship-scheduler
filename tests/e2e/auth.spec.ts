@@ -43,7 +43,8 @@ test("signs up a new account, joins an org by key, and lands on the calendar", a
   await page.getByLabel("First name").fill("New");
   await page.getByLabel("Last name").fill("Member");
   await page.getByLabel("Email").fill("new.member@example.com");
-  await page.getByLabel("Password").fill("password123");
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByLabel("Confirm password").fill("password123");
   // Submit (the form's own "Sign up" button).
   await page.getByRole("button", { name: "Sign up" }).click();
 
@@ -65,6 +66,22 @@ test("signs up a new account, joins an org by key, and lands on the calendar", a
   await page.getByRole("button", { name: "Join" }).click();
   await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
   await expect(page.getByText("New Member")).toBeVisible(); // navbar name
+});
+
+// Sign-up guards against a mistyped password: the confirm field must match.
+test("blocks sign-up when the passwords don't match", async ({ page }) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  await page.getByLabel("First name").fill("Mismatch");
+  await page.getByLabel("Last name").fill("User");
+  await page.getByLabel("Email").fill("mismatch@example.com");
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByLabel("Confirm password").fill("different456");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  await expect(page.getByText("Passwords don't match.")).toBeVisible();
+  await expect(page).toHaveURL(/\/login/); // stayed put, no account created
 });
 
 // Login strategy 2: Google SSO. A true end-to-end run needs real OAuth
