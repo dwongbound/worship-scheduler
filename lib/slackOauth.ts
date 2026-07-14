@@ -7,7 +7,8 @@
 // with NEXTAUTH_SECRET so a tampered/forged callback is rejected (CSRF guard).
 import crypto from "crypto";
 
-export const SLACK_BOT_SCOPES = "chat:write,im:write,mpim:write,users:read.email";
+export const SLACK_BOT_SCOPES =
+  "chat:write,im:write,mpim:write,mpim:write.topic,users:read.email";
 export const SLACK_USER_SCOPES = "openid,email,profile";
 
 export type SlackOAuthState = {
