@@ -99,8 +99,9 @@ export default function OrgSwitcher() {
   const trigger = (
     <span
       data-testid="org-switcher"
-      className={`flex max-w-36 items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5
-        text-sm font-medium dark:border-gray-700 ${
+      data-tour="orgs"
+      className={`flex h-9 max-w-36 items-center gap-1 rounded-lg border border-gray-300 px-2.5
+        text-sm font-medium dark:border-gray-600 ${
           mode === "locked" ? "opacity-60" : "hover:bg-gray-100 dark:hover:bg-gray-700"
         }`}
     >

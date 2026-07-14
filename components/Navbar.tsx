@@ -8,6 +8,7 @@ import Dropdown from "./common/Dropdown";
 import Banner from "./common/Banner";
 import Logo from "./Logo";
 import OrgSwitcher from "./OrgSwitcher";
+import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
 import type { ApiAvailabilityStatus } from "@/lib/types";
@@ -203,6 +204,7 @@ export default function Navbar() {
               <Link
                 key={tab.href}
                 href={tab.href}
+                data-tour={tab.href}
                 onClick={() => handleTabClick(tab.href)}
                 className={tabClassName(isActive(tab.href), isAdminTab)}
               >
@@ -223,12 +225,21 @@ export default function Navbar() {
 
 
         <div className="flex items-center gap-3">
+          {/* Guided tour: "?" help button, auto-opens once per browser.
+              Admins get extra steps covering the Create/Team tabs. */}
+          <GuidedTour
+            isAdmin={Boolean(
+              session?.user?.isSuperAdmin ||
+                session?.user?.memberships?.some((m) => m.isAdmin),
+            )}
+          />
+
           {/* Theme toggle: light → dark → system */}
           <button
             onClick={cycleTheme}
             aria-label={themeLabel}
             title={themeLabel}
-            className="rounded-lg p-2 text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
           >
             {themeIcon}
           </button>
@@ -240,7 +251,7 @@ export default function Navbar() {
           {session?.user && (
             <Dropdown
               trigger={
-                <span className="flex items-center gap-2">
+                <span data-tour="profile" className="flex items-center gap-2">
                   <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">
                     {(session.user.name ?? "?").charAt(0).toUpperCase()}
                     {needsInstruments && (

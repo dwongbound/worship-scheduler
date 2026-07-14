@@ -100,6 +100,10 @@ export default function UsersPage() {
   const [stats, setStats] = useState<Record<string, UserSetBreakdown[]> | null>(
     null
   );
+  // True from the moment the admin org changes until users, teams AND stats
+  // have all reloaded — keeps the full-page loader up so the switch happens as
+  // one atomic swap instead of each section updating piecewise.
+  const [switchingOrg, setSwitchingOrg] = useState(false);
 
   const myId = session?.user?.id;
   // This page shows exactly ONE org (the navbar switcher's admin selection) —
@@ -115,9 +119,23 @@ export default function UsersPage() {
     fetchJsonArray<ApiTeam>(`/api/teams?orgId=${adminOrgId}`).then(setTeams);
   }, [adminOrgId]);
 
+  // `load`'s identity only changes when adminOrgId does, so this effect fires
+  // on an org switch (not on the in-place reloads that mutations trigger).
+  // Blank every section and mark the switch in progress so the full-page loader
+  // covers the swap; it lifts once everything below has reloaded.
   useEffect(() => {
-    if (isAdmin) load();
+    if (!isAdmin) return;
+    setSwitchingOrg(true);
+    setUsers(null);
+    setTeams(null);
+    setStats(null);
+    load();
   }, [isAdmin, load]);
+
+  // The switch is done only once all three data sets are back for the new org.
+  useEffect(() => {
+    if (switchingOrg && users && teams && stats) setSwitchingOrg(false);
+  }, [switchingOrg, users, teams, stats]);
 
   // ── Team management (the card at the top) ─────────────────────────────
   async function addTeam() {
@@ -244,7 +262,10 @@ export default function UsersPage() {
     });
   }
 
-  usePageLoading(status === "loading" || (!!isAdmin && (!users || !teams)));
+  usePageLoading(
+    status === "loading" ||
+      (!!isAdmin && (switchingOrg || !users || !teams))
+  );
 
   if (status === "loading") return null;
   // Non-admins never see the tab, but guard direct visits too.
