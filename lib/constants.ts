@@ -6,10 +6,10 @@
 // all derive from it.
 export const SLOT_CAPACITIES = {
   WORSHIP_LEADER: 1,
-  VOCALS: 4, // vox
+  VOCALS: 3, // vox
   ACOUSTIC_GUITAR: 1,
   ELECTRIC_GUITAR: 2,
-  KEYS: 2, // pianos
+  KEYS: 1, // pianos
   STRINGS: 1,
   DRUMS: 1,
   BASS: 1,

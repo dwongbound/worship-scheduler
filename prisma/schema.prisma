@@ -103,7 +103,7 @@ model Org {
   @@map("orgs")
 }
 
-// A user's membership in one org, created by redeeming that org's key.
+// A user's membership in one org, created by entering that org's key.
 // Admin is PER-ORG: this flag replaces the old global User.isAdmin.
 model OrgMembership {
   id      String  @id @default(cuid())

@@ -261,6 +261,9 @@ export default function AvailabilityCalendar({
           const blocks = blocksByDay.get(date.toISOString())!;
           const blocked = blocks.fullDay || blocks.periods.length > 0;
           const blockable = canBlock(date);
+          // Past days (this month, before today) can't be blocked — render them
+          // muted like out-of-month cells so they don't look clickable.
+          const isPast = inMonth && startOfDay(date) < todayStart;
 
           return (
             <div
@@ -275,9 +278,11 @@ export default function AvailabilityCalendar({
                 if (startRef.current && blockable) extendDrag(date);
               }}
               className={`min-h-[84px] select-none border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
-                blockable ? "cursor-pointer" : ""
+                blockable
+                  ? "cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                  : ""
               } ${
-                !inMonth
+                !inMonth || (isPast && !blocked)
                   ? "bg-gray-50 text-gray-400 dark:bg-gray-900/50"
                   : blocks.fullDay
                     ? "bg-rose-50 dark:bg-rose-950/40"
@@ -292,7 +297,7 @@ export default function AvailabilityCalendar({
                   className={`flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-medium ${
                     isToday
                       ? "bg-indigo-600 text-white"
-                      : inMonth
+                      : inMonth && !isPast
                         ? "text-gray-700 dark:text-gray-300"
                         : "text-gray-400 dark:text-gray-600"
                   }`}

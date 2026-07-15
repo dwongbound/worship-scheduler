@@ -132,6 +132,7 @@ export interface ApiAvailabilityStatus {
 export interface ApiAdminUser {
   id: string;
   name: string;
+  username: string; // stable, human-readable deep-link key (?user=<username>)
   isAdmin: boolean;
   isMD: boolean; // can be a set's musical director
   instruments: Instrument[];
