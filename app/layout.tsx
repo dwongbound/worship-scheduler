@@ -3,6 +3,7 @@ import Script from "next/script";
 import "./globals.css";
 import Providers from "./providers";
 import Navbar from "@/components/Navbar";
+import ScrollToTopButton from "@/components/ScrollToTopButton";
 
 export const metadata: Metadata = {
   title: "Worship Scheduler",
@@ -63,6 +64,7 @@ export default function RootLayout({
           {/* Extra bottom padding on phones so content can scroll clear of the
               floating bottom nav bar (see Navbar.tsx). */}
           <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-6">{children}</main>
+          <ScrollToTopButton />
         </Providers>
       </body>
     </html>

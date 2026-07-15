@@ -9,16 +9,19 @@
 // A master date-range selector at the top drives a per-person count of how
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
+import Dropdown from "@/components/common/Dropdown";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
+import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import {
@@ -73,7 +76,9 @@ function SetBreakdown({
   );
 }
 
-export default function UsersPage() {
+// Wrapped in Suspense (below) because useSearchParams() requires a boundary —
+// without one the whole route bails out of prerendering at build time.
+function UsersPageInner() {
   const { data: session, status } = useSession();
   const [users, setUsers] = useState<ApiAdminUser[] | null>(null);
   // Ministry teams (managed in the card at the top of the page).
@@ -91,7 +96,11 @@ export default function UsersPage() {
 
   // Team stats: which range is picked, the custom range's dates, and the
   // userId → set-count map fetched for the active range (null while loading).
-  const [rangeIdx, setRangeIdx] = useState(0);
+  // Default to "Next 4 weeks" (fall back to the first preset if it's renamed).
+  const [rangeIdx, setRangeIdx] = useState(() => {
+    const i = STAT_RANGES.findIndex((r) => r.days === 28);
+    return i === -1 ? 0 : i;
+  });
   const [customStart, setCustomStart] = useState(() => toYmd(new Date()));
   const [customEnd, setCustomEnd] = useState(() =>
     toYmd(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
@@ -110,6 +119,16 @@ export default function UsersPage() {
   // members, teams, and stats all scope to it, with zero cross-org leakage.
   const { adminOrgId, isAdminAny } = useOrgs();
   const isAdmin = isAdminAny;
+
+  // Deep-link from the navbar's "not on a team" banner: `?user=<username>`
+  // scrolls that person's card into view and rings it briefly (username keeps
+  // the URL readable instead of exposing an opaque id). `handledHighlight`
+  // remembers which one we've already acted on so re-renders don't re-scroll.
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const highlightParam = searchParams.get("user");
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const handledHighlight = useRef<string | null>(null);
 
   const load = useCallback(() => {
     if (!adminOrgId) return;
@@ -175,6 +194,8 @@ export default function UsersPage() {
         setTeamError(data.error ?? "Could not delete the team.");
       }
       load();
+      // Dropping a team can leave its members team-less — refresh the reminder.
+      window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
     } finally {
       setTeamBusy(false);
     }
@@ -213,6 +234,37 @@ export default function UsersPage() {
     };
   }, [isAdmin, adminOrgId, startISO, endISO]);
 
+  // Act on `?user=<username>` once the matching card is in the DOM: scroll it
+  // into view, ring it, and strip the param so a refresh/back doesn't re-fire.
+  // Clearing the param resets `handledHighlight` so clicking the same person
+  // again re-scrolls. The ring's own timeout lives in the effect below, keyed
+  // on the ring state, so stripping the param here doesn't cut it short.
+  useEffect(() => {
+    if (!highlightParam) {
+      handledHighlight.current = null;
+      return;
+    }
+    if (!users) return;
+    if (handledHighlight.current === highlightParam) return;
+    // The URL keys on username; resolve it to the card's id for scroll + ring.
+    const match = users.find((u) => u.username === highlightParam);
+    if (!match) return; // not in this org
+    handledHighlight.current = highlightParam;
+
+    document
+      .getElementById(`user-card-${match.id}`)
+      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedId(match.id);
+    router.replace("/users", { scroll: false });
+  }, [highlightParam, users, router]);
+
+  // Fade the highlight ring a few seconds after it lands.
+  useEffect(() => {
+    if (!highlightedId) return;
+    const timer = setTimeout(() => setHighlightedId(null), 4000);
+    return () => clearTimeout(timer);
+  }, [highlightedId]);
+
   // Apply a change locally right away, then persist it. If the request fails,
   // reload from the server so the UI reflects the true state.
   const patchUser = useCallback(
@@ -238,6 +290,9 @@ export default function UsersPage() {
         body: JSON.stringify(body),
       });
       if (!res.ok) load();
+      // A team-membership edit may have (un)covered someone — let the navbar
+      // refresh its "not on a team" reminder dot/banner right away.
+      if (patchTeams) window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
     },
     [load, adminOrgId]
   );
@@ -346,11 +401,12 @@ export default function UsersPage() {
                 setMemberQuery("");
                 setConfirmingTeamId(null);
               }}
-              className="flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-sm
-                transition-colors hover:bg-indigo-100 dark:bg-gray-800 dark:hover:bg-indigo-900/40"
+              className="flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-sm
+                text-indigo-900 transition-colors hover:bg-indigo-100
+                dark:bg-indigo-500/15 dark:text-indigo-100 dark:hover:bg-indigo-500/25"
             >
               <span className="font-medium">{team.name}</span>
-              <span className="text-xs text-gray-500 dark:text-gray-400">
+              <span className="text-xs text-indigo-500/80 dark:text-indigo-200/60">
                 {memberCount(team.id)}{" "}
                 {memberCount(team.id) === 1 ? "member" : "members"}
               </span>
@@ -409,8 +465,14 @@ export default function UsersPage() {
 
       <ul className="space-y-3">
         {users.map((user) => (
-          <li key={user.id}>
-            <Card>
+          <li key={user.id} id={`user-card-${user.id}`} className="scroll-mt-24">
+            <Card
+              className={
+                highlightedId === user.id
+                  ? "ring-2 ring-indigo-500 transition-shadow dark:ring-indigo-400"
+                  : "transition-shadow"
+              }
+            >
               {/* Left: identity + roles. Right: fixed-width set breakdown. */}
               <div className="flex flex-col gap-4 sm:flex-row">
                 <div className="flex-1 space-y-3">
@@ -461,22 +523,48 @@ export default function UsersPage() {
                     </div>
                   </div>
 
-                  {/* Read-only membership chips — manage membership from the
-                      team buttons in the Teams card above. */}
-                  {user.teams.length > 0 && (
-                    <div>
-                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                        Teams
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {user.teams.map((team) => (
-                          <Badge key={team.id} tone="blue">
-                            {team.name}
-                          </Badge>
-                        ))}
+                  {/* Membership chips, plus an inline "+ Add to team" chip in
+                      the first free slot so an admin can add this person to any
+                      team they're not already on without opening the team card. */}
+                  {(() => {
+                    const available = teams.filter(
+                      (t) => !user.teams.some((ut) => ut.id === t.id)
+                    );
+                    return (
+                      <div>
+                        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                          Teams
+                        </p>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {user.teams.map((team) => (
+                            <Badge key={team.id} tone="indigo">
+                              {team.name}
+                            </Badge>
+                          ))}
+                          {available.length > 0 && (
+                            <Dropdown
+                              align="left"
+                              trigger={
+                                <span className="inline-flex items-center rounded-full border border-dashed border-gray-300 px-2.5 py-0.5 text-xs font-medium text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200">
+                                  + Add to team
+                                </span>
+                              }
+                            >
+                              {available.map((team) => (
+                                <button
+                                  key={team.id}
+                                  onClick={() => addToTeam(user, team)}
+                                  className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+                                >
+                                  {team.name}
+                                </button>
+                              ))}
+                            </Dropdown>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
 
                 <SetBreakdown breakdown={stats?.[user.id]} loading={stats === null} />
@@ -506,6 +594,14 @@ export default function UsersPage() {
         onClose={() => setOpenTeamId(null)}
       />
     </div>
+  );
+}
+
+export default function UsersPage() {
+  return (
+    <Suspense fallback={null}>
+      <UsersPageInner />
+    </Suspense>
   );
 }
 

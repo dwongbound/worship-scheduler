@@ -18,6 +18,16 @@ export async function login(
   usernameOrEmail: string,
   password = "password123"
 ) {
+  // Suppress the first-run guided tour — its full-screen overlay otherwise
+  // intercepts clicks in every test. addInitScript runs before page scripts on
+  // each navigation, so the "seen" flag is set for the whole session.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem("guided-tour-seen", "1");
+    } catch {
+      /* private mode — ignore */
+    }
+  });
   await page.goto("/login");
   await page.getByLabel("Username / Email").fill(usernameOrEmail);
   await page.getByLabel("Password").fill(password);
