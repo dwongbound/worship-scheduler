@@ -21,7 +21,7 @@ import {
   ROLE_ORDER,
   resolveCapacities,
 } from "@/lib/constants";
-import { formatDay, minutesToTimeLabel, shortDateLabel } from "@/lib/dates";
+import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { useOrgs } from "@/components/OrgProvider";
 import type {
@@ -63,6 +63,10 @@ export default function CreatePage() {
   );
   const [statusRequestId, setStatusRequestId] = useState<string>("");
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  // Slack "remind everyone to fill in availability" confirm flow.
+  const [remindOpen, setRemindOpen] = useState(false);
+  const [remindBusy, setRemindBusy] = useState(false);
+  const [remindResult, setRemindResult] = useState("");
   // Which control is mid-update (inline dots) — never a full-page loader.
   const [busyAction, setBusyAction] = useState<
     "generate" | "apply" | "request" | null
@@ -149,10 +153,32 @@ export default function CreatePage() {
     }
   }
 
+  // Re-send the Slack DM asking everyone (with Slack linked) to fill in the
+  // selected request. Fired from the confirm modal on the status card.
+  async function sendReminder() {
+    if (!selectedRequestId) return;
+    setRemindBusy(true);
+    setRemindResult("");
+    try {
+      const res = await fetch(
+        `/api/admin/availability-request/${selectedRequestId}/remind`,
+        { method: "POST", headers: orgHeaders(adminOrgId) }
+      );
+      setRemindResult(
+        res.ok ? "Reminder sent on Slack." : "Could not send the reminder."
+      );
+    } catch {
+      setRemindResult("Could not send the reminder.");
+    } finally {
+      setRemindBusy(false);
+      setRemindOpen(false);
+    }
+  }
+
   // Ask the whole team to submit availability over a date range. Everyone who
   // hasn't responded sees a reminder dot + banner until they do.
   async function requestAvailability() {
-    if (!reqStart || !reqEnd) return;
+    if (!reqStart) return;
     setBusyAction("request");
     setReqResult("");
     try {
@@ -162,11 +188,17 @@ export default function CreatePage() {
         body: JSON.stringify({
           name: reqName,
           startDate: reqStart,
-          endDate: reqEnd,
+          // No end date → a single-day request (defaults to the start date).
+          endDate: reqEnd || reqStart,
         }),
       });
       const data = await res.json();
-      if (res.ok) setReqName("");
+      if (res.ok) {
+        setReqName("");
+        // Refresh so the status card's Request dropdown picks up (and selects)
+        // the just-created request without a page reload.
+        await reload();
+      }
       setReqResult(
         res.ok
           ? "Availability request sent to the team."
@@ -241,9 +273,8 @@ export default function CreatePage() {
 
   // Human label for a request in the TimeRange dropdown.
   function requestLabel(r: ApiAvailabilityRequest): string {
-    return r.name
-      ? `${r.name} — ${shortDateLabel(r.startDate)} - ${shortDateLabel(r.endDate)}`
-      : `${shortDateLabel(r.startDate)} - ${shortDateLabel(r.endDate)}`;
+    const range = shortRangeLabel(r.startDate, r.endDate);
+    return r.name ? `${r.name} — ${range}` : range;
   }
 
   function formatUnavailability(entry: AdminUnavailabilityEntry): string {
@@ -302,7 +333,14 @@ export default function CreatePage() {
     Math.ceil(templates.length / TEMPLATES_PER_PAGE)
   );
   const currentTemplatePage = Math.min(templatePage, templatePageCount - 1);
-  const visibleTemplates = templates.slice(
+  // Ordered Monday→Sunday (day 0=Sun, so shift to a Mon-first index), then by
+  // start time within a day, so the list stays in weekly order as rows are added.
+  const orderedTemplates = [...templates].sort((a, b) => {
+    const dayA = (a.dayOfWeek + 6) % 7;
+    const dayB = (b.dayOfWeek + 6) % 7;
+    return dayA - dayB || a.startMinute - b.startMinute;
+  });
+  const visibleTemplates = orderedTemplates.slice(
     currentTemplatePage * TEMPLATES_PER_PAGE,
     (currentTemplatePage + 1) * TEMPLATES_PER_PAGE
   );
@@ -314,16 +352,8 @@ export default function CreatePage() {
       {/* ── Weekly templates ────────────────────────────────────────── */}
       <section>
         <Card>
-          <div className="mb-3 flex items-center justify-between">
+          <div className="mb-3">
             <h2 className="font-semibold">Weekly Recurring Sets</h2>
-            {/* Keep the accessible name the e2e specs click on. */}
-            <Button
-              size="sm"
-              onClick={() => setTemplateModalOpen(true)}
-              aria-label="Add weekly set time"
-            >
-              Add
-            </Button>
           </div>
           {templates.length === 0 ? (
             <p className="text-sm text-gray-500">No templates yet.</p>
@@ -365,7 +395,8 @@ export default function CreatePage() {
                     <td className="py-2 text-right">
                       <Button
                         size="sm"
-                        variant="danger"
+                        variant="ghost"
+                        className="text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
                         onClick={() => removeTemplate(t.id)}
                         disabled={busyTemplateId === t.id}
                       >
@@ -377,6 +408,16 @@ export default function CreatePage() {
               </tbody>
             </table>
           )}
+          {/* Transparent full-width add row beneath the list. Keeps the
+              accessible name the e2e specs click on. */}
+          <button
+            type="button"
+            onClick={() => setTemplateModalOpen(true)}
+            aria-label="Add weekly set time"
+            className="mt-2 w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
+          >
+            + Add
+          </button>
           {/* Pager — only when there's more than one page of templates. */}
           {templatePageCount > 1 && (
             <div className="mt-3 flex items-center justify-end gap-3">
@@ -430,7 +471,7 @@ export default function CreatePage() {
                 onChange={setReqStart}
               />
               <DateSelect
-                label="To"
+                label="To (optional)"
                 value={reqEnd}
                 min={reqStart || toYmd(new Date())}
                 onChange={setReqEnd}
@@ -438,7 +479,7 @@ export default function CreatePage() {
             </div>
             <Button
               onClick={requestAvailability}
-              disabled={!reqStart || !reqEnd || busyAction === "request"}
+              disabled={!reqStart || busyAction === "request"}
             >
               {busyAction === "request" ? (
                 <LoadingDots size="sm" />
@@ -456,7 +497,26 @@ export default function CreatePage() {
 
         {/* Right: who has responded, filtered by TimeRange */}
         <Card>
-          <h2 className="mb-3 font-semibold">Availability status</h2>
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h2 className="font-semibold">Availability status</h2>
+            {selectedRequest && (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setRemindResult("");
+                  setRemindOpen(true);
+                }}
+              >
+                Remind on Slack
+              </Button>
+            )}
+          </div>
+          {remindResult && (
+            <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
+              {remindResult}
+            </p>
+          )}
           {requests.length > 0 && (
             <div className="mb-3">
               <Select
@@ -468,8 +528,8 @@ export default function CreatePage() {
                   // <option> can't contain markup (React hydration error), so
                   // plain text only — no <strong> here.
                   <option key={r.id} value={r.id}>
-                    {r.name || "Availability"} ({shortDateLabel(r.startDate)} -{" "}
-                    {shortDateLabel(r.endDate)})
+                    {r.name || "Availability"} (
+                    {shortRangeLabel(r.startDate, r.endDate)})
                   </option>
                 ))}
               </Select>
@@ -572,7 +632,7 @@ export default function CreatePage() {
           {genMode === "request" ? (
             <p className="text-sm text-gray-600 dark:text-gray-400">
               {genRequest
-                ? `Scheduling ${shortDateLabel(genRequest.startDate)} – ${shortDateLabel(genRequest.endDate)}.`
+                ? `Scheduling ${shortRangeLabel(genRequest.startDate, genRequest.endDate)}.`
                 : "Pick an availability request above."}
             </p>
           ) : genMode === "weeks" ? (
@@ -679,6 +739,40 @@ export default function CreatePage() {
             )}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={remindOpen}
+        onClose={() => setRemindOpen(false)}
+        title="Remind on Slack"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setRemindOpen(false)}
+              disabled={remindBusy}
+            >
+              Cancel
+            </Button>
+            <Button onClick={sendReminder} disabled={remindBusy}>
+              {remindBusy ? <LoadingDots size="sm" /> : "Send reminder"}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          This sends a direct message on Slack to everyone with Slack linked,
+          asking them to fill out their availability for{" "}
+          <strong>
+            {selectedRequest
+              ? `${selectedRequest.name || "Availability"} (${shortRangeLabel(
+                  selectedRequest.startDate,
+                  selectedRequest.endDate
+                )})`
+              : "this request"}
+          </strong>
+          .
+        </p>
       </Modal>
 
       <TemplateModal

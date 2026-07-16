@@ -26,7 +26,7 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - **Org** — the top-level tenant (a church/ministry). Declared in the
   `ORG_KEYS` env var (`"Name:key,Name:key"`); rows auto-upsert BY NAME
   (`lib/org.ts ensureOrgsSynced` — renaming in env = a new empty org). Users
-  join by redeeming a key (`/join` page or navbar "Add an org…").
+  join by entering a key (`/join` page or navbar "Add an org…").
 - **OrgMembership** — user↔org join with **per-org `isAdmin`** (the old
   global `User.isAdmin` is gone). Admin routes take an `x-org-id` header
   (collections) or derive the org from the resource; both re-check the db

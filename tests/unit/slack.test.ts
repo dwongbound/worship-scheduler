@@ -179,14 +179,16 @@ describe("weeklySummaryText", () => {
     end: new Date("2026-07-17T12:00:00"),
   };
 
-  it("lists each set's people in scarce-first role order with an (MD) marker", () => {
+  it("lists people scarce-first and marks the designated MD, never the WL", () => {
     const text = weeklySummaryText("Sunday Team", range, [
       {
         label: "Sunday Worship",
         startsAt: new Date("2026-07-12T10:00:00"),
+        mdUserId: "u-bob", // Bob on keys is the MD
         assignments: [
-          { role: "DRUMS", user: { name: "Ryan", isMD: false } },
-          { role: "WORSHIP_LEADER", user: { name: "Alice", isMD: true } },
+          { role: "DRUMS", user: { id: "u-ryan", name: "Ryan" } },
+          { role: "KEYS", user: { id: "u-bob", name: "Bob" } },
+          { role: "WORSHIP_LEADER", user: { id: "u-alice", name: "Alice" } },
         ],
       },
     ]);
@@ -194,8 +196,10 @@ describe("weeklySummaryText", () => {
     const lines = text.split("\n");
     expect(lines[0]).toContain("*Sunday Team*");
     expect(lines[2]).toContain("*Sunday Worship*");
-    expect(lines[3]).toBe("• Alice — Worship Leader (MD)");
+    // ROLE_ORDER is WL, DRUMS, BASS, KEYS, … → WL, then Drums, then Keys.
+    expect(lines[3]).toBe("• Alice — Worship Leader");
     expect(lines[4]).toBe("• Ryan — Drums");
+    expect(lines[5]).toBe("• Bob — Piano / Keys (MD)");
   });
 
   it("uses a fallback name and placeholder line for empty unnamed sets", () => {
@@ -203,6 +207,7 @@ describe("weeklySummaryText", () => {
       {
         label: null,
         startsAt: new Date("2026-07-12T10:00:00"),
+        mdUserId: null,
         assignments: [],
       },
     ]);

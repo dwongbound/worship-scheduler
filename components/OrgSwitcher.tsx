@@ -3,13 +3,19 @@
 // the page:
 //   /calendar, /swaps — a VIEW filter: "All orgs" + each of my orgs.
 //   /create, /users   — the ADMIN org: exactly one of my admin orgs (no All).
-//   /schedule         — locked to "All orgs" (busy blocks span every org).
-// Every mode ends with "Add an org…", which prompts for an org key.
+//   /schedule         — locked to "All orgs" (busy blocks span every org): the
+//                       menu lists the orgs greyed-out/disabled with an (i)
+//                       note explaining the lock; "Org settings" + "Add an
+//                       org…" still work.
+// Every mode ends with "Org settings" (admins only, hidden on phones — it opens
+// the full-page /orgs view) and "Add an org…", which prompts for an org key.
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useState } from "react";
 import Button from "./common/Button";
 import Dropdown from "./common/Dropdown";
+import InfoTooltip from "./common/InfoTooltip";
 import Input from "./common/Input";
 import Modal from "./common/Modal";
 import { ORGS_CHANGED_EVENT, useOrgs } from "./OrgProvider";
@@ -31,32 +37,14 @@ export default function OrgSwitcher() {
   const [orgKey, setOrgKey] = useState("");
   const [addError, setAddError] = useState("");
   const [addBusy, setAddBusy] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [orgSlack, setOrgSlack] = useState<{ connected: boolean; team: string | null } | null>(null);
 
   if (!orgs) return null; // first load — the navbar renders without it briefly
 
   const mode = modeFor(pathname);
   const adminOrgs = orgs.filter((o) => o.isAdmin);
-  // The concrete org the settings action targets: whatever's selected, if the
-  // user administers it (hidden on "All orgs").
-  let selectedOrgId: string | null = null;
-  if (mode === "admin") {
-    selectedOrgId = adminOrgId;
-  } else if (viewOrgId !== "all") {
-    selectedOrgId = viewOrgId;
-  }
-  const settingsOrg = orgs.find((o) => o.id === selectedOrgId && o.isAdmin) ?? null;
-
-  async function openSettings() {
-    setOrgSlack(null);
-    setSettingsOpen(true);
-    const me = await fetch("/api/me").then((r) => r.json()).catch(() => null);
-    const m = me?.memberships?.find(
-      (x: { orgId: string }) => x.orgId === settingsOrg?.id
-    );
-    setOrgSlack({ connected: !!m?.orgSlackConnected, team: m?.slackTeamName ?? null });
-  }
+  // "Org settings" is only useful to someone who administers an org; the item
+  // links to the full-page /orgs view where they pick which one.
+  const canManageOrgs = adminOrgs.length > 0;
 
   const label =
     mode === "locked"
@@ -100,10 +88,8 @@ export default function OrgSwitcher() {
     <span
       data-testid="org-switcher"
       data-tour="orgs"
-      className={`flex h-9 max-w-36 items-center gap-1 rounded-lg border border-gray-300 px-2.5
-        text-sm font-medium dark:border-gray-600 ${
-          mode === "locked" ? "opacity-60" : "hover:bg-gray-100 dark:hover:bg-gray-700"
-        }`}
+      className="flex h-9 max-w-36 items-center gap-1 rounded-lg border border-gray-300 px-2.5
+        text-sm font-medium hover:bg-gray-100 dark:border-gray-600 dark:hover:bg-gray-700"
     >
       <span className="truncate">{label}</span>
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-4 w-4 shrink-0">
@@ -116,54 +102,90 @@ export default function OrgSwitcher() {
     </span>
   );
 
-  // Locked pages render the pill without a menu — a title explains why.
-  if (mode === "locked") {
-    return (
-      <span title="Availabilities always covers all your orgs" aria-disabled>
-        {trigger}
-      </span>
-    );
-  }
+  // Shared menu tail, as one bordered group so there's a single divider above
+  // it (no stray borders / empty rows). "Org settings" is admins-only and
+  // hidden on phones (the full-page view is desktop-oriented).
+  const menuTail = (
+    <div className="border-t border-gray-200 dark:border-gray-700">
+      {canManageOrgs && (
+        <Link
+          href="/orgs"
+          className="hidden w-full px-4 py-2 text-left text-sm text-gray-500
+            hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 sm:block"
+        >
+          ⚙ Org settings
+        </Link>
+      )}
+      <button
+        onClick={() => {
+          setAddError("");
+          setOrgKey("");
+          setAddOpen(true);
+        }}
+        className="block w-full px-4 py-2 text-left text-sm text-gray-500
+          hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
+      >
+        + Add an org…
+      </button>
+    </div>
+  );
 
   return (
     <>
-      <Dropdown trigger={trigger}>
+      <Dropdown
+        trigger={trigger}
+        // Locked mode has an (i) hover popover next to "All orgs" that needs to
+        // escape the panel; other modes keep the default clipped corners.
+        menuClassName={mode === "locked" ? "overflow-visible" : "overflow-hidden"}
+      >
+        {/* View mode: "All orgs" + each org, all selectable filters. */}
         {mode === "view" && (
           <button onClick={() => setViewOrg("all")} className={itemClass(viewOrgId === "all")}>
             All orgs
           </button>
         )}
-        {(mode === "admin" ? adminOrgs : orgs).map((org) => (
-          <button
-            key={org.id}
-            onClick={() => (mode === "admin" ? setAdminOrg(org.id) : setViewOrg(org.id))}
-            className={itemClass(
-              mode === "admin" ? adminOrgId === org.id : viewOrgId === org.id
-            )}
-          >
-            {org.name}
-          </button>
-        ))}
-        {settingsOrg && (
-          <button
-            onClick={openSettings}
-            className="block w-full border-t border-gray-200 px-4 py-2 text-left text-sm
-              text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700"
-          >
-            ⚙ {settingsOrg.name} settings
-          </button>
+        {mode !== "locked" &&
+          (mode === "admin" ? adminOrgs : orgs).map((org) => (
+            <button
+              key={org.id}
+              onClick={() => (mode === "admin" ? setAdminOrg(org.id) : setViewOrg(org.id))}
+              className={itemClass(
+                mode === "admin" ? adminOrgId === org.id : viewOrgId === org.id
+              )}
+            >
+              {org.name}
+            </button>
+          ))}
+
+        {/* Locked (Availabilities): "All orgs" is the active, unchangeable
+            filter, with an (i) hover popover to its right explaining the lock;
+            the individual orgs are shown disabled below. */}
+        {mode === "locked" && (
+          <>
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-indigo-600 dark:text-indigo-400"
+            >
+              All orgs
+              <InfoTooltip
+                side="bottom"
+                text="Availabilities always covers all your orgs, so this filter can’t be narrowed to one."
+              />
+            </div>
+            {orgs.map((org) => (
+              <div
+                key={org.id}
+                aria-disabled
+                onClick={(e) => e.stopPropagation()}
+                className="cursor-not-allowed px-4 py-2 text-sm text-gray-400 dark:text-gray-500"
+              >
+                {org.name}
+              </div>
+            ))}
+          </>
         )}
-        <button
-          onClick={() => {
-            setAddError("");
-            setOrgKey("");
-            setAddOpen(true);
-          }}
-          className="block w-full border-t border-gray-200 px-4 py-2 text-left text-sm
-            text-gray-500 hover:bg-gray-100 dark:border-gray-700 dark:text-gray-400 dark:hover:bg-gray-700"
-        >
-          + Add an org…
-        </button>
+
+        {menuTail}
       </Dropdown>
 
       {addOpen && (
@@ -193,49 +215,6 @@ export default function OrgSwitcher() {
               </Button>
             </div>
           </form>
-        </Modal>
-      )}
-
-      {settingsOpen && settingsOrg && (
-        <Modal
-          open
-          onClose={() => setSettingsOpen(false)}
-          title={`${settingsOrg.name} settings`}
-        >
-          <div className="space-y-4">
-            <div>
-              <p className="text-sm font-medium">Slack workspace</p>
-              <p className="text-sm text-gray-500">
-                {orgSlack === null
-                  ? "Checking…"
-                  : orgSlack.connected
-                    ? `Connected to ${orgSlack.team ?? "Slack"} ✓`
-                    : "Not connected — the bot can't message this org yet."}
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                onClick={() => {
-                  window.location.href = `/api/slack/install?orgId=${settingsOrg.id}`;
-                }}
-              >
-                {orgSlack?.connected ? "Reconnect Slack" : "Connect to Slack"}
-              </Button>
-              {orgSlack?.connected && (
-                <Button
-                  variant="secondary"
-                  onClick={async () => {
-                    await fetch(`/api/slack/install?orgId=${settingsOrg.id}`, {
-                      method: "DELETE",
-                    });
-                    setOrgSlack({ connected: false, team: null });
-                  }}
-                >
-                  Disconnect
-                </Button>
-              )}
-            </div>
-          </div>
         </Modal>
       )}
     </>

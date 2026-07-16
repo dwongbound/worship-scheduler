@@ -7,12 +7,17 @@ interface DropdownProps {
   trigger: ReactNode; // what you click to open the menu
   children: ReactNode; // menu contents
   align?: "left" | "right";
+  // Extra classes for the menu panel. Defaults to `overflow-hidden` (so item
+  // hover backgrounds stay within the rounded corners); pass `overflow-visible`
+  // when a child needs to escape the panel, e.g. a hover popover/tooltip.
+  menuClassName?: string;
 }
 
 export default function Dropdown({
   trigger,
   children,
   align = "right",
+  menuClassName = "overflow-hidden",
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -37,9 +42,9 @@ export default function Dropdown({
         <div
           // Clicks inside the menu (e.g. "Log out") close it too.
           onClick={() => setOpen(false)}
-          className={`absolute top-full z-40 mt-2 w-48 overflow-hidden rounded-lg border
+          className={`absolute top-full z-40 mt-2 w-48 rounded-lg border
             border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800
-            ${align === "right" ? "right-0" : "left-0"}`}
+            ${align === "right" ? "right-0" : "left-0"} ${menuClassName}`}
         >
           {children}
         </div>

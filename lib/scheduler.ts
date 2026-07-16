@@ -234,8 +234,9 @@ export function buildSchedule(
     // order: people NOT booked within MIN_GAP_DAYS of this set first (the
     // spacing rule — soft, so a small pool still fills every slot), then the
     // least-loaded, then user id for determinism. Optional `mdOnly` restricts
-    // to MDs. When a set doesn't add an MD (requiresMD off), MDs are excluded
-    // from it entirely — an MD is only ever assigned to a set that opted in.
+    // to MDs (used only by the MD reservation below). MDs are otherwise treated
+    // as ordinary players — they may fill any role on any set; being the set's
+    // designated MD is a separate choice (Set.mdUserId, see lib/md.ts).
     const bestFor = (role: Instrument, mdOnly = false) =>
       users
         .filter(
@@ -243,7 +244,6 @@ export function buildSchedule(
           (u) => !set.teamId || (u.teamIds ?? []).includes(set.teamId)
         )
         .filter((u) => (mdOnly ? u.isMD : true))
-        .filter((u) => set.requiresMD || !u.isMD)
         .filter((u) => u.instruments.includes(role))
         .filter((u) => canTakeRole(u.id, role))
         .filter((u) => isUserAvailable(u.id, set, rules))

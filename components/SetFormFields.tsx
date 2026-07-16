@@ -120,8 +120,9 @@ export default function SetFormFields({
         </Select>
       </div>
 
-      {/* On: the auto-scheduler seats a musical director on this set. Off: no
-          MD is assigned at all — MDs are excluded from this set's auto-fill. */}
+      {/* On: this set wants a musical director — the auto-scheduler seats one
+          and the set detail modal shows the MD picker. Off: no MD is tracked
+          for this set. (MDs can still play any role on any set either way.) */}
       <Checkbox
         label="Add MD"
         checked={state.requiresMD}

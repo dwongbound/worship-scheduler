@@ -1,7 +1,16 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
   "git": {
     "deploymentEnabled": {
-      "dev": false
+      "**": false,
+      "main": true,
+      "staging": true
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/weekly-reminders",
+      "schedule": "0 15 * * *"
+    }
+  ]
 }

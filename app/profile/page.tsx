@@ -3,7 +3,7 @@
 // for the future Slack integration. Password changes happen in a separate
 // modal that requires typing the new password twice.
 import { useSession } from "next-auth/react";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
@@ -37,9 +37,12 @@ export default function ProfilePage() {
   const [hasPassword, setHasPassword] = useState(true);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-  // Briefly true right after a successful save so the button can flash a
-  // checkmark instead of its normal label.
+  // Briefly true right after a successful save so the status line can flash a
+  // "Saved ✓" confirmation.
   const [saved, setSaved] = useState(false);
+  // Snapshot of the last-persisted fields, so an auto-save that would be a
+  // no-op (e.g. tabbing out of an unchanged input) is skipped.
+  const savedKeyRef = useRef("");
 
   // Password-change modal state.
   const [pwOpen, setPwOpen] = useState(false);
@@ -57,16 +60,19 @@ export default function ProfilePage() {
         setMemberships(me.memberships ?? []);
         setInstruments(me.instruments);
         setHasPassword(me.hasPassword ?? true);
+        savedKeyRef.current = fieldsKey(me.name, me.email ?? "", me.instruments);
         setLoaded(true);
       });
   }, []);
 
+  // Toggling a role saves immediately (no Save button) — pass the next array
+  // explicitly since setInstruments is async and state would still be stale.
   function toggleInstrument(inst: Instrument) {
-    setInstruments((current) =>
-      current.includes(inst)
-        ? current.filter((i) => i !== inst)
-        : [...current, inst]
-    );
+    const next = instruments.includes(inst)
+      ? instruments.filter((i) => i !== inst)
+      : [...instruments, inst];
+    setInstruments(next);
+    saveProfile({ instruments: next });
   }
 
   // The shared PUT body for the profile fields (used by save + password change).
@@ -79,25 +85,42 @@ export default function ProfilePage() {
     };
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  // Stable identity for a set of fields, to detect no-op saves.
+  function fieldsKey(n: string, e: string, ins: Instrument[]) {
+    return JSON.stringify([n.trim(), (e || "").trim(), [...ins].sort()]);
+  }
+
+  // Auto-save the profile fields. Fields default to current state; callers pass
+  // overrides for values that state hasn't caught up to yet (instrument toggle).
+  async function saveProfile(
+    overrides: { name?: string; email?: string | null; instruments?: Instrument[] } = {}
+  ) {
+    const payload = profilePayload(overrides);
+    // Name is required — never PUT a blank one (it'd 400 and read as a random
+    // error on an unrelated action, e.g. toggling a role).
+    if (!payload.name.trim()) {
+      setMessage("Error: name is required");
+      return;
+    }
+    const key = fieldsKey(payload.name, payload.email ?? "", payload.instruments);
+    if (key === savedKeyRef.current) return; // nothing actually changed
+
     setMessage("");
     setSaving(true);
     try {
       const res = await fetch("/api/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(profilePayload()),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
-        setMessage("Saved!");
-        // Flash the checkmark on the button, then revert to the normal label.
+        savedKeyRef.current = key;
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
         // Refresh the JWT so the navbar shows the new name immediately.
-        await update({ name });
+        await update({ name: payload.name });
         // Tell the navbar to re-check the profile so the "finish setup"
-        // reminder dot/banner clear the moment instruments are saved.
+        // reminder dot/banner clear the moment a role is saved.
         window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
       } else {
         const data = await res.json();
@@ -154,11 +177,20 @@ export default function ProfilePage() {
     <div className="mx-auto max-w-lg space-y-6">
       <h1 className="text-2xl font-bold">Edit Profile</h1>
       <Card>
-        <form onSubmit={onSubmit} className="space-y-4">
+        {/* No Save button: changes persist as you make them — roles save on
+            click, name/email on blur. Enter in a text field saves too. */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            saveProfile();
+          }}
+          className="space-y-4"
+        >
           <Input
             label="Name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            onBlur={() => saveProfile()}
             required
           />
           <Input
@@ -166,6 +198,7 @@ export default function ProfilePage() {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onBlur={() => saveProfile()}
             placeholder="you@example.com"
           />
           <fieldset>
@@ -184,11 +217,11 @@ export default function ProfilePage() {
             </div>
           </fieldset>
 
-          {hasPassword && (
-            <div>
-              <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Password
-              </span>
+          <div>
+            <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Password
+            </span>
+            {hasPassword ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -196,50 +229,38 @@ export default function ProfilePage() {
               >
                 Change password
               </Button>
-            </div>
-          )}
-
-          {message && (
-            <p
-              className={`text-sm font-medium ${
-                message.startsWith("Error")
-                  ? "text-red-600"
-                  : "text-green-600"
-              }`}
-            >
-              {message}
-            </p>
-          )}
-          <Button type="submit" disabled={saving || saved}>
-            {saving ? (
-              <LoadingDots size="sm" />
-            ) : saved ? (
-              <>
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-4 w-4"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={3}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  {/* dasharray 24 ≈ path length; the check-draw animation
-                      sweeps dashoffset 24→0 so the tick appears to be drawn. */}
-                  <path
-                    d="M5 13l4 4L19 7"
-                    strokeDasharray={24}
-                    strokeDashoffset={24}
-                    className="animate-check-draw"
-                  />
-                </svg>
-                Saved
-              </>
             ) : (
-              "Save changes"
+              // Google (OAuth-only) accounts have no password to change.
+              <div className="flex items-center gap-2">
+                <Button type="button" variant="secondary" disabled>
+                  Change password
+                </Button>
+                <span className="text-sm text-gray-500">
+                  (signed in with Google)
+                </span>
+              </div>
             )}
-          </Button>
+          </div>
+
+          {/* Auto-save status: a transient "Saving…"/"Saved ✓", or an error.
+              Fixed height so the layout doesn't jump as it changes. */}
+          <div className="flex h-5 items-center text-sm font-medium">
+            {saving ? (
+              <span className="flex items-center gap-2 text-gray-500">
+                <LoadingDots size="sm" /> Saving…
+              </span>
+            ) : message ? (
+              <span
+                className={
+                  message.startsWith("Error") ? "text-red-600" : "text-green-600"
+                }
+              >
+                {message}
+              </span>
+            ) : saved ? (
+              <span className="text-green-600">Saved ✓</span>
+            ) : null}
+          </div>
         </form>
       </Card>
 

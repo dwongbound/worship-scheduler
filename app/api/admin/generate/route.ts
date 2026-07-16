@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { buildSchedule } from "@/lib/scheduler";
+import { defaultMDId } from "@/lib/md";
 import type { Instrument, SlotCapacityMap } from "@/lib/constants";
 import { occurrencesInRange, parseLocalDate, upcomingOccurrences } from "@/lib/dates";
 import type { StagedPlan, StagedSet } from "@/lib/types";
@@ -229,17 +230,35 @@ export async function POST(req: NextRequest) {
     rosters.set(p.setId, roster);
   }
 
+  // Who's an MD, for deriving each set's designated MD from its roster.
+  const isMDById = new Map<string, boolean>(
+    users.map((u: { id: string; isMD: boolean }) => [u.id, u.isMD])
+  );
+
   const sets: StagedSet[] = stagedList
-    .map((s) => ({
-      startsAt: s.startsAt.toISOString(),
-      label: s.label,
-      durationMinutes: s.durationMinutes,
-      requiresMD: s.requiresMD,
-      slotCapacities: s.capacities,
-      teamId: s.teamId,
-      existing: s.existing,
-      assignments: rosters.get(s.startsAt.toISOString()) ?? [],
-    }))
+    .map((s) => {
+      const assignments = rosters.get(s.startsAt.toISOString()) ?? [];
+      return {
+        startsAt: s.startsAt.toISOString(),
+        label: s.label,
+        durationMinutes: s.durationMinutes,
+        requiresMD: s.requiresMD,
+        // Auto-pick the MD only for sets that want one (see lib/md.ts).
+        mdUserId: s.requiresMD
+          ? defaultMDId(
+              assignments.map((a) => ({
+                userId: a.userId,
+                role: a.role,
+                isMD: isMDById.get(a.userId) ?? false,
+              }))
+            )
+          : null,
+        slotCapacities: s.capacities,
+        teamId: s.teamId,
+        existing: s.existing,
+        assignments,
+      };
+    })
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
 
   const plan: StagedPlan = { sets, skipped };

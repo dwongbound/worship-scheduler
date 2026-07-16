@@ -16,6 +16,7 @@ import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import type { Instrument, SlotCapacityMap } from "@/lib/constants";
 import { buildSchedule } from "@/lib/scheduler";
+import { defaultMDId, isValidMD } from "@/lib/md";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -130,6 +131,32 @@ export async function POST(
         type: "ADDED" as const,
       })),
     });
+  }
+
+  // Designate an MD from the full post-fill roster: keep the current one if it's
+  // still eligible, otherwise auto-pick the best (see lib/md.ts).
+  if (set.requiresMD) {
+    const isMDById = new Map<string, boolean>(
+      users.map((u: { id: string; isMD: boolean }) => [u.id, u.isMD])
+    );
+    const fullRoster = [
+      ...set.assignments.map((a) => ({
+        userId: a.userId,
+        role: a.role as Instrument,
+        isMD: a.user.isMD,
+      })),
+      ...proposals.map((p) => ({
+        userId: p.userId,
+        role: p.role,
+        isMD: isMDById.get(p.userId) ?? false,
+      })),
+    ];
+    const mdUserId = isValidMD(set.mdUserId, fullRoster)
+      ? set.mdUserId
+      : defaultMDId(fullRoster);
+    if (mdUserId !== set.mdUserId) {
+      await prisma.set.update({ where: { id: set.id }, data: { mdUserId } });
+    }
   }
 
   return NextResponse.json({ assignmentsCreated: count });

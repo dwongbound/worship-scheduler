@@ -22,4 +22,16 @@
   html.dark {
     color-scheme: dark;
   }
+
+  /* Phones navigate between tabs with a horizontal swipe (see Navbar.tsx). Clip
+     any horizontal page overflow and disable horizontal overscroll so a swipe
+     can't drag the whole page — and with it the sticky navbar — sideways.
+     `clip` (not `hidden`) doesn't turn the body into a scroll container, so the
+     viewport still scrolls vertically and `position: sticky` keeps working. */
+  html {
+    overscroll-behavior-x: none;
+  }
+  body {
+    overflow-x: clip;
+  }
 }

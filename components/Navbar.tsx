@@ -1,7 +1,7 @@
 "use client";
 // Top navigation: tabs, dark-mode toggle, swap-alert red dot, user menu.
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
 import Dropdown from "./common/Dropdown";
@@ -10,6 +10,10 @@ import Logo from "./Logo";
 import OrgSwitcher from "./OrgSwitcher";
 import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
+import { useOrgs } from "./OrgProvider";
+import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import { setNavDirection } from "@/lib/navDirection";
+import { useSwipe } from "./SwipeProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
 import type { ApiAvailabilityStatus } from "@/lib/types";
 
@@ -22,6 +26,9 @@ export const AVAILABILITY_CHANGED_EVENT = "availability-changed";
 // Fired by the Profile page after a save, so the "finish your profile" reminder
 // dot/banner clear the moment the user picks their first instrument.
 export const PROFILE_CHANGED_EVENT = "profile-changed";
+// Fired by the Team tab after any team-membership edit, so the "users with no
+// team" reminder dot/banner refresh immediately instead of on the next poll.
+export const TEAMS_CHANGED_EVENT = "teams-changed";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -35,10 +42,35 @@ export default function Navbar() {
   // start empty, so this drives a "finish your profile" reminder dot + banner.
   const [needsInstruments, setNeedsInstruments] = useState(false);
   const [instrumentsBannerDismissed, setInstrumentsBannerDismissed] = useState(false);
+  // Admins only: members of the selected admin org who aren't on any team yet.
+  // Drives the Team tab's reminder dot + a banner linking to each person.
+  const [teamlessUsers, setTeamlessUsers] = useState<
+    { id: string; name: string; username: string }[]
+  >([]);
+  const [teamlessBannerDismissed, setTeamlessBannerDismissed] = useState(false);
   // Href of the tab just clicked, so it highlights immediately instead of
   // waiting for `pathname` to update after the new page mounts.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
   const beginNavigation = useBeginNavigation();
+  const router = useRouter();
+  // The org the admin tabs operate on — the teamless reminder scopes to it, so
+  // its banner links land on the /users list that actually shows those people.
+  const { adminOrgId, isAdminAny } = useOrgs();
+
+  // Shared with SwipePager: the navbar writes the live tab list / active index /
+  // navigate fn here, and reads back `previewIndex` — the tab the in-progress
+  // swipe is heading toward — so the highlight updates live during the drag.
+  const {
+    tabsRef: tabHrefsRef,
+    activeIndexRef,
+    navigateRef,
+    previewIndex,
+  } = useSwipe();
+
+  // Phone bottom bar shrinks to icons-only on scroll down (labels collapse) and
+  // expands back to icon + label on scroll up or near the top. It never fully
+  // hides, so navigation stays one tap away.
+  const [bottomBarCompact, setBottomBarCompact] = useState(false);
 
   // Read the persisted mode after mount (localStorage is client-only).
   useEffect(() => {
@@ -50,6 +82,34 @@ export default function Navbar() {
   useEffect(() => {
     setPendingHref(null);
   }, [pathname]);
+
+  // Track scroll direction to shrink/expand the phone bottom bar. Uses a ref
+  // (not state) for the last position so the passive scroll listener never
+  // needs to re-attach, and rAF-throttles so it only recalculates once per
+  // frame.
+  useEffect(() => {
+    let lastY = window.scrollY;
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        const delta = y - lastY;
+        if (y < 40) {
+          setBottomBarCompact(false);
+        } else if (delta > 8) {
+          setBottomBarCompact(true);
+        } else if (delta < -8) {
+          setBottomBarCompact(false);
+        }
+        lastY = y;
+        ticking = false;
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   // While in "system" mode, follow live OS theme changes.
   useEffect(() => {
@@ -109,25 +169,58 @@ export default function Navbar() {
     }
   }, []);
 
+  // Members of the selected admin org who aren't on any team. Only admins can
+  // hit the endpoint, and it needs an org to scope to, so bail out otherwise
+  // (and clear any stale list, e.g. after switching to a non-admin org).
+  const refreshTeamless = useCallback(async () => {
+    if (!isAdminAny || !adminOrgId) {
+      setTeamlessUsers([]);
+      return;
+    }
+    try {
+      const users = await fetchJsonArray<{
+        id: string;
+        name: string;
+        username: string;
+      }>(
+        "/api/admin/users/teamless",
+        { headers: orgHeaders(adminOrgId) }
+      );
+      setTeamlessUsers(users);
+    } catch {
+      // keep old state
+    }
+  }, [isAdminAny, adminOrgId]);
+
   useEffect(() => {
     if (!session) return;
     refreshSwapCount();
     refreshAvailability();
     refreshProfile();
+    refreshTeamless();
     const interval = setInterval(() => {
       refreshSwapCount();
       refreshAvailability();
+      refreshTeamless();
     }, 60_000);
     window.addEventListener(SWAPS_CHANGED_EVENT, refreshSwapCount);
     window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshAvailability);
     window.addEventListener(PROFILE_CHANGED_EVENT, refreshProfile);
+    window.addEventListener(TEAMS_CHANGED_EVENT, refreshTeamless);
     return () => {
       clearInterval(interval);
       window.removeEventListener(SWAPS_CHANGED_EVENT, refreshSwapCount);
       window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshAvailability);
       window.removeEventListener(PROFILE_CHANGED_EVENT, refreshProfile);
+      window.removeEventListener(TEAMS_CHANGED_EVENT, refreshTeamless);
     };
-  }, [session, refreshSwapCount, refreshAvailability, refreshProfile]);
+  }, [session, refreshSwapCount, refreshAvailability, refreshProfile, refreshTeamless]);
+
+  // A dismissal only applies to the org it was made for — switching admin orgs
+  // brings the (differently-scoped) teamless banner back.
+  useEffect(() => {
+    setTeamlessBannerDismissed(false);
+  }, [adminOrgId]);
 
   // No chrome on the login or join-org pages. Placed after all hooks so hook
   // order stays stable across renders (never return before a hook).
@@ -164,7 +257,14 @@ export default function Navbar() {
     session?.user?.memberships?.some((m) => m.isAdmin)
       ? [
           { href: "/create", label: "Create", icon: PLUS_ICON, admin: true },
-          { href: "/users", label: "Team", icon: USERS_ICON, admin: true },
+          {
+            href: "/users",
+            label: "Team",
+            icon: USERS_ICON,
+            admin: true,
+            dot: teamlessUsers.length > 0,
+            dotTestId: "team-dot",
+          },
         ]
       : []),
   ];
@@ -174,6 +274,10 @@ export default function Navbar() {
   // to the real route once navigation completes.
   const isActive = (href: string) =>
     pendingHref ? pendingHref === href : pathname.startsWith(href);
+  // During a swipe, SwipePager sets `previewIndex` so the highlight follows the
+  // drag to the tab you're heading toward; otherwise use the real/pending tab.
+  const tabActive = (index: number, href: string) =>
+    previewIndex != null ? index === previewIndex : isActive(href);
   const handleTabClick = (href: string) => {
     // Show the shared loader and highlight the clicked tab the instant it's
     // clicked, before the next page mounts.
@@ -181,6 +285,22 @@ export default function Navbar() {
       setPendingHref(href);
       beginNavigation();
     }
+  };
+
+  // Feed the swipe handler the current tab order, active tab, and a navigate
+  // fn (same optimistic highlight + loader a tab tap gets, then a real push).
+  tabHrefsRef.current = tabs.map((t) => t.href);
+  activeIndexRef.current = Math.max(
+    0,
+    tabs.findIndex((t) => isActive(t.href))
+  );
+  navigateRef.current = (href) => {
+    // Tell SwipePager which way the content should slide: swiping to a
+    // right-hand tab slides the new page in from the right, and vice versa.
+    const to = tabHrefsRef.current.indexOf(href);
+    setNavDirection(Math.sign(to - activeIndexRef.current));
+    handleTabClick(href);
+    router.push(href);
   };
 
   return (
@@ -194,11 +314,13 @@ export default function Navbar() {
           </Link>
           {/* Tab strip — hidden on phones, where the floating bottom bar
               (below) takes over. `overflow-x-auto` guards awkward mid-size
-              widths, but it also clips vertically, which would cut off the
-              notification dots that stick out above each tab — the `py-2 -my-2`
-              gives them room inside the clip box without changing the layout. */}
-          <div className="hidden gap-1 overflow-x-auto py-2 -my-2 sm:flex">
-            {tabs.map((tab) => {
+              widths, but setting overflow-x also makes the browser clip
+              overflow-y, which would cut off the notification dots that stick
+              out past each tab's top-right corner. `p-2 -m-2` pads all four
+              sides inside the clip box (room for the dots) and cancels it with a
+              matching negative margin, so the layout is unchanged. */}
+          <div className="hidden gap-1 overflow-x-auto p-2 -m-2 sm:flex">
+            {tabs.map((tab, i) => {
             const isAdminTab = "admin" in tab && tab.admin === true;
             return (
               <Link
@@ -206,7 +328,7 @@ export default function Navbar() {
                 href={tab.href}
                 data-tour={tab.href}
                 onClick={() => handleTabClick(tab.href)}
-                className={tabClassName(isActive(tab.href), isAdminTab)}
+                className={tabClassName(tabActive(i, tab.href), isAdminTab)}
               >
                 {isAdminTab && <ShieldIcon />}
                 {tab.label}
@@ -225,6 +347,10 @@ export default function Navbar() {
 
 
         <div className="flex items-center gap-3">
+          {/* Org switcher: page-dependent (view filter / admin org / locked).
+              Sits left of the ? / theme icons. */}
+          {session?.user && <OrgSwitcher />}
+
           {/* Guided tour: "?" help button, auto-opens once per browser.
               Admins get extra steps covering the Create/Team tabs. */}
           <GuidedTour
@@ -243,9 +369,6 @@ export default function Navbar() {
           >
             {themeIcon}
           </button>
-
-          {/* Org switcher: page-dependent (view filter / admin org / locked) */}
-          {session?.user && <OrgSwitcher />}
 
           {/* User menu: avatar initial → Edit profile / Log out */}
           {session?.user && (
@@ -330,6 +453,30 @@ export default function Navbar() {
           )}
         </Banner>
       )}
+
+      {/* Admin reminder: people in this org who aren't on any team yet (the
+          scheduler only offers a set's team members, so they'd never be
+          picked). Each name links to the Team tab, scrolled to that person. */}
+      {teamlessUsers.length > 0 && !teamlessBannerDismissed && (
+        <Banner tone="amber" onDismiss={() => setTeamlessBannerDismissed(true)}>
+          {teamlessUsers.length === 1
+            ? "1 person isn’t on a team yet: "
+            : `${teamlessUsers.length} people aren’t on a team yet: `}
+          {teamlessUsers.map((u, i) => (
+            <span key={u.id}>
+              {i > 0 && ", "}
+              <Link
+                href={`/users?user=${u.username}`}
+                onClick={() => handleTabClick("/users")}
+                className="font-semibold underline"
+              >
+                {u.name}
+              </Link>
+            </span>
+          ))}
+          . Add them to a team so they can be scheduled.
+        </Banner>
+      )}
     </nav>
 
     {/* Phone-only bottom bar: an app-style floating pill fixed above the
@@ -337,16 +484,22 @@ export default function Navbar() {
         and red dots as the top strip, but icon-first with short labels.
         The top strip's dots keep the data-testids; duplicating them here
         would break Playwright's strict single-match lookups. */}
-    <nav className="fixed inset-x-4 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-30 sm:hidden">
-      <div className="mx-auto flex max-w-md items-stretch rounded-2xl border border-gray-200 bg-white/95 px-1.5 py-1.5 shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-800/95">
-        {tabs.map((tab) => {
+    <nav className="fixed inset-x-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30 sm:hidden">
+      <div
+        className={`mx-auto flex items-stretch rounded-full border border-gray-200/70 bg-white/70 px-1.5 py-1.5 shadow-lg backdrop-blur-md transition-all duration-300 ease-in-out dark:border-gray-700/70 dark:bg-gray-800/70 ${
+          // Scroll down → also pull the pill in horizontally (centered), so it
+          // reads as a compact icons-only bar rather than a full-width one.
+          bottomBarCompact ? "max-w-xs" : "max-w-md"
+        }`}
+      >
+        {tabs.map((tab, i) => {
           const isAdminTab = "admin" in tab && tab.admin === true;
           return (
             <Link
               key={tab.href}
               href={tab.href}
               onClick={() => handleTabClick(tab.href)}
-              className={bottomTabClassName(isActive(tab.href), isAdminTab)}
+              className={bottomTabClassName(tabActive(i, tab.href), isAdminTab)}
             >
               <span className="relative">
                 <TabIcon d={tab.icon} />
@@ -354,7 +507,12 @@ export default function Navbar() {
                   <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500" />
                 )}
               </span>
-              <span className="text-[10px] font-medium leading-tight">
+              {/* Labels collapse to nothing on scroll down, leaving icons only. */}
+              <span
+                className={`overflow-hidden text-[10px] font-medium leading-tight transition-all duration-300 ease-in-out ${
+                  bottomBarCompact ? "max-h-0 opacity-0" : "max-h-4 opacity-100"
+                }`}
+              >
                 {"mobileLabel" in tab ? tab.mobileLabel : tab.label}
               </span>
             </Link>
@@ -399,8 +557,10 @@ function tabClassName(active: boolean, admin: boolean): string {
 // Bottom-bar tab styling: stacked icon + label, evenly sharing the pill's
 // width. Same indigo/amber active cues as the top strip.
 function bottomTabClassName(active: boolean, admin: boolean): string {
+  // `rounded-full` matches the surrounding pill so the active-tab highlight
+  // echoes the bar's own corner roundness.
   const base =
-    "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition-colors focus:outline-none";
+    "flex flex-1 flex-col items-center gap-0.5 rounded-full px-1 py-1.5 transition-colors focus:outline-none";
 
   if (admin) {
     if (active) {

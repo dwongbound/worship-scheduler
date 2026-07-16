@@ -82,6 +82,30 @@ export function shortDateLabel(value: Date | string): string {
   });
 }
 
+/** True when two dates fall on the same calendar day (local, time ignored). */
+export function isSameDay(a: Date | string, b: Date | string): boolean {
+  const da = new Date(a);
+  const db = new Date(b);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
+}
+
+/**
+ * A short label for a date range that collapses to a single date when the
+ * endpoints are the same day: "7/8/26" vs "7/8/26 - 7/10/26".
+ */
+export function shortRangeLabel(
+  start: Date | string,
+  end: Date | string
+): string {
+  return isSameDay(start, end)
+    ? shortDateLabel(start)
+    : `${shortDateLabel(start)} - ${shortDateLabel(end)}`;
+}
+
 // ── Display formatting (client-safe) ────────────────────────────────────
 
 export function formatDay(value: Date | string): string {
@@ -91,6 +115,19 @@ export function formatDay(value: Date | string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+/**
+ * The verbose (`formatDay`) counterpart to `shortRangeLabel`: a single day
+ * when the endpoints match, else "start → end".
+ */
+export function dateRangeLabel(
+  start: Date | string,
+  end: Date | string
+): string {
+  return isSameDay(start, end)
+    ? formatDay(start)
+    : `${formatDay(start)} → ${formatDay(end)}`;
 }
 
 export function formatTime(value: Date | string): string {

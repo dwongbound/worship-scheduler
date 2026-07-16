@@ -66,13 +66,15 @@ function ruleAppliesOn(rule: ApiUnavailability, day: Date): boolean {
 
 export default function AvailabilityCalendar({
   entries,
-  onBlockDays,
+  onEditDays,
   busy = false,
 }: {
   entries: ApiUnavailability[];
-  // Called when the user clicks/drags a run of days: the inclusive [start, end]
-  // as YYYY-MM-DD strings. Omit to render the calendar read-only.
-  onBlockDays?: (startYmd: string, endYmd: string) => void;
+  // Called when the user edits a run of days: the inclusive [start, end] as
+  // YYYY-MM-DD strings, and whether to block (true) or unblock (false) them.
+  // A drag always blocks; a single click on an already-blocked day unblocks it
+  // (a toggle). Omit to render the calendar read-only.
+  onEditDays?: (startYmd: string, endYmd: string, blocked: boolean) => void;
   busy?: boolean;
 }) {
   const today = new Date();
@@ -87,8 +89,29 @@ export default function AvailabilityCalendar({
   const startRef = useRef<Date | null>(null);
   const endRef = useRef<Date | null>(null);
   const gridRef = useRef<HTMLDivElement>(null);
-  const interactive = !!onBlockDays && !busy;
+  const interactive = !!onEditDays && !busy;
   const todayStart = startOfDay(today);
+
+  // Days already covered by an all-day SPECIFIC block — the ones a single click
+  // toggles OFF. Recurring/timed blocks aren't togglable this way, so they're
+  // excluded. Kept in a ref so the pointer-up handler can read it without being
+  // a hook dependency (it wires up once).
+  const specificBlockedDays = useMemo(() => {
+    const set = new Set<string>();
+    for (const e of entries) {
+      if (e.type !== "SPECIFIC" || !e.startDate) continue;
+      const s = e.startMinute ?? 0;
+      const en = e.endMinute ?? FULL_DAY_END;
+      if (!(s <= 0 && en >= FULL_DAY_END)) continue; // all-day only
+      const end = e.endDate ? startOfDay(new Date(e.endDate)) : null;
+      let d = startOfDay(new Date(e.startDate));
+      const last = end ?? d;
+      for (; d <= last; d = addDays(d, 1)) set.add(toYmd(d));
+    }
+    return set;
+  }, [entries]);
+  const blockedDaysRef = useRef(specificBlockedDays);
+  blockedDaysRef.current = specificBlockedDays;
 
   // A day can be blocked if it's in the visible month and not in the past.
   const canBlock = (date: Date) =>
@@ -132,17 +155,22 @@ export default function AvailabilityCalendar({
       startRef.current = null;
       endRef.current = null;
       paintSelection(); // clears the highlight (refs are now null)
-      if (s && e && onBlockDays) {
+      if (s && e && onEditDays) {
         const lo = s <= e ? s : e;
         const hi = s <= e ? e : s;
-        onBlockDays(toYmd(lo), toYmd(hi));
+        // A single click on an already-blocked day unblocks it (toggle); any
+        // other click/drag blocks the run.
+        const singleDay = toYmd(lo) === toYmd(hi);
+        const blocked = !(singleDay && blockedDaysRef.current.has(toYmd(lo)));
+        onEditDays(toYmd(lo), toYmd(hi), blocked);
       }
     };
     window.addEventListener("pointerup", onUp);
     return () => window.removeEventListener("pointerup", onUp);
-    // paintSelection only reads refs (stable), so onBlockDays is the only dep.
+    // paintSelection + blockedDaysRef only read refs (stable), so onEditDays is
+    // the only real dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onBlockDays]);
+  }, [onEditDays]);
 
   const year = viewMonth.getFullYear();
   const month = viewMonth.getMonth();
@@ -232,12 +260,13 @@ export default function AvailabilityCalendar({
         </div>
       </div>
 
-      {/* Hint: shown whenever the calendar is an editor. Gated on onBlockDays
+      {/* Hint: shown whenever the calendar is an editor. Gated on onEditDays
           (not `interactive`) so it stays put while a block is saving — `busy`
           briefly flips `interactive` off and would otherwise flicker it away. */}
-      {onBlockDays && (
+      {onEditDays && (
         <p className="border-t border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
-          Click a day — or drag across several — to block them out (all day).
+          Click a day — or drag across several — to block it out (all day).
+          Click a blocked day again to clear it.
         </p>
       )}
 
@@ -261,6 +290,9 @@ export default function AvailabilityCalendar({
           const blocks = blocksByDay.get(date.toISOString())!;
           const blocked = blocks.fullDay || blocks.periods.length > 0;
           const blockable = canBlock(date);
+          // Past days (this month, before today) can't be blocked — render them
+          // muted like out-of-month cells so they don't look clickable.
+          const isPast = inMonth && startOfDay(date) < todayStart;
 
           return (
             <div
@@ -275,9 +307,11 @@ export default function AvailabilityCalendar({
                 if (startRef.current && blockable) extendDrag(date);
               }}
               className={`min-h-[84px] select-none border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
-                blockable ? "cursor-pointer" : ""
+                blockable
+                  ? "cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                  : ""
               } ${
-                !inMonth
+                !inMonth || (isPast && !blocked)
                   ? "bg-gray-50 text-gray-400 dark:bg-gray-900/50"
                   : blocks.fullDay
                     ? "bg-rose-50 dark:bg-rose-950/40"
@@ -292,7 +326,7 @@ export default function AvailabilityCalendar({
                   className={`flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-medium ${
                     isToday
                       ? "bg-indigo-600 text-white"
-                      : inMonth
+                      : inMonth && !isPast
                         ? "text-gray-700 dark:text-gray-300"
                         : "text-gray-400 dark:text-gray-600"
                   }`}

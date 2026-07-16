@@ -17,6 +17,7 @@ export async function GET(req: NextRequest) {
     select: {
       id: true,
       name: true,
+      username: true,
       isMD: true,
       instruments: true,
       // The caller's org's membership row — its isAdmin is what the Team
