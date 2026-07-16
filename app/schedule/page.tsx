@@ -21,9 +21,10 @@ import Select from "@/components/common/Select";
 import { AVAILABILITY_CHANGED_EVENT } from "@/components/Navbar";
 import { DAY_LABELS } from "@/lib/constants";
 import {
-  formatDay,
+  dateRangeLabel,
   minutesToTimeLabel,
   shortDateLabel,
+  shortRangeLabel,
   timeStringToMinutes,
 } from "@/lib/dates";
 import type { ApiAvailabilityRequest, ApiUnavailability } from "@/lib/types";
@@ -49,7 +50,7 @@ const TIME_PRESETS = [
 // Human label for a request in summaries (the short form: name if it has
 // one), prefixed with its org — requests from ALL my orgs mix in one list.
 function requestLabel(r: ApiAvailabilityRequest): string {
-  const base = r.name || `${formatDay(r.startDate)} → ${formatDay(r.endDate)}`;
+  const base = r.name || dateRangeLabel(r.startDate, r.endDate);
   return r.org ? `${r.org.name}: ${base}` : base;
 }
 
@@ -57,7 +58,7 @@ function requestLabel(r: ApiAvailabilityRequest): string {
 // prefixes the custom name when there is one. Mirrors the Create tab.
 // <option>s can't hold chips, so the org rides along as a text prefix.
 function requestOptionLabel(r: ApiAvailabilityRequest): string {
-  const range = `${shortDateLabel(r.startDate)} - ${shortDateLabel(r.endDate)}`;
+  const range = shortRangeLabel(r.startDate, r.endDate);
   const base = r.name ? `${r.name} (${range})` : range;
   return r.org ? `${r.org.name} — ${base}` : base;
 }
@@ -180,21 +181,16 @@ export default function SchedulePage() {
     }
   }
 
-  // Block a run of whole days straight from the calendar — a standalone,
-  // all-day specific block that isn't tied to any request.
-  async function blockDays(startYmd: string, endYmd: string) {
+  // Edit a run of whole days straight from the calendar. `blocked` true paints
+  // an all-day block over them (merging, never duplicating); false clears them
+  // (splitting a covering range as needed). Handled server-side so it's atomic.
+  async function editDays(startYmd: string, endYmd: string, blocked: boolean) {
     setBusyAction("specific");
     try {
-      await fetch("/api/availability", {
+      await fetch("/api/availability/block-days", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "SPECIFIC",
-          date: startYmd,
-          endDate: endYmd !== startYmd ? endYmd : undefined,
-          startMinute: 0,
-          endMinute: 24 * 60, // all day
-        }),
+        body: JSON.stringify({ start: startYmd, end: endYmd, blocked }),
       });
       await reload();
       window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
@@ -629,7 +625,7 @@ export default function SchedulePage() {
           <div data-tour="avail-calendar" className="hidden lg:block">
             <AvailabilityCalendar
               entries={entries}
-              onBlockDays={blockDays}
+              onEditDays={editDays}
               busy={busyAction === "specific"}
             />
           </div>

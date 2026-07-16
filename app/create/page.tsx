@@ -21,7 +21,7 @@ import {
   ROLE_ORDER,
   resolveCapacities,
 } from "@/lib/constants";
-import { formatDay, minutesToTimeLabel, shortDateLabel } from "@/lib/dates";
+import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { useOrgs } from "@/components/OrgProvider";
 import type {
@@ -178,7 +178,7 @@ export default function CreatePage() {
   // Ask the whole team to submit availability over a date range. Everyone who
   // hasn't responded sees a reminder dot + banner until they do.
   async function requestAvailability() {
-    if (!reqStart || !reqEnd) return;
+    if (!reqStart) return;
     setBusyAction("request");
     setReqResult("");
     try {
@@ -188,7 +188,8 @@ export default function CreatePage() {
         body: JSON.stringify({
           name: reqName,
           startDate: reqStart,
-          endDate: reqEnd,
+          // No end date → a single-day request (defaults to the start date).
+          endDate: reqEnd || reqStart,
         }),
       });
       const data = await res.json();
@@ -272,9 +273,8 @@ export default function CreatePage() {
 
   // Human label for a request in the TimeRange dropdown.
   function requestLabel(r: ApiAvailabilityRequest): string {
-    return r.name
-      ? `${r.name} — ${shortDateLabel(r.startDate)} - ${shortDateLabel(r.endDate)}`
-      : `${shortDateLabel(r.startDate)} - ${shortDateLabel(r.endDate)}`;
+    const range = shortRangeLabel(r.startDate, r.endDate);
+    return r.name ? `${r.name} — ${range}` : range;
   }
 
   function formatUnavailability(entry: AdminUnavailabilityEntry): string {
@@ -471,7 +471,7 @@ export default function CreatePage() {
                 onChange={setReqStart}
               />
               <DateSelect
-                label="To"
+                label="To (optional)"
                 value={reqEnd}
                 min={reqStart || toYmd(new Date())}
                 onChange={setReqEnd}
@@ -479,7 +479,7 @@ export default function CreatePage() {
             </div>
             <Button
               onClick={requestAvailability}
-              disabled={!reqStart || !reqEnd || busyAction === "request"}
+              disabled={!reqStart || busyAction === "request"}
             >
               {busyAction === "request" ? (
                 <LoadingDots size="sm" />
@@ -528,8 +528,8 @@ export default function CreatePage() {
                   // <option> can't contain markup (React hydration error), so
                   // plain text only — no <strong> here.
                   <option key={r.id} value={r.id}>
-                    {r.name || "Availability"} ({shortDateLabel(r.startDate)} -{" "}
-                    {shortDateLabel(r.endDate)})
+                    {r.name || "Availability"} (
+                    {shortRangeLabel(r.startDate, r.endDate)})
                   </option>
                 ))}
               </Select>
@@ -632,7 +632,7 @@ export default function CreatePage() {
           {genMode === "request" ? (
             <p className="text-sm text-gray-600 dark:text-gray-400">
               {genRequest
-                ? `Scheduling ${shortDateLabel(genRequest.startDate)} – ${shortDateLabel(genRequest.endDate)}.`
+                ? `Scheduling ${shortRangeLabel(genRequest.startDate, genRequest.endDate)}.`
                 : "Pick an availability request above."}
             </p>
           ) : genMode === "weeks" ? (
@@ -765,9 +765,10 @@ export default function CreatePage() {
           asking them to fill out their availability for{" "}
           <strong>
             {selectedRequest
-              ? `${selectedRequest.name || "Availability"} (${shortDateLabel(
-                  selectedRequest.startDate
-                )} – ${shortDateLabel(selectedRequest.endDate)})`
+              ? `${selectedRequest.name || "Availability"} (${shortRangeLabel(
+                  selectedRequest.startDate,
+                  selectedRequest.endDate
+                )})`
               : "this request"}
           </strong>
           .

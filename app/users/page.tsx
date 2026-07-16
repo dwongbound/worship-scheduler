@@ -9,6 +9,7 @@
 // A master date-range selector at the top drives a per-person count of how
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
@@ -17,8 +18,7 @@ import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Dropdown from "@/components/common/Dropdown";
-import Input from "@/components/common/Input";
-import Modal from "@/components/common/Modal";
+import LoadingDots from "@/components/common/LoadingDots";
 import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
@@ -81,18 +81,13 @@ function SetBreakdown({
 function UsersPageInner() {
   const { data: session, status } = useSession();
   const [users, setUsers] = useState<ApiAdminUser[] | null>(null);
-  // Ministry teams (managed in the card at the top of the page).
+  // Ministry teams (read-only here — full management lives on the Org page).
   const [teams, setTeams] = useState<ApiTeam[] | null>(null);
-  const [newTeamName, setNewTeamName] = useState("");
-  // Whether the "+ Add team" chip has been swapped for its inline name input.
-  const [addingTeam, setAddingTeam] = useState(false);
-  const [teamError, setTeamError] = useState("");
-  const [teamBusy, setTeamBusy] = useState(false);
-  // Team whose delete button was clicked once (two-step confirm).
-  const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
-  // Team whose members modal is open, + the add-member autocomplete query.
-  const [openTeamId, setOpenTeamId] = useState<string | null>(null);
-  const [memberQuery, setMemberQuery] = useState("");
+  // "Send set reminder" per team: which is in-flight + its last result.
+  const [sendingTeamId, setSendingTeamId] = useState<string | null>(null);
+  const [sendResult, setSendResult] = useState<
+    Record<string, { ok: boolean; text: string }>
+  >({});
 
   // Team stats: which range is picked, the custom range's dates, and the
   // userId → set-count map fetched for the active range (null while loading).
@@ -156,48 +151,23 @@ function UsersPageInner() {
     if (switchingOrg && users && teams && stats) setSwitchingOrg(false);
   }, [switchingOrg, users, teams, stats]);
 
-  // ── Team management (the card at the top) ─────────────────────────────
-  async function addTeam() {
-    const name = newTeamName.trim();
-    if (!name) return;
-    setTeamBusy(true);
-    setTeamError("");
+  // Post one team's "this week's sets" to its Slack channel on demand. Full
+  // team management (create/delete, members, channel id) lives on the Org page.
+  async function sendReminder(teamId: string) {
+    setSendingTeamId(teamId);
     try {
-      const res = await fetch("/api/teams", {
+      const res = await fetch(`/api/teams/${teamId}/slack-summary`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
-        body: JSON.stringify({ name }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setTeamError(data.error ?? "Could not add the team.");
-        return;
-      }
-      setNewTeamName("");
-      setAddingTeam(false); // collapse the inline input back to the "+" chip
-      load();
+      const data = await res.json().catch(() => ({}));
+      setSendResult((m) => ({
+        ...m,
+        [teamId]: res.ok
+          ? { ok: true, text: "Sent!" }
+          : { ok: false, text: data.error ?? "Could not send." },
+      }));
     } finally {
-      setTeamBusy(false);
-    }
-  }
-
-  // Deleting a team keeps its sets (they become team-less = open to everyone)
-  // and simply drops the memberships — hence the inline two-step confirm.
-  async function deleteTeam(id: string) {
-    setConfirmingTeamId(null);
-    setTeamBusy(true);
-    setTeamError("");
-    try {
-      const res = await fetch(`/api/teams/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setTeamError(data.error ?? "Could not delete the team.");
-      }
-      load();
-      // Dropping a team can leave its members team-less — refresh the reminder.
-      window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
-    } finally {
-      setTeamBusy(false);
+      setSendingTeamId(null);
     }
   }
 
@@ -304,17 +274,11 @@ function UsersPageInner() {
     patchUser(user.id, { instruments: next });
   }
 
-  // Membership edits from the team members modal. Both go through patchUser,
-  // so the user cards' chips update optimistically with the same state.
+  // Add this person to a team from their card's "+ Add to team" chip. Goes
+  // through patchUser so the card's chips update optimistically.
   function addToTeam(user: ApiAdminUser, team: ApiTeam) {
     if (user.teams.some((t) => t.id === team.id)) return;
     patchUser(user.id, { teams: [...user.teams, team] });
-  }
-
-  function removeFromTeam(user: ApiAdminUser, team: ApiTeam) {
-    patchUser(user.id, {
-      teams: user.teams.filter((t) => t.id !== team.id),
-    });
   }
 
   usePageLoading(
@@ -379,7 +343,7 @@ function UsersPageInner() {
         </div>
       </div>
 
-      {/* ── Teams: add/delete the ministry teams sets are scheduled for ── */}
+      {/* ── Teams: read-only list here; managed on the Org settings page ── */}
       <Card>
         {/* Styled as a heading but rendered as <p>: the e2e specs target the
             page's "Team" <h1> with a non-exact heading query, and any real
@@ -387,79 +351,67 @@ function UsersPageInner() {
         <p className="mb-1 font-semibold">Teams</p>
         <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
           Every set belongs to a team, and only that team&rsquo;s members are
-          scheduled on it. Click a team to see and manage its members.
+          scheduled on it. Team settings can only be modified on the{" "}
+          <Link
+            href="/orgs"
+            className="font-medium text-indigo-600 underline dark:text-indigo-400"
+          >
+            Org settings page
+          </Link>{" "}
+          (desktop only).
         </p>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Each team is a chip: click to open its members modal (view,
-              add, remove members, delete the team). */}
-          {teams.map((team) => (
-            <button
-              key={team.id}
-              type="button"
-              onClick={() => {
-                setOpenTeamId(team.id);
-                setMemberQuery("");
-                setConfirmingTeamId(null);
-              }}
-              className="flex items-center gap-2 rounded-full bg-indigo-50 px-3 py-1 text-sm
-                text-indigo-900 transition-colors hover:bg-indigo-100
-                dark:bg-indigo-500/15 dark:text-indigo-100 dark:hover:bg-indigo-500/25"
-            >
-              <span className="font-medium">{team.name}</span>
-              <span className="text-xs text-indigo-500/80 dark:text-indigo-200/60">
-                {memberCount(team.id)}{" "}
-                {memberCount(team.id) === 1 ? "member" : "members"}
-              </span>
-            </button>
-          ))}
-
-          {/* Adding a team is a clear (dashed) chip: clicking it swaps in an
-              inline name input; Enter/Add saves, Escape cancels. */}
-          {addingTeam ? (
-            <form
-              className="flex items-center gap-1.5 rounded-full border border-dashed border-gray-300 py-0.5 pl-3 pr-1 dark:border-gray-600"
-              onSubmit={(e) => {
-                e.preventDefault();
-                addTeam();
-              }}
-            >
-              <input
-                autoFocus
-                value={newTeamName}
-                onChange={(e) => setNewTeamName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setAddingTeam(false);
-                    setNewTeamName("");
-                  }
-                }}
-                placeholder="e.g. Youth Team"
-                aria-label="New team name"
-                className="w-36 bg-transparent text-sm focus:outline-none"
-              />
-              <Button size="sm" type="submit" disabled={teamBusy || !newTeamName.trim()}>
-                Add
-              </Button>
-            </form>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setNewTeamName("");
-                setAddingTeam(true);
-              }}
-              className="rounded-full border border-dashed border-gray-300 px-3 py-1 text-sm
-                text-gray-500 transition-colors hover:border-indigo-400 hover:text-indigo-600
-                dark:border-gray-600 dark:text-gray-400 dark:hover:border-indigo-500 dark:hover:text-indigo-400"
-            >
-              + Add team
-            </button>
-          )}
-        </div>
-        {teamError && (
-          <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
-            {teamError}
-          </p>
+        {teams.length === 0 ? (
+          <p className="text-sm text-gray-400">No teams yet.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100 dark:divide-gray-700/50">
+            {teams.map((team) => {
+              const result = sendResult[team.id];
+              return (
+                <li
+                  key={team.id}
+                  className="flex flex-wrap items-center justify-between gap-2 py-2"
+                >
+                  <div>
+                    <p className="text-sm font-medium">{team.name}</p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {memberCount(team.id)}{" "}
+                      {memberCount(team.id) === 1 ? "member" : "members"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {result && (
+                      <span
+                        className={`text-xs font-medium ${
+                          result.ok
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}
+                      >
+                        {result.text}
+                      </span>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => sendReminder(team.id)}
+                      disabled={sendingTeamId === team.id || !team.slackChannelId}
+                      title={
+                        team.slackChannelId
+                          ? undefined
+                          : "Add a Slack channel ID on the Org settings page first."
+                      }
+                    >
+                      {sendingTeamId === team.id ? (
+                        <LoadingDots size="sm" />
+                      ) : (
+                        "Send set reminder"
+                      )}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </Card>
 
@@ -573,26 +525,6 @@ function UsersPageInner() {
           </li>
         ))}
       </ul>
-
-      <TeamMembersModal
-        team={teams.find((t) => t.id === openTeamId) ?? null}
-        users={users}
-        query={memberQuery}
-        onQueryChange={setMemberQuery}
-        busy={teamBusy}
-        confirmingDelete={confirmingTeamId === openTeamId}
-        onConfirmDelete={(confirming) =>
-          setConfirmingTeamId(confirming ? openTeamId : null)
-        }
-        onDelete={(id) => {
-          setOpenTeamId(null);
-          deleteTeam(id);
-        }}
-        onAdd={addToTeam}
-        onRemove={removeFromTeam}
-        onSaved={load}
-        onClose={() => setOpenTeamId(null)}
-      />
     </div>
   );
 }
@@ -602,266 +534,5 @@ export default function UsersPage() {
     <Suspense fallback={null}>
       <UsersPageInner />
     </Suspense>
-  );
-}
-
-// Members modal for one team: the current roster (with per-person remove), an
-// autocomplete input to add people, the team's Slack channel + weekly-summary
-// send button, and the team's delete button.
-function TeamMembersModal({
-  team,
-  users,
-  query,
-  onQueryChange,
-  busy,
-  confirmingDelete,
-  onConfirmDelete,
-  onDelete,
-  onAdd,
-  onRemove,
-  onSaved,
-  onClose,
-}: {
-  team: ApiTeam | null; // null = closed
-  users: ApiAdminUser[];
-  query: string;
-  onQueryChange: (q: string) => void;
-  busy: boolean;
-  confirmingDelete: boolean;
-  onConfirmDelete: (confirming: boolean) => void;
-  onDelete: (teamId: string) => void;
-  onAdd: (user: ApiAdminUser, team: ApiTeam) => void;
-  onRemove: (user: ApiAdminUser, team: ApiTeam) => void;
-  onSaved: () => void; // parent refetch after the channel id changes
-  onClose: () => void;
-}) {
-  // Slack channel input (seeded from the team when a modal opens) + the
-  // outcome of the last save/send, shown inline next to the buttons.
-  const [channelId, setChannelId] = useState("");
-  const [slackBusy, setSlackBusy] = useState(false);
-  const [slackMsg, setSlackMsg] = useState<{ ok: boolean; text: string } | null>(
-    null
-  );
-  // Whether THIS team's org has connected its Slack bot. Posting a summary
-  // needs the org's token, so a channel id alone isn't enough.
-  const [orgSlackConnected, setOrgSlackConnected] = useState(false);
-  useEffect(() => {
-    setChannelId(team?.slackChannelId ?? "");
-    setSlackMsg(null);
-    if (!team?.orgId) {
-      setOrgSlackConnected(false);
-      return;
-    }
-    fetch(`/api/slack/status?orgId=${team.orgId}`)
-      .then((r) => r.json())
-      .then((d) => setOrgSlackConnected(!!d.enabled))
-      .catch(() => setOrgSlackConnected(false));
-  }, [team?.id, team?.slackChannelId, team?.orgId]);
-
-  if (!team) return null;
-
-  async function saveChannel(t: ApiTeam) {
-    setSlackBusy(true);
-    setSlackMsg(null);
-    try {
-      const res = await fetch(`/api/teams/${t.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slackChannelId: channelId.trim() || null }),
-      });
-      const data = await res.json().catch(() => ({}));
-      setSlackMsg(
-        res.ok
-          ? { ok: true, text: "Saved." }
-          : { ok: false, text: data.error ?? "Could not save the channel." }
-      );
-      if (res.ok) onSaved();
-    } finally {
-      setSlackBusy(false);
-    }
-  }
-
-  async function sendSummary(t: ApiTeam) {
-    setSlackBusy(true);
-    setSlackMsg(null);
-    try {
-      const res = await fetch(`/api/teams/${t.id}/slack-summary`, {
-        method: "POST",
-      });
-      const data = await res.json().catch(() => ({}));
-      setSlackMsg(
-        res.ok
-          ? { ok: true, text: "Summary sent to Slack." }
-          : { ok: false, text: data.error ?? "Could not send the summary." }
-      );
-    } finally {
-      setSlackBusy(false);
-    }
-  }
-
-  const members = users.filter((u) => u.teams.some((t) => t.id === team.id));
-  // Autocomplete: non-members whose name matches the query (top 6).
-  const trimmed = query.trim().toLowerCase();
-  const suggestions = trimmed
-    ? users
-        .filter((u) => !u.teams.some((t) => t.id === team.id))
-        .filter((u) => u.name.toLowerCase().includes(trimmed))
-        .slice(0, 6)
-    : [];
-
-  return (
-    <Modal open onClose={onClose} title={team.name}>
-      {/* Current roster */}
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-        Members ({members.length})
-      </p>
-      {members.length === 0 ? (
-        <p className="text-sm text-gray-400">Nobody on this team yet.</p>
-      ) : (
-        <ul className="max-h-56 space-y-1 overflow-y-auto">
-          {members.map((u) => (
-            <li
-              key={u.id}
-              className="flex items-center justify-between gap-2 rounded-md bg-gray-50 px-3 py-1.5 text-sm dark:bg-gray-800/60"
-            >
-              <span>{u.name}</span>
-              <button
-                type="button"
-                onClick={() => onRemove(u, team)}
-                disabled={busy}
-                aria-label={`Remove ${u.name} from ${team.name}`}
-                className="rounded p-1 text-xs leading-none text-gray-400
-                  hover:bg-red-50 hover:text-red-600 disabled:opacity-50
-                  dark:hover:bg-red-900/30 dark:hover:text-red-400"
-              >
-                ✕
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* Add a member: type a name, pick from the matches. */}
-      <div className="mt-4">
-        <Input
-          label="Add member"
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          placeholder="Start typing a name…"
-        />
-        {trimmed && (
-          <ul className="mt-2 space-y-1">
-            {suggestions.length === 0 ? (
-              <li className="text-sm text-gray-400">No matches.</li>
-            ) : (
-              suggestions.map((u) => (
-                <li
-                  key={u.id}
-                  className="flex items-center justify-between gap-2 rounded-md border border-gray-200 px-3 py-1.5 text-sm dark:border-gray-700"
-                >
-                  <span>{u.name}</span>
-                  <Button size="sm" onClick={() => onAdd(u, team)} disabled={busy}>
-                    Add
-                  </Button>
-                </li>
-              ))
-            )}
-          </ul>
-        )}
-      </div>
-
-      {/* Slack: the channel the weekly set summary is posted to, + send. */}
-      <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          Slack
-        </p>
-        <div className="flex items-end gap-2">
-          <div className="flex-1">
-            <Input
-              label="Channel ID"
-              value={channelId}
-              onChange={(e) => setChannelId(e.target.value)}
-              placeholder="C0123ABCD"
-            />
-          </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => saveChannel(team)}
-            disabled={
-              slackBusy || channelId.trim() === (team.slackChannelId ?? "")
-            }
-          >
-            Save
-          </Button>
-        </div>
-        <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-          Find it in Slack under the channel&rsquo;s details → About → Channel
-          ID, and invite the bot to the channel so it can post. Leave empty to
-          turn summaries off.
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            onClick={() => sendSummary(team)}
-            disabled={slackBusy || !team.slackChannelId || !orgSlackConnected}
-          >
-            Send this week&rsquo;s sets
-          </Button>
-          {!orgSlackConnected && (
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              Connect this org&rsquo;s Slack first (org menu → settings).
-            </p>
-          )}
-          {slackMsg && (
-            <p
-              className={`text-sm font-medium ${
-                slackMsg.ok
-                  ? "text-green-600 dark:text-green-400"
-                  : "text-red-600 dark:text-red-400"
-              }`}
-            >
-              {slackMsg.text}
-            </p>
-          )}
-        </div>
-      </div>
-
-      {/* Danger zone: delete the team (its sets survive, open to everyone). */}
-      <div className="mt-5 flex items-center justify-end gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-        {confirmingDelete ? (
-          <>
-            <span className="mr-auto text-sm text-gray-600 dark:text-gray-400">
-              Delete this team? Its sets are kept, open to everyone.
-            </span>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => onConfirmDelete(false)}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => onDelete(team.id)}
-              disabled={busy}
-            >
-              Confirm delete
-            </Button>
-          </>
-        ) : (
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() => onConfirmDelete(true)}
-            disabled={busy}
-          >
-            Delete team
-          </Button>
-        )}
-      </div>
-    </Modal>
   );
 }

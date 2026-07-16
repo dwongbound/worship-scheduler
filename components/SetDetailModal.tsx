@@ -14,14 +14,15 @@ import LoadingDots from "./common/LoadingDots";
 import ExportIcsButton from "./ExportIcsButton";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
+import Select from "./common/Select";
 import {
   INSTRUMENT_LABELS,
-  MD_ROLES,
   ROLE_ORDER,
   resolveCapacities,
   type Instrument,
 } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
+import { eligibleMDIds, isValidMD } from "@/lib/md";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
 import { isOnTeam } from "@/lib/stagedPlan";
 import SetHistoryEntry from "./SetHistoryEntry";
@@ -63,8 +64,16 @@ interface SetDetailModalProps {
   currentUserId?: string;
   isAdmin?: boolean;
   users?: ApiAdminUser[]; // for the admin assignment dropdowns
+  // Every set in view (calendar's −7d…+92d window). Used to count how many
+  // times each person is already scheduled within ±2 weeks of this set, which
+  // orders the assignment dropdowns least-scheduled-first.
+  allSets?: ApiSet[];
   onChanged?: () => void | Promise<void>; // refetch after an edit
 }
+
+// How wide a window (each side, in days) counts toward a person's recent
+// scheduling load in the assignment dropdowns.
+const SERVE_WINDOW_DAYS = 14;
 
 export default function SetDetailModal({
   set,
@@ -72,6 +81,7 @@ export default function SetDetailModal({
   currentUserId,
   isAdmin = false,
   users = [],
+  allSets = [],
   onChanged,
 }: SetDetailModalProps) {
   const [notesDraft, setNotesDraft] = useState("");
@@ -153,6 +163,27 @@ export default function SetDetailModal({
     [users]
   );
 
+  // How many times each user is already scheduled within ±SERVE_WINDOW_DAYS of
+  // this set (counted once per set even if they hold several roles on it).
+  // Orders the assignment dropdowns so the least-recently-scheduled surface
+  // first. (Above the early return to keep hook order stable.)
+  const serveCounts = useMemo<Map<string, number>>(() => {
+    const counts = new Map<string, number>();
+    if (!set) return counts;
+    const center = new Date(set.startsAt).getTime();
+    const span = SERVE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    for (const s of allSets) {
+      if (Math.abs(new Date(s.startsAt).getTime() - center) > span) continue;
+      const seen = new Set<string>();
+      for (const a of s.assignments) {
+        if (seen.has(a.user.id)) continue; // one set = one serve, not per role
+        seen.add(a.user.id);
+        counts.set(a.user.id, (counts.get(a.user.id) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [allSets, set?.id, set?.startsAt]);
+
   if (!set) return null;
   // Narrowed copy of the id for closures (nested functions below don't
   // retain TS's null-check narrowing of the `set` prop itself).
@@ -161,12 +192,23 @@ export default function SetDetailModal({
   // The set's own team shape (falls back to the global default per role).
   const capacities = resolveCapacities(set.slotCapacities);
 
-  // A required-MD set is "unclosed" until an MD is assigned to an MD_ROLE
-  // (keys, electric guitar, or bass — the only roles an MD can lead from).
-  const hasMD = set.assignments.some(
-    (a) => a.user.isMD && MD_ROLES.includes(a.role)
+  // MD picker data. Eligible = an assignee who is an MD, plays an MD-capable
+  // role (keys/electric/bass), and isn't the worship leader (see lib/md.ts).
+  const mdAssignments = set.assignments.map((a) => ({
+    userId: a.user.id,
+    role: a.role,
+    isMD: a.user.isMD,
+  }));
+  const eligibleMdIds = new Set(eligibleMDIds(mdAssignments));
+  // The chosen MD, but only if still valid for the current roster (a stale id
+  // — e.g. after their slot was removed — reads as "no MD").
+  const mdUserId = isValidMD(set.mdUserId, mdAssignments) ? set.mdUserId : null;
+  // A required-MD set is "unclosed" until one is chosen.
+  const missingMD = set.requiresMD && !mdUserId;
+  // Distinct assignees, for the MD dropdown (a person with several slots once).
+  const distinctAssignees = Array.from(
+    new Map(set.assignments.map((a) => [a.user.id, a.user])).values()
   );
-  const missingMD = set.requiresMD && !hasMD;
 
   // This set as the scheduler sees it, for availability checks.
   const calcSet = {
@@ -183,10 +225,13 @@ export default function SetDetailModal({
   const canEditNotes = isAdmin || isSetWorshipLeader;
   const canEditTeam = isAdmin;
 
-  // Options for a role's dropdown: users who play `role` and aren't already in
-  // THAT role on this set (a person may hold several roles on one set, so we
-  // only exclude them from a role they already fill). Each is flagged with
-  // whether they're free at this set's time; available people sort first.
+  // Options for a role's dropdown. Manual assignment has no instrument
+  // constraint — an admin can put anyone on the team into any role — so we
+  // offer every team member not already in THIS role (a person may hold several
+  // roles on one set, so we only exclude the role they already fill). Each is
+  // flagged with whether they're free at this set's time and how many times
+  // they're scheduled nearby; the list sorts available-first, then
+  // least-scheduled-first, so unavailable people sink to the bottom.
   const eligibleFor = (role: Instrument): PlayerOption[] => {
     const inThisRole = new Set(
       set.assignments.filter((a) => a.role === role).map((a) => a.user.id)
@@ -194,15 +239,17 @@ export default function SetDetailModal({
     return users
       // Only this set's team members are offered (no team = open to everyone).
       .filter((u) => isOnTeam(u, set.teamId ?? set.team?.id))
-      .filter((u) => u.instruments.includes(role) && !inThisRole.has(u.id))
+      .filter((u) => !inThisRole.has(u.id))
       .map((u) => ({
         id: u.id,
         name: u.name,
         available: isUserAvailable(u.id, calcSet, rules),
+        count: serveCounts.get(u.id) ?? 0,
       }))
       .sort(
         (a, b) =>
           Number(b.available) - Number(a.available) ||
+          a.count - b.count ||
           a.name.localeCompare(b.name)
       );
   };
@@ -275,6 +322,16 @@ export default function SetDetailModal({
       })
     );
 
+  // Set (or clear, with "") this set's designated MD.
+  const setMD = (userId: string) =>
+    runEdit(() =>
+      fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mdUserId: userId || null }),
+      })
+    );
+
   // Open a Slack group DM among this set's assigned team and post an intro.
   const messageTeamOnSlack = async () => {
     setBusy(true);
@@ -344,7 +401,10 @@ export default function SetDetailModal({
                 text="Fills this set's empty slots with available team members,
                   preferring people who aren't already serving in the
                   surrounding week. People already assigned keep their roles —
-                  the fill works around them."
+                  the fill works around them. In the assignment dropdowns, the
+                  ×N badge is how many times that person is already scheduled
+                  within ±2 weeks of this set; the least-scheduled, available
+                  people are listed first."
               />
             </>
           )}
@@ -430,7 +490,7 @@ export default function SetDetailModal({
                             : removeAssignment(a.id)
                         }
                       />
-                      {a.user.isMD && (
+                      {a.user.id === mdUserId && (
                         <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
                           * (MD)
                         </span>
@@ -441,7 +501,7 @@ export default function SetDetailModal({
                     <li key={a.id} className="flex items-center gap-2">
                       <span>
                         {a.user.name}
-                        {a.user.isMD && (
+                        {a.user.id === mdUserId && (
                           <span className="ml-1 font-medium text-indigo-600 dark:text-indigo-400">
                             * (MD)
                           </span>
@@ -485,6 +545,50 @@ export default function SetDetailModal({
           );
         })}
       </ul>
+
+      {/* MD picker (only for sets that require one). One MD per set, chosen from
+          the assignees — clickable only for those who qualify (an MD playing
+          keys/electric/bass, never the worship leader). */}
+      {set.requiresMD && (
+        <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
+          {canEditTeam ? (
+            eligibleMdIds.size === 0 ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                <span className="font-medium">Musical director:</span> nobody
+                eligible yet — assign an MD on keys, electric guitar, or bass.
+              </p>
+            ) : (
+              <Select
+                label="Musical director"
+                value={mdUserId ?? ""}
+                disabled={busy}
+                onChange={(e) => setMD(e.target.value)}
+                className="max-w-xs"
+              >
+                <option value="">None</option>
+                {distinctAssignees.map((u) => (
+                  <option
+                    key={u.id}
+                    value={u.id}
+                    disabled={!eligibleMdIds.has(u.id)}
+                  >
+                    {u.name}
+                    {eligibleMdIds.has(u.id) ? "" : " — not eligible"}
+                  </option>
+                ))}
+              </Select>
+            )
+          ) : (
+            <p className="text-sm">
+              <span className="font-medium">Musical director:</span>{" "}
+              {mdUserId
+                ? distinctAssignees.find((u) => u.id === mdUserId)?.name ??
+                  "—"
+                : "none yet"}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Notes (bottom): editable by admins + the worship leader. */}
       <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">

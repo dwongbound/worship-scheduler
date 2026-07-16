@@ -1,6 +1,30 @@
 // Unit tests for recurrence expansion (lib/dates.ts).
 import { describe, expect, it } from "vitest";
-import { occurrencesInRange, upcomingOccurrences } from "@/lib/dates";
+import {
+  dateRangeLabel,
+  occurrencesInRange,
+  shortRangeLabel,
+  upcomingOccurrences,
+} from "@/lib/dates";
+
+describe("range labels collapse single days", () => {
+  // Local Date objects (not "YYYY-MM-DD" strings, which parse as UTC midnight).
+  const jul16 = new Date(2026, 6, 16);
+  const jul18 = new Date(2026, 6, 18);
+
+  it("shortRangeLabel shows one date when start === end", () => {
+    expect(shortRangeLabel(jul16, jul16)).toBe("7/16/26");
+  });
+
+  it("shortRangeLabel shows both dates for a real range", () => {
+    expect(shortRangeLabel(jul16, jul18)).toBe("7/16/26 - 7/18/26");
+  });
+
+  it("dateRangeLabel collapses to a single verbose day", () => {
+    expect(dateRangeLabel(jul16, jul16)).not.toContain("→");
+    expect(dateRangeLabel(jul16, jul18)).toContain("→");
+  });
+});
 
 describe("upcomingOccurrences", () => {
   // Thursday Jan 1 2026, 10:00 local time.

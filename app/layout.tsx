@@ -3,6 +3,8 @@ import Script from "next/script";
 import "./globals.css";
 import Providers from "./providers";
 import Navbar from "@/components/Navbar";
+import SwipePager from "@/components/SwipePager";
+import { SwipeProvider } from "@/components/SwipeProvider";
 import ScrollToTopButton from "@/components/ScrollToTopButton";
 
 export const metadata: Metadata = {
@@ -60,10 +62,16 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-gray-50 text-gray-900 antialiased dark:bg-gray-900 dark:text-gray-100">
         <Providers>
-          <Navbar />
-          {/* Extra bottom padding on phones so content can scroll clear of the
-              floating bottom nav bar (see Navbar.tsx). */}
-          <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-6">{children}</main>
+          {/* SwipeProvider wraps the navbar (which registers the tab list) and
+              the pager (which runs the swipe gesture) so they share drag state. */}
+          <SwipeProvider>
+            <Navbar />
+            {/* Extra bottom padding on phones so content can scroll clear of the
+                floating bottom nav bar (see Navbar.tsx). */}
+            <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-6">
+              <SwipePager>{children}</SwipePager>
+            </main>
+          </SwipeProvider>
           <ScrollToTopButton />
         </Providers>
       </body>

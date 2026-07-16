@@ -55,6 +55,7 @@ function parseStagedSet(raw: unknown): StagedSet | null {
     label: typeof s.label === "string" ? s.label : null,
     durationMinutes,
     requiresMD: Boolean(s.requiresMD),
+    mdUserId: typeof s.mdUserId === "string" ? s.mdUserId : null,
     slotCapacities,
     teamId: typeof s.teamId === "string" ? s.teamId : null,
     existing: Boolean(s.existing),
@@ -108,6 +109,16 @@ export async function POST(req: NextRequest) {
   for (const s of sets) {
     const startsAt = new Date(s.startsAt);
 
+    const roster = s.assignments.filter((a) => memberIds.has(a.userId));
+    // Honor the reviewed MD choice, but only if that person is actually in the
+    // roster being applied (else leave it unset — the detail modal re-validates
+    // full eligibility on display).
+    const rosterIds = new Set(roster.map((a) => a.userId));
+    const mdUserId =
+      s.requiresMD && s.mdUserId && rosterIds.has(s.mdUserId)
+        ? s.mdUserId
+        : null;
+
     // Reuse an existing set with the same name at this time, else create it —
     // so we never recreate a block that already exists (and never fill a
     // differently-named set that happens to share the time).
@@ -121,6 +132,7 @@ export async function POST(req: NextRequest) {
           startsAt,
           durationMinutes: s.durationMinutes,
           requiresMD: s.requiresMD,
+          mdUserId,
           slotCapacities: s.slotCapacities ?? undefined,
           teamId: teamIdOf(s),
           orgId: admin.orgId,
@@ -135,13 +147,13 @@ export async function POST(req: NextRequest) {
         data: {
           durationMinutes: s.durationMinutes,
           requiresMD: s.requiresMD,
+          mdUserId,
           slotCapacities: s.slotCapacities ?? undefined,
           teamId: teamIdOf(s),
         },
       });
     }
 
-    const roster = s.assignments.filter((a) => memberIds.has(a.userId));
     if (roster.length > 0) {
       const result = await prisma.assignment.createMany({
         data: roster.map((a) => ({

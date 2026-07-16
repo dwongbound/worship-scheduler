@@ -5,12 +5,16 @@
 // below* the box. It also marks people who can't serve at this set's time:
 // they stay in the list (so you can see who they are) but are disabled and
 // labelled "(unavailable)", and available people are sorted to the top.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface PlayerOption {
   id: string;
   name: string;
   available: boolean;
+  // How many times this person is already scheduled in the surrounding weeks
+  // (±2 weeks of this set). Drives the "least-scheduled first" ordering and is
+  // shown as a muted count. Optional — callers that don't compute it omit it.
+  count?: number;
 }
 
 interface PlayerSelectProps {
@@ -38,7 +42,10 @@ export default function PlayerSelect({
   widthClass = "w-48",
 }: PlayerSelectProps) {
   const [open, setOpen] = useState(false);
+  // Type-to-search query, filtering the option list by name while open.
+  const [query, setQuery] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   // Close on outside click or Escape.
   useEffect(() => {
@@ -57,10 +64,26 @@ export default function PlayerSelect({
     };
   }, [open]);
 
+  // Reset the search each time the list closes; focus the box when it opens so
+  // you can start typing a name immediately.
+  useEffect(() => {
+    if (open) searchRef.current?.focus();
+    else setQuery("");
+  }, [open]);
+
   const choose = (userId: string) => {
     onChange(userId);
     setOpen(false);
   };
+
+  // Filter candidates by the typed query (case-insensitive substring). The
+  // caller already sorted them (least-scheduled / available first), so we keep
+  // that order.
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () => (q ? options.filter((o) => o.name.toLowerCase().includes(q)) : options),
+    [options, q]
+  );
 
   return (
     <div className={`relative ${widthClass}`} ref={ref}>
@@ -82,26 +105,48 @@ export default function PlayerSelect({
       </button>
 
       {open && (
-        <ul
-          role="listbox"
+        <div
           // Indigo-tinted surface so the open list reads as distinct from the
           // gray modal behind it.
-          className="absolute left-0 top-full z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-indigo-200 bg-indigo-50 py-1 shadow-xl dark:border-indigo-700 dark:bg-indigo-900"
+          className="absolute left-0 top-full z-20 mt-1 w-full rounded-lg border border-indigo-200 bg-indigo-50 shadow-xl dark:border-indigo-700 dark:bg-indigo-900"
         >
-          <OptionRow label="None" active={!selected} onClick={() => choose("")} />
-          {/* The current occupant, shown checked so you can see who's in the slot. */}
-          {selected && (
-            <OptionRow label={selected.name} active onClick={() => choose(selected.id)} />
-          )}
-          {options.map((o) => (
-            <OptionRow
-              key={o.id}
-              label={o.available ? o.name : `${o.name} (unavailable)`}
-              disabled={!o.available}
-              onClick={() => choose(o.id)}
+          {/* Type-to-search: filters the list by name as you type. */}
+          <div className="p-1.5">
+            <input
+              ref={searchRef}
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name…"
+              className="w-full rounded border border-indigo-200 bg-white px-2 py-1 text-sm
+                focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
+                dark:border-indigo-700 dark:bg-gray-800"
             />
-          ))}
-        </ul>
+          </div>
+          <ul role="listbox" className="max-h-56 overflow-auto pb-1">
+            {/* "None" and the current occupant only show on an unfiltered list. */}
+            {!q && (
+              <OptionRow label="None" active={!selected} onClick={() => choose("")} />
+            )}
+            {!q && selected && (
+              <OptionRow label={selected.name} active onClick={() => choose(selected.id)} />
+            )}
+            {filtered.map((o) => (
+              <OptionRow
+                key={o.id}
+                label={o.available ? o.name : `${o.name} (unavailable)`}
+                count={o.count}
+                disabled={!o.available}
+                onClick={() => choose(o.id)}
+              />
+            ))}
+            {filtered.length === 0 && (
+              <li className="px-3 py-1.5 text-sm text-gray-500 dark:text-gray-400">
+                No matches.
+              </li>
+            )}
+          </ul>
+        </div>
       )}
     </div>
   );
@@ -111,11 +156,15 @@ function OptionRow({
   label,
   active,
   disabled,
+  count,
   onClick,
 }: {
   label: string;
   active?: boolean;
   disabled?: boolean;
+  // Times already scheduled in the surrounding weeks; shown as a muted badge so
+  // admins can see why the list is ordered the way it is.
+  count?: number;
   onClick: () => void;
 }) {
   return (
@@ -124,7 +173,7 @@ function OptionRow({
         type="button"
         disabled={disabled}
         onClick={onClick}
-        className={`block w-full px-3 py-1.5 text-left text-sm
+        className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm
           ${
             disabled
               ? "cursor-not-allowed text-gray-400 dark:text-gray-500"
@@ -132,7 +181,15 @@ function OptionRow({
           }
           ${active ? "font-medium text-indigo-700 dark:text-indigo-200" : "text-gray-800 dark:text-gray-100"}`}
       >
-        {label}
+        <span className="truncate">{label}</span>
+        {count !== undefined && count > 0 && (
+          <span
+            className="shrink-0 text-xs text-gray-400 dark:text-gray-500"
+            title={`Scheduled ${count} time${count === 1 ? "" : "s"} within ±2 weeks`}
+          >
+            ×{count}
+          </span>
+        )}
       </button>
     </li>
   );

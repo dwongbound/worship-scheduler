@@ -1,18 +1,49 @@
+"use client";
 // Small "i" badge that reveals an explanatory tooltip on hover (or keyboard
-// focus). Pure CSS — no state, no portal — so it works anywhere, including
-// inside modals.
+// focus). The bubble is rendered in a portal with fixed positioning off the
+// icon's bounding rect, so it escapes any `overflow` scroll container it sits
+// inside (e.g. a modal body or a dropdown) instead of being clipped by it.
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
+
 export default function InfoTooltip({
   text,
   side = "top",
 }: {
   text: string;
-  // Where the bubble opens. Use "bottom" when the icon sits near the top of a
-  // modal, where an upward bubble would be clipped by the panel edge.
+  // Where the bubble opens relative to the icon. "bottom" is handy when the
+  // icon sits near the top of the viewport, where an upward bubble would be cut
+  // off by the window edge.
   side?: "top" | "bottom";
 }) {
+  const iconRef = useRef<HTMLSpanElement>(null);
+  // Fixed-position coordinates for the bubble, or null while hidden. We measure
+  // on open so the portal (a document-level child) lines up with the icon.
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  const show = () => {
+    const el = iconRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    // Anchor the bubble's right edge to the icon's right edge (matching the old
+    // right-aligned look) and open above or below by a small gap.
+    setPos({
+      top: side === "top" ? r.top - 6 : r.bottom + 6,
+      left: r.right,
+    });
+  };
+  const hide = () => setPos(null);
+
   return (
-    <span className="group relative inline-flex">
+    <span
+      className="inline-flex"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onFocus={show}
+      onBlur={hide}
+    >
       <span
+        ref={iconRef}
         tabIndex={0}
         aria-label="More information"
         className="flex h-4 w-4 cursor-help select-none items-center justify-center
@@ -21,18 +52,28 @@ export default function InfoTooltip({
       >
         i
       </span>
-      {/* Right-aligned so it stays inside the modal even when the icon sits
-          near the panel's right edge. */}
-      <span
-        role="tooltip"
-        className={`pointer-events-none absolute right-0 z-10 w-64
-          rounded-md bg-gray-900 px-3 py-2 text-xs font-normal normal-case text-gray-100
-          opacity-0 shadow-lg transition-opacity duration-150
-          group-hover:opacity-100 group-focus-within:opacity-100 dark:bg-gray-700
-          ${side === "top" ? "bottom-full mb-1.5" : "top-full mt-1.5"}`}
-      >
-        {text}
-      </span>
+      {pos &&
+        createPortal(
+          <span
+            role="tooltip"
+            // Fixed + translate so the bubble's right edge and vertical anchor
+            // land on the measured point. z-index sits above modals (z-50).
+            style={{
+              top: pos.top,
+              left: pos.left,
+              transform:
+                side === "top"
+                  ? "translate(-100%, -100%)"
+                  : "translate(-100%, 0)",
+            }}
+            className="pointer-events-none fixed z-[60] w-64 rounded-md bg-gray-900
+              px-3 py-2 text-xs font-normal normal-case text-gray-100 shadow-lg
+              dark:bg-gray-700"
+          >
+            {text}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }
