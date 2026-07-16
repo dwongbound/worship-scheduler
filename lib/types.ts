@@ -45,6 +45,9 @@ export interface ApiSet {
   durationMinutes: number;
   notes: string | null;
   requiresMD: boolean; // set needs a musical director on its team
+  // The designated MD's userId, or null (none chosen / doesn't require one).
+  // Must be an eligible assignee — see lib/md.ts.
+  mdUserId: string | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
   // The team this set is for (null = open to the whole org, e.g. its team
   // was deleted). Optional because some endpoints return sets without it.
@@ -127,6 +130,18 @@ export interface ApiAvailabilityStatus {
   needsResponse: boolean;
 }
 
+// A scheduled weekly Slack reminder for one team (Org settings page). Carries
+// the team's name + Slack channel so the table can flag teams with no channel.
+export interface ApiWeeklyReminder {
+  id: string;
+  teamId: string;
+  teamName: string;
+  teamSlackChannelId: string | null;
+  dayOfWeek: number; // 0=Sun … 6=Sat
+  minute: number; // minutes from midnight (server TZ)
+  lastSentAt: string | null;
+}
+
 // A user as seen by admins (Create + Users tabs): roles, admin flag, and
 // whether they've finished entering availability.
 export interface ApiAdminUser {
@@ -182,6 +197,8 @@ export interface StagedSet {
   label: string | null;
   durationMinutes: number;
   requiresMD: boolean; // set needs a musical director on its team
+  // The proposed MD's userId (from lib/md.ts defaultMDId), or null if none.
+  mdUserId: string | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
   // Team the set belongs to (see ApiSet.teamId). Optional so older plans and
   // test fixtures without a team keep working (= open to everyone).

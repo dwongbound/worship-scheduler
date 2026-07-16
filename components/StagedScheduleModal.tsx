@@ -18,14 +18,15 @@ import Button from "./common/Button";
 import Badge from "./common/Badge";
 import LoadingDots from "./common/LoadingDots";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
+import Select from "./common/Select";
 import {
   INSTRUMENT_LABELS,
-  MD_ROLES,
   ROLE_ORDER,
   resolveCapacities,
   type Instrument,
 } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
+import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
 import {
   conflictedUserIds,
@@ -157,6 +158,41 @@ export default function StagedScheduleModal({
       assignments: [...s.assignments, { userId, role }],
     }));
 
+  // Pick (or clear, with "") a staged set's designated MD.
+  const setMD = (idx: number, userId: string) =>
+    updateSet(idx, (s) => ({ ...s, mdUserId: userId || null }));
+
+  // MD eligibility for a staged set, mirroring lib/md with our local isMD info:
+  // eligible assignees, and the current pick if it's still valid.
+  const mdInfo = (set: StagedSet) => {
+    const a = set.assignments.map((x) => ({
+      userId: x.userId,
+      role: x.role,
+      isMD: isMdOf(x.userId),
+    }));
+    return {
+      eligibleIds: new Set(eligibleMDIds(a)),
+      mdUserId: isValidMD(set.mdUserId, a) ? set.mdUserId : null,
+    };
+  };
+
+  // Normalize each set's MD just before applying: keep a still-valid choice,
+  // else auto-pick the best eligible one (mirrors the generate default). Sets
+  // that don't require an MD carry none.
+  const applySets = (): StagedSet[] =>
+    sets.map((s) => {
+      if (!s.requiresMD) return { ...s, mdUserId: null };
+      const a = s.assignments.map((x) => ({
+        userId: x.userId,
+        role: x.role,
+        isMD: isMdOf(x.userId),
+      }));
+      return {
+        ...s,
+        mdUserId: isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a),
+      };
+    });
+
   // Options for a role's dropdown: users who play `role` and aren't already on
   // this set (one slot per set), each flagged available/unavailable at this
   // set's time and sorted available-first (mirrors SetDetailModal).
@@ -215,7 +251,7 @@ export default function StagedScheduleModal({
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Discard
           </Button>
-          <Button onClick={() => onApply(sets)} disabled={busy}>
+          <Button onClick={() => onApply(applySets())} disabled={busy}>
             {busy ? <LoadingDots size="sm" /> : "Apply schedule"}
           </Button>
         </>
@@ -298,12 +334,10 @@ export default function StagedScheduleModal({
             <div className="flex gap-3 overflow-x-auto pb-2">
               {entries.map(({ set, idx }) => {
             const capacities = resolveCapacities(set.slotCapacities);
-            // Required-MD set with no MD in an MD_ROLE → couldn't close it.
-            const missingMD =
-              set.requiresMD &&
-              !set.assignments.some(
-                (a) => isMdOf(a.userId) && MD_ROLES.includes(a.role)
-              );
+            // The set's MD (only if still eligible) and who could take the role.
+            const { eligibleIds: mdEligibleIds, mdUserId } = mdInfo(set);
+            // Required-MD set with no eligible MD chosen → couldn't close it.
+            const missingMD = set.requiresMD && !mdUserId;
             const conflicted = conflictedUserIds(set, rules);
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules);
@@ -401,7 +435,7 @@ export default function StagedScheduleModal({
                               />
                               <SlotMarkers
                                 count={counts.get(a.userId) ?? 0}
-                                isMD={isMdOf(a.userId)}
+                                isMD={a.userId === mdUserId}
                                 unavailable={conflicted.has(a.userId)}
                               />
                             </div>
@@ -426,6 +460,42 @@ export default function StagedScheduleModal({
                     );
                   })}
                 </ul>
+
+                {/* MD picker: one per set, chosen from the assignees; only those
+                    who qualify (an MD on keys/electric/bass, not the WL) are
+                    clickable. Empty when nobody qualifies. */}
+                {set.requiresMD && (
+                  <div className="mt-2 border-t border-gray-100 pt-2 dark:border-gray-700">
+                    {mdEligibleIds.size === 0 ? (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        No eligible MD — needs someone on keys, electric guitar,
+                        or bass.
+                      </p>
+                    ) : (
+                      <Select
+                        label="MD"
+                        value={mdUserId ?? ""}
+                        disabled={busy}
+                        onChange={(e) => setMD(idx, e.target.value)}
+                        className="py-1 text-xs"
+                      >
+                        <option value="">None</option>
+                        {Array.from(
+                          new Set(set.assignments.map((a) => a.userId))
+                        ).map((uid) => (
+                          <option
+                            key={uid}
+                            value={uid}
+                            disabled={!mdEligibleIds.has(uid)}
+                          >
+                            {nameOf(uid)}
+                            {mdEligibleIds.has(uid) ? "" : " — not eligible"}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </div>
+                )}
               </div>
               );
               })}

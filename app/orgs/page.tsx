@@ -11,6 +11,7 @@ import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
+import OrgTeamsManager from "@/components/OrgTeamsManager";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 
 // Just the per-org fields /api/me exposes that this page cares about.
@@ -307,6 +308,9 @@ export default function OrgSettingsPage() {
                     )}
                   </div>
                 )}
+
+                {/* Teams + scheduled weekly Slack reminders (admins only). */}
+                {selected.isAdmin && <OrgTeamsManager orgId={selected.id} />}
               </Card>
             )}
           </section>

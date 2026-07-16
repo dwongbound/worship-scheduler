@@ -288,19 +288,19 @@ describe("buildSchedule", () => {
     ).toBe(false);
   });
 
-  it("excludes MDs entirely from a set that doesn't add an MD", () => {
-    // requiresMD off → the MD is off-limits; the non-MD fills the slot even
-    // though it's more heavily loaded (an MD is never seated on an opt-out set).
+  it("lets an MD fill a role on a set that doesn't add an MD", () => {
+    // MDs are ordinary players now — requiresMD off no longer bars them. b1
+    // (an MD) is less loaded than b2, so normal balancing seats b1.
     const bassists = [user("b1", ["BASS"], true), user("b2", ["BASS"])];
     const result = buildSchedule([tuesdaySet], bassists, [], new Map([["b2", 5]]));
-    expect(result).toEqual([{ setId: "set-1", userId: "b2", role: "BASS" }]);
+    expect(result).toEqual([{ setId: "set-1", userId: "b1", role: "BASS" }]);
   });
 
-  it("leaves a slot empty when the only candidate is an MD and the set adds no MD", () => {
-    // The sole bassist is an MD and the set didn't opt into an MD → nobody is
-    // eligible, so the bass slot stays empty rather than seating the MD.
+  it("fills a slot with an MD candidate even when the set adds no MD", () => {
+    // The sole bassist is an MD; being an MD no longer excludes them, so the
+    // bass slot is filled rather than left empty.
     const result = buildSchedule([tuesdaySet], [user("m1", ["BASS"], true)], []);
-    expect(result.some((a) => a.role === "BASS")).toBe(false);
+    expect(result).toContainEqual({ setId: "set-1", userId: "m1", role: "BASS" });
   });
 
   it("gracefully leaves a required-MD set with no MD when none is available", () => {

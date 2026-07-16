@@ -97,6 +97,7 @@ model Org {
   sets                 Set[]
   templates            SetTemplate[]
   availabilityRequests AvailabilityRequest[]
+  reminders            WeeklyReminder[]
 
   createdAt DateTime @default(now())
 
@@ -140,15 +141,40 @@ model Team {
   // must be invited to the channel; null = Slack summaries off for this team.
   slackChannelId String?
 
-  users     User[]        @relation("TeamMembers")
+  users     User[]           @relation("TeamMembers")
   sets      Set[]
   templates SetTemplate[]
+  reminders WeeklyReminder[]
 
   createdAt DateTime @default(now())
 
   // Team names only need to be unique within their org.
   @@unique([orgId, name])
   @@map("teams")
+}
+
+// A scheduled weekly Slack reminder: post one team's "this week's sets" summary
+// to its Slack channel every week at a chosen day + time. The daily cron
+// (app/api/cron/weekly-reminders) sends any whose dayOfWeek matches today and
+// that hasn't gone out yet today (lastSentAt guards against double-sends).
+model WeeklyReminder {
+  id String @id @default(cuid())
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+
+  dayOfWeek  Int // 0=Sun … 6=Sat, matching JS getDay()
+  minute     Int // minutes from midnight (server TZ), the target send time
+  lastSentAt DateTime? // last successful send, to dedupe within a day
+
+  createdAt DateTime @default(now())
+
+  // One reminder per team per weekday — a team can still have several across
+  // different days.
+  @@unique([teamId, dayOfWeek])
+  @@map("weekly_reminders")
 }
 
 model User {
@@ -177,6 +203,8 @@ model User {
   historyActed    SetHistoryEvent[] @relation("SetHistoryActor")
   historyTargeted SetHistoryEvent[] @relation("SetHistoryTarget")
   historyPrevious SetHistoryEvent[] @relation("SetHistoryPrevious")
+  // Sets where this person is the designated musical director.
+  mdSets          Set[]             @relation("SetMD")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -192,9 +220,16 @@ model Set {
   durationMinutes Int
   notes           String? // free-form notes shown in the set detail modal
 
-  // When true, this set needs at least one musical director (a User with
-  // isMD) on its team; the scheduler tries to guarantee one.
+  // When true, this set needs a musical director; the scheduler seats one and
+  // the UI shows the MD picker + a warning until one is chosen.
   requiresMD Boolean @default(false)
+
+  // The one designated MD for this set. Always someone assigned in an
+  // MD-capable role (keys/electric/bass) and never the worship leader — see
+  // lib/md.ts for the eligibility rule. Null = no MD chosen yet. SetNull so
+  // deleting the user just clears the designation, not the set.
+  md       User?   @relation("SetMD", fields: [mdUserId], references: [id], onDelete: SetNull)
+  mdUserId String?
 
   // Per-set team shape: an Instrument→count map (e.g. { ELECTRIC_GUITAR: 2,
   // ACOUSTIC_GUITAR: 0 }). Null = use the global SLOT_CAPACITIES default.

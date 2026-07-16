@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Dropdown from "./common/Dropdown";
 import Banner from "./common/Banner";
 import Logo from "./Logo";
@@ -12,6 +12,8 @@ import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
 import { useOrgs } from "./OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import { setNavDirection } from "@/lib/navDirection";
+import { useSwipe } from "./SwipeProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
 import type { ApiAvailabilityStatus } from "@/lib/types";
 
@@ -55,11 +57,20 @@ export default function Navbar() {
   // its banner links land on the /users list that actually shows those people.
   const { adminOrgId, isAdminAny } = useOrgs();
 
-  // Live snapshots of the tab strip for the swipe handler, which attaches once
-  // but must always act on the current tabs / active tab / navigation fn.
-  const tabHrefsRef = useRef<string[]>([]);
-  const activeIndexRef = useRef(0);
-  const navigateRef = useRef<(href: string) => void>(() => {});
+  // Shared with SwipePager: the navbar writes the live tab list / active index /
+  // navigate fn here, and reads back `previewIndex` — the tab the in-progress
+  // swipe is heading toward — so the highlight updates live during the drag.
+  const {
+    tabsRef: tabHrefsRef,
+    activeIndexRef,
+    navigateRef,
+    previewIndex,
+  } = useSwipe();
+
+  // Phone bottom bar shrinks to icons-only on scroll down (labels collapse) and
+  // expands back to icon + label on scroll up or near the top. It never fully
+  // hides, so navigation stays one tap away.
+  const [bottomBarCompact, setBottomBarCompact] = useState(false);
 
   // Read the persisted mode after mount (localStorage is client-only).
   useEffect(() => {
@@ -72,51 +83,32 @@ export default function Navbar() {
     setPendingHref(null);
   }, [pathname]);
 
-  // Phones: a horizontal swipe across the page flicks to the neighbouring tab,
-  // matching the bottom bar's left-to-right order. Attaches once and reads the
-  // live tab snapshot from refs, so it never goes stale as tabs/route change.
+  // Track scroll direction to shrink/expand the phone bottom bar. Uses a ref
+  // (not state) for the last position so the passive scroll listener never
+  // needs to re-attach, and rAF-throttles so it only recalculates once per
+  // frame.
   useEffect(() => {
-    let startX = 0;
-    let startY = 0;
-    let startT = 0;
-    let tracking = false;
-    const onStart = (e: TouchEvent) => {
-      // Ignore multi-touch (pinch/zoom) — only single-finger swipes navigate.
-      if (e.touches.length !== 1) {
-        tracking = false;
-        return;
-      }
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
-      startT = Date.now();
-      tracking = true;
+    let lastY = window.scrollY;
+    let ticking = false;
+    const onScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        const y = window.scrollY;
+        const delta = y - lastY;
+        if (y < 40) {
+          setBottomBarCompact(false);
+        } else if (delta > 8) {
+          setBottomBarCompact(true);
+        } else if (delta < -8) {
+          setBottomBarCompact(false);
+        }
+        lastY = y;
+        ticking = false;
+      });
     };
-    const onEnd = (e: TouchEvent) => {
-      if (!tracking) return;
-      tracking = false;
-      if (window.innerWidth >= 640) return; // phones only (Tailwind `sm`)
-      // No tab bar on the auth pages — don't act on their stale ref snapshot.
-      const path = window.location.pathname;
-      if (path === "/login" || path === "/join") return;
-      if (Date.now() - startT > 600) return; // too slow to read as a flick
-      const t = e.changedTouches[0];
-      const dx = t.clientX - startX;
-      const dy = t.clientY - startY;
-      // Must be a decisive, mostly-horizontal swipe — not a vertical scroll.
-      if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
-      const hrefs = tabHrefsRef.current;
-      if (hrefs.length === 0) return;
-      // Swipe left (finger moves left) → next tab; swipe right → previous.
-      const next = activeIndexRef.current + (dx < 0 ? 1 : -1);
-      if (next < 0 || next >= hrefs.length) return; // don't wrap past the ends
-      navigateRef.current(hrefs[next]);
-    };
-    window.addEventListener("touchstart", onStart, { passive: true });
-    window.addEventListener("touchend", onEnd, { passive: true });
-    return () => {
-      window.removeEventListener("touchstart", onStart);
-      window.removeEventListener("touchend", onEnd);
-    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   // While in "system" mode, follow live OS theme changes.
@@ -282,6 +274,10 @@ export default function Navbar() {
   // to the real route once navigation completes.
   const isActive = (href: string) =>
     pendingHref ? pendingHref === href : pathname.startsWith(href);
+  // During a swipe, SwipePager sets `previewIndex` so the highlight follows the
+  // drag to the tab you're heading toward; otherwise use the real/pending tab.
+  const tabActive = (index: number, href: string) =>
+    previewIndex != null ? index === previewIndex : isActive(href);
   const handleTabClick = (href: string) => {
     // Show the shared loader and highlight the clicked tab the instant it's
     // clicked, before the next page mounts.
@@ -299,6 +295,10 @@ export default function Navbar() {
     tabs.findIndex((t) => isActive(t.href))
   );
   navigateRef.current = (href) => {
+    // Tell SwipePager which way the content should slide: swiping to a
+    // right-hand tab slides the new page in from the right, and vice versa.
+    const to = tabHrefsRef.current.indexOf(href);
+    setNavDirection(Math.sign(to - activeIndexRef.current));
     handleTabClick(href);
     router.push(href);
   };
@@ -320,7 +320,7 @@ export default function Navbar() {
               sides inside the clip box (room for the dots) and cancels it with a
               matching negative margin, so the layout is unchanged. */}
           <div className="hidden gap-1 overflow-x-auto p-2 -m-2 sm:flex">
-            {tabs.map((tab) => {
+            {tabs.map((tab, i) => {
             const isAdminTab = "admin" in tab && tab.admin === true;
             return (
               <Link
@@ -328,7 +328,7 @@ export default function Navbar() {
                 href={tab.href}
                 data-tour={tab.href}
                 onClick={() => handleTabClick(tab.href)}
-                className={tabClassName(isActive(tab.href), isAdminTab)}
+                className={tabClassName(tabActive(i, tab.href), isAdminTab)}
               >
                 {isAdminTab && <ShieldIcon />}
                 {tab.label}
@@ -347,6 +347,10 @@ export default function Navbar() {
 
 
         <div className="flex items-center gap-3">
+          {/* Org switcher: page-dependent (view filter / admin org / locked).
+              Sits left of the ? / theme icons. */}
+          {session?.user && <OrgSwitcher />}
+
           {/* Guided tour: "?" help button, auto-opens once per browser.
               Admins get extra steps covering the Create/Team tabs. */}
           <GuidedTour
@@ -365,9 +369,6 @@ export default function Navbar() {
           >
             {themeIcon}
           </button>
-
-          {/* Org switcher: page-dependent (view filter / admin org / locked) */}
-          {session?.user && <OrgSwitcher />}
 
           {/* User menu: avatar initial → Edit profile / Log out */}
           {session?.user && (
@@ -484,15 +485,21 @@ export default function Navbar() {
         The top strip's dots keep the data-testids; duplicating them here
         would break Playwright's strict single-match lookups. */}
     <nav className="fixed inset-x-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30 sm:hidden">
-      <div className="mx-auto flex max-w-md items-stretch rounded-2xl border border-gray-200 bg-white/95 px-1.5 py-1.5 shadow-lg backdrop-blur dark:border-gray-700 dark:bg-gray-800/95">
-        {tabs.map((tab) => {
+      <div
+        className={`mx-auto flex items-stretch rounded-full border border-gray-200/70 bg-white/70 px-1.5 py-1.5 shadow-lg backdrop-blur-md transition-all duration-300 ease-in-out dark:border-gray-700/70 dark:bg-gray-800/70 ${
+          // Scroll down → also pull the pill in horizontally (centered), so it
+          // reads as a compact icons-only bar rather than a full-width one.
+          bottomBarCompact ? "max-w-xs" : "max-w-md"
+        }`}
+      >
+        {tabs.map((tab, i) => {
           const isAdminTab = "admin" in tab && tab.admin === true;
           return (
             <Link
               key={tab.href}
               href={tab.href}
               onClick={() => handleTabClick(tab.href)}
-              className={bottomTabClassName(isActive(tab.href), isAdminTab)}
+              className={bottomTabClassName(tabActive(i, tab.href), isAdminTab)}
             >
               <span className="relative">
                 <TabIcon d={tab.icon} />
@@ -500,7 +507,12 @@ export default function Navbar() {
                   <span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500" />
                 )}
               </span>
-              <span className="text-[10px] font-medium leading-tight">
+              {/* Labels collapse to nothing on scroll down, leaving icons only. */}
+              <span
+                className={`overflow-hidden text-[10px] font-medium leading-tight transition-all duration-300 ease-in-out ${
+                  bottomBarCompact ? "max-h-0 opacity-0" : "max-h-4 opacity-100"
+                }`}
+              >
                 {"mobileLabel" in tab ? tab.mobileLabel : tab.label}
               </span>
             </Link>
@@ -545,8 +557,10 @@ function tabClassName(active: boolean, admin: boolean): string {
 // Bottom-bar tab styling: stacked icon + label, evenly sharing the pill's
 // width. Same indigo/amber active cues as the top strip.
 function bottomTabClassName(active: boolean, admin: boolean): string {
+  // `rounded-full` matches the surrounding pill so the active-tab highlight
+  // echoes the bar's own corner roundness.
   const base =
-    "flex flex-1 flex-col items-center gap-0.5 rounded-xl px-1 py-1.5 transition-colors focus:outline-none";
+    "flex flex-1 flex-col items-center gap-0.5 rounded-full px-1 py-1.5 transition-colors focus:outline-none";
 
   if (admin) {
     if (active) {

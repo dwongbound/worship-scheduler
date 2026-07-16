@@ -25,6 +25,7 @@ function stagedSet(
     label: "Set",
     durationMinutes,
     requiresMD: false,
+    mdUserId: null,
     slotCapacities: null,
     existing: false,
     assignments,

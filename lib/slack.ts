@@ -377,18 +377,19 @@ export async function messageSetTeamOnSlack(
 type SummarySet = {
   label: string | null;
   startsAt: Date;
-  assignments: { role: Instrument; user: { name: string; isMD: boolean } }[];
+  mdUserId: string | null; // the set's one designated MD, if any
+  assignments: { role: Instrument; user: { id: string; name: string } }[];
 };
 
 /**
  * The week-ahead digest for one team, one block per set:
  *
  *   *Sunday Worship* — Sunday, July 12, 2026 · 10:00 AM
- *   • Alice — Worship Leader (MD)
- *   • Bob — Drums
+ *   • Bob — Keys (MD)
+ *   • Alice — Worship Leader
  *
- * People are listed in scarce-first role order; (MD) marks musical directors.
- * Pure (no I/O) so it's unit-testable.
+ * People are listed in scarce-first role order; (MD) marks the set's designated
+ * musical director. Pure (no I/O) so it's unit-testable.
  */
 export function weeklySummaryText(
   teamName: string,
@@ -405,7 +406,7 @@ export function weeklySummaryText(
       .sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role))
       .map(
         (a) =>
-          `• ${a.user.name} — ${INSTRUMENT_LABELS[a.role]}${a.user.isMD ? " (MD)" : ""}`
+          `• ${a.user.name} — ${INSTRUMENT_LABELS[a.role]}${a.user.id === set.mdUserId ? " (MD)" : ""}`
       );
     if (lines.length === 0) lines.push("• _No one assigned yet_");
     return [header, ...lines].join("\n");
@@ -442,7 +443,7 @@ export async function sendTeamWeeklySummary(
     orderBy: { startsAt: "asc" },
     include: {
       assignments: {
-        include: { user: { select: { name: true, isMD: true } } },
+        include: { user: { select: { id: true, name: true } } },
       },
     },
   });

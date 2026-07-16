@@ -28,7 +28,8 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const startDate = parseLocalDate(body.startDate);
-  const endDate = parseLocalDate(body.endDate);
+  // End date is optional — a single-day request defaults it to the start date.
+  const endDate = body.endDate ? parseLocalDate(body.endDate) : startDate;
   if (!startDate || !endDate || startDate > endDate) {
     return NextResponse.json({ error: "Invalid date range" }, { status: 400 });
   }

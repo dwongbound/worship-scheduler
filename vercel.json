@@ -6,5 +6,11 @@
       "main": true,
       "staging": true
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/weekly-reminders",
+      "schedule": "0 15 * * *"
+    }
+  ]
 }
