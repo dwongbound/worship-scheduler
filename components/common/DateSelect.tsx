@@ -41,8 +41,8 @@ function displayLabel(value: string): string {
 
 interface DateSelectProps {
   label: string;
-  value: string; // yyyy-mm-dd, or "" for no date
-  onChange: (value: string) => void;
+  value: string; // yyyy-mm-dd, or "" for no date (in range mode: the start)
+  onChange?: (value: string) => void; // single mode; use onRangeChange for ranges
   min?: string; // yyyy-mm-dd — earlier days are disabled
   max?: string; // yyyy-mm-dd — later days are disabled
   required?: boolean;
@@ -51,6 +51,13 @@ interface DateSelectProps {
   // "full" → red, "partial" → amber, null → nothing. Used to surface which days
   // already have availability blocks while picking.
   dayMarker?: (ymd: string) => "full" | "partial" | null;
+  // Range mode: pick a start then an end within the same calendar. `value` is
+  // the start and `endValue` the end (empty/same-as-start = a single day). The
+  // first click sets the start; the next click sets the end (or, if earlier
+  // than the start, restarts). onRangeChange fires instead of onChange.
+  range?: boolean;
+  endValue?: string;
+  onRangeChange?: (start: string, end: string) => void;
 }
 
 export default function DateSelect({
@@ -62,6 +69,9 @@ export default function DateSelect({
   required,
   disabled,
   dayMarker,
+  range,
+  endValue,
+  onRangeChange,
 }: DateSelectProps) {
   const [open, setOpen] = useState(false);
   // The month the calendar shows (independent of the selection): the selected
@@ -79,6 +89,8 @@ export default function DateSelect({
   // Open above the field when there isn't room below (e.g. near the bottom of
   // the page) — otherwise the calendar spills off-screen and clips.
   const [dropUp, setDropUp] = useState(false);
+  // While picking a range's end, the day under the cursor previews the range.
+  const [hoverYmd, setHoverYmd] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   // Re-center whenever the picker (re)opens.
@@ -136,11 +148,54 @@ export default function DateSelect({
     (min && ymd < min) || (max && ymd > max);
 
   const pick = (d: Date) => {
-    onChange(toYmd(d));
+    const picked = toYmd(d);
+    if (range) {
+      // No start yet, or a complete range → begin a fresh range.
+      if (!value || endValue) {
+        onRangeChange?.(picked, "");
+      } else if (picked >= value) {
+        // Start is set → this click is the end; close once the range is whole.
+        onRangeChange?.(value, picked);
+        setOpen(false);
+        setHoverYmd(null);
+      } else {
+        // Clicked before the start → treat it as the new start.
+        onRangeChange?.(picked, "");
+      }
+      return;
+    }
+    onChange?.(picked);
     setOpen(false);
   };
   const shiftMonth = (delta: number) =>
     setView((v) => new Date(v.getFullYear(), v.getMonth() + delta, 1));
+
+  // Drop any stale range hover-preview once the popup closes.
+  useEffect(() => {
+    if (!open) setHoverYmd(null);
+  }, [open]);
+
+  // The range currently highlighted: the committed [value, endValue], or a live
+  // preview from the start to the hovered day while picking the end.
+  const pickingEnd = !!range && !!value && !endValue;
+  let rangeLo: string | null = null;
+  let rangeHi: string | null = null;
+  if (range && value) {
+    const other = endValue || (pickingEnd ? hoverYmd : null) || value;
+    rangeLo = value <= other ? value : other;
+    rangeHi = value <= other ? other : value;
+  }
+
+  // Field text: "Jul 7 – Jul 9" for a range, "Jul 7" for a single day/start.
+  const displayText = range
+    ? value
+      ? endValue && endValue !== value
+        ? `${displayLabel(value)} – ${displayLabel(endValue)}`
+        : displayLabel(value)
+      : ""
+    : value
+      ? displayLabel(value)
+      : "";
 
   return (
     <label className="block">
@@ -161,8 +216,8 @@ export default function DateSelect({
             focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60
             dark:border-gray-600 dark:bg-gray-800`}
         >
-          <span className={value ? "" : "text-gray-400 dark:text-gray-500"}>
-            {value ? displayLabel(value) : "mm/dd/yyyy"}
+          <span className={displayText ? "" : "text-gray-400 dark:text-gray-500"}>
+            {displayText || "mm/dd/yyyy"}
           </span>
           <CalendarIcon />
         </button>
@@ -215,9 +270,16 @@ export default function DateSelect({
               {cells.map((d) => {
                 const ymd = toYmd(d);
                 const inMonth = d.getMonth() === view.getMonth();
-                const selected = ymd === value;
                 const isToday = ymd === todayYmd;
                 const blocked = !!outOfRange(ymd);
+                // Range highlight: the two endpoints are "selected"; days
+                // between them get a lighter fill. Single mode keeps its one
+                // selected day.
+                const inRange =
+                  !!rangeLo && !!rangeHi && ymd >= rangeLo && ymd <= rangeHi;
+                const isEndpoint = ymd === rangeLo || ymd === rangeHi;
+                const selected = range ? inRange && isEndpoint : ymd === value;
+                const midRange = range && inRange && !isEndpoint;
                 // Existing-block dot (only for in-month days, to avoid clutter).
                 const marker = inMonth && dayMarker ? dayMarker(ymd) : null;
                 return (
@@ -226,12 +288,16 @@ export default function DateSelect({
                     type="button"
                     disabled={blocked}
                     onClick={() => pick(d)}
+                    onMouseEnter={() => {
+                      if (pickingEnd && !blocked) setHoverYmd(ymd);
+                    }}
                     className={`relative h-8 rounded text-sm transition-colors
                       ${blocked ? "cursor-not-allowed text-gray-300 dark:text-gray-600" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
                       ${!inMonth && !blocked ? "text-gray-400 dark:text-gray-500" : ""}
-                      ${inMonth && !blocked && !selected ? "text-gray-800 dark:text-gray-100" : ""}
+                      ${inMonth && !blocked && !selected && !midRange ? "text-gray-800 dark:text-gray-100" : ""}
+                      ${midRange && !selected ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-800/60 dark:text-indigo-100" : ""}
                       ${selected ? "bg-indigo-600 font-semibold text-white hover:bg-indigo-600 dark:bg-indigo-500" : ""}
-                      ${isToday && !selected && !blocked ? "font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-400 dark:text-indigo-300" : ""}`}
+                      ${isToday && !selected && !midRange && !blocked ? "font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-400 dark:text-indigo-300" : ""}`}
                   >
                     {d.getDate()}
                     {marker && (
@@ -247,14 +313,25 @@ export default function DateSelect({
               })}
             </div>
 
+            {/* While mid-range, nudge the user to complete it. */}
+            {pickingEnd && (
+              <p className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-300">
+                Now pick the end date (or the same day for a single day).
+              </p>
+            )}
+
             {/* Clear (only when there's a value to clear) + jump to today. */}
             <div className="mt-2 flex items-center justify-between text-sm">
-              {value && !required ? (
+              {value && (!required || range) ? (
                 <button
                   type="button"
                   onClick={() => {
-                    onChange("");
-                    setOpen(false);
+                    if (range) {
+                      onRangeChange?.("", ""); // stay open to re-pick the start
+                    } else {
+                      onChange?.("");
+                      setOpen(false);
+                    }
                   }}
                   className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                 >
