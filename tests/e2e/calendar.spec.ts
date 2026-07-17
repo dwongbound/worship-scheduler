@@ -129,8 +129,17 @@ test("admin assigns and removes a player in the set modal", async ({ page }) => 
 test("assignment dropdown flags people who are unavailable for the set", async ({
   page,
 }) => {
-  // Carol can't serve on Wednesdays (all day).
+  // Carol can't serve on Wednesdays (all day). Clean up any matching block
+  // a previous (e.g. timed-out) attempt might have left behind — otherwise a
+  // retry hits a 409 "already exists" and fails deterministically every time.
   await login(page, "carol");
+  const existing = (await (await page.request.get("/api/availability")).json())
+    .entries as { id: string; type: string; dayOfWeek: number | null }[];
+  for (const e of existing) {
+    if (e.type === "RECURRING" && e.dayOfWeek === 3) {
+      await page.request.delete(`/api/availability/${e.id}`);
+    }
+  }
   const res = await page.request.post("/api/availability", {
     data: { type: "RECURRING", dayOfWeek: 3, startMinute: 0, endMinute: 1440 },
   });
@@ -138,20 +147,24 @@ test("assignment dropdown flags people who are unavailable for the set", async (
   const blockId = (await res.json()).id as string;
 
   try {
-    // Admin opens a seeded Wednesday Night set and its Piano / Keys dropdown.
+    // Admin opens the seeded Wednesday Night set and its Vox (VOCALS) row —
+    // seeded with only 1 of its 3 slots filled (Grace), so 2 stay open. Carol
+    // plays KEYS + VOCALS but her seeded Keys slot (Ivy) and the other roles
+    // are already filled, so Vox is the only role with an open slot she
+    // qualifies for.
     await login(page, "admin");
     await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
     const modal = page.getByRole("dialog");
     await expect(modal).toBeVisible();
 
-    const keysRow = modal.getByRole("listitem").filter({ hasText: "Piano / Keys" });
-    await keysRow.getByRole("button", { name: "None" }).first().click();
+    const voxRow = modal.getByRole("listitem").filter({ hasText: "Vox" });
+    await voxRow.getByRole("button", { name: "None" }).first().click();
 
     // Carol is still listed (so you can see her) but labelled + disabled...
     const carol = page.getByRole("option", { name: /Carol Chen \(unavailable\)/ });
     await expect(carol).toBeVisible();
     await expect(carol.getByRole("button")).toBeDisabled();
-    // ...while an available keys player is selectable.
+    // ...while an available vocalist is selectable.
     await expect(
       page.getByRole("option", { name: "Nina Nguyen" }).getByRole("button")
     ).toBeEnabled();
