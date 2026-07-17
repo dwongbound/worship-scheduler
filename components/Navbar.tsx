@@ -486,7 +486,7 @@ export default function Navbar() {
         would break Playwright's strict single-match lookups. */}
     <nav className="fixed inset-x-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30 sm:hidden">
       <div
-        className={`mx-auto flex items-stretch rounded-full border border-gray-200/70 bg-white/70 px-1.5 py-1.5 shadow-lg backdrop-blur-md transition-all duration-300 ease-in-out dark:border-gray-700/70 dark:bg-gray-800/70 ${
+        className={`mx-auto flex items-stretch rounded-full border border-gray-200/60 bg-white/50 px-1.5 py-1.5 shadow-lg backdrop-blur-xl transition-all duration-300 ease-in-out dark:border-gray-700/60 dark:bg-gray-800/50 ${
           // Scroll down → also pull the pill in horizontally (centered), so it
           // reads as a compact icons-only bar rather than a full-width one.
           bottomBarCompact ? "max-w-xs" : "max-w-md"
