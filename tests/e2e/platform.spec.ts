@@ -2,7 +2,7 @@
 // admin-of-every-org access. Gated by the SUPERADMIN_EMAILS allowlist, which
 // env/test.env sets to a throwaway address (never a real person's email).
 import { expect, test, type Page } from "@playwright/test";
-import { login, orgKey } from "./helpers";
+import { login, orgKey, suppressGuidedTour } from "./helpers";
 
 const SUPER_EMAIL = "superadmin@example.com";
 const PW = "password123";
@@ -20,6 +20,7 @@ function orgName(index: number): string {
  * not per attempt), so a second sign-up of the same email would collide.
  */
 async function loginAsSuperAdmin(page: Page) {
+  await suppressGuidedTour(page);
   await page.goto("/login");
   await page.getByRole("button", { name: "Sign up" }).click();
   await page.getByLabel("First name").fill("Super");

@@ -7,17 +7,16 @@ test("a user edits the instruments they play", async ({ page }) => {
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  // Carol plays Keys + Vocals but not Strings — add it and save.
+  // Carol plays Keys + Vocals but not Strings — toggling it auto-saves (no
+  // Save button; see app/profile/page.tsx).
   const strings = page.getByLabel("Strings");
   await expect(strings).not.toBeChecked();
   await strings.check();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved!")).toBeVisible();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
 
   // Revert so the suite's shared state is unchanged.
   await page.getByLabel("Strings").uncheck();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved!")).toBeVisible();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
 });
 
 test("a brand-new member is nudged to pick their instruments, then the nudge clears", async ({
@@ -37,18 +36,16 @@ test("a brand-new member is nudged to pick their instruments, then the nudge cle
     .click();
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  // Pick a role and save — the dot and banner clear without a reload.
+  // Pick a role — it auto-saves, and the dot and banner clear without a reload.
   await page.getByLabel("Drums").check();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved!")).toBeVisible();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
 
   await expect(page.getByTestId("profile-dot")).toHaveCount(0);
   await expect(page.getByText("Finish setting up your profile")).toHaveCount(0);
 
   // Revert so the suite's shared state (an empty-profile account) is unchanged.
   await page.getByLabel("Drums").uncheck();
-  await page.getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved!")).toBeVisible();
+  await expect(page.getByText("Saved ✓")).toBeVisible();
   await expect(page.getByTestId("profile-dot")).toBeVisible();
 });
 

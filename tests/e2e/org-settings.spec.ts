@@ -51,7 +51,14 @@ test("an org admin can change and rotate the org join key", async ({ page }) => 
   await expect(page.getByLabel("Join key")).not.toHaveValue(custom);
 
   // Restore the seeded key so specs that join org 2 by its key still pass.
+  // The input is a controlled field holding whatever was just typed, so
+  // asserting its value alone doesn't prove the save round-trip landed —
+  // wait for the button to leave its "Saving…" busy state instead (it only
+  // flips back once the PATCH response is in), otherwise the test can end
+  // and tear down the page before the request reaches the server.
   await page.getByLabel("Join key").fill(original);
   await page.getByRole("button", { name: "Save key" }).click();
+  await expect(page.getByRole("button", { name: "Saving…" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save key" })).toBeVisible();
   await expect(page.getByLabel("Join key")).toHaveValue(original);
 });

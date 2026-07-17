@@ -59,14 +59,85 @@ test("submits availability and re-opens it for changes", async ({ page }) => {
   await login(page, "carol");
   await page.goto("/schedule");
 
-  await page.getByRole("button", { name: "Submit unavailabilities" }).click();
-  // Nothing blocked → confirm the "fully available" submit.
-  await page.getByRole("button", { name: "Yes, I'm fully available" }).click();
+  // "Submit Response" opens a confirmation modal summarizing the blocked
+  // days before actually sending.
+  await page.getByRole("button", { name: "Submit Response" }).click();
+  const modal = page.getByRole("dialog").filter({ hasText: "Submit your response?" });
+  await expect(modal).toBeVisible();
+  // Nothing blocked → the modal says so.
+  await expect(modal.getByText(/available the whole time/)).toBeVisible();
+  await modal.getByRole("button", { name: "Confirm" }).click();
   await expect(page.getByText(/Submitted on|Updated on/)).toBeVisible();
 
   // "Make changes" re-opens the form (unsubmits).
   await page.getByRole("button", { name: "Make changes" }).click();
   await expect(
-    page.getByRole("button", { name: "Submit unavailabilities" })
+    page.getByRole("button", { name: "Submit Response" })
   ).toBeVisible();
+});
+
+test("confirmation modal lists a blocked day, and the date picker marks it", async ({
+  page,
+}) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  // Scope to the Admin Requests section — its "Start date"/"Block these
+  // dates" field+button share labels with the mobile-only Specific Blocks
+  // section, which stays in the DOM (just CSS-hidden) at this desktop width.
+  const adminRequests = page
+    .locator("section")
+    .filter({ hasText: "Admin Requests" });
+
+  // Block today (an all-day block, the form's default preset) within the
+  // active request's window.
+  await adminRequests.getByLabel("Start date", { exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Today", exact: true }).click();
+  await adminRequests.getByRole("button", { name: "Block these dates" }).click();
+
+  // Re-opening the date picker now shows a red "full day" dot on today.
+  await adminRequests.getByLabel("Start date", { exact: true }).click();
+  const todayCell = page
+    .getByRole("dialog")
+    .getByRole("button", { name: String(new Date().getDate()), exact: true });
+  await expect(todayCell.locator(".bg-rose-500")).toBeVisible();
+  await page.keyboard.press("Escape");
+
+  // The submit-confirmation modal breaks the blocked day out instead of
+  // claiming full availability.
+  await page.getByRole("button", { name: "Submit Response" }).click();
+  const modal = page.getByRole("dialog").filter({ hasText: "Submit your response?" });
+  await expect(modal).toBeVisible();
+  await expect(modal.getByText(/available the whole time/)).toHaveCount(0);
+  await expect(modal.getByText("All day")).toBeVisible();
+  await modal.getByRole("button", { name: "Modify" }).click();
+  await expect(modal).not.toBeVisible();
+
+  // Clean up the block so it doesn't leak into later specs.
+  await page.getByRole("button", { name: "Delete" }).first().click();
+});
+
+test("mobile: quick-blocks a day from the Specific Blocks section", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  // Desktop-only calendar is gone below lg; this section is mobile-only and
+  // request-independent (no admin request needed to use it).
+  const specificBlocks = page
+    .locator("section")
+    .filter({ hasText: "Specific Blocks" });
+  await specificBlocks.getByLabel("Start date", { exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Today", exact: true }).click();
+  await specificBlocks.getByRole("button", { name: "Block these dates" }).click();
+
+  const blockEntry = page.getByRole("listitem").filter({ hasText: "All day" });
+  await expect(blockEntry.first()).toBeVisible();
+
+  // Clean up.
+  await page.getByRole("button", { name: "Delete" }).first().click();
+  await expect(blockEntry).toHaveCount(0);
 });
