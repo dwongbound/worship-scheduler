@@ -145,11 +145,11 @@ test("admin sends an availability request to the team", async ({ page }) => {
 
   await page.getByLabel("Name (optional)").fill("Fall 2026 Request");
   // From/To are custom DateSelect popups (not native date inputs). Their button's
-  // accessible name is exactly "From"/"To", so open each with an EXACT label
-  // match (getByLabel("To") without exact is ambiguous — "Today" contains "to")
-  // and choose "Today" scoped to the open popup dialog. A single-day range is
-  // valid (startDate <= endDate).
-  const pickToday = async (field: "From" | "To") => {
+  // accessible name is exactly "From"/"To (optional)", so open each with an
+  // EXACT label match (getByLabel("To") without exact is ambiguous — "Today"
+  // contains "to") and choose "Today" scoped to the open popup dialog. A
+  // single-day range is valid (startDate <= endDate).
+  const pickToday = async (field: "From" | "To (optional)") => {
     await page.getByLabel(field, { exact: true }).click();
     await page
       .getByRole("dialog")
@@ -158,7 +158,7 @@ test("admin sends an availability request to the team", async ({ page }) => {
   };
 
   await pickToday("From");
-  await pickToday("To");
+  await pickToday("To (optional)");
   await page.getByRole("button", { name: "Request availabilities" }).click();
   await expect(
     page.getByText("Availability request sent to the team.")

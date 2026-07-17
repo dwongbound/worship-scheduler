@@ -47,6 +47,10 @@ interface DateSelectProps {
   max?: string; // yyyy-mm-dd — later days are disabled
   required?: boolean;
   disabled?: boolean;
+  // Optional per-day marker rendered as a small dot under the date number:
+  // "full" → red, "partial" → amber, null → nothing. Used to surface which days
+  // already have availability blocks while picking.
+  dayMarker?: (ymd: string) => "full" | "partial" | null;
 }
 
 export default function DateSelect({
@@ -57,6 +61,7 @@ export default function DateSelect({
   max,
   required,
   disabled,
+  dayMarker,
 }: DateSelectProps) {
   const [open, setOpen] = useState(false);
   // The month the calendar shows (independent of the selection): the selected
@@ -213,13 +218,15 @@ export default function DateSelect({
                 const selected = ymd === value;
                 const isToday = ymd === todayYmd;
                 const blocked = !!outOfRange(ymd);
+                // Existing-block dot (only for in-month days, to avoid clutter).
+                const marker = inMonth && dayMarker ? dayMarker(ymd) : null;
                 return (
                   <button
                     key={ymd}
                     type="button"
                     disabled={blocked}
                     onClick={() => pick(d)}
-                    className={`h-8 rounded text-sm transition-colors
+                    className={`relative h-8 rounded text-sm transition-colors
                       ${blocked ? "cursor-not-allowed text-gray-300 dark:text-gray-600" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
                       ${!inMonth && !blocked ? "text-gray-400 dark:text-gray-500" : ""}
                       ${inMonth && !blocked && !selected ? "text-gray-800 dark:text-gray-100" : ""}
@@ -227,6 +234,14 @@ export default function DateSelect({
                       ${isToday && !selected && !blocked ? "font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-400 dark:text-indigo-300" : ""}`}
                   >
                     {d.getDate()}
+                    {marker && (
+                      <span
+                        aria-hidden="true"
+                        className={`pointer-events-none absolute bottom-0.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full ${
+                          marker === "full" ? "bg-rose-500" : "bg-amber-500"
+                        }`}
+                      />
+                    )}
                   </button>
                 );
               })}

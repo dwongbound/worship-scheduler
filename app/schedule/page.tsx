@@ -17,6 +17,7 @@ import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
 import { usePageLoading } from "@/components/LoadingProvider";
+import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { AVAILABILITY_CHANGED_EVENT } from "@/components/Navbar";
 import { DAY_LABELS } from "@/lib/constants";
@@ -63,6 +64,68 @@ function requestOptionLabel(r: ApiAvailabilityRequest): string {
   return r.org ? `${r.org.name} — ${base}` : base;
 }
 
+const FULL_DAY_MIN = 24 * 60;
+
+// Block level for one calendar day, from the union of every block that lands on
+// it: "full" = an all-day block covers it, "partial" = only part of the day,
+// null = free. Drives the red/amber dots on the date pickers and the summary in
+// the submit-confirmation modal.
+function dayBlockLevel(
+  entries: ApiUnavailability[],
+  ymd: string
+): "full" | "partial" | null {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  let full = false;
+  let partial = false;
+  for (const e of entries) {
+    if (e.type === "RECURRING") {
+      if (date.getDay() !== e.dayOfWeek) continue;
+    } else {
+      if (!e.startDate) continue;
+      const s = new Date(e.startDate);
+      const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+      const eRaw = e.endDate ? new Date(e.endDate) : s;
+      const endDay = new Date(eRaw.getFullYear(), eRaw.getMonth(), eRaw.getDate());
+      if (date < startDay || date > endDay) continue;
+    }
+    const start = e.startMinute ?? 0;
+    const end = e.endMinute ?? FULL_DAY_MIN;
+    if (e.type === "DATE_RANGE" || (start <= 0 && end >= FULL_DAY_MIN)) full = true;
+    else partial = true;
+  }
+  return full ? "full" : partial ? "partial" : null;
+}
+
+// Every blocked day inside a request's window, for the confirmation modal.
+function blockedDaysInRange(
+  entries: ApiUnavailability[],
+  startIso: string,
+  endIso: string
+): { ymd: string; label: string; level: "full" | "partial" }[] {
+  const out: { ymd: string; label: string; level: "full" | "partial" }[] = [];
+  const s = new Date(startIso);
+  const e = new Date(endIso);
+  const cur = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+  const last = new Date(e.getFullYear(), e.getMonth(), e.getDate());
+  for (; cur <= last; cur.setDate(cur.getDate() + 1)) {
+    const ymd = toYmd(cur);
+    const level = dayBlockLevel(entries, ymd);
+    if (level) {
+      out.push({
+        ymd,
+        label: cur.toLocaleDateString(undefined, {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        }),
+        level,
+      });
+    }
+  }
+  return out;
+}
+
 export default function SchedulePage() {
   const [entries, setEntries] = useState<ApiUnavailability[] | null>(null);
   const [requests, setRequests] = useState<ApiAvailabilityRequest[]>([]);
@@ -74,8 +137,9 @@ export default function SchedulePage() {
     "recurring" | "specific" | "complete" | null
   >(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
-  // Two-step guard when submitting with nothing blocked (see the submit area).
-  const [confirmingEmptySubmit, setConfirmingEmptySubmit] = useState(false);
+  // Submit opens a confirmation modal summarizing the days you'll be marked
+  // unavailable for the selected request before it's actually sent.
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Inline error for the general-block form (e.g. duplicate block).
   const [recurringError, setRecurringError] = useState<string | null>(null);
@@ -92,6 +156,11 @@ export default function SchedulePage() {
   const [specPresetIndex, setSpecPresetIndex] = useState(0); // All day
   const [specCustomStart, setSpecCustomStart] = useState("09:00");
   const [specCustomEnd, setSpecCustomEnd] = useState("12:00");
+
+  // Mobile-only quick blocker: block whole days (a single date or a range)
+  // without the draggable calendar, which is desktop-only.
+  const [blockStart, setBlockStart] = useState("");
+  const [blockEnd, setBlockEnd] = useState("");
 
   const reload = useCallback(async () => {
     // On any error, fall back to empty state so the page renders instead of
@@ -199,6 +268,18 @@ export default function SchedulePage() {
     }
   }
 
+  // Mobile quick-block: add an all-day block for a single date (or a start→end
+  // range), request-independent — the same thing dragging the calendar does on
+  // desktop. Reuses editDays so merging/dedupe stay server-side.
+  async function addDayBlock(e: FormEvent) {
+    e.preventDefault();
+    if (!blockStart) return;
+    const end = blockEnd && blockEnd >= blockStart ? blockEnd : blockStart;
+    await editDays(blockStart, end, true);
+    setBlockStart("");
+    setBlockEnd("");
+  }
+
   async function remove(id: string) {
     setBusyEntryId(id);
     try {
@@ -287,21 +368,11 @@ export default function SchedulePage() {
   // Submitted = a response row with a completedAt (a null one is "unsubmitted").
   const submitted = !!selectedResponse?.completedAt;
 
-  // How many of my blocks actually apply to this request's window — so the UI
-  // can show progress and warn before submitting "available the whole time".
-  // Recurring blocks always apply; specific blocks count when they land inside
-  // the window (whether entered here or dragged on the calendar).
-  const blocksForRequest = selectedRequest
-    ? entries.filter((e) => {
-        if (e.type === "RECURRING") return true;
-        if (!e.startDate) return false;
-        const day = toYmd(new Date(e.startDate));
-        return (
-          day >= toYmd(new Date(selectedRequest.startDate)) &&
-          day <= toYmd(new Date(selectedRequest.endDate))
-        );
-      }).length
-    : 0;
+  // The days I'll be marked unavailable for the selected request — shown in the
+  // submit-confirmation modal.
+  const confirmDays = selectedRequest
+    ? blockedDaysInRange(entries, selectedRequest.startDate, selectedRequest.endDate)
+    : [];
 
   // Bounds for the specific-block date pickers: stay inside the selected
   // request's window, and never allow marking a date in the past.
@@ -323,234 +394,189 @@ export default function SchedulePage() {
           auto-scheduler won&rsquo;t assign you then. Block{" "}
           <strong>specific dates</strong> (one-off, or in response to a
           request) or set <strong>recurring blocks</strong> that repeat every
-          week. The quickest way is to click or drag days on the calendar.
+          week. On desktop the quickest way is to click or drag days on the
+          calendar; on mobile, use the date pickers.
         </p>
       </div>
 
-      {/* Split pane: editors on the left, resulting-union preview on the right
-          (the right column is desktop-only — hidden on mobile). */}
+      {/* Layout: desktop is two independent columns — editors (Admin Requests,
+          then Recurring) on the left, Busy Blocks (calendar + list) on the
+          right. Mobile is one column ordered Admin Requests → Busy Blocks →
+          Specific Blocks → Recurring. The editors wrapper is `display: contents`
+          on mobile so its two sections flatten into the parent and can be
+          ordered around Busy/Specific; on desktop it's a normal column, so the
+          two columns keep independent heights (no calendar-driven gap). */}
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        {/* ── Editors: desktop LEFT, mobile BELOW the Busy Blocks list ── */}
-        <div data-tour="avail-editors" className="order-2 min-w-0 flex-1 space-y-6 lg:order-1">
-          {/* Specific dates: respond to an admin's availability request by
-              blocking out the dates you can't serve, then submit. */}
-          <section className="space-y-3">
-            <h2 className="text-xl font-bold">Block specific dates</h2>
-            {requests.length === 0 ? (
-              <Card>
-                <p className="text-sm text-gray-500">
-                  No one has requested availability yet. You can still block out
-                  any dates using the calendar on the right.
-                </p>
-              </Card>
-            ) : (
-              <Card className="space-y-4">
-                <Select
-                  label="Responding to request"
-                  value={selectedRequestId}
-                  onChange={(e) => {
-                    setSelectedRequestId(e.target.value);
-                    setConfirmingEmptySubmit(false);
-                  }}
-                >
-                  {requests.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {requestOptionLabel(r)}
-                    </option>
-                  ))}
-                </Select>
+        <div className="contents lg:block lg:min-w-0 lg:flex-1 lg:space-y-6">
+          {/* ── 1. Admin Requests — respond to an admin's availability request ── */}
+          <section data-tour="avail-editors" className="order-1 min-w-0 space-y-3">
+            <h2 className="text-xl font-bold">Admin Requests</h2>
+          {requests.length === 0 ? (
+            <Card>
+              <p className="text-sm text-gray-500">
+                No one has requested availability yet. You can still block out
+                any dates — use the calendar on desktop, or the{" "}
+                <strong>Specific Blocks</strong> section on mobile.
+              </p>
+            </Card>
+          ) : (
+            <Card className="space-y-4">
+              <Select
+                label="Responding to request"
+                value={selectedRequestId}
+                onChange={(e) => {
+                  setSelectedRequestId(e.target.value);
+                  setConfirmOpen(false);
+                }}
+              >
+                {requests.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {requestOptionLabel(r)}
+                  </option>
+                ))}
+              </Select>
 
-                {selectedRequest && (
-                  <>
-                    {/* Which org is asking — the request list spans them all. */}
-                    {selectedRequest.org && (
-                      <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
-                        {selectedRequest.org.name}
-                      </span>
-                    )}
-                    <p className="text-sm text-gray-600 dark:text-gray-400">
-                      Block out the dates you <strong>can&rsquo;t</strong> serve
-                      between{" "}
-                      <strong>{shortDateLabel(selectedRequest.startDate)}</strong>{" "}
-                      and{" "}
-                      <strong>{shortDateLabel(selectedRequest.endDate)}</strong>,
-                      then submit so the team knows you&rsquo;re done.
-                    </p>
+              {selectedRequest && (
+                <>
+                  {/* Which org is asking — the request list spans them all. */}
+                  {selectedRequest.org && (
+                    <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                      {selectedRequest.org.name}
+                    </span>
+                  )}
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Block out the dates you <strong>can&rsquo;t</strong> serve
+                    between{" "}
+                    <strong>{shortDateLabel(selectedRequest.startDate)}</strong>{" "}
+                    and{" "}
+                    <strong>{shortDateLabel(selectedRequest.endDate)}</strong>,
+                    then submit so the team knows you&rsquo;re done. If your
+                    dates are already blocked correctly, just submit your
+                    response.
+                  </p>
 
-                    {submitted ? (
-                      /* Submitted: a clear confirmation + a way back to editing. */
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-green-50 px-3 py-2 dark:bg-green-900/30">
-                        <p className="text-sm font-medium text-green-700 dark:text-green-300">
-                          ✓ {selectedResponse!.edited ? "Updated" : "Submitted"} on{" "}
-                          {new Date(
-                            selectedResponse!.completedAt!
-                          ).toLocaleDateString()}
-                        </p>
+                  {submitted ? (
+                    /* Submitted: a clear confirmation + a way back to editing. */
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-green-50 px-3 py-2 dark:bg-green-900/30">
+                      <p className="text-sm font-medium text-green-700 dark:text-green-300">
+                        ✓ {selectedResponse!.edited ? "Updated" : "Submitted"} on{" "}
+                        {new Date(
+                          selectedResponse!.completedAt!
+                        ).toLocaleDateString()}
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={toggleComplete}
+                        disabled={busyAction === "complete"}
+                      >
+                        {busyAction === "complete" ? (
+                          <LoadingDots size="sm" />
+                        ) : (
+                          "Make changes"
+                        )}
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Add a block within this request's window. "Block these
+                          dates" is intentionally softer (secondary) so the
+                          primary "Submit Response" below stands out. */}
+                      <form
+                        onSubmit={addSpecific}
+                        className="grid gap-3 sm:grid-cols-2 sm:items-end"
+                      >
+                        <DateSelect
+                          label="Start date"
+                          value={specDate}
+                          min={rangeMin}
+                          max={windowEnd}
+                          dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
+                          onChange={(v) => {
+                            setSpecDate(v);
+                            // Keep the range valid: drop an end date before start.
+                            if (specEndDate && specEndDate < v) setSpecEndDate("");
+                          }}
+                          required
+                        />
+                        <DateSelect
+                          label="End date (optional)"
+                          value={specEndDate}
+                          min={specDate || rangeMin}
+                          max={windowEnd}
+                          dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
+                          onChange={setSpecEndDate}
+                        />
+                        <Select
+                          label="Time"
+                          value={specPresetIndex}
+                          onChange={(e) =>
+                            setSpecPresetIndex(Number(e.target.value))
+                          }
+                        >
+                          {TIME_PRESETS.map((p, i) => (
+                            <option key={i} value={i}>
+                              {p.label}
+                            </option>
+                          ))}
+                        </Select>
+                        {TIME_PRESETS[specPresetIndex].start === -1 && (
+                          <div className="grid grid-cols-2 gap-3 sm:col-span-2">
+                            <Input
+                              label="From"
+                              type="time"
+                              value={specCustomStart}
+                              onChange={(e) => setSpecCustomStart(e.target.value)}
+                            />
+                            <Input
+                              label="To"
+                              type="time"
+                              value={specCustomEnd}
+                              onChange={(e) => setSpecCustomEnd(e.target.value)}
+                            />
+                          </div>
+                        )}
+                        <div className="sm:col-span-2">
+                          <Button
+                            type="submit"
+                            variant="secondary"
+                            disabled={!specDate || busyAction === "specific"}
+                          >
+                            {busyAction === "specific" ? (
+                              <LoadingDots size="sm" />
+                            ) : (
+                              "Block these dates"
+                            )}
+                          </Button>
+                        </div>
+                      </form>
+
+                      {/* Primary CTA — opens a confirmation modal summarizing
+                          the days you'll be marked unavailable. */}
+                      <div className="border-t border-gray-200 pt-4 dark:border-gray-700">
                         <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={toggleComplete}
+                          className="w-full"
+                          onClick={() => setConfirmOpen(true)}
                           disabled={busyAction === "complete"}
                         >
                           {busyAction === "complete" ? (
                             <LoadingDots size="sm" />
                           ) : (
-                            "Make changes"
+                            "Submit Response"
                           )}
                         </Button>
                       </div>
-                    ) : (
-                      <>
-                        {/* Add a block within this request's window. Leave "End
-                            date" blank for a single day; set it for a range. */}
-                        <form
-                          onSubmit={addSpecific}
-                          className="grid gap-3 sm:grid-cols-2 sm:items-end"
-                        >
-                          <DateSelect
-                            label="Start date"
-                            value={specDate}
-                            min={rangeMin}
-                            max={windowEnd}
-                            onChange={(v) => {
-                              setSpecDate(v);
-                              // Keep the range valid: drop an end date before start.
-                              if (specEndDate && specEndDate < v)
-                                setSpecEndDate("");
-                            }}
-                            required
-                          />
-                          <DateSelect
-                            label="End date (optional)"
-                            value={specEndDate}
-                            min={specDate || rangeMin}
-                            max={windowEnd}
-                            onChange={setSpecEndDate}
-                          />
-                          <Select
-                            label="Time"
-                            value={specPresetIndex}
-                            onChange={(e) =>
-                              setSpecPresetIndex(Number(e.target.value))
-                            }
-                          >
-                            {TIME_PRESETS.map((p, i) => (
-                              <option key={i} value={i}>
-                                {p.label}
-                              </option>
-                            ))}
-                          </Select>
-                          {TIME_PRESETS[specPresetIndex].start === -1 && (
-                            <div className="grid grid-cols-2 gap-3 sm:col-span-2">
-                              <Input
-                                label="From"
-                                type="time"
-                                value={specCustomStart}
-                                onChange={(e) =>
-                                  setSpecCustomStart(e.target.value)
-                                }
-                              />
-                              <Input
-                                label="To"
-                                type="time"
-                                value={specCustomEnd}
-                                onChange={(e) =>
-                                  setSpecCustomEnd(e.target.value)
-                                }
-                              />
-                            </div>
-                          )}
-                          <div className="sm:col-span-2">
-                            <Button
-                              type="submit"
-                              disabled={!specDate || busyAction === "specific"}
-                            >
-                              {busyAction === "specific" ? (
-                                <LoadingDots size="sm" />
-                              ) : (
-                                "Block these dates"
-                              )}
-                            </Button>
-                          </div>
-                        </form>
-
-                        {/* Submit: only after you've entered your blocks. We
-                            show a running count and, if nothing is blocked,
-                            confirm you really mean "available the whole time"
-                            (testers tended to submit an empty response). */}
-                        <div className="border-t border-gray-200 pt-4 dark:border-gray-700">
-                          {confirmingEmptySubmit ? (
-                            <div className="space-y-2">
-                              <p className="text-sm text-gray-700 dark:text-gray-300">
-                                You haven&rsquo;t blocked any dates for this
-                                request, so you&rsquo;ll be marked{" "}
-                                <strong>available the whole time</strong> (
-                                {shortDateLabel(selectedRequest.startDate)} –{" "}
-                                {shortDateLabel(selectedRequest.endDate)}). Sound
-                                right?
-                              </p>
-                              <div className="flex flex-wrap justify-end gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="secondary"
-                                  onClick={() => setConfirmingEmptySubmit(false)}
-                                  disabled={busyAction === "complete"}
-                                >
-                                  Go back
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  onClick={() => {
-                                    setConfirmingEmptySubmit(false);
-                                    toggleComplete();
-                                  }}
-                                  disabled={busyAction === "complete"}
-                                >
-                                  {busyAction === "complete" ? (
-                                    <LoadingDots size="sm" />
-                                  ) : (
-                                    "Yes, I'm fully available"
-                                  )}
-                                </Button>
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <span className="text-sm text-gray-500 dark:text-gray-400">
-                                {blocksForRequest === 0
-                                  ? "Step 1: block the dates you can't serve above. Nothing blocked yet."
-                                  : `${blocksForRequest} block${
-                                      blocksForRequest === 1 ? "" : "s"
-                                    } added — submit when you're done.`}
-                              </span>
-                              <Button
-                                size="sm"
-                                onClick={() =>
-                                  blocksForRequest === 0
-                                    ? setConfirmingEmptySubmit(true)
-                                    : toggleComplete()
-                                }
-                                disabled={busyAction === "complete"}
-                              >
-                                {busyAction === "complete" ? (
-                                  <LoadingDots size="sm" />
-                                ) : (
-                                  "Submit unavailabilities"
-                                )}
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      </>
-                    )}
-                  </>
-                )}
-              </Card>
-            )}
+                    </>
+                  )}
+                </>
+              )}
+            </Card>
+          )}
           </section>
 
-          {/* Recurring blocks: apply every week */}
-          <section className="space-y-3">
+          {/* Recurring blocks — mobile order 4; on desktop this sits under
+              Admin Requests in the left column. */}
+          <section className="order-4 min-w-0 space-y-3">
             <h2 className="text-xl font-bold">Recurring blocks</h2>
             <Card>
               <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
@@ -617,9 +643,9 @@ export default function SchedulePage() {
           </section>
         </div>
 
-        {/* ── Busy Blocks — single source of truth for viewing/deleting.
-            Desktop RIGHT (calendar + list); mobile TOP (list only). ────── */}
-        <div className="order-1 min-w-0 flex-1 space-y-3 lg:order-2">
+        {/* Busy Blocks — single source of truth for viewing/deleting.
+            Desktop: calendar + list; mobile: list only (no calendar). */}
+        <div className="order-2 min-w-0 space-y-3 lg:flex-1">
           <h2 className="text-xl font-bold">Busy Blocks</h2>
           {/* Calendar is desktop-only — too cramped on a phone. */}
           <div data-tour="avail-calendar" className="hidden lg:block">
@@ -647,9 +673,7 @@ export default function SchedulePage() {
                       className="flex items-center justify-between gap-2"
                     >
                       <span className="flex min-w-0 items-baseline gap-2">
-                        <Badge
-                          tone={entry.type === "SPECIFIC" ? "blue" : "gray"}
-                        >
+                        <Badge tone={entry.type === "SPECIFIC" ? "blue" : "gray"}>
                           {entry.type === "SPECIFIC" ? "Specific" : "Recurring"}
                         </Badge>
                         <span>
@@ -682,7 +706,122 @@ export default function SchedulePage() {
             )}
           </Card>
         </div>
+
+        {/* ── 3. Specific Blocks — mobile-only proactive day blocker (the
+            calendar covers this on desktop). ── */}
+        <section className="order-3 min-w-0 space-y-3 lg:hidden">
+          <h2 className="text-xl font-bold">Specific Blocks</h2>
+          <Card className="space-y-3">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Proactively block out specific days in the future.
+            </p>
+            <form
+              onSubmit={addDayBlock}
+              className="grid gap-3 sm:grid-cols-2 sm:items-end"
+            >
+              <DateSelect
+                label="Start date"
+                value={blockStart}
+                min={toYmd(new Date())}
+                dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
+                onChange={(v) => {
+                  setBlockStart(v);
+                  // Keep the range valid: drop an end date before the new start.
+                  if (blockEnd && blockEnd < v) setBlockEnd("");
+                }}
+                required
+              />
+              <DateSelect
+                label="End date (optional)"
+                value={blockEnd}
+                min={blockStart || toYmd(new Date())}
+                dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
+                onChange={setBlockEnd}
+              />
+              <div className="sm:col-span-2">
+                <Button
+                  type="submit"
+                  disabled={!blockStart || busyAction === "specific"}
+                >
+                  {busyAction === "specific" ? (
+                    <LoadingDots size="sm" />
+                  ) : (
+                    "Block these dates"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </Card>
+        </section>
       </div>
+
+      {/* Submit-response confirmation modal: summarizes the days you'll be
+          marked unavailable before actually sending. Modify (left) closes it;
+          Confirm (right) submits. */}
+      {confirmOpen && selectedRequest && (
+        <Modal
+          open
+          onClose={() => setConfirmOpen(false)}
+          title="Submit your response?"
+          subtitle={requestLabel(selectedRequest)}
+          footer={
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => setConfirmOpen(false)}
+                disabled={busyAction === "complete"}
+              >
+                Modify
+              </Button>
+              <Button
+                onClick={async () => {
+                  await toggleComplete();
+                  setConfirmOpen(false);
+                }}
+                disabled={busyAction === "complete"}
+              >
+                {busyAction === "complete" ? (
+                  <LoadingDots size="sm" />
+                ) : (
+                  "Confirm"
+                )}
+              </Button>
+            </>
+          }
+        >
+          {confirmDays.length === 0 ? (
+            <p className="text-sm text-gray-700 dark:text-gray-300">
+              You haven&rsquo;t blocked any dates, so you&rsquo;ll be marked{" "}
+              <strong>available the whole time</strong> (
+              {shortDateLabel(selectedRequest.startDate)} –{" "}
+              {shortDateLabel(selectedRequest.endDate)}).
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm text-gray-700 dark:text-gray-300">
+                You&rsquo;ll be marked <strong>unavailable</strong> on these days
+                ({shortDateLabel(selectedRequest.startDate)} –{" "}
+                {shortDateLabel(selectedRequest.endDate)}):
+              </p>
+              <ul className="space-y-1.5 text-sm">
+                {confirmDays.map((d) => (
+                  <li key={d.ymd} className="flex items-center gap-2">
+                    <span
+                      className={`h-2 w-2 shrink-0 rounded-full ${
+                        d.level === "full" ? "bg-rose-500" : "bg-amber-500"
+                      }`}
+                    />
+                    <span className="font-medium">{d.label}</span>
+                    <span className="text-gray-500 dark:text-gray-400">
+                      — {d.level === "full" ? "All day" : "Part of the day"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

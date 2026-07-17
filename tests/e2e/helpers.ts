@@ -12,15 +12,14 @@ export function orgKey(index: number): string {
   return key;
 }
 
-/** Log in through the real login form. All seed users share one password. */
-export async function login(
-  page: Page,
-  usernameOrEmail: string,
-  password = "password123"
-) {
-  // Suppress the first-run guided tour — its full-screen overlay otherwise
-  // intercepts clicks in every test. addInitScript runs before page scripts on
-  // each navigation, so the "seen" flag is set for the whole session.
+/**
+ * Suppress the first-run guided tour — its full-screen overlay otherwise
+ * intercepts clicks in every test. addInitScript runs before page scripts on
+ * each navigation, so the "seen" flag is set for the whole session. Any test
+ * that doesn't go through `login()` (e.g. a custom sign-up flow) must call
+ * this itself before its first navigation.
+ */
+export async function suppressGuidedTour(page: Page) {
   await page.addInitScript(() => {
     try {
       localStorage.setItem("guided-tour-seen", "1");
@@ -28,6 +27,15 @@ export async function login(
       /* private mode — ignore */
     }
   });
+}
+
+/** Log in through the real login form. All seed users share one password. */
+export async function login(
+  page: Page,
+  usernameOrEmail: string,
+  password = "password123"
+) {
+  await suppressGuidedTour(page);
   await page.goto("/login");
   await page.getByLabel("Username / Email").fill(usernameOrEmail);
   await page.getByLabel("Password").fill(password);
