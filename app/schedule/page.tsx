@@ -21,6 +21,7 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { AVAILABILITY_CHANGED_EVENT } from "@/components/Navbar";
+import { blockedDaysInRange, dayBlockLevel } from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   dateRangeLabel,
@@ -63,68 +64,6 @@ function requestOptionLabel(r: ApiAvailabilityRequest): string {
   const range = shortRangeLabel(r.startDate, r.endDate);
   const base = r.name ? `${r.name} (${range})` : range;
   return r.org ? `${r.org.name} — ${base}` : base;
-}
-
-const FULL_DAY_MIN = 24 * 60;
-
-// Block level for one calendar day, from the union of every block that lands on
-// it: "full" = an all-day block covers it, "partial" = only part of the day,
-// null = free. Drives the red/amber dots on the date pickers and the summary in
-// the submit-confirmation modal.
-function dayBlockLevel(
-  entries: ApiUnavailability[],
-  ymd: string
-): "full" | "partial" | null {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  let full = false;
-  let partial = false;
-  for (const e of entries) {
-    if (e.type === "RECURRING") {
-      if (date.getDay() !== e.dayOfWeek) continue;
-    } else {
-      if (!e.startDate) continue;
-      const s = new Date(e.startDate);
-      const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-      const eRaw = e.endDate ? new Date(e.endDate) : s;
-      const endDay = new Date(eRaw.getFullYear(), eRaw.getMonth(), eRaw.getDate());
-      if (date < startDay || date > endDay) continue;
-    }
-    const start = e.startMinute ?? 0;
-    const end = e.endMinute ?? FULL_DAY_MIN;
-    if (e.type === "DATE_RANGE" || (start <= 0 && end >= FULL_DAY_MIN)) full = true;
-    else partial = true;
-  }
-  return full ? "full" : partial ? "partial" : null;
-}
-
-// Every blocked day inside a request's window, for the confirmation modal.
-function blockedDaysInRange(
-  entries: ApiUnavailability[],
-  startIso: string,
-  endIso: string
-): { ymd: string; label: string; level: "full" | "partial" }[] {
-  const out: { ymd: string; label: string; level: "full" | "partial" }[] = [];
-  const s = new Date(startIso);
-  const e = new Date(endIso);
-  const cur = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-  const last = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-  for (; cur <= last; cur.setDate(cur.getDate() + 1)) {
-    const ymd = toYmd(cur);
-    const level = dayBlockLevel(entries, ymd);
-    if (level) {
-      out.push({
-        ymd,
-        label: cur.toLocaleDateString(undefined, {
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-        }),
-        level,
-      });
-    }
-  }
-  return out;
 }
 
 // Segmented-toggle button styling for the "Block out times" specific/recurring

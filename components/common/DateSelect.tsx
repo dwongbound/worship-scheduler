@@ -8,6 +8,12 @@
 // only swap the onChange signature: (e) => setX(e.target.value) becomes
 // (v) => setX(v). `min`/`max` are also yyyy-mm-dd and gate selectable days.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toYmd } from "@/lib/dates";
+
+// Re-exported so the many `import { toYmd } from "@/components/common/DateSelect"`
+// call sites keep working; the implementation now lives in lib/dates (pure +
+// unit-testable) so lib/availability can share it without importing a component.
+export { toYmd };
 
 // Weekday headers, Sunday-first to match the calendar grid below.
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
@@ -16,13 +22,9 @@ const MONTHS = [
   "July", "August", "September", "October", "November", "December",
 ];
 
-// yyyy-mm-dd <-> local Date, parsed by hand so we never touch UTC (new
+// yyyy-mm-dd -> local Date, parsed by hand so we never touch UTC (new
 // Date("2026-07-07") would parse as midnight UTC and shift a day in the US).
-export function toYmd(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-}
+// The inverse (toYmd) now lives in lib/dates and is re-exported above.
 function fromYmd(value: string): Date | null {
   const [y, m, d] = value.split("-").map(Number);
   if (!y || !m || !d) return null;

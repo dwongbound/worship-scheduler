@@ -1,8 +1,18 @@
 // E2E: Availabilities tab — recurring blocks, click-to-block on the calendar,
 // and the submit ("I'm done") workflow. Each test opens with an availability
-// request so the specific-blocks section is present.
+// request so the Admin Requests form is present.
+//
+// Page shape (see app/schedule/page.tsx): "Admin Requests" responds to an
+// admin's window, "Block out times" adds a standalone weekly-recurring OR
+// specific block behind a toggle, and "Busy Blocks" lists everything.
+// The phone-width pass over this page lives in mobile.spec.ts.
 import { expect, test } from "@playwright/test";
-import { login, requestAvailability } from "./helpers";
+import {
+  login,
+  pickSingleDay,
+  requestAvailability,
+  sectionByHeading,
+} from "./helpers";
 
 // The calendar is desktop-only (hidden below lg), so make sure the viewport is
 // wide enough for the click-to-block test.
@@ -13,14 +23,16 @@ test("adds and deletes a recurring weekly block", async ({ page }) => {
   await login(page, "carol");
   await page.getByRole("link", { name: "Availabilities", exact: true }).click();
 
-  // "Every Tuesday morning." Scope to the Recurring section — the specific-block
-  // form also has a "Time" select, so getByLabel alone would be ambiguous.
-  const recurring = page
-    .locator("section")
-    .filter({ hasText: "Recurring blocks" });
-  await recurring.getByLabel("Day of week").selectOption("2");
-  await recurring.getByLabel("Time").selectOption("1"); // Morning preset
-  await recurring.getByRole("button", { name: "Add recurring block" }).click();
+  // "Every Tuesday morning." The section defaults to the specific-date form,
+  // so switch to the weekly one first. Scope to the section — the Admin
+  // Requests form has a "Time" select too, so getByLabel alone is ambiguous.
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Every week" }).click();
+  await blockOutTimes.getByLabel("Day of week").selectOption("2");
+  await blockOutTimes.getByLabel("Time").selectOption("1"); // Morning preset
+  await blockOutTimes
+    .getByRole("button", { name: "Add recurring block" })
+    .click();
 
   const entry = page.getByText(/Every Tuesday/);
   await expect(entry).toBeVisible();
@@ -83,21 +95,18 @@ test("confirmation modal lists a blocked day, and the date picker marks it", asy
   await login(page, "carol");
   await page.goto("/schedule");
 
-  // Scope to the Admin Requests section — its "Start date"/"Block these
-  // dates" field+button share labels with the mobile-only Specific Blocks
-  // section, which stays in the DOM (just CSS-hidden) at this desktop width.
-  const adminRequests = page
-    .locator("section")
-    .filter({ hasText: "Admin Requests" });
+  // Scope to the Admin Requests section — its "Dates to block"/"Block these
+  // dates" field+button share labels with the Block out times section below.
+  const adminRequests = sectionByHeading(page, "Admin Requests");
 
   // Block today (an all-day block, the form's default preset) within the
   // active request's window.
-  await adminRequests.getByLabel("Start date", { exact: true }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Today", exact: true }).click();
+  await adminRequests.getByLabel("Dates to block", { exact: true }).click();
+  await pickSingleDay(page);
   await adminRequests.getByRole("button", { name: "Block these dates" }).click();
 
   // Re-opening the date picker now shows a red "full day" dot on today.
-  await adminRequests.getByLabel("Start date", { exact: true }).click();
+  await adminRequests.getByLabel("Dates to block", { exact: true }).click();
   const todayCell = page
     .getByRole("dialog")
     .getByRole("button", { name: String(new Date().getDate()), exact: true });
@@ -116,28 +125,4 @@ test("confirmation modal lists a blocked day, and the date picker marks it", asy
 
   // Clean up the block so it doesn't leak into later specs.
   await page.getByRole("button", { name: "Delete" }).first().click();
-});
-
-test("mobile: quick-blocks a day from the Specific Blocks section", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await login(page, "carol");
-  await page.goto("/schedule");
-
-  // Desktop-only calendar is gone below lg; this section is mobile-only and
-  // request-independent (no admin request needed to use it).
-  const specificBlocks = page
-    .locator("section")
-    .filter({ hasText: "Specific Blocks" });
-  await specificBlocks.getByLabel("Start date", { exact: true }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Today", exact: true }).click();
-  await specificBlocks.getByRole("button", { name: "Block these dates" }).click();
-
-  const blockEntry = page.getByRole("listitem").filter({ hasText: "All day" });
-  await expect(blockEntry.first()).toBeVisible();
-
-  // Clean up.
-  await page.getByRole("button", { name: "Delete" }).first().click();
-  await expect(blockEntry).toHaveCount(0);
 });
