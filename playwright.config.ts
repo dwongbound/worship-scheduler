@@ -22,7 +22,25 @@ export default defineConfig({
     baseURL: "http://localhost:3100",
     trace: "retain-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  // Two viewports, two projects. `mobile.spec.ts` is the phone-width pass over
+  // the app's responsive branches (bottom tab bar, the My-sets list that
+  // replaces the month grid, the desktop-only .ics export); every other spec is
+  // written against the desktop layout, so each project runs only its own half
+  // rather than the whole suite twice. Pixel 5 is a real device preset — mobile
+  // user-agent, touch, and DPR — not just a narrow window, so it also exercises
+  // the touch-only paths a bare viewport override would miss.
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testIgnore: /mobile\.spec\.ts/,
+    },
+    {
+      name: "mobile",
+      use: { ...devices["Pixel 5"] },
+      testMatch: /mobile\.spec\.ts/,
+    },
+  ],
   webServer: {
     command: "npm run e2e:server",
     url: "http://localhost:3100/login",

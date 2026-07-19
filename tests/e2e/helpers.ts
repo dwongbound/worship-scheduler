@@ -1,5 +1,20 @@
 // Shared e2e helpers.
-import { Page, expect } from "@playwright/test";
+import { Locator, Page, expect } from "@playwright/test";
+
+/**
+ * The <section> whose own <h2> is `heading`.
+ *
+ * Prefer this over `.filter({ hasText })` for page sections: several headings
+ * are also mentioned in neighbouring prose (the Availabilities page name-drops
+ * "Block out times" inside the Admin Requests card), and hasText matches any
+ * descendant text — so it silently resolves to two sections and the call fails
+ * on strict mode. Matching on the heading element pins it to the real one.
+ */
+export function sectionByHeading(page: Page, heading: string): Locator {
+  return page
+    .locator("section")
+    .filter({ has: page.getByRole("heading", { name: heading, exact: true }) });
+}
 
 /**
  * The nth org's join key from the test env's ORG_KEYS ("Name:key,Name:key").
@@ -10,6 +25,23 @@ export function orgKey(index: number): string {
   const key = entry.slice(entry.lastIndexOf(":") + 1).trim();
   expect(key, `no ORG_KEYS entry at index ${index}`).toBeTruthy();
   return key;
+}
+
+/**
+ * In an already-open DateSelect popup, pick today as a one-day range.
+ *
+ * The availability forms use `range` DateSelects, where a click sets the start
+ * and leaves the popup open for the end. Clicking "Today" twice therefore means
+ * "just today" and closes the popup — one click would leave a half-open range,
+ * an unfilled field, and a disabled submit button.
+ */
+export async function pickSingleDay(page: Page) {
+  const today = page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Today", exact: true });
+  await today.click();
+  await today.click();
+  await expect(today).toBeHidden();
 }
 
 /**
