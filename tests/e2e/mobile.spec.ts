@@ -3,9 +3,10 @@
 // tab shows a "My sets" list instead of the dense month grid, the Availabilities
 // calendar drops away, and desktop-only affordances (the .ics export) hide.
 //
-// This file IS the "mobile" playwright project (see playwright.config.ts): it
-// runs under the Pixel 5 device preset — 393x851, mobile UA, touch — and the
-// desktop project skips it. So don't set a viewport here; the project owns it.
+// This file backs the "mobile-ios" and "mobile-android" playwright projects
+// (see playwright.config.ts): it runs under real device presets — iPhone 16 Pro
+// and Galaxy S24 — for their mobile UA, touch, and DPR, and the desktop project
+// skips it. So don't set a viewport here; each project's device owns it.
 import { expect, test } from "@playwright/test";
 import {
   login,
