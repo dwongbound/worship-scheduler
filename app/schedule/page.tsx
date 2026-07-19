@@ -1,13 +1,14 @@
 "use client";
 // Availabilities tab: tell the scheduler when you're NOT free.
-//   • Specific blocks — a date (or date range) + time window inside a TimeRange
-//     the admin requested.
-//   • Recurring blocks — weekly ("every Tuesday morning"), always apply.
-// Layout is a split pane. The "Busy Blocks" column is the single source of
-// truth for viewing/deleting: the union of both block types as a calendar plus
-// one scrollable, deletable list. The editors column holds the two forms.
-//   Desktop: editors LEFT, Busy Blocks RIGHT.
-//   Mobile:  Busy Blocks list on top (calendar hidden), editors below.
+//   • Admin Requests — respond to an admin's request by blocking dates inside
+//     its window, then submit.
+//   • Block out times — the general form: a one-off specific date/range OR a
+//     weekly recurring block (both with a time-of-day window).
+// The "Busy Blocks" column is the single source of truth for viewing/deleting:
+// the union of every block as a calendar (desktop) plus one scrollable,
+// deletable list.
+//   Desktop: editors (Admin Requests, Block out times) LEFT, Busy Blocks RIGHT.
+//   Mobile:  Admin Requests → Busy Blocks list → Block out times.
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import Badge from "@/components/common/Badge";
@@ -20,6 +21,7 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { AVAILABILITY_CHANGED_EVENT } from "@/components/Navbar";
+import { blockedDaysInRange, dayBlockLevel } from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   dateRangeLabel,
@@ -64,66 +66,14 @@ function requestOptionLabel(r: ApiAvailabilityRequest): string {
   return r.org ? `${r.org.name} — ${base}` : base;
 }
 
-const FULL_DAY_MIN = 24 * 60;
-
-// Block level for one calendar day, from the union of every block that lands on
-// it: "full" = an all-day block covers it, "partial" = only part of the day,
-// null = free. Drives the red/amber dots on the date pickers and the summary in
-// the submit-confirmation modal.
-function dayBlockLevel(
-  entries: ApiUnavailability[],
-  ymd: string
-): "full" | "partial" | null {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  let full = false;
-  let partial = false;
-  for (const e of entries) {
-    if (e.type === "RECURRING") {
-      if (date.getDay() !== e.dayOfWeek) continue;
-    } else {
-      if (!e.startDate) continue;
-      const s = new Date(e.startDate);
-      const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-      const eRaw = e.endDate ? new Date(e.endDate) : s;
-      const endDay = new Date(eRaw.getFullYear(), eRaw.getMonth(), eRaw.getDate());
-      if (date < startDay || date > endDay) continue;
-    }
-    const start = e.startMinute ?? 0;
-    const end = e.endMinute ?? FULL_DAY_MIN;
-    if (e.type === "DATE_RANGE" || (start <= 0 && end >= FULL_DAY_MIN)) full = true;
-    else partial = true;
-  }
-  return full ? "full" : partial ? "partial" : null;
-}
-
-// Every blocked day inside a request's window, for the confirmation modal.
-function blockedDaysInRange(
-  entries: ApiUnavailability[],
-  startIso: string,
-  endIso: string
-): { ymd: string; label: string; level: "full" | "partial" }[] {
-  const out: { ymd: string; label: string; level: "full" | "partial" }[] = [];
-  const s = new Date(startIso);
-  const e = new Date(endIso);
-  const cur = new Date(s.getFullYear(), s.getMonth(), s.getDate());
-  const last = new Date(e.getFullYear(), e.getMonth(), e.getDate());
-  for (; cur <= last; cur.setDate(cur.getDate() + 1)) {
-    const ymd = toYmd(cur);
-    const level = dayBlockLevel(entries, ymd);
-    if (level) {
-      out.push({
-        ymd,
-        label: cur.toLocaleDateString(undefined, {
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-        }),
-        level,
-      });
-    }
-  }
-  return out;
+// Segmented-toggle button styling for the "Block out times" specific/recurring
+// switch — filled when active, plain otherwise.
+function blockKindClass(active: boolean): string {
+  return `rounded-md px-3 py-1.5 font-medium transition-colors ${
+    active
+      ? "bg-indigo-600 text-white"
+      : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+  }`;
 }
 
 export default function SchedulePage() {
@@ -134,33 +84,33 @@ export default function SchedulePage() {
   const [selectedRequestId, setSelectedRequestId] = useState<string>("");
   // Which control is mid-update (inline dots) — never a full-page loader.
   const [busyAction, setBusyAction] = useState<
-    "recurring" | "specific" | "complete" | null
+    "specific" | "complete" | "block" | null
   >(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   // Submit opens a confirmation modal summarizing the days you'll be marked
   // unavailable for the selected request before it's actually sent.
   const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Inline error for the general-block form (e.g. duplicate block).
-  const [recurringError, setRecurringError] = useState<string | null>(null);
+  // Inline error for the "Block out times" form (e.g. duplicate recurring).
+  const [blockError, setBlockError] = useState<string | null>(null);
 
-  // Recurring block form state
-  const [dayOfWeek, setDayOfWeek] = useState(2); // Tuesday
-  const [presetIndex, setPresetIndex] = useState(1); // Morning
+  // Unified "Block out times" form: a one-off specific date/range OR a weekly
+  // recurring block. Both share the time-of-day picker.
+  const [blockKind, setBlockKind] = useState<"specific" | "recurring">("specific");
+  const [dayOfWeek, setDayOfWeek] = useState(2); // Tuesday (recurring)
+  const [presetIndex, setPresetIndex] = useState(0); // All day
   const [customStart, setCustomStart] = useState("09:00");
   const [customEnd, setCustomEnd] = useState("12:00");
+  const [blockStart, setBlockStart] = useState(""); // specific range start
+  const [blockEnd, setBlockEnd] = useState(""); // "" = single day
 
-  // Specific block form state (a start date, optional end date, + time window)
+  // Admin-request response form: its own start/end date + time window, kept
+  // separate from the general block form above.
   const [specDate, setSpecDate] = useState("");
   const [specEndDate, setSpecEndDate] = useState(""); // "" = single day
   const [specPresetIndex, setSpecPresetIndex] = useState(0); // All day
   const [specCustomStart, setSpecCustomStart] = useState("09:00");
   const [specCustomEnd, setSpecCustomEnd] = useState("12:00");
-
-  // Mobile-only quick blocker: block whole days (a single date or a range)
-  // without the draggable calendar, which is desktop-only.
-  const [blockStart, setBlockStart] = useState("");
-  const [blockEnd, setBlockEnd] = useState("");
 
   const reload = useCallback(async () => {
     // On any error, fall back to empty state so the page renders instead of
@@ -185,34 +135,65 @@ export default function SchedulePage() {
     reload();
   }, [reload]);
 
-  async function addRecurring(e: FormEvent) {
+  // Unified block creator: a weekly recurring block, or a one-off specific
+  // date/range — both carry the shared time window.
+  async function addBlock(e: FormEvent) {
     e.preventDefault();
-    setRecurringError(null);
-    const preset = TIME_PRESETS[presetIndex];
-    const isCustom = preset.start === -1;
-    const startMinute = isCustom ? timeStringToMinutes(customStart) : preset.start;
-    const endMinute = isCustom ? timeStringToMinutes(customEnd) : preset.end;
-    // Reject an exact duplicate before hitting the server so the list can't
-    // accumulate identical rows (the server enforces this too).
-    const isDuplicate = (entries ?? []).some(
-      (entry) =>
-        entry.type === "RECURRING" &&
-        entry.dayOfWeek === dayOfWeek &&
-        entry.startMinute === startMinute &&
-        entry.endMinute === endMinute
-    );
-    if (isDuplicate) {
-      setRecurringError("That block already exists.");
+    setBlockError(null);
+
+    if (blockKind === "recurring") {
+      // Recurring carries a time-of-day window (from the preset / custom).
+      const preset = TIME_PRESETS[presetIndex];
+      const isCustom = preset.start === -1;
+      const startMinute = isCustom ? timeStringToMinutes(customStart) : preset.start;
+      const endMinute = isCustom ? timeStringToMinutes(customEnd) : preset.end;
+      // Reject an exact duplicate up front (the server enforces this too).
+      const isDuplicate = (entries ?? []).some(
+        (entry) =>
+          entry.type === "RECURRING" &&
+          entry.dayOfWeek === dayOfWeek &&
+          entry.startMinute === startMinute &&
+          entry.endMinute === endMinute
+      );
+      if (isDuplicate) {
+        setBlockError("That block already exists.");
+        return;
+      }
+      setBusyAction("block");
+      try {
+        await fetch("/api/availability", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "RECURRING", dayOfWeek, startMinute, endMinute }),
+        });
+        await reload();
+        window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
+      } finally {
+        setBusyAction(null);
+      }
       return;
     }
-    setBusyAction("recurring");
+
+    // Specific: a standalone (request-independent) single day or range, blocked
+    // all day (0 → end of day). Leave endDate off for a single day.
+    if (!blockStart) return;
+    setBusyAction("block");
     try {
       await fetch("/api/availability", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: "RECURRING", dayOfWeek, startMinute, endMinute }),
+        body: JSON.stringify({
+          type: "SPECIFIC",
+          date: blockStart,
+          endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
+          startMinute: 0,
+          endMinute: 24 * 60,
+        }),
       });
+      setBlockStart("");
+      setBlockEnd("");
       await reload();
+      window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
     } finally {
       setBusyAction(null);
     }
@@ -266,18 +247,6 @@ export default function SchedulePage() {
     } finally {
       setBusyAction(null);
     }
-  }
-
-  // Mobile quick-block: add an all-day block for a single date (or a start→end
-  // range), request-independent — the same thing dragging the calendar does on
-  // desktop. Reuses editDays so merging/dedupe stay server-side.
-  async function addDayBlock(e: FormEvent) {
-    e.preventDefault();
-    if (!blockStart) return;
-    const end = blockEnd && blockEnd >= blockStart ? blockEnd : blockStart;
-    await editDays(blockStart, end, true);
-    setBlockStart("");
-    setBlockEnd("");
   }
 
   async function remove(id: string) {
@@ -385,27 +354,41 @@ export default function SchedulePage() {
   const rangeMin =
     windowStart > toYmd(new Date()) ? windowStart : toYmd(new Date());
 
+  // The Busy Blocks list: dated (specific) blocks first — only ones ending
+  // today or later, so past blocks drop off — in chronological order, then the
+  // recurring blocks by weekday. Deleting still targets the real entry id.
+  const todayYmd = toYmd(new Date());
+  const listEntries = [...entries]
+    .filter((e) => {
+      if (e.type === "RECURRING") return true;
+      const end = e.endDate ?? e.startDate;
+      return !end || toYmd(new Date(end)) >= todayYmd; // hide fully-past blocks
+    })
+    .sort((a, b) => {
+      const aRec = a.type === "RECURRING";
+      const bRec = b.type === "RECURRING";
+      if (aRec !== bRec) return aRec ? 1 : -1; // specific/dated first, recurring last
+      if (!aRec) {
+        const ad = a.startDate ? new Date(a.startDate).getTime() : 0;
+        const bd = b.startDate ? new Date(b.startDate).getTime() : 0;
+        if (ad !== bd) return ad - bd;
+        return (a.startMinute ?? 0) - (b.startMinute ?? 0);
+      }
+      // Both recurring: order by weekday, then start time.
+      const ao = (a.dayOfWeek ?? 0) * 1440 + (a.startMinute ?? 0);
+      const bo = (b.dayOfWeek ?? 0) * 1440 + (b.startMinute ?? 0);
+      return ao - bo;
+    });
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Availabilities</h1>
-        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-          Block out the times you <strong>can&rsquo;t</strong> serve — the
-          auto-scheduler won&rsquo;t assign you then. Block{" "}
-          <strong>specific dates</strong> (one-off, or in response to a
-          request) or set <strong>recurring blocks</strong> that repeat every
-          week. On desktop the quickest way is to click or drag days on the
-          calendar; on mobile, use the date pickers.
-        </p>
-      </div>
-
       {/* Layout: desktop is two independent columns — editors (Admin Requests,
-          then Recurring) on the left, Busy Blocks (calendar + list) on the
-          right. Mobile is one column ordered Admin Requests → Busy Blocks →
-          Specific Blocks → Recurring. The editors wrapper is `display: contents`
-          on mobile so its two sections flatten into the parent and can be
-          ordered around Busy/Specific; on desktop it's a normal column, so the
-          two columns keep independent heights (no calendar-driven gap). */}
+          then Block out times) on the left, Busy Blocks (calendar + list) on
+          the right. Mobile is one column ordered Admin Requests → Busy Blocks →
+          Block out times. The editors wrapper is `display: contents` on mobile
+          so its two sections flatten into the parent and can be ordered around
+          Busy Blocks; on desktop it's a normal column, so the two columns keep
+          independent heights (no calendar-driven gap). */}
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="contents lg:block lg:min-w-0 lg:flex-1 lg:space-y-6">
           {/* ── 1. Admin Requests — respond to an admin's availability request ── */}
@@ -415,8 +398,8 @@ export default function SchedulePage() {
             <Card>
               <p className="text-sm text-gray-500">
                 No one has requested availability yet. You can still block out
-                any dates — use the calendar on desktop, or the{" "}
-                <strong>Specific Blocks</strong> section on mobile.
+                any dates in <strong>Block out times</strong> below (or the
+                calendar on desktop).
               </p>
             </Card>
           ) : (
@@ -487,25 +470,18 @@ export default function SchedulePage() {
                         className="grid gap-3 sm:grid-cols-2 sm:items-end"
                       >
                         <DateSelect
-                          label="Start date"
+                          range
+                          label="Dates to block"
                           value={specDate}
+                          endValue={specEndDate}
                           min={rangeMin}
                           max={windowEnd}
                           dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
-                          onChange={(v) => {
-                            setSpecDate(v);
-                            // Keep the range valid: drop an end date before start.
-                            if (specEndDate && specEndDate < v) setSpecEndDate("");
+                          onRangeChange={(start, end) => {
+                            setSpecDate(start);
+                            setSpecEndDate(end);
                           }}
                           required
-                        />
-                        <DateSelect
-                          label="End date (optional)"
-                          value={specEndDate}
-                          min={specDate || rangeMin}
-                          max={windowEnd}
-                          dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
-                          onChange={setSpecEndDate}
                         />
                         <Select
                           label="Time"
@@ -574,71 +550,122 @@ export default function SchedulePage() {
           )}
           </section>
 
-          {/* Recurring blocks — mobile order 4; on desktop this sits under
-              Admin Requests in the left column. */}
-          <section className="order-4 min-w-0 space-y-3">
-            <h2 className="text-xl font-bold">Recurring blocks</h2>
-            <Card>
-              <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
-                Recurring — applies every week.
+          {/* Block out times — a one-off specific date/range OR a weekly
+              recurring block, in one form. (Admin Requests above is only for
+              responding to a request's window.) */}
+          <section className="order-3 min-w-0 space-y-3">
+            <h2 className="text-xl font-bold">Block out times</h2>
+            <Card className="space-y-4">
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Block times you <strong>can&rsquo;t</strong> serve — a specific
+                date or range, or a weekly repeat.
               </p>
-              <form
-                onSubmit={addRecurring}
-                className="grid gap-3 sm:grid-cols-2 sm:items-end"
-              >
-                <Select
-                  label="Day of week"
-                  value={dayOfWeek}
-                  onChange={(e) => setDayOfWeek(Number(e.target.value))}
+
+              {/* Recurring (left) vs. specific (right) toggle. */}
+              <div className="inline-flex rounded-lg border border-gray-300 p-0.5 text-sm dark:border-gray-600">
+                <button
+                  type="button"
+                  onClick={() => setBlockKind("recurring")}
+                  className={blockKindClass(blockKind === "recurring")}
                 >
-                  {DAY_LABELS.map((label, i) => (
-                    <option key={i} value={i}>
-                      {label}
-                    </option>
-                  ))}
-                </Select>
-                <Select
-                  label="Time"
-                  value={presetIndex}
-                  onChange={(e) => setPresetIndex(Number(e.target.value))}
+                  Every week
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBlockKind("specific")}
+                  className={blockKindClass(blockKind === "specific")}
                 >
-                  {TIME_PRESETS.map((p, i) => (
-                    <option key={i} value={i}>
-                      {p.label}
-                    </option>
-                  ))}
-                </Select>
-                {TIME_PRESETS[presetIndex].start === -1 && (
-                  <div className="grid grid-cols-2 gap-3 sm:col-span-2">
-                    <Input
-                      label="From"
-                      type="time"
-                      value={customStart}
-                      onChange={(e) => setCustomStart(e.target.value)}
-                    />
-                    <Input
-                      label="To"
-                      type="time"
-                      value={customEnd}
-                      onChange={(e) => setCustomEnd(e.target.value)}
-                    />
+                  Specific date(s)
+                </button>
+              </div>
+
+              {blockKind === "recurring" ? (
+                // Weekly recurring: a weekday + a time-of-day window.
+                <form
+                  onSubmit={addBlock}
+                  className="grid gap-3 sm:grid-cols-2 sm:items-end"
+                >
+                  <Select
+                    label="Day of week"
+                    value={dayOfWeek}
+                    onChange={(e) => setDayOfWeek(Number(e.target.value))}
+                  >
+                    {DAY_LABELS.map((label, i) => (
+                      <option key={i} value={i}>
+                        {label}
+                      </option>
+                    ))}
+                  </Select>
+                  <Select
+                    label="Time"
+                    value={presetIndex}
+                    onChange={(e) => setPresetIndex(Number(e.target.value))}
+                  >
+                    {TIME_PRESETS.map((p, i) => (
+                      <option key={i} value={i}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </Select>
+                  {TIME_PRESETS[presetIndex].start === -1 && (
+                    <div className="grid grid-cols-2 gap-3 sm:col-span-2">
+                      <Input
+                        label="From"
+                        type="time"
+                        value={customStart}
+                        onChange={(e) => setCustomStart(e.target.value)}
+                      />
+                      <Input
+                        label="To"
+                        type="time"
+                        value={customEnd}
+                        onChange={(e) => setCustomEnd(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <div className="sm:col-span-2">
+                    <Button type="submit" disabled={busyAction === "block"}>
+                      {busyAction === "block" ? (
+                        <LoadingDots size="sm" />
+                      ) : (
+                        "Add recurring block"
+                      )}
+                    </Button>
                   </div>
-                )}
-                <div className="sm:col-span-2">
-                  <Button type="submit" disabled={busyAction === "recurring"}>
-                    {busyAction === "recurring" ? (
+                  {blockError && (
+                    <p className="text-sm text-rose-600 sm:col-span-2 dark:text-rose-400">
+                      {blockError}
+                    </p>
+                  )}
+                </form>
+              ) : (
+                // Specific: a single day or a range, blocked all day (no time).
+                <form onSubmit={addBlock} className="space-y-3">
+                  <DateSelect
+                    range
+                    label="Dates to block"
+                    value={blockStart}
+                    endValue={blockEnd}
+                    min={toYmd(new Date())}
+                    dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
+                    onRangeChange={(start, end) => {
+                      setBlockStart(start);
+                      setBlockEnd(end);
+                    }}
+                    required
+                  />
+                  <Button
+                    type="submit"
+                    disabled={!blockStart || busyAction === "block"}
+                  >
+                    {busyAction === "block" ? (
                       <LoadingDots size="sm" />
                     ) : (
-                      "Add recurring block"
+                      "Block these dates"
                     )}
                   </Button>
-                </div>
-                {recurringError && (
-                  <p className="text-sm text-rose-600 sm:col-span-2 dark:text-rose-400">
-                    {recurringError}
-                  </p>
-                )}
-              </form>
+                </form>
+              )}
             </Card>
           </section>
         </div>
@@ -656,13 +683,13 @@ export default function SchedulePage() {
             />
           </div>
           <Card className="max-h-80 overflow-y-auto">
-            {entries.length === 0 ? (
+            {listEntries.length === 0 ? (
               <p className="text-sm text-gray-500">
                 Nothing blocked yet — you&rsquo;re available anytime.
               </p>
             ) : (
               <ul className="space-y-2 text-sm">
-                {entries.map((entry) => {
+                {listEntries.map((entry) => {
                   const req =
                     entry.type === "SPECIFIC"
                       ? requests.find((r) => r.id === entry.requestId)
@@ -706,53 +733,6 @@ export default function SchedulePage() {
             )}
           </Card>
         </div>
-
-        {/* ── 3. Specific Blocks — mobile-only proactive day blocker (the
-            calendar covers this on desktop). ── */}
-        <section className="order-3 min-w-0 space-y-3 lg:hidden">
-          <h2 className="text-xl font-bold">Specific Blocks</h2>
-          <Card className="space-y-3">
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Proactively block out specific days in the future.
-            </p>
-            <form
-              onSubmit={addDayBlock}
-              className="grid gap-3 sm:grid-cols-2 sm:items-end"
-            >
-              <DateSelect
-                label="Start date"
-                value={blockStart}
-                min={toYmd(new Date())}
-                dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
-                onChange={(v) => {
-                  setBlockStart(v);
-                  // Keep the range valid: drop an end date before the new start.
-                  if (blockEnd && blockEnd < v) setBlockEnd("");
-                }}
-                required
-              />
-              <DateSelect
-                label="End date (optional)"
-                value={blockEnd}
-                min={blockStart || toYmd(new Date())}
-                dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
-                onChange={setBlockEnd}
-              />
-              <div className="sm:col-span-2">
-                <Button
-                  type="submit"
-                  disabled={!blockStart || busyAction === "specific"}
-                >
-                  {busyAction === "specific" ? (
-                    <LoadingDots size="sm" />
-                  ) : (
-                    "Block these dates"
-                  )}
-                </Button>
-              </div>
-            </form>
-          </Card>
-        </section>
       </div>
 
       {/* Submit-response confirmation modal: summarizes the days you'll be

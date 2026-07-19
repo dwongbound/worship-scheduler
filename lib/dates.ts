@@ -2,6 +2,17 @@
 // upcomingOccurrences is pure + unit-tested (tests/unit/dates.test.ts).
 
 /**
+ * Local `yyyy-mm-dd` for a Date — the same string the native <input type=date>
+ * emits. Built by hand from the local getters so we never touch UTC (new
+ * Date("2026-07-07") parses as midnight UTC and can shift a day in the US).
+ */
+export function toYmd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
+/**
  * Expand a weekly recurrence into concrete Dates for the next `weeks`
  * weeks. E.g. (dayOfWeek=1, startMinute=1140) → the next N Mondays at 7pm,
  * in the server's local timezone. Occurrences already in the past
