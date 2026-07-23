@@ -35,7 +35,7 @@
     "dotenv": "^16.4.5",
     "dotenv-cli": "^7.4.2",
     "postcss": "^8.4.39",
-    "prisma": "^7.8.0",
+    "prisma": "^7.9.0",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.16.2",
     "typescript": "^6.0.3",
