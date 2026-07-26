@@ -15,6 +15,7 @@ import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
 import { usePageLoading } from "@/components/LoadingProvider";
@@ -393,7 +394,13 @@ export default function SchedulePage() {
         <div className="contents lg:block lg:min-w-0 lg:flex-1 lg:space-y-6">
           {/* ── 1. Admin Requests — respond to an admin's availability request ── */}
           <section data-tour="avail-editors" className="order-1 min-w-0 space-y-3">
-            <h2 className="text-xl font-bold">Admin Requests</h2>
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-xl font-bold">Admin Requests</h2>
+              <InfoTooltip
+                side="bottom"
+                text="Block out the dates you can't serve within the request window, then submit so the team knows you're done. Times you've already blocked below apply here too — if everything's already correct, just submit."
+              />
+            </div>
           {requests.length === 0 ? (
             <Card>
               <p className="text-sm text-gray-500">
@@ -427,16 +434,6 @@ export default function SchedulePage() {
                       {selectedRequest.org.name}
                     </span>
                   )}
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    Block out the dates you <strong>can&rsquo;t</strong> serve
-                    between{" "}
-                    <strong>{shortDateLabel(selectedRequest.startDate)}</strong>{" "}
-                    and{" "}
-                    <strong>{shortDateLabel(selectedRequest.endDate)}</strong>,
-                    then submit so the team knows you&rsquo;re done. If your
-                    dates are already blocked correctly, just submit your
-                    response.
-                  </p>
 
                   {submitted ? (
                     /* Submitted: a clear confirmation + a way back to editing. */
@@ -471,6 +468,7 @@ export default function SchedulePage() {
                       >
                         <DateSelect
                           range
+                          highlightToday={false}
                           label="Dates to block"
                           value={specDate}
                           endValue={specEndDate}
@@ -554,13 +552,11 @@ export default function SchedulePage() {
               recurring block, in one form. (Admin Requests above is only for
               responding to a request's window.) */}
           <section className="order-3 min-w-0 space-y-3">
-            <h2 className="text-xl font-bold">Block out times</h2>
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-xl font-bold">Block out times</h2>
+              <InfoTooltip text="Block times you can't serve — a specific date or range, or a weekly repeat." />
+            </div>
             <Card className="space-y-4">
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                Block times you <strong>can&rsquo;t</strong> serve — a specific
-                date or range, or a weekly repeat.
-              </p>
-
               {/* Recurring (left) vs. specific (right) toggle. */}
               <div className="inline-flex rounded-lg border border-gray-300 p-0.5 text-sm dark:border-gray-600">
                 <button
@@ -643,6 +639,7 @@ export default function SchedulePage() {
                 <form onSubmit={addBlock} className="space-y-3">
                   <DateSelect
                     range
+                    highlightToday={false}
                     label="Dates to block"
                     value={blockStart}
                     endValue={blockEnd}

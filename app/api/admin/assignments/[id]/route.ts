@@ -6,33 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { isValidMD } from "@/lib/md";
-
-// After a roster change, drop the set's designated MD if that person is no
-// longer an eligible assignee (e.g. their MD-capable slot was reassigned away).
-async function clearStaleMD(setId: string) {
-  const set = await prisma.set.findUnique({
-    where: { id: setId },
-    select: {
-      mdUserId: true,
-      assignments: {
-        select: { userId: true, role: true, user: { select: { isMD: true } } },
-      },
-    },
-  });
-  if (!set?.mdUserId) return;
-  const stillValid = isValidMD(
-    set.mdUserId,
-    set.assignments.map((a) => ({
-      userId: a.userId,
-      role: a.role,
-      isMD: a.user.isMD,
-    }))
-  );
-  if (!stillValid) {
-    await prisma.set.update({ where: { id: setId }, data: { mdUserId: null } });
-  }
-}
+import { clearStaleMD, promoteMDIfEmpty } from "@/lib/setMd";
 
 // Look up the assignment + gate on the set's org. Returns the row and the
 // acting admin, or an error response.
@@ -89,7 +63,10 @@ export async function PATCH(
         type: "REASSIGNED",
       },
     });
+    // Reassigning may have orphaned the old MD; then, if this set still needs
+    // one and the newly-assigned person qualifies, promote them automatically.
     await clearStaleMD(existing.setId);
+    await promoteMDIfEmpty(existing.setId, userId);
     return NextResponse.json(updated);
   } catch {
     // Unique [setId, userId, role] — that person already fills this role here.

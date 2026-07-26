@@ -356,6 +356,7 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
         onAdd={(user, team) => {
           if (user.teams.some((t) => t.id === team.id)) return;
           patchUserTeams(user, [...user.teams, team]);
+          setMemberQuery(""); // clear so they can type the next name
         }}
         onRemove={(user, team) =>
           patchUserTeams(

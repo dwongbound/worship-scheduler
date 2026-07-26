@@ -30,18 +30,41 @@ export function orgKey(index: number): string {
 /**
  * In an already-open DateSelect popup, pick today as a one-day range.
  *
- * The availability forms use `range` DateSelects, where a click sets the start
- * and leaves the popup open for the end. Clicking "Today" twice therefore means
- * "just today" and closes the popup — one click would leave a half-open range,
- * an unfilled field, and a disabled submit button.
+ * The availability forms use `range` DateSelects, where the first click sets
+ * the range start and leaves the popup open for the end; a second "Today" click
+ * completes it as a single day and closes the popup. One click alone would
+ * leave a half-open range, an unfilled field, and a disabled submit button.
+ *
+ * We click until the popup actually closes rather than assuming exactly two.
+ * On WebKit the two clicks can outrun React's re-render, so the second click
+ * reads the stale "no start yet" state and just re-opens a start; retrying
+ * until the "Today" button is gone rides that out (and is a no-op extra check
+ * on Chromium, where two clicks already suffice).
  */
 export async function pickSingleDay(page: Page) {
-  const today = page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Today", exact: true });
-  await today.click();
-  await today.click();
-  await expect(today).toBeHidden();
+  const dialog = page.getByRole("dialog");
+  // Today's grid cell — the enabled button carrying today's day number (the
+  // same number in a padding month is rendered disabled, so exclude those).
+  const todayCell = dialog
+    .getByRole("button", { name: String(new Date().getDate()), exact: true })
+    .and(page.locator("button:not([disabled])"));
+
+  // One click sets the range start, which both availability forms accept as a
+  // single-day block (they require only the start; endDate is optional). We
+  // deliberately do NOT complete the range with a second same-day click: on
+  // WebKit that second click is unreliable and left the popup open. Confirm the
+  // start committed (the cell renders selected) — retrying because on WebKit a
+  // click can land just before React commits.
+  await expect(async () => {
+    await todayCell.click();
+    await expect(todayCell).toHaveClass(/bg-indigo-600/, { timeout: 1500 });
+  }).toPass({ timeout: 10_000 });
+
+  // Close the picker so the form's submit button underneath is interactable.
+  await expect(async () => {
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden({ timeout: 1500 });
+  }).toPass({ timeout: 10_000 });
 }
 
 /**
@@ -69,8 +92,21 @@ export async function login(
 ) {
   await suppressGuidedTour(page);
   await page.goto("/login");
-  await page.getByLabel("Username / Email").fill(usernameOrEmail);
-  await page.getByLabel("Password").fill(password);
+  const userField = page.getByLabel("Username / Email");
+  const passField = page.getByLabel("Password");
+  // Fill and confirm both values stick before submitting. On WebKit (the
+  // iPhone project) two things can silently wipe a just-filled field: React
+  // hydration resetting a controlled input typed into before it's interactive,
+  // and Safari credential-autofill clearing the username once the password is
+  // populated. Filling password first / username last dodges the autofill, and
+  // the toPass retry rides out the hydration race — a plain fill() left the
+  // username empty and every login failed. Chromium is unaffected either way.
+  await expect(async () => {
+    await passField.fill(password);
+    await userField.fill(usernameOrEmail);
+    await expect(passField).toHaveValue(password);
+    await expect(userField).toHaveValue(usernameOrEmail);
+  }).toPass({ timeout: 10_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/calendar/);
 }

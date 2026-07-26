@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { promoteMDIfEmpty } from "@/lib/setMd";
 import { SLOT_CAPACITIES } from "@/lib/constants";
 
 export async function POST(req: NextRequest) {
@@ -50,6 +51,9 @@ export async function POST(req: NextRequest) {
     await prisma.setHistoryEvent.create({
       data: { setId, role, actorId: admin.user.id, targetUserId: userId, type: "ADDED" },
     });
+    // If this set needs an MD, has none yet, and the person just added is an
+    // eligible MD, make them the MD (parity with auto-schedule).
+    await promoteMDIfEmpty(setId, userId);
     return NextResponse.json(created, { status: 201 });
   } catch {
     // Unique [setId, userId, role] — the person already fills this role here.

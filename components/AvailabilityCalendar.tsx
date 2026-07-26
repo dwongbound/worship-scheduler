@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { minutesToTimeLabel } from "@/lib/dates";
 import { toYmd } from "@/components/common/DateSelect";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import type { ApiUnavailability } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -233,9 +234,18 @@ export default function AvailabilityCalendar({
     <div className="rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
       {/* Header: month title + navigation */}
       <div className="flex items-center justify-between gap-2 px-4 py-3">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-          {monthLabel}
-        </h2>
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+            {monthLabel}
+          </h2>
+          {/* How-to lives here (gated on editor mode) instead of a hint line. */}
+          {onEditDays && (
+            <InfoTooltip
+              side="bottom"
+              text="Click a day — or drag across several — to block it out (all day). Click a blocked day again to clear it."
+            />
+          )}
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={goToday}
@@ -259,16 +269,6 @@ export default function AvailabilityCalendar({
           </button>
         </div>
       </div>
-
-      {/* Hint: shown whenever the calendar is an editor. Gated on onEditDays
-          (not `interactive`) so it stays put while a block is saving — `busy`
-          briefly flips `interactive` off and would otherwise flicker it away. */}
-      {onEditDays && (
-        <p className="border-t border-gray-200 px-4 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
-          Click a day — or drag across several — to block it out (all day).
-          Click a blocked day again to clear it.
-        </p>
-      )}
 
       {/* Weekday labels */}
       <div className="grid grid-cols-7 border-t border-gray-200 dark:border-gray-700">

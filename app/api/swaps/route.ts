@@ -1,6 +1,7 @@
 // GET /api/swaps — open swap requests the current user could take:
-// upcoming, someone else's, for an instrument the user plays, and within
-// the user's orgs (?orgId= narrows to one — the Set Manager org filter).
+// upcoming, someone else's, for an instrument the user plays, within the
+// user's orgs (?orgId= narrows to one — the Set Manager org filter), and on
+// the set's own team (a team-less set is open to the whole org).
 // Also powers the navbar red dot (it just checks the count, all orgs).
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
@@ -33,7 +34,17 @@ export async function GET(req: NextRequest) {
       status: "SWAP_REQUESTED",
       userId: { not: user.id },
       role: { in: me.instruments },
-      set: { startsAt: { gte: new Date() }, orgId: { in: scope } },
+      set: {
+        startsAt: { gte: new Date() },
+        orgId: { in: scope },
+        // Stay within the set's team: only its members can cover it. A set with
+        // no team is open to everyone in the org (matches the scheduler's
+        // "null team = whole org" rule).
+        OR: [
+          { teamId: null },
+          { team: { users: { some: { id: user.id } } } },
+        ],
+      },
     },
     include: {
       set: { include: { org: { select: { id: true, name: true } } } },

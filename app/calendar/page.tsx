@@ -7,7 +7,7 @@
 // set's roster.
 import { useSession } from "next-auth/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Button from "@/components/common/Button";
 import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
@@ -74,12 +74,19 @@ function CalendarView() {
   const { orgs, viewOrgId, isAdminOf, isAdminAny } = useOrgs();
   const isAdmin = isAdminAny;
 
+  // Switching the org view recreates refetchSets and re-runs its effect, so two
+  // fetches can be in flight at once. Tag each with an id and let only the
+  // latest commit — otherwise a slow "All orgs" response can land after (and
+  // clobber) a newer per-org one, leaving the wrong org's sets on screen.
+  const setsReqId = useRef(0);
   const refetchSets = useCallback(async () => {
+    const reqId = ++setsReqId.current;
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
     const [fresh, swaps] = await Promise.all([
       fetchJsonArray<ApiSet>(`/api/sets${orgParam}`),
       fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
     ]);
+    if (reqId !== setsReqId.current) return; // superseded by a newer refetch
     setSets(fresh);
     setTakeableSwaps(swaps);
   }, [viewOrgId]);
@@ -244,7 +251,7 @@ function CalendarView() {
             onClick={() => setPanelOpen((open) => !open)}
             aria-expanded={panelOpen}
           >
-            My Upcoming Sets
+            Upcoming Sets
             <ExpanderChevron open={panelOpen} />
           </Button>
         </div>
@@ -293,7 +300,7 @@ function CalendarView() {
           // over. The fixed height + items-stretch make the panel column (and
           // therefore its divider) span the full available height.
           <div className="relative left-1/2 w-screen -translate-x-1/2 px-4">
-            <div className="flex h-[calc(100dvh-7rem)] min-h-0">
+            <div className="flex h-[calc(100dvh-var(--app-header-h)-3rem)] min-h-0">
               {mainColumn}
               <PanelDivider onPointerDown={startResize} />
               <MySetsPanel
@@ -306,7 +313,7 @@ function CalendarView() {
             </div>
           </div>
         ) : (
-          <div className="flex h-[calc(100dvh-7rem)] min-h-0">{mainColumn}</div>
+          <div className="flex h-[calc(100dvh-var(--app-header-h)-3em)] min-h-0">{mainColumn}</div>
         )}
       </div>
 

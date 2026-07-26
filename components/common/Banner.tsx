@@ -1,6 +1,9 @@
 "use client";
 // Dismissible full-width notification banner (e.g. the availability-request
-// reminder). Tones map to semantic colors; pass onDismiss to show an ✕.
+// reminder). Tones map to semantic colors; pass onDismiss to show an ✕. Pass
+// `href` to show a trailing "→" that links to whatever the banner is nudging
+// the user toward (e.g. the Availabilities page).
+import Link from "next/link";
 import { ReactNode } from "react";
 
 type BannerTone = "indigo" | "amber";
@@ -15,16 +18,35 @@ const TONE_CLASSES: Record<BannerTone, string> = {
 export default function Banner({
   tone = "indigo",
   children,
+  href,
+  onLinkClick,
   onDismiss,
 }: {
   tone?: BannerTone;
   children: ReactNode;
+  // Destination for the trailing "→" call-to-action link (omit for none).
+  href?: string;
+  // Fired when that link is clicked (e.g. to kick off the nav loader).
+  onLinkClick?: () => void;
   onDismiss?: () => void;
 }) {
   return (
     <div className={`w-full ${TONE_CLASSES[tone]}`}>
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-2.5 text-sm">
-        <span>{children}</span>
+        <span>
+          {children}
+          {/* Trailing call-to-action arrow, right after the text and bold. */}
+          {href && (
+            <Link
+              href={href}
+              onClick={onLinkClick}
+              aria-label="Go there"
+              className="ml-1.5 whitespace-nowrap text-base font-bold hover:opacity-70"
+            >
+              →
+            </Link>
+          )}
+        </span>
         {onDismiss && (
           <button
             onClick={onDismiss}

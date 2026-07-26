@@ -158,3 +158,21 @@ export async function requireOrgAdminFor(
   });
   return membership?.isAdmin ? { user: { id: user.id } } : null;
 }
+
+/**
+ * Membership gate (any member, admin or not) when the org is derived from the
+ * resource. For member-usable actions that still must stay inside the tenant —
+ * e.g. starting a set's Slack group chat.
+ */
+export async function requireOrgMemberFor(
+  orgId: string
+): Promise<{ user: { id: string } } | null> {
+  const user = await getSessionUser();
+  if (!user) return null;
+  if (isSuperAdmin(user.email)) return { user: { id: user.id } };
+  const membership = await prisma.orgMembership.findUnique({
+    where: { userId_orgId: { userId: user.id, orgId } },
+    select: { userId: true },
+  });
+  return membership ? { user: { id: user.id } } : null;
+}

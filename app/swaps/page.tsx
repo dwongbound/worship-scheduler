@@ -4,44 +4,84 @@
 //   2. Open swap requests from teammates who play my instrument(s) —
 //      one click takes over their slot (which then needs MY confirmation).
 import { useCallback, useEffect, useState } from "react";
+import { useSession } from "next-auth/react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import LoadingDots from "@/components/common/LoadingDots";
 import ExportIcsButton from "@/components/ExportIcsButton";
+import SetDetailModal from "@/components/SetDetailModal";
 import { usePageLoading } from "@/components/LoadingProvider";
 import StatusBadge from "@/components/StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
-import { fetchJsonArray } from "@/lib/api";
+import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { INSTRUMENT_LABELS } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
-import type { ApiMyAssignment, ApiSwapRequest } from "@/lib/types";
+import type {
+  ApiAdminUser,
+  ApiMyAssignment,
+  ApiSet,
+  ApiSwapRequest,
+} from "@/lib/types";
 
 export default function SwapsPage() {
   const [mine, setMine] = useState<ApiMyAssignment[] | null>(null);
   const [openSwaps, setOpenSwaps] = useState<ApiSwapRequest[] | null>(null);
+  // Full sets (with rosters) for the "Details" modal — the /api/assignments and
+  // /api/swaps payloads omit assignments, so we fetch the sets alongside them
+  // and look one up by id when a Details button is clicked.
+  const [allSets, setAllSets] = useState<ApiSet[] | null>(null);
+  // The set whose roster modal is open (its id), or null. adminUsersByOrg feeds
+  // the modal's assignment dropdowns for orgs I administer (empty = read-only).
+  const [detailSetId, setDetailSetId] = useState<string | null>(null);
+  const [adminUsersByOrg, setAdminUsersByOrg] = useState<
+    Record<string, ApiAdminUser[]>
+  >({});
   // Id of the row currently updating (shows inline dots), and a flag for the
   // bulk "confirm all" button — so a mutation never remounts the whole page.
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
   // Navbar org switcher: "all" or one org — filters both sections. Rows show
   // an org chip while several orgs are mixed together.
-  const { orgs, viewOrgId } = useOrgs();
+  const { orgs, viewOrgId, isAdminOf } = useOrgs();
+  const { data: session } = useSession();
+  const myId = session?.user?.id;
   const showOrgChips = viewOrgId === "all" && (orgs?.length ?? 0) > 1;
 
   const reload = useCallback(async () => {
     // Both endpoints return arrays; fall back to [] on any error so a hiccup
     // shows an empty list instead of crashing on `.map`.
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
-    const [mineData, swapsData] = await Promise.all([
+    const [mineData, swapsData, setsData] = await Promise.all([
       fetchJsonArray<ApiMyAssignment>(`/api/assignments${orgParam}`),
       fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
+      fetchJsonArray<ApiSet>(`/api/sets${orgParam}`),
     ]);
     setMine(mineData);
     setOpenSwaps(swapsData);
+    setAllSets(setsData);
     // Nudge the navbar to refresh its red dot.
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
   }, [viewOrgId]);
+
+  // One admin-users fetch per org I administer — feeds the Details modal's
+  // assignment dropdowns (mirrors the calendar page). Non-admin orgs stay
+  // absent, so the modal opens read-only for them.
+  useEffect(() => {
+    const adminOrgIds = (orgs ?? []).filter((o) => o.isAdmin).map((o) => o.id);
+    if (adminOrgIds.length === 0) return;
+    Promise.all(
+      adminOrgIds.map(
+        async (orgId) =>
+          [
+            orgId,
+            await fetchJsonArray<ApiAdminUser>("/api/admin/users", {
+              headers: orgHeaders(orgId),
+            }),
+          ] as const
+      )
+    ).then((pairs) => setAdminUsersByOrg(Object.fromEntries(pairs)));
+  }, [orgs]);
 
   useEffect(() => {
     reload();
@@ -87,16 +127,19 @@ export default function SwapsPage() {
   }
 
   // Full-page loader only for the initial data load — never for mutations.
-  usePageLoading(!mine || !openSwaps);
-  if (!mine || !openSwaps) return null;
+  // Wait on allSets too so a Details click always finds its full set.
+  usePageLoading(!mine || !openSwaps || !allSets);
+  if (!mine || !openSwaps || !allSets) return null;
 
   const pendingCount = mine.filter((a) => a.status === "PENDING").length;
+  // The full set behind the open Details modal (null = closed / not found).
+  const detailSet = allSets.find((s) => s.id === detailSetId) ?? null;
 
   return (
     <div className="space-y-8">
       {/* ── Cover requests I could take ─────────────────────────────── */}
       <section>
-        <h2 className="mb-3 text-xl font-bold">Cover Requests</h2>
+        <h1 className="mb-3 text-2xl font-bold">Cover Requests</h1>
         {openSwaps.length === 0 && (
           <p className="text-gray-500">
             No open cover requests for your instruments.
@@ -122,13 +165,22 @@ export default function SwapsPage() {
                     {swap.user.name}
                   </p>
                 </div>
-                {busyId === swap.id ? (
-                  <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
-                ) : (
-                  <Button size="sm" onClick={() => takeSwap(swap.id)}>
-                    Take this set
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setDetailSetId(swap.set.id)}
+                  >
+                    Details
                   </Button>
-                )}
+                  {busyId === swap.id ? (
+                    <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+                  ) : (
+                    <Button size="sm" onClick={() => takeSwap(swap.id)}>
+                      Take this set
+                    </Button>
+                  )}
+                </div>
               </Card>
             </li>
           ))}
@@ -142,7 +194,7 @@ export default function SwapsPage() {
             {/* Plain link download: the browser sends session cookies along.
                 Hidden on phones — no .ics export on narrow screens. */}
             <a href="/api/export" download className="hidden sm:block">
-              <Button variant="secondary">Export my sets (.ics)</Button>
+              <Button variant="secondary">Export all my sets (.ics)</Button>
             </a>
             {pendingCount > 0 && (
               <Button
@@ -181,6 +233,13 @@ export default function SwapsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <StatusBadge status={a.status} />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setDetailSetId(a.set.id)}
+                  >
+                    Details
+                  </Button>
                   {busyId === a.id ? (
                     <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
                   ) : (
@@ -222,6 +281,19 @@ export default function SwapsPage() {
           ))}
         </ul>
       </section>
+
+      {/* Roster modal opened by any "Details" button. Admin powers are per set
+          (only admins of the set's org can edit); everyone else sees it
+          read-only. */}
+      <SetDetailModal
+        set={detailSet}
+        onClose={() => setDetailSetId(null)}
+        currentUserId={myId}
+        isAdmin={isAdminOf(detailSet?.org?.id)}
+        users={detailSet?.org ? adminUsersByOrg[detailSet.org.id] ?? [] : []}
+        allSets={allSets}
+        onChanged={reload}
+      />
     </div>
   );
 }

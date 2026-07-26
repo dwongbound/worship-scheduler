@@ -30,6 +30,14 @@ export async function GET(req: NextRequest) {
         gte: new Date(now - 7 * MS_PER_DAY),
         lte: new Date(now + 92 * MS_PER_DAY),
       },
+      // Private sets are visible only to the people assigned to them and to
+      // admins of their org; everyone else never sees them. Normal (public)
+      // sets are unaffected.
+      OR: [
+        { isPrivate: false },
+        { assignments: { some: { userId: user.id } } },
+        { org: { memberships: { some: { userId: user.id, isAdmin: true } } } },
+      ],
     },
     orderBy: { startsAt: "asc" },
     include: {
@@ -45,8 +53,15 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  const { label, startsAt, durationMinutes, slotCapacities, requiresMD, teamId } =
-    await req.json();
+  const {
+    label,
+    startsAt,
+    durationMinutes,
+    slotCapacities,
+    requiresMD,
+    isPrivate,
+    teamId,
+  } = await req.json();
 
   // startsAt arrives as an ISO string from the client's date+time inputs.
   const start = new Date(startsAt);
@@ -91,6 +106,7 @@ export async function POST(req: NextRequest) {
       startsAt: start,
       durationMinutes,
       requiresMD: Boolean(requiresMD),
+      isPrivate: Boolean(isPrivate),
       slotCapacities: capacities ?? undefined,
       teamId,
       orgId: team.orgId,

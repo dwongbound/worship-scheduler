@@ -231,6 +231,45 @@ async function main() {
     },
   });
 
+  // ── Private ad-hoc set: visible ONLY to org admins and the people assigned
+  //    to it. Backs the privacy e2e (admin + bob see it; kate does not). ─────
+  const privateRehearsal = await prisma.set.create({
+    data: {
+      label: "Private Rehearsal",
+      startsAt: nextDayOfWeek(1, 20, 0),
+      durationMinutes: 60,
+      isPrivate: true,
+      teamId: sundayTeam.id,
+      orgId: org1.id,
+    },
+  });
+
+  // ── Team-scoped cover fixture: ivy (Prayer Room + keys) has asked for a
+  //    cover. Only Prayer Room keys players (jack/paul) may see/take it; a
+  //    Sunday-only keys player (carol) may not. Backs the team-swaps e2e. ────
+  const prayerCover = await prisma.set.create({
+    data: {
+      label: "Prayer Cover Test",
+      startsAt: nextDayOfWeek(6, 10, 0),
+      durationMinutes: 60,
+      teamId: prayerTeam.id,
+      orgId: org1.id,
+    },
+  });
+
+  // A second, mobile-only team-cover fixture (jack's keys). The mobile projects
+  // run read-only against it, so it stays open across both device runs where
+  // the desktop `prayerCover` above gets taken. ────────────────────────────
+  const prayerCoverMobile = await prisma.set.create({
+    data: {
+      label: "Prayer Cover Mobile",
+      startsAt: nextDayOfWeek(6, 12, 0),
+      durationMinutes: 60,
+      teamId: prayerTeam.id,
+      orgId: org1.id,
+    },
+  });
+
   // ── Org 2 fixtures: one set + its own availability request, so cross-org
   //    isolation is visible/testable (only paul/grace/jack/ruth see these). ─
   const collegeNight = await prisma.set.create({
@@ -294,6 +333,15 @@ async function main() {
       { setId: wednesday2.id, userId: id.ruth, role: "DRUMS", status: "PENDING" },
       { setId: wednesday2.id, userId: id.nina, role: "KEYS", status: "PENDING" },
 
+      // Private Rehearsal (private) — only bob is on it, so only bob + admins
+      // can see the set at all.
+      { setId: privateRehearsal.id, userId: id.bob, role: "DRUMS", status: "CONFIRMED" },
+
+      // Prayer Cover Test — ivy has requested a cover on keys (Prayer Room).
+      { setId: prayerCover.id, userId: id.ivy, role: "KEYS", status: "SWAP_REQUESTED" },
+      // Prayer Cover Mobile — jack's open keys cover, for the mobile spec.
+      { setId: prayerCoverMobile.id, userId: id.jack, role: "KEYS", status: "SWAP_REQUESTED" },
+
       // College Night (org 2 — its roster only uses org 2 members).
       { setId: collegeNight.id, userId: id.jack, role: "WORSHIP_LEADER", status: "CONFIRMED" },
       { setId: collegeNight.id, userId: id.ruth, role: "DRUMS", status: "PENDING" },
@@ -327,7 +375,7 @@ async function main() {
   });
 
   console.log(
-    `Seeded 2 orgs, ${USERS.length} users, 3 teams, 6 sets, 2 templates.`
+    `Seeded 2 orgs, ${USERS.length} users, 3 teams, 9 sets, 2 templates.`
   );
 }
 

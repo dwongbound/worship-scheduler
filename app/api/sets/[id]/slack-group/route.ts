@@ -1,8 +1,9 @@
-// POST /api/admin/sets/:id/slack-group — open a Slack group DM among a set's
-// assigned team members and post an intro message. Org admin only (org
-// derived from the set).
+// POST /api/sets/:id/slack-group — open a Slack group DM among a set's assigned
+// team members and post an intro message. Any MEMBER of the set's org can start
+// it (not just admins) — anyone on the team may want to kick off the group
+// chat. The org is derived from the set.
 import { NextRequest, NextResponse } from "next/server";
-import { requireOrgAdminFor } from "@/lib/org";
+import { requireOrgMemberFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { messageSetTeamOnSlack } from "@/lib/slack";
 
@@ -18,8 +19,8 @@ export async function POST(
   if (!set) {
     return NextResponse.json({ error: "Set not found" }, { status: 404 });
   }
-  const admin = await requireOrgAdminFor(set.orgId);
-  if (!admin) {
+  const member = await requireOrgMemberFor(set.orgId);
+  if (!member) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 

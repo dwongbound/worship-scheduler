@@ -13,6 +13,9 @@ interface ModalProps {
   title: string;
   // Optional muted text rendered inline after the title (e.g. a set's date).
   subtitle?: ReactNode;
+  // Optional element pinned to the right of the title itself (e.g. an org
+  // chip), center-aligned with it rather than dropping to the subtitle line.
+  titleAccessory?: ReactNode;
   children: ReactNode;
   // Panel width. "lg" (default) is the standard centered dialog; "full" is a
   // near-full-screen workspace for review/editing flows (e.g. the staged
@@ -35,6 +38,7 @@ export default function Modal({
   onClose,
   title,
   subtitle,
+  titleAccessory,
   children,
   size = "lg",
   footer,
@@ -79,7 +83,13 @@ export default function Modal({
           {/* Title with the optional subtitle inline (wraps under it when the
               panel is narrow). */}
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
-            <h2 className="text-lg font-semibold">{title}</h2>
+            {/* Title + accessory (org chip, lock). On phones the accessory
+                wraps to its own line under the title instead of squeezing it;
+                on ≥sm they share a line. */}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 sm:flex-nowrap">
+              <h2 className="text-lg font-semibold">{title}</h2>
+              {titleAccessory}
+            </div>
             {subtitle && (
               <p className="text-sm text-gray-600 dark:text-gray-400">
                 {subtitle}

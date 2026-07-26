@@ -22,13 +22,16 @@ export default defineConfig({
     baseURL: "http://localhost:3100",
     trace: "retain-on-failure",
   },
-  // Two viewports, two projects. `mobile.spec.ts` is the phone-width pass over
-  // the app's responsive branches (bottom tab bar, the My-sets list that
-  // replaces the month grid, the desktop-only .ics export); every other spec is
-  // written against the desktop layout, so each project runs only its own half
-  // rather than the whole suite twice. Pixel 5 is a real device preset — mobile
-  // user-agent, touch, and DPR — not just a narrow window, so it also exercises
-  // the touch-only paths a bare viewport override would miss.
+  // Projects by layout. `mobile.spec.ts` is the phone-width pass over the app's
+  // responsive branches (bottom tab bar, the My-sets list that replaces the
+  // month grid, the desktop-only .ics export); every other spec is written
+  // against the desktop layout. testMatch/testIgnore keep each project to its
+  // own half rather than running the whole suite on every device.
+  //
+  // Mobile runs on two real device presets — newest iOS (iPhone 16 Pro) and
+  // newest Samsung flagship (Galaxy S24) — so the phone paths are exercised
+  // under both engines' user-agent, touch, and DPR, not just a narrow window.
+  // Update these two names to bump to a newer preset when Playwright ships one.
   projects: [
     {
       name: "chromium",
@@ -36,8 +39,13 @@ export default defineConfig({
       testIgnore: /mobile\.spec\.ts/,
     },
     {
-      name: "mobile",
-      use: { ...devices["Pixel 5"] },
+      name: "mobile-ios",
+      use: { ...devices["iPhone 16 Pro"] },
+      testMatch: /mobile\.spec\.ts/,
+    },
+    {
+      name: "mobile-android",
+      use: { ...devices["Galaxy S24"] },
       testMatch: /mobile\.spec\.ts/,
     },
   ],
