@@ -50,8 +50,8 @@ const COMMON_STEPS: Step[] = [
     href: "/schedule",
   },
   {
-    title: "Specific vs. recurring blocks",
-    body: "Block out times you can't serve here. A specific block is a one-off date (e.g. away this Sunday); a recurring block repeats every week (e.g. never Thursday nights). The scheduler skips you during both.",
+    title: "Respond to a request",
+    body: "When an admin asks for availability, block the dates you can't serve within their window here, then hit Submit Response so the team knows you're done. If you're already free, just submit.",
     target: "avail-editors",
     href: "/schedule",
   },
@@ -88,7 +88,7 @@ const ADMIN_STEPS: Step[] = [
 // Closing step everyone sees last — highlights the user menu.
 const PROFILE_STEP: Step = {
   title: "Your profile",
-  body: "Open the menu under your name to set the instruments and roles you play — you can't be scheduled until you do. Reopen this tour anytime from the ? button.",
+  body: "Open the menu under your name to set the instruments and roles you play — you can't be scheduled until you do. Reopen this tour anytime from the \"?\" icon.",
   target: "profile",
 };
 

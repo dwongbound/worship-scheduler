@@ -1,6 +1,7 @@
 // PATCH /api/sets/:id — edit a set's notes (org admins + the set's worship
-// leader, who runs it) or its designated MD (org admins only). Send { notes }
-// or { mdUserId } (mdUserId: null clears the MD).
+// leader, who runs it), its designated MD (org admins only), or its private
+// flag (org admins only). Send { notes }, { mdUserId } (null clears the MD),
+// or { isPrivate }.
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
@@ -21,7 +22,9 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json();
   const editingMD = "mdUserId" in body;
-  if (!editingMD && typeof body.notes !== "string") {
+  const editingPrivate = "isPrivate" in body;
+  // Only a plain notes edit (neither MD nor privacy) requires a notes string.
+  if (!editingMD && !editingPrivate && typeof body.notes !== "string") {
     return NextResponse.json({ error: "notes is required" }, { status: 400 });
   }
 
@@ -33,11 +36,11 @@ export async function PATCH(
     return NextResponse.json({ error: "Set not found" }, { status: 404 });
   }
 
-  // Permission: MD edits are admin-only; notes may also be edited by the set's
-  // assigned worship leader.
+  // Permission: MD and privacy edits are admin-only; notes may also be edited
+  // by the set's assigned worship leader.
   const admin = await requireOrgAdminFor(set.orgId);
   let allowed = !!admin;
-  if (!allowed && !editingMD) {
+  if (!allowed && !editingMD && !editingPrivate) {
     const leaderSlot = await prisma.assignment.findFirst({
       where: { setId: id, userId: user.id, role: "WORSHIP_LEADER" },
     });
@@ -45,6 +48,20 @@ export async function PATCH(
   }
   if (!allowed) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  if (editingPrivate) {
+    if (typeof body.isPrivate !== "boolean") {
+      return NextResponse.json(
+        { error: "isPrivate must be a boolean" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { isPrivate: body.isPrivate },
+    });
+    return NextResponse.json(updated);
   }
 
   if (editingMD) {

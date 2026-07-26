@@ -14,9 +14,9 @@ import LoadingDots from "./common/LoadingDots";
 import ExportIcsButton from "./ExportIcsButton";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
-import Select from "./common/Select";
 import {
   INSTRUMENT_LABELS,
+  MD_ROLES,
   ROLE_ORDER,
   resolveCapacities,
   type Instrument,
@@ -94,7 +94,8 @@ export default function SetDetailModal({
   // Filled slot whose "✕" was clicked — a confirm modal asks before removing
   // the person along with their slot. (Empty slots are removed right away.)
   const [slotToDelete, setSlotToDelete] = useState<ApiAssignment | null>(null);
-  // Slack "message team" state: only shown to admins when Slack is configured.
+  // Slack "message team" state. The button is shown to everyone (anyone on the
+  // team can start the group chat); it's disabled until this org connects Slack.
   const [slackConfigured, setSlackConfigured] = useState(false);
   const [slackMsg, setSlackMsg] = useState("");
 
@@ -114,19 +115,20 @@ export default function SetDetailModal({
     setSlackMsg("");
   }, [set?.id]);
 
-  // Is the Slack bot configured? Gates the admin "Slack Team" button.
+  // Is the Slack bot configured for this org? Drives whether the "Slack Team"
+  // button is enabled (it's shown to everyone regardless).
   // Only fetch while a set is actually open — this modal is always mounted (with
   // set=null) on the calendar page, so gating on `set` avoids a wasted request
   // (and a doubled one under React's dev Strict Mode) on every calendar load.
   useEffect(() => {
-    if (!isAdmin || !set) return;
+    if (!set) return;
     // Per-org: the "Slack Team" button only works if the set's OWN org has
     // connected Slack, so ask about that org specifically.
     fetch(`/api/slack/status?orgId=${set.org?.id ?? ""}`)
       .then((r) => r.json())
       .then((d) => setSlackConfigured(!!d.enabled))
       .catch(() => setSlackConfigured(false));
-  }, [isAdmin, set]);
+  }, [set]);
 
   // History section: fetched fresh whenever a (different) set opens, and
   // refreshed again after any edit made from this modal (see runEdit).
@@ -225,26 +227,39 @@ export default function SetDetailModal({
   const canEditNotes = isAdmin || isSetWorshipLeader;
   const canEditTeam = isAdmin;
 
-  // Options for a role's dropdown. Manual assignment has no instrument
-  // constraint — an admin can put anyone on the team into any role — so we
-  // offer every team member not already in THIS role (a person may hold several
-  // roles on one set, so we only exclude the role they already fill). Each is
-  // flagged with whether they're free at this set's time and how many times
-  // they're scheduled nearby; the list sorts available-first, then
-  // least-scheduled-first, so unavailable people sink to the bottom.
+  // Options for a role's dropdown. We offer this set's team members who play
+  // THIS role (per their Team-tab instruments) and aren't already filling it
+  // here (a person may hold several roles on one set, so we only exclude the
+  // role they already fill). Each is flagged with whether they're free at this
+  // set's time and how many times they're scheduled nearby; the list sorts
+  // available-first, then least-scheduled-first, so unavailable people sink to
+  // the bottom (but stay selectable — an admin can override).
+  // The set's worship leader(s) can't double as MD, so they never get the
+  // "(MD)" hint even in an MD-capable role's dropdown.
+  const worshipLeaderIds = new Set(
+    set.assignments
+      .filter((a) => a.role === "WORSHIP_LEADER")
+      .map((a) => a.user.id)
+  );
   const eligibleFor = (role: Instrument): PlayerOption[] => {
     const inThisRole = new Set(
       set.assignments.filter((a) => a.role === role).map((a) => a.user.id)
     );
+    // In an MD-capable role, mark the musical directors — picking them here
+    // makes them an eligible MD for the set.
+    const roleAllowsMD = MD_ROLES.includes(role);
     return users
       // Only this set's team members are offered (no team = open to everyone).
       .filter((u) => isOnTeam(u, set.teamId ?? set.team?.id))
+      // …and only those who actually play this role (Team-tab instruments).
+      .filter((u) => u.instruments.includes(role))
       .filter((u) => !inThisRole.has(u.id))
       .map((u) => ({
         id: u.id,
         name: u.name,
         available: isUserAvailable(u.id, calcSet, rules),
         count: serveCounts.get(u.id) ?? 0,
+        md: roleAllowsMD && u.isMD && !worshipLeaderIds.has(u.id),
       }))
       .sort(
         (a, b) =>
@@ -322,6 +337,17 @@ export default function SetDetailModal({
       })
     );
 
+  // Flip this set's private flag (admin only). Private = hidden from everyone
+  // except org admins and the people assigned to it.
+  const togglePrivate = (isPrivate: boolean) =>
+    runEdit(() =>
+      fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isPrivate }),
+      })
+    );
+
   // Set (or clear, with "") this set's designated MD.
   const setMD = (userId: string) =>
     runEdit(() =>
@@ -337,7 +363,7 @@ export default function SetDetailModal({
     setBusy(true);
     setSlackMsg("");
     try {
-      const res = await fetch(`/api/admin/sets/${set.id}/slack-group`, {
+      const res = await fetch(`/api/sets/${set.id}/slack-group`, {
         method: "POST",
       });
       const data = await res.json().catch(() => ({}));
@@ -368,16 +394,34 @@ export default function SetDetailModal({
       open
       onClose={slotToDelete ? () => setSlotToDelete(null) : onClose}
       title={set.label ?? "Worship Set"}
+      titleAccessory={
+        /* On the title line: the set's org (matters in "All orgs" views) and,
+           for a private set, a bare lock icon. Sits right of the title rather
+           than down on the date line. */
+        (set.org || set.isPrivate) && (
+          <span className="flex items-center gap-2">
+            {set.org && (
+              <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                {set.org.name}
+              </span>
+            )}
+            {/* Private = only admins + assigned people ever see this modal. */}
+            {set.isPrivate && (
+              <span
+                title="Private"
+                aria-label="Private"
+                className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs leading-none text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                🔒
+              </span>
+            )}
+          </span>
+        )
+      }
       subtitle={
         <>
           {formatDay(set.startsAt)} · {formatTime(set.startsAt)}
           {set.team && <> · {set.team.name}</>}
-          {/* Which org this set belongs to — matters in "All orgs" views. */}
-          {set.org && (
-            <span className="ml-2 inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
-              {set.org.name}
-            </span>
-          )}
         </>
       }
     >
@@ -398,31 +442,52 @@ export default function SetDetailModal({
               </Button>
               <InfoTooltip
                 side="bottom"
-                text="Fills this set's empty slots with available team members,
-                  preferring people who aren't already serving in the
-                  surrounding week. People already assigned keep their roles —
-                  the fill works around them. In the assignment dropdowns, the
-                  ×N badge is how many times that person is already scheduled
-                  within ±2 weeks of this set; the least-scheduled, available
-                  people are listed first."
+                text={
+                  <>
+                    Fills this set&apos;s <strong>empty slots</strong>{" "}
+                    with available team members, preferring people who aren&apos;t
+                    already serving in the surrounding week. People already
+                    assigned keep their roles — the fill works around them. In
+                    the assignment dropdowns, the ×N badge is how many times
+                    that person is already scheduled within ±2 weeks of this
+                    set; the least-scheduled, available people are listed first.
+                  </>
+                }
               />
+              {/* Flip visibility: private = only admins + assigned people. */}
+              <label className="ml-1 flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-400">
+                <input
+                  type="checkbox"
+                  checked={set.isPrivate}
+                  disabled={busy}
+                  onChange={(e) => togglePrivate(e.target.checked)}
+                  className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-gray-600"
+                />
+                Private
+              </label>
             </>
           )}
         </div>
         <div className="flex items-center gap-2">
-          {isAdmin && slackConfigured && (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={messageTeamOnSlack}
-              disabled={busy}
-            >
-              <span className="flex items-center gap-1.5">
-                <SlackIcon />
-                Slack Team
-              </span>
-            </Button>
-          )}
+          {/* Shown to everyone (any team member can start the group chat), but
+              disabled until this org connects Slack — the affordance stays
+              discoverable and the tooltip explains what's missing. */}
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={messageTeamOnSlack}
+            disabled={busy || !slackConfigured}
+            title={
+              slackConfigured
+                ? undefined
+                : "Connect Slack for this organization to message the team."
+            }
+          >
+            <span className="flex items-center gap-1.5">
+              <SlackIcon />
+              Slack Team
+            </span>
+          </Button>
           <ExportIcsButton
             href={`/api/export/${set.id}`}
             label="Export set (.ics)"
@@ -431,7 +496,7 @@ export default function SetDetailModal({
           />
         </div>
       </div>
-      {isAdmin && slackConfigured && slackMsg && (
+      {slackConfigured && slackMsg && (
         <p className="-mt-1 mb-4 text-sm text-gray-600 dark:text-gray-400">
           {slackMsg}
         </p>
@@ -554,29 +619,35 @@ export default function SetDetailModal({
           {canEditTeam ? (
             eligibleMdIds.size === 0 ? (
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                <span className="font-medium">Musical director:</span> nobody
-                eligible yet — assign an MD on keys, electric guitar, or bass.
+                <span className="font-medium">Musical director:</span> none of
+                the people currently assigned to this set can be MD. The MD must
+                be a musical director playing keys, electric guitar, or bass.
               </p>
             ) : (
-              <Select
-                label="Musical director"
-                value={mdUserId ?? ""}
-                disabled={busy}
-                onChange={(e) => setMD(e.target.value)}
-                className="max-w-xs"
-              >
-                <option value="">None</option>
-                {distinctAssignees.map((u) => (
-                  <option
-                    key={u.id}
-                    value={u.id}
-                    disabled={!eligibleMdIds.has(u.id)}
-                  >
-                    {u.name}
-                    {eligibleMdIds.has(u.id) ? "" : " — not eligible"}
-                  </option>
-                ))}
-              </Select>
+              <div className="space-y-1.5">
+                <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Musical director
+                </span>
+                <PlayerSelect
+                  selected={
+                    mdUserId
+                      ? {
+                          id: mdUserId,
+                          name:
+                            distinctAssignees.find((u) => u.id === mdUserId)
+                              ?.name ?? "",
+                        }
+                      : null
+                  }
+                  // Only eligible assignees are offered (ineligible people can't
+                  // be MD; the zero-eligible case is handled by the message above).
+                  options={distinctAssignees
+                    .filter((u) => eligibleMdIds.has(u.id) && u.id !== mdUserId)
+                    .map((u) => ({ id: u.id, name: u.name, available: true }))}
+                  disabled={busy}
+                  onChange={(userId) => setMD(userId)}
+                />
+              </div>
             )
           ) : (
             <p className="text-sm">
@@ -632,7 +703,7 @@ export default function SetDetailModal({
         ) : history.length === 0 ? (
           <p className="text-sm text-gray-400">No activity yet.</p>
         ) : (
-          <ul className="max-h-48 space-y-2.5 overflow-y-auto">
+          <ul className="max-h-48 divide-y divide-gray-200 overflow-y-auto dark:divide-gray-700">
             {history.map((event) => (
               <SetHistoryEntry key={event.id} event={event} />
             ))}

@@ -28,19 +28,13 @@ async function createAdHocSet(page: Page, label: string) {
 test("shows upcoming sets and opens the team modal", async ({ page }) => {
   await login(page, "bob");
 
-  // "Sunday Morning" also appears in the hidden mobile "My sets" panel (in the
-  // DOM but display:none at desktop widths), so scope to a visible calendar
-  // chip. Two Sunday sets exist; the first is bob's seeded one.
-  const sundayCard = page
-    .getByText("Sunday Morning")
-    .filter({ visible: true })
-    .first();
-  await expect(sundayCard).toBeVisible();
-  await sundayCard.click();
+  // Deep-link to the roster modal by label — month-independent. The seeded
+  // "Sunday Morning" can land in the *next* month's grid (e.g. when today is a
+  // late-month Sunday), where it has no visible chip to click. openSetByLabel
+  // resolves the id via the API and opens the modal directly.
+  const modal = await openSetByLabel(page, "Sunday Morning");
 
   // Modal lists the roster with roles and teammates.
-  const modal = page.getByRole("dialog");
-  await expect(modal).toBeVisible();
   await expect(modal.getByText("Bob Baker")).toBeVisible(); // drums (bob)
   await expect(modal.getByText("Carol Chen")).toBeVisible(); // keys
   await expect(modal.getByText("Worship Leader")).toBeVisible();
@@ -50,16 +44,26 @@ test("shows upcoming sets and opens the team modal", async ({ page }) => {
   await expect(modal).not.toBeVisible();
 });
 
-test("'My Upcoming Sets' opens a sidebar listing the sets I'm on", async ({ page }) => {
+test("'Upcoming Sets' sidebar shows all sets by default, filterable to mine", async ({ page }) => {
   await login(page, "bob");
-  await page.getByRole("button", { name: "My Upcoming Sets" }).click();
+  await page.getByRole("button", { name: "Upcoming Sets" }).click();
 
-  // The mobile "My sets" list (hidden at desktop widths) repeats the set
-  // names, so scope to the visible desktop sidebar <aside>.
+  // The mobile list (hidden at desktop widths) repeats the set names, so scope
+  // to the visible desktop sidebar <aside>.
   const panel = page
     .locator("aside")
-    .filter({ hasText: "My sets", visible: true });
-  await expect(panel.getByText("Sunday Morning")).toBeVisible();
+    .filter({ hasText: "Upcoming sets", visible: true });
+
+  // Default (scope "all") lists every upcoming set — including "Saturday
+  // Prayer", which bob (Sunday Team) is not on. Two "Sunday Morning" sets are
+  // seeded (this week + two out), so take the first.
+  await expect(panel.getByText("Sunday Morning").first()).toBeVisible();
+  await expect(panel.getByText("Saturday Prayer")).toBeVisible();
+
+  // Switching the "Show sets" filter to "My sets" drops the ones bob isn't on.
+  await panel.getByLabel("Show sets").selectOption("mine");
+  await expect(panel.getByText("Sunday Morning").first()).toBeVisible();
+  await expect(panel.getByText("Saturday Prayer")).toHaveCount(0);
 });
 
 test("non-admins get no inline '+' create button", async ({ page }) => {
@@ -78,16 +82,20 @@ test("admin creates an ad-hoc set inline from a day cell", async ({ page }) => {
   await modal.getByRole("button", { name: "Create set" }).click();
   await expect(modal).not.toBeVisible();
 
-  // The new set now shows as a chip on the calendar.
-  await expect(page.getByText("Special Prayer Night")).toBeVisible();
+  // The new set now shows as a chip on the calendar. The label also appears in
+  // the always-rendered (but hidden) mobile panel, so scope to the visible one.
+  await expect(
+    page.getByText("Special Prayer Night").filter({ visible: true }).first()
+  ).toBeVisible();
 });
 
 test("admin deletes a set from the detail modal", async ({ page }) => {
   await login(page, "admin");
   await createAdHocSet(page, "To Be Deleted");
 
-  // Open the set's team modal and delete it (two-step confirm).
-  await page.getByText("To Be Deleted").click();
+  // Open the set's team modal and delete it (two-step confirm). Scope to the
+  // visible grid chip (the hidden mobile panel repeats the label).
+  await page.getByText("To Be Deleted").filter({ visible: true }).first().click();
   const modal = page.getByRole("dialog");
   await expect(modal).toBeVisible();
   await modal.getByRole("button", { name: "Delete set" }).click();
@@ -102,8 +110,9 @@ test("admin assigns and removes a player in the set modal", async ({ page }) => 
   await login(page, "admin");
   await createAdHocSet(page, "Roster Test");
 
-  // Open the (empty) set's team modal.
-  await page.getByText("Roster Test").click();
+  // Open the (empty) set's team modal (visible grid chip, not the hidden
+  // mobile panel's repeat of the label).
+  await page.getByText("Roster Test").filter({ visible: true }).first().click();
   const modal = page.getByRole("dialog");
   await expect(modal).toBeVisible();
 
@@ -160,14 +169,21 @@ test("assignment dropdown flags people who are unavailable for the set", async (
     const voxRow = modal.getByRole("listitem").filter({ hasText: "Vox" });
     await voxRow.getByRole("button", { name: "None" }).first().click();
 
-    // Carol is still listed (so you can see her) but labelled + disabled...
+    // Carol is flagged "(unavailable)" so an admin can see the conflict...
     const carol = page.getByRole("option", { name: /Carol Chen \(unavailable\)/ });
     await expect(carol).toBeVisible();
-    await expect(carol.getByRole("button")).toBeDisabled();
-    // ...while an available vocalist is selectable.
+    // ...but she stays selectable — the flag is a warning an admin may override
+    // (see PlayerSelect: unavailable people are muted, not disabled).
+    await expect(carol.getByRole("button")).toBeEnabled();
+    // An available vocalist carries no "(unavailable)" flag. Scope to the
+    // dropdown option's button — "Nina Nguyen" also names an <option> in the
+    // calendar's native "Show sets for" <select>, which has no button child.
+    await expect(
+      page.getByRole("option", { name: /Nina Nguyen \(unavailable\)/ })
+    ).toHaveCount(0);
     await expect(
       page.getByRole("option", { name: "Nina Nguyen" }).getByRole("button")
-    ).toBeEnabled();
+    ).toBeVisible();
   } finally {
     // Tests share one serial db — remove Carol's block so it can't leak into
     // later specs (e.g. schedule.spec, which also acts as Carol).
@@ -211,19 +227,24 @@ test("filters the calendar by my sets and by status", async ({ page }) => {
   await login(page, "admin");
   // An empty set (no team) that admin is NOT assigned to.
   await createAdHocSet(page, "Filter Fixture");
-  await expect(page.getByText("Filter Fixture")).toBeVisible();
+
+  // These filters act on the desktop grid; the mobile panel is always in the
+  // DOM (hidden here) with its own separate filter and keeps its copy of the
+  // label, so every assertion scopes to the visible grid chip.
+  const chip = page.getByText("Filter Fixture").filter({ visible: true });
+  await expect(chip.first()).toBeVisible();
 
   // Person filter → "My sets": admin isn't on it → hidden. Back to "Everyone"
   // shows it again.
   const personFilter = page.getByLabel("Show sets for");
   await personFilter.selectOption({ label: "My sets" });
-  await expect(page.getByText("Filter Fixture")).toHaveCount(0);
+  await expect(chip).toHaveCount(0);
   await personFilter.selectOption({ label: "Everyone" });
-  await expect(page.getByText("Filter Fixture")).toBeVisible();
+  await expect(chip.first()).toBeVisible();
 
   // Status "Unconfirmed": an empty set has no pending assignment → hidden.
   await page.getByLabel("Set status").selectOption({ label: "Unconfirmed" });
-  await expect(page.getByText("Filter Fixture")).toHaveCount(0);
+  await expect(chip).toHaveCount(0);
 });
 
 test("admin auto-schedules a set's open slots around a hand-picked player", async ({

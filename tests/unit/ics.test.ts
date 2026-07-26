@@ -61,10 +61,21 @@ describe("buildIcs", () => {
     expect(ics.split("\r\n").join("\r\n")).toBe(ics);
   });
 
-  it("computes DTEND from the duration", () => {
-    const ics = buildIcs([event]);
-    expect(ics).toContain("DTSTART:20260105T170000Z");
-    expect(ics).toContain("DTEND:20260105T183000Z"); // +90 min
+  it("computes DTEND from the duration, anchored to the given timezone", () => {
+    // Anchor to UTC so the wall-clock equals the input for a deterministic check.
+    const ics = buildIcs([event], "Worship Scheduler", "UTC");
+    expect(ics).toContain("DTSTART;TZID=UTC:20260105T170000");
+    expect(ics).toContain("DTEND;TZID=UTC:20260105T183000"); // +90 min
+    // No bare UTC "Z" times on the event itself (DTSTAMP aside).
+    expect(ics).not.toContain("DTSTART:20260105T170000Z");
+  });
+
+  it("emits times in the requested local wall-clock, with a VTIMEZONE", () => {
+    // 17:00 UTC on Jan 5 is 09:00 in America/Los_Angeles (PST, UTC-8).
+    const ics = buildIcs([event], "Worship Scheduler", "America/Los_Angeles");
+    expect(ics).toContain("DTSTART;TZID=America/Los_Angeles:20260105T090000");
+    expect(ics).toContain("BEGIN:VTIMEZONE");
+    expect(ics).toContain("TZID:America/Los_Angeles");
   });
 
   it("emits one VEVENT per event with stable UIDs", () => {

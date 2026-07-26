@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { coverEligibility } from "@/lib/sets";
 import { notifySwapTaken } from "@/lib/slack";
 
 export async function POST(
@@ -19,42 +20,31 @@ export async function POST(
 
   const assignment = await prisma.assignment.findUnique({
     where: { id },
-    include: { set: { select: { orgId: true } } },
+    include: {
+      set: {
+        select: {
+          orgId: true,
+          teamId: true,
+          // Whether the taker is on this set's team (empty array = they're not).
+          team: { select: { users: { where: { id: user.id }, select: { id: true } } } },
+        },
+      },
+    },
   });
-  if (!assignment || assignment.status !== "SWAP_REQUESTED") {
+  if (!assignment) {
     return NextResponse.json(
       { error: "Swap request not found" },
       { status: 404 }
-    );
-  }
-  // Covers can only be taken by members of the set's org.
-  if (!(await getMyOrgIds(user.id)).includes(assignment.set.orgId)) {
-    return NextResponse.json(
-      { error: "Swap request not found" },
-      { status: 404 }
-    );
-  }
-  if (assignment.userId === user.id) {
-    return NextResponse.json(
-      { error: "Cannot take your own swap" },
-      { status: 400 }
     );
   }
 
-  // I must actually play this instrument…
+  // Gather the facts the eligibility rule needs, then decide in one place (a
+  // pure, unit-tested helper — see lib/sets.ts). Holding a different role on
+  // the same set is fine, so only THIS role counts as "already in role".
   const me = await prisma.user.findUnique({
     where: { id: user.id },
     select: { instruments: true },
   });
-  if (!me?.instruments.includes(assignment.role)) {
-    return NextResponse.json(
-      { error: "You don't play this instrument" },
-      { status: 400 }
-    );
-  }
-
-  // …and can't already fill THIS role on the set (holding a different role on
-  // the same set is fine — a person can play more than one).
   const alreadyInRole = await prisma.assignment.findUnique({
     where: {
       setId_userId_role: {
@@ -64,10 +54,23 @@ export async function POST(
       },
     },
   });
-  if (alreadyInRole) {
+
+  const eligibility = coverEligibility({
+    viewerId: user.id,
+    ownerId: assignment.userId,
+    assignmentStatus: assignment.status,
+    viewerInstruments: me?.instruments ?? [],
+    role: assignment.role,
+    viewerOrgIds: await getMyOrgIds(user.id),
+    setOrgId: assignment.set.orgId,
+    setTeamId: assignment.set.teamId,
+    viewerOnTeam: (assignment.set.team?.users.length ?? 0) > 0,
+    alreadyInRole: !!alreadyInRole,
+  });
+  if (!eligibility.ok) {
     return NextResponse.json(
-      { error: "You already play this role on this set" },
-      { status: 400 }
+      { error: eligibility.error },
+      { status: eligibility.status }
     );
   }
 

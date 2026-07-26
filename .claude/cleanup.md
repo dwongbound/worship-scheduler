@@ -8,4 +8,6 @@ I want to cleanup my code before I push it out for review. Please audit everythi
 
 4. Make sure no memory leeks. When something is deleted, make sure it's deleted from the database. I don't want forever climbing disk usage. Make sure API calls are optimized. For example, if 2 calls are only ever called together, why make them separate API calls?
 
-5. See if things can be sped up, maybe there is duplication in mounting or API queries etc other optimizations. We want our application to be a super smooth user experience.
+5. See if things can be sped up, maybe there is duplication in mounting or unnecessary cascading API queries etc other optimizations. We want our application to be a super smooth user experience.
+
+6. Make sure there's appropriate testing for every feature. Unit testing for small specific functionality and e2e tests for mobile and desktop, especially user stories and functionality differences.

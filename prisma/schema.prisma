@@ -224,6 +224,11 @@ model Set {
   // the UI shows the MD picker + a warning until one is chosen.
   requiresMD Boolean @default(false)
 
+  // When true, this is a "private" ad-hoc set: only org admins and the people
+  // assigned to it can see it (GET /api/sets filters it out for everyone else).
+  // Default false = a normal set visible to the whole org.
+  isPrivate Boolean @default(false)
+
   // The one designated MD for this set. Always someone assigned in an
   // MD-capable role (keys/electric/bass) and never the worship leader — see
   // lib/md.ts for the eligibility rule. Null = no MD chosen yet. SetNull so

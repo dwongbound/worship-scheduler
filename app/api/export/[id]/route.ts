@@ -3,7 +3,9 @@
 // matching the whole-calendar export at /api/export.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { canViewSet } from "@/lib/sets";
 import { buildIcs, setEventTitle } from "@/lib/ics";
 import { INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
 
@@ -28,6 +30,17 @@ export async function GET(
     where: { setId: id, userId: user.id },
   });
   const roles = mine.map((a) => a.role as Instrument);
+
+  // A private set may only be exported by its assigned people and org admins;
+  // to anyone else it looks like it doesn't exist (matches GET /api/sets). The
+  // viewer's own rows in `mine` tell us whether they're assigned.
+  const visible = canViewSet(
+    { isPrivate: set.isPrivate, assignedUserIds: mine.map((a) => a.userId) },
+    { userId: user.id, isOrgAdmin: !!(await requireOrgAdminFor(set.orgId)) }
+  );
+  if (!visible) {
+    return NextResponse.json({ error: "Set not found" }, { status: 404 });
+  }
 
   const ics = buildIcs([
     {

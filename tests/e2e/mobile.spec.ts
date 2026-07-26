@@ -3,9 +3,10 @@
 // tab shows a "My sets" list instead of the dense month grid, the Availabilities
 // calendar drops away, and desktop-only affordances (the .ics export) hide.
 //
-// This file IS the "mobile" playwright project (see playwright.config.ts): it
-// runs under the Pixel 5 device preset — 393x851, mobile UA, touch — and the
-// desktop project skips it. So don't set a viewport here; the project owns it.
+// This file backs the "mobile-ios" and "mobile-android" playwright projects
+// (see playwright.config.ts): it runs under real device presets — iPhone 16 Pro
+// and Galaxy S24 — for their mobile UA, touch, and DPR, and the desktop project
+// skips it. So don't set a viewport here; each project's device owns it.
 import { expect, test } from "@playwright/test";
 import {
   login,
@@ -20,8 +21,8 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   // The desktop tab strip is display:none on phones (getByRole ignores hidden),
   // so its full "Set Manager" label isn't reachable...
   await expect(page.getByRole("link", { name: "Set Manager" })).toHaveCount(0);
-  // ...while the bottom bar's short "Sets" label is, and it navigates.
-  const setsTab = page.getByRole("link", { name: "Sets", exact: true });
+  // ...while the bottom bar's short "My Sets" label is, and it navigates.
+  const setsTab = page.getByRole("link", { name: "My Sets", exact: true });
   await expect(setsTab).toBeVisible();
   await setsTab.click();
 
@@ -50,13 +51,67 @@ test("phone calendar shows the My sets list, not the month grid", async ({ page 
   await expect(modal.getByText("Worship Leader")).toBeVisible();
 });
 
+test("phone calendar lists all upcoming sets by default, filterable to mine", async ({
+  page,
+}) => {
+  // nina is on "Sunday Morning" but not "Saturday Prayer"; nothing mutates her
+  // roster, so this stays valid across both device projects.
+  await login(page, "nina");
+
+  // Default shows every upcoming set — including one nina isn't on.
+  await expect(
+    page.getByText("Saturday Prayer").filter({ visible: true }).first()
+  ).toBeVisible();
+  await expect(
+    page.getByText("Sunday Morning").filter({ visible: true }).first()
+  ).toBeVisible();
+
+  // "My sets" narrows to the ones she holds a slot on. Scope to visible: the
+  // desktop month grid is also in the DOM here (hidden) and keeps Saturday
+  // Prayer's chip, so an unscoped count would still see that hidden copy.
+  await page.getByLabel("Show sets").selectOption("mine");
+  await expect(
+    page.getByText("Saturday Prayer").filter({ visible: true })
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Sunday Morning").filter({ visible: true }).first()
+  ).toBeVisible();
+});
+
+test("phone: a private set stays hidden from a non-member", async ({ page }) => {
+  // kate is neither on the seeded "Private Rehearsal" nor an admin.
+  await login(page, "kate");
+  const sets = (await (await page.request.get("/api/sets")).json()) as {
+    label: string;
+  }[];
+  expect(sets.find((s) => s.label === "Private Rehearsal")).toBeFalsy();
+  await expect(page.getByText("Private Rehearsal")).toHaveCount(0);
+});
+
+test("phone: a team-scoped cover shows only to the set's team", async ({ page }) => {
+  // "Prayer Cover Mobile" is jack's open keys cover on the Prayer Room team.
+  // paul (Prayer Room + keys) sees it; carol (keys, Sunday-only) does not.
+  await login(page, "paul");
+  await page.goto("/swaps");
+  await expect(
+    page
+      .locator("li")
+      .filter({ hasText: "Prayer Cover Mobile" })
+      .filter({ hasText: "requested by Jack Jones" })
+  ).toBeVisible();
+
+  await login(page, "carol");
+  await page.goto("/swaps");
+  await expect(page.getByText("Prayer Cover Mobile")).toHaveCount(0);
+});
+
 test("phone Set Manager hides the desktop-only .ics export", async ({ page }) => {
   await login(page, "bob");
   await page.goto("/swaps");
 
   await expect(page.getByRole("heading", { name: "My Sets" })).toBeVisible();
   // The export button is desktop-only (hidden sm:block) — present but not shown.
-  await expect(page.getByText("Export my sets (.ics)")).toBeHidden();
+  await expect(page.getByText("Export all my sets (.ics)")).toBeHidden();
 });
 
 test("phone Availabilities blocks a day without the desktop calendar", async ({

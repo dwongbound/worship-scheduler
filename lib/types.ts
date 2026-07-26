@@ -45,6 +45,10 @@ export interface ApiSet {
   durationMinutes: number;
   notes: string | null;
   requiresMD: boolean; // set needs a musical director on its team
+  // Private ad-hoc set: only org admins + assigned people can see it. The
+  // server never returns private sets to anyone else, so this is effectively
+  // always visible-to-you when present.
+  isPrivate: boolean;
   // The designated MD's userId, or null (none chosen / doesn't require one).
   // Must be an eligible assignee — see lib/md.ts.
   mdUserId: string | null;
