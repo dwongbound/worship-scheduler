@@ -49,6 +49,10 @@ interface DateSelectProps {
   max?: string; // yyyy-mm-dd — later days are disabled
   required?: boolean;
   disabled?: boolean;
+  // Whether to ring "today" in the grid. On by default as a helpful anchor;
+  // turn it off where today is irrelevant (e.g. the block-out-dates pickers,
+  // which only care about the future window, not the current date).
+  highlightToday?: boolean;
   // Optional per-day marker rendered as a small dot under the date number:
   // "full" → red, "partial" → amber, null → nothing. Used to surface which days
   // already have availability blocks while picking.
@@ -70,6 +74,7 @@ export default function DateSelect({
   max,
   required,
   disabled,
+  highlightToday = true,
   dayMarker,
   range,
   endValue,
@@ -272,7 +277,7 @@ export default function DateSelect({
               {cells.map((d) => {
                 const ymd = toYmd(d);
                 const inMonth = d.getMonth() === view.getMonth();
-                const isToday = ymd === todayYmd;
+                const isToday = highlightToday && ymd === todayYmd;
                 const blocked = !!outOfRange(ymd);
                 // Range highlight: the two endpoints are "selected"; days
                 // between them get a lighter fill. Single mode keeps its one

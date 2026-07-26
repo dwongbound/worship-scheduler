@@ -30,6 +30,24 @@ test("logs out via the user dropdown", async ({ page }) => {
   await expect(page).toHaveURL(/\/login/);
 });
 
+test("crossing the /login boundary raises no React error (hooks-order regression)", async ({
+  page,
+}) => {
+  // The Navbar is mounted on every route but renders null on /login and /join.
+  // A hook once sat *below* that early return, so React threw "Rendered fewer
+  // hooks than expected" when the persistent Navbar re-rendered across the
+  // boundary (e.g. on logout). Fail loudly if any uncaught error comes back.
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+
+  await login(page, "bob"); // /login → /calendar (Navbar gains its chrome)
+  await page.getByText("Bob Baker").click();
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(page).toHaveURL(/\/login/); // /calendar → /login (Navbar → null)
+
+  expect(errors).toEqual([]);
+});
+
 // Login strategy 1: self-service sign-up (credentials). A brand-new account
 // has no org membership, so it's gated at /join until it redeems an org key;
 // a bad key is rejected, the real one lands on the calendar, signed in.

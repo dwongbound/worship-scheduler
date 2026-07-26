@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Dropdown from "./common/Dropdown";
 import Banner from "./common/Banner";
 import Logo from "./Logo";
@@ -35,6 +35,10 @@ export default function Navbar() {
   const { data: session } = useSession();
   const [theme, setTheme] = useState<Theme>("system");
   const [openSwapCount, setOpenSwapCount] = useState(0);
+  // Published as the `--app-header-h` CSS var so full-height pages (e.g. the
+  // calendar) can size themselves to the space below the nav — which grows and
+  // shrinks as reminder banners appear/dismiss.
+  const navRef = useRef<HTMLElement>(null);
   // Per-org active requests + whether ANY still needs my response.
   const [availStatus, setAvailStatus] = useState<ApiAvailabilityStatus | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -222,6 +226,24 @@ export default function Navbar() {
     setTeamlessBannerDismissed(false);
   }, [adminOrgId]);
 
+  // Keep `--app-header-h` in sync with the nav's real height (bar + any
+  // banners), so the calendar's `100dvh - header` math stays correct no matter
+  // how many banners are showing. Must stay above the early return below so
+  // hook order is identical on every route.
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const publish = () =>
+      document.documentElement.style.setProperty(
+        "--app-header-h",
+        `${el.offsetHeight}px`
+      );
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   // No chrome on the login or join-org pages. Placed after all hooks so hook
   // order stays stable across renders (never return before a hook).
   if (pathname === "/login" || pathname === "/join") return null;
@@ -237,7 +259,7 @@ export default function Navbar() {
     {
       href: "/swaps",
       label: "Set Manager",
-      mobileLabel: "Sets",
+      mobileLabel: "My Sets",
       icon: SWAP_ICON,
       dot: openSwapCount > 0,
       dotTestId: "swap-dot",
@@ -278,6 +300,7 @@ export default function Navbar() {
   // drag to the tab you're heading toward; otherwise use the real/pending tab.
   const tabActive = (index: number, href: string) =>
     previewIndex != null ? index === previewIndex : isActive(href);
+
   const handleTabClick = (href: string) => {
     // Show the shared loader and highlight the clicked tab the instant it's
     // clicked, before the next page mounts.
@@ -305,7 +328,7 @@ export default function Navbar() {
 
   return (
     <>
-    <nav className="sticky top-0 z-30 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+    <nav ref={navRef} className="sticky top-0 z-30 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
       <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 py-3">
         <div className="flex min-w-0 items-center gap-4">
           {/* Page logo, far left */}
@@ -422,7 +445,12 @@ export default function Navbar() {
       {/* Onboarding banner: shown until a new user picks the instruments/roles
           they play, so the scheduler can actually assign them. */}
       {needsInstruments && !instrumentsBannerDismissed && (
-        <Banner tone="indigo" onDismiss={() => setInstrumentsBannerDismissed(true)}>
+        <Banner
+          tone="indigo"
+          href="/profile"
+          onLinkClick={() => handleTabClick("/profile")}
+          onDismiss={() => setInstrumentsBannerDismissed(true)}
+        >
           Finish setting up your profile:{" "}
           <Link href="/profile" className="font-semibold underline">
             add the instruments and roles you play
@@ -434,7 +462,12 @@ export default function Navbar() {
       {/* Reminder banner: shown until the user submits their availability
           for every org's active request (spotlights the first one waiting). */}
       {pendingAvail && !bannerDismissed && (
-        <Banner tone="amber" onDismiss={() => setBannerDismissed(true)}>
+        <Banner
+          tone="amber"
+          href="/schedule"
+          onLinkClick={() => handleTabClick("/schedule")}
+          onDismiss={() => setBannerDismissed(true)}
+        >
           {pendingAvail.request.name ? (
             <>
               {pendingAvail.request.org
@@ -458,7 +491,12 @@ export default function Navbar() {
           scheduler only offers a set's team members, so they'd never be
           picked). Each name links to the Team tab, scrolled to that person. */}
       {teamlessUsers.length > 0 && !teamlessBannerDismissed && (
-        <Banner tone="amber" onDismiss={() => setTeamlessBannerDismissed(true)}>
+        <Banner
+          tone="amber"
+          href="/users"
+          onLinkClick={() => handleTabClick("/users")}
+          onDismiss={() => setTeamlessBannerDismissed(true)}
+        >
           {teamlessUsers.length === 1
             ? "1 person isn’t on a team yet: "
             : `${teamlessUsers.length} people aren’t on a team yet: `}

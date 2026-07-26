@@ -27,6 +27,7 @@ export interface SetFormState {
   startTime: string; // "09:00"
   duration: number; // minutes
   requiresMD: boolean; // set needs a musical director on its team
+  isPrivate: boolean; // only admins + assigned people can see this set
   capacities: Record<Instrument, number> | null;
   // Which team the set is for. "" until the teams list loads; callers default
   // it to the first team and block submit while it's empty.
@@ -40,6 +41,7 @@ export function emptySetForm(): SetFormState {
     startTime: "09:00",
     duration: 90,
     requiresMD: false,
+    isPrivate: false,
     capacities: null,
     teamId: "",
   };
@@ -52,6 +54,7 @@ export default function SetFormFields({
   teams,
   labelRequired = false,
   labelPlaceholder = "e.g. Sunday Morning Service",
+  allowPrivate = false,
   disabled,
 }: {
   state: SetFormState;
@@ -60,6 +63,8 @@ export default function SetFormFields({
   teams: ApiTeam[]; // the set is created FOR one of these (empty = loading)
   labelRequired?: boolean;
   labelPlaceholder?: string;
+  // Show the "Private" checkbox (ad-hoc sets only — templates don't have it).
+  allowPrivate?: boolean;
   disabled?: boolean;
 }) {
   const patch = (p: Partial<SetFormState>) => onChange({ ...state, ...p });
@@ -129,6 +134,17 @@ export default function SetFormFields({
         onChange={(e) => patch({ requiresMD: e.target.checked })}
         disabled={disabled}
       />
+
+      {/* Private ad-hoc set: hidden from everyone except org admins and the
+          people assigned to it. Offered only when creating a one-off set. */}
+      {allowPrivate && (
+        <Checkbox
+          label="Private (only admins + assigned people can see this set)"
+          checked={state.isPrivate}
+          onChange={(e) => patch({ isPrivate: e.target.checked })}
+          disabled={disabled}
+        />
+      )}
 
       {/* Team shape is opt-in: null capacities means "use the default team".
           Toggling on seeds the editor with the defaults; toggling off clears

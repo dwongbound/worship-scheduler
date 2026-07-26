@@ -15,6 +15,10 @@ export interface PlayerOption {
   // (±2 weeks of this set). Drives the "least-scheduled first" ordering and is
   // shown as a muted count. Optional — callers that don't compute it omit it.
   count?: number;
+  // True when picking this person here would make them an eligible musical
+  // director (an MD-capable role + they're an MD). Shows a "(MD)" hint in the
+  // open list only — never on the collapsed control after selection.
+  md?: boolean;
 }
 
 interface PlayerSelectProps {
@@ -134,13 +138,22 @@ export default function PlayerSelect({
             {filtered.map((o) => (
               <OptionRow
                 key={o.id}
-                label={o.available ? o.name : `${o.name} (unavailable)`}
+                // "(MD)" flags who can be the musical director here; combines
+                // with the "(unavailable)" marker when both apply.
+                label={`${o.name}${o.md ? " (MD)" : ""}${
+                  o.available ? "" : " (unavailable)"
+                }`}
                 count={o.count}
-                disabled={!o.available}
+                // Unavailable people are dimmed but still selectable — an admin
+                // can deliberately override and assign someone who's busy.
+                muted={!o.available}
                 onClick={() => choose(o.id)}
               />
             ))}
-            {filtered.length === 0 && (
+            {/* Only a real search shows an empty-state; with no query, an empty
+                candidate list (e.g. the only role-player is already selected)
+                just shows "None" + the current pick, nothing more. */}
+            {q && filtered.length === 0 && (
               <li className="px-3 py-1.5 text-sm text-gray-500 dark:text-gray-400">
                 No matches.
               </li>
@@ -156,17 +169,22 @@ function OptionRow({
   label,
   active,
   disabled,
+  muted,
   count,
   onClick,
 }: {
   label: string;
   active?: boolean;
   disabled?: boolean;
+  // Dimmed but still clickable (e.g. an unavailable person an admin may
+  // override). `disabled` blocks selection; `muted` only greys the row.
+  muted?: boolean;
   // Times already scheduled in the surrounding weeks; shown as a muted badge so
   // admins can see why the list is ordered the way it is.
   count?: number;
   onClick: () => void;
 }) {
+  const dim = disabled || muted;
   return (
     <li role="option" aria-selected={!!active} aria-disabled={!!disabled}>
       <button
@@ -174,12 +192,14 @@ function OptionRow({
         disabled={disabled}
         onClick={onClick}
         className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm
+          ${disabled ? "cursor-not-allowed" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
           ${
-            disabled
-              ? "cursor-not-allowed text-gray-400 dark:text-gray-500"
-              : "hover:bg-indigo-100 dark:hover:bg-indigo-800"
-          }
-          ${active ? "font-medium text-indigo-700 dark:text-indigo-200" : "text-gray-800 dark:text-gray-100"}`}
+            active
+              ? "font-medium text-indigo-700 dark:text-indigo-200"
+              : dim
+                ? "text-gray-400 dark:text-gray-500"
+                : "text-gray-800 dark:text-gray-100"
+          }`}
       >
         <span className="truncate">{label}</span>
         {count !== undefined && count > 0 && (

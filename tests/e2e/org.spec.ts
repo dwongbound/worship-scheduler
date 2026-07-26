@@ -27,7 +27,10 @@ test("calendar defaults to All orgs, filters per org, and persists the choice", 
 
   // Default view: everything from both orgs, switcher reads "All orgs".
   await expect(page.getByTestId("org-switcher")).toContainText("All orgs");
-  await expect(page.getByText("College Night").first()).toBeVisible();
+  // Scope to the visible grid chip — the hidden mobile panel repeats the label.
+  await expect(
+    page.getByText("College Night").filter({ visible: true }).first()
+  ).toBeVisible();
 
   // The set detail modal names the set's org with a chip.
   const modal = await openSetByLabel(page, "College Night");
@@ -79,8 +82,11 @@ test("a member can join another org by key from the navbar", async ({
     .fill(entry.slice(entry.lastIndexOf(":") + 1).trim());
   await page.getByRole("button", { name: "Join", exact: true }).click();
 
-  // Org 2's sets now show up in the (still "All orgs") calendar view.
-  await expect(page.getByText("College Night").first()).toBeVisible();
+  // Org 2's sets now show up in the (still "All orgs") calendar view. Scope to
+  // the visible grid chip (the hidden mobile panel repeats the label).
+  await expect(
+    page.getByText("College Night").filter({ visible: true }).first()
+  ).toBeVisible();
   // And the switcher menu now lists the new org.
   await page.getByTestId("org-switcher").click();
   await expect(

@@ -18,6 +18,10 @@
      `.dark` class is toggled on <html> by the theme script. */
   html {
     color-scheme: light;
+    /* Live height of the sticky nav (bar + any reminder banners), published by
+       Navbar.tsx. Full-height pages subtract it so they fit under the header
+       without scrolling, even as banners come and go. ~4rem = bar, no banners. */
+    --app-header-h: 4rem;
   }
   html.dark {
     color-scheme: dark;

@@ -1,9 +1,10 @@
 "use client";
-// One line in a set's activity log (the History section of SetDetailModal),
+// One entry in a set's activity log (the History section of SetDetailModal),
 // rendered as two rows:
-//   • who acted, with the timestamp in parentheses
-//   • what changed — connective text muted, every person shown as a chip
-//     (struck through when they were removed or replaced)
+//   • the date/time, followed by who did it in parentheses — all muted
+//   • what happened — the change (connective text muted, every person a chip,
+//     struck through when removed or replaced)
+// Consecutive entries are separated by a divider (see the list in SetDetailModal).
 import { formatDay, formatTime } from "@/lib/dates";
 import { describeSetHistoryEvent } from "@/lib/setHistory";
 import type { ApiSetHistoryEvent } from "@/lib/types";
@@ -37,19 +38,16 @@ export default function SetHistoryEntry({
 }: {
   event: ApiSetHistoryEvent;
 }) {
-  const { actor, actorMuted, tokens } = describeSetHistoryEvent(event);
+  const { actor, tokens } = describeSetHistoryEvent(event);
 
   return (
-    <li>
-      {/* Row 1: actor chip + muted timestamp. */}
-      <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
-        <Chip name={actor} muted={actorMuted} />
-        <span className="text-xs text-gray-400 dark:text-gray-500">
-          ({formatDay(event.createdAt)} · {formatTime(event.createdAt)})
-        </span>
+    <li className="py-2.5 first:pt-0 last:pb-0">
+      {/* Row 1: date/time, then who did it in parentheses. */}
+      <div className="text-xs text-gray-400 dark:text-gray-500">
+        {formatDay(event.createdAt)} · {formatTime(event.createdAt)} ({actor})
       </div>
-      {/* Row 2: what changed — string tokens are muted text, object tokens
-          are person chips. */}
+      {/* Row 2: what changed. String tokens are muted connective text; object
+          tokens are person chips. */}
       <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-gray-600 dark:text-gray-400">
         {tokens.map((token, i) =>
           typeof token === "string" ? (

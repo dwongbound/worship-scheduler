@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { SLOT_CAPACITIES } from "@/lib/constants";
+import { resolveProfileEmail } from "@/lib/profile";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -74,11 +75,24 @@ export async function PUT(req: NextRequest) {
     ? body.instruments.filter((i: string) => validInstruments.includes(i))
     : [];
 
+  // Google (OAuth-only) accounts sign in with their Google email, so it's not
+  // editable — ignore any email in the body and keep the existing value. The
+  // rule is a pure, unit-tested helper (see lib/profile.ts).
+  const current = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { passwordHash: true, email: true },
+  });
+  const email = resolveProfileEmail(
+    !!current?.passwordHash,
+    current?.email ?? null,
+    body.email
+  );
+
   // Slack member ids are per-org now (OrgMembership.slackUserId, set via the
   // profile connect UI / PUT /api/memberships/[orgId]/slack) — not written here.
   const data: Record<string, unknown> = {
     name: body.name.trim(),
-    email: body.email || null,
+    email,
     instruments,
   };
   if (typeof body.password === "string" && body.password.length > 0) {

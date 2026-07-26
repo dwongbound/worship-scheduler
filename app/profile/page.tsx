@@ -26,6 +26,10 @@ type Membership = {
   slackTeamName: string | null;
 };
 
+// postMessage tag the Slack OAuth popup uses to hand its result back to the
+// page that opened it (so only the Slack section refreshes, not the whole page).
+const SLACK_CONNECT_MESSAGE = "slack-connect-result";
+
 export default function ProfilePage() {
   const { update } = useSession();
   const [loaded, setLoaded] = useState(false);
@@ -43,6 +47,9 @@ export default function ProfilePage() {
   // Snapshot of the last-persisted fields, so an auto-save that would be a
   // no-op (e.g. tabbing out of an unchanged input) is skipped.
   const savedKeyRef = useRef("");
+  // Holds the "hide the ✓" timer so each save restarts the full 2s window
+  // (otherwise an earlier timer fires early and cuts a later check short).
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Password-change modal state.
   const [pwOpen, setPwOpen] = useState(false);
@@ -50,6 +57,20 @@ export default function ProfilePage() {
   const [pw2, setPw2] = useState("");
   const [pwError, setPwError] = useState("");
   const [pwSaving, setPwSaving] = useState(false);
+
+  // When this page is the Slack OAuth popup (the callback redirected us here
+  // with ?slack=<status>), hand the result to the opener and close — so the
+  // opener refreshes just its Slack section instead of the whole page reloading.
+  useEffect(() => {
+    const status = new URLSearchParams(window.location.search).get("slack");
+    if (status && window.opener) {
+      window.opener.postMessage(
+        { type: SLACK_CONNECT_MESSAGE, status },
+        window.location.origin
+      );
+      window.close();
+    }
+  }, []);
 
   useEffect(() => {
     fetch("/api/me")
@@ -114,14 +135,28 @@ export default function ProfilePage() {
         body: JSON.stringify(payload),
       });
       if (res.ok) {
+        // What actually changed vs. the last save (key = [name, email, roles]).
+        // Both post-save side effects are expensive, so only fire the one whose
+        // field moved — otherwise a role toggle needlessly refreshes the JWT
+        // (csrf + session round-trip) and re-runs the whole navbar refetch.
+        const [prevName, , prevRoles] = JSON.parse(
+          savedKeyRef.current || '["","",[]]'
+        ) as [string, string, string[]];
         savedKeyRef.current = key;
         setSaved(true);
-        setTimeout(() => setSaved(false), 2000);
-        // Refresh the JWT so the navbar shows the new name immediately.
-        await update({ name: payload.name });
-        // Tell the navbar to re-check the profile so the "finish setup"
-        // reminder dot/banner clear the moment a role is saved.
-        window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
+        if (savedTimer.current) clearTimeout(savedTimer.current);
+        savedTimer.current = setTimeout(() => setSaved(false), 2000);
+        // Refresh the JWT (and, via the session change, the navbar) only when
+        // the name — the one profile field the navbar shows — actually changed.
+        if (payload.name.trim() !== prevName) {
+          await update({ name: payload.name });
+        }
+        // Poke the navbar's setup-reminder dot only when roles changed, since
+        // that's the only thing the dot depends on.
+        const nextRoles = [...payload.instruments].sort();
+        if (JSON.stringify(prevRoles) !== JSON.stringify(nextRoles)) {
+          window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
+        }
       } else {
         const data = await res.json();
         setMessage(`Error: ${data.error ?? "could not save"}`);
@@ -193,17 +228,39 @@ export default function ProfilePage() {
             onBlur={() => saveProfile()}
             required
           />
-          <Input
-            label="Email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onBlur={() => saveProfile()}
-            placeholder="you@example.com"
-          />
+          <div>
+            <Input
+              label="Email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onBlur={() => saveProfile()}
+              placeholder="you@example.com"
+              // Google (OAuth-only) accounts use their Google email to sign in,
+              // so it can't be edited here.
+              disabled={!hasPassword}
+            />
+            {!hasPassword && (
+              <p className="mt-1 text-xs text-gray-500">
+                Managed by your Google account.
+              </p>
+            )}
+          </div>
           <fieldset>
-            <legend className="mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-              Instruments / roles
+            <legend className="mb-2 flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              <span>Instruments / roles</span>
+              {/* Auto-save status for the whole profile lives here now. */}
+              {saving ? (
+                <LoadingDots size="sm" />
+              ) : saved ? (
+                <span
+                  className="text-green-600"
+                  aria-label="Saved"
+                  data-testid="profile-saved"
+                >
+                  ✓
+                </span>
+              ) : null}
             </legend>
             <div className="grid grid-cols-2 gap-2">
               {ROLE_ORDER.map((inst) => (
@@ -242,14 +299,10 @@ export default function ProfilePage() {
             )}
           </div>
 
-          {/* Auto-save status: a transient "Saving…"/"Saved ✓", or an error.
-              Fixed height so the layout doesn't jump as it changes. */}
-          <div className="flex h-5 items-center text-sm font-medium">
-            {saving ? (
-              <span className="flex items-center gap-2 text-gray-500">
-                <LoadingDots size="sm" /> Saving…
-              </span>
-            ) : message ? (
+          {/* Errors and one-off notices (e.g. "Password updated."). The
+              transient saving/saved status now sits by the Instruments header. */}
+          {message && (
+            <div className="flex h-5 items-center text-sm font-medium">
               <span
                 className={
                   message.startsWith("Error") ? "text-red-600" : "text-green-600"
@@ -257,10 +310,8 @@ export default function ProfilePage() {
               >
                 {message}
               </span>
-            ) : saved ? (
-              <span className="text-green-600">Saved ✓</span>
-            ) : null}
-          </div>
+            </div>
+          )}
         </form>
       </Card>
 
@@ -306,10 +357,78 @@ export default function ProfilePage() {
 // Per-org Slack linking. Each org the user belongs to gets a row: the current
 // member id (connected/not), a one-click Connect button (Flow A OAuth, which
 // prefills the workspace), and a manual id field as the fallback.
+// Human-readable outcome for each ?slack=<status> the connect callback returns.
+const SLACK_RESULTS: Record<string, { text: string; ok: boolean }> = {
+  connected: { text: "Connected ✓", ok: true },
+  duplicate: {
+    text: "That Slack account is already linked to someone else in this org.",
+    ok: false,
+  },
+  wrong_workspace: {
+    text: "That was a different Slack workspace than this org uses.",
+    ok: false,
+  },
+  forbidden: { text: "Couldn't verify your session — please try again.", ok: false },
+  error: { text: "Slack connection failed — please try again.", ok: false },
+};
+
 function SlackConnections({ initial }: { initial: Membership[] }) {
   const [rows, setRows] = useState(initial);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // orgId whose OAuth popup is open (its button shows a spinner); null = idle.
+  const [connecting, setConnecting] = useState<string | null>(null);
+  // Transient per-org outcome shown after a flow (mainly to surface errors —
+  // success is already visible in the row's "Connected ✓" line).
+  const [note, setNote] = useState<{ orgId: string; text: string; ok: boolean } | null>(null);
   useEffect(() => setRows(initial), [initial]);
+
+  // Re-pull just this org's Slack link after a successful connect, so only this
+  // row updates rather than reloading the page.
+  async function refreshOrg(orgId: string) {
+    const me = await fetch("/api/me")
+      .then((r) => r.json())
+      .catch(() => null);
+    const updated: Membership | undefined = me?.memberships?.find(
+      (m: Membership) => m.orgId === orgId
+    );
+    if (updated) setRows((rs) => rs.map((r) => (r.orgId === orgId ? updated : r)));
+  }
+
+  // Start Flow A in a popup so the page underneath stays put. When the popup
+  // finishes it postMessages its result back (see ProfilePage's popup handler);
+  // we also poll popup.closed in case the user dismisses it without finishing.
+  function connect(orgId: string) {
+    const url = `/api/slack/connect?orgId=${orgId}`;
+    const popup = window.open(url, "slack_connect", "width=600,height=760");
+    // Popups blocked → fall back to the old full-page redirect.
+    if (!popup) {
+      window.location.href = url;
+      return;
+    }
+    setConnecting(orgId);
+    setNote(null);
+
+    let timer: ReturnType<typeof setInterval>;
+    const finish = (status?: string) => {
+      window.removeEventListener("message", onMessage);
+      clearInterval(timer);
+      setConnecting(null);
+      if (status) {
+        const result = SLACK_RESULTS[status] ?? SLACK_RESULTS.error;
+        setNote({ orgId, ...result });
+        if (result.ok) refreshOrg(orgId);
+      }
+    };
+    const onMessage = (e: MessageEvent) => {
+      if (e.origin !== window.location.origin) return;
+      if (e.data?.type !== SLACK_CONNECT_MESSAGE) return;
+      finish(String(e.data.status ?? ""));
+    };
+    window.addEventListener("message", onMessage);
+    timer = setInterval(() => {
+      if (popup.closed) finish();
+    }, 500);
+  }
 
   async function saveManual(orgId: string) {
     const value = drafts[orgId] ?? "";
@@ -349,19 +468,27 @@ function SlackConnections({ initial }: { initial: Membership[] }) {
                   ) : m.orgSlackConnected ? (
                     "Not connected"
                   ) : (
-                    "Slack isn't set up for this org yet"
+                    "Slack isn't set up for this org yet. Tell your admin to do so."
                   )}
                 </p>
+                {note?.orgId === m.orgId && !note.ok && (
+                  <p className="mt-1 text-xs text-red-600">{note.text}</p>
+                )}
               </div>
               {m.orgSlackConnected && (
                 <Button
                   type="button"
                   variant="secondary"
-                  onClick={() => {
-                    window.location.href = `/api/slack/connect?orgId=${m.orgId}`;
-                  }}
+                  disabled={connecting === m.orgId}
+                  onClick={() => connect(m.orgId)}
                 >
-                  {m.slackUserId ? "Reconnect" : "Connect Slack"}
+                  {connecting === m.orgId ? (
+                    <LoadingDots size="sm" />
+                  ) : m.slackUserId ? (
+                    "Reconnect"
+                  ) : (
+                    "Connect Slack"
+                  )}
                 </Button>
               )}
             </div>

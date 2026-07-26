@@ -82,6 +82,7 @@ export default function CreateSetModal({
           startsAt: startsAtISO(),
           durationMinutes: form.duration,
           requiresMD: form.requiresMD,
+          isPrivate: form.isPrivate,
           // null capacities → the set uses the global default team shape.
           slotCapacities: form.capacities ?? undefined,
           teamId: form.teamId,
@@ -111,6 +112,7 @@ export default function CreateSetModal({
           onChange={setForm}
           teams={teams}
           disabled={busy}
+          allowPrivate
           labelPlaceholder="e.g. Special Prayer Night"
         />
 

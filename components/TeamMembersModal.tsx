@@ -111,7 +111,29 @@ export default function TeamMembersModal({
     : [];
 
   return (
-    <Modal open onClose={onClose} title={team.name}>
+    <Modal
+      open
+      onClose={onClose}
+      title={team.name}
+      // Delete pinned bottom-left, Done bottom-right; both stay put while the
+      // body scrolls. Delete opens a separate confirmation modal (below).
+      footer={
+        <>
+          <Button
+            size="sm"
+            variant="danger"
+            onClick={() => onConfirmDelete(true)}
+            disabled={busy}
+            className="mr-auto"
+          >
+            Delete team
+          </Button>
+          <Button size="sm" variant="secondary" onClick={onClose}>
+            Done
+          </Button>
+        </>
+      }
+    >
       {/* Current roster */}
       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
         Members ({members.length})
@@ -228,41 +250,40 @@ export default function TeamMembersModal({
         </div>
       </div>
 
-      {/* Danger zone: delete the team (its sets survive, open to everyone). */}
-      <div className="mt-5 flex items-center justify-end gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-        {confirmingDelete ? (
-          <>
-            <span className="mr-auto text-sm text-gray-600 dark:text-gray-400">
-              Delete this team? Its sets are kept, open to everyone.
-            </span>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => onConfirmDelete(false)}
-              disabled={busy}
-            >
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => onDelete(team.id)}
-              disabled={busy}
-            >
-              Confirm delete
-            </Button>
-          </>
-        ) : (
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={() => onConfirmDelete(true)}
-            disabled={busy}
-          >
-            Delete team
-          </Button>
-        )}
-      </div>
+      {/* Delete confirmation: a separate stacked modal so it reads as a
+          deliberate, blocking step (its sets survive, open to everyone). */}
+      {confirmingDelete && (
+        <Modal
+          open
+          onClose={() => onConfirmDelete(false)}
+          title="Delete team?"
+          footer={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onConfirmDelete(false)}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => onDelete(team.id)}
+                disabled={busy}
+              >
+                Confirm delete
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Delete <span className="font-medium">{team.name}</span>? Its sets are
+            kept, open to everyone.
+          </p>
+        </Modal>
+      )}
     </Modal>
   );
 }

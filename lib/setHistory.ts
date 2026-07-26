@@ -38,10 +38,11 @@ export function describeSetHistoryEvent(
         tokens: ["removed", { name: target, struck: true }, `from ${role}`],
       };
     case "REASSIGNED":
+      // No verb needed — the new chip + struck-through old chip already read as
+      // a swap, and the actor is shown up on the date line.
       return {
         actor,
         tokens: [
-          "swapped in",
           { name: target },
           "for",
           { name: previous, struck: true },
