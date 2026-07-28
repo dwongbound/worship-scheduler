@@ -296,7 +296,7 @@ async function main() {
 
   // Target org: the one holding Prayer Room Team + Sunday Team. Override with
   // STAGING_ORG if needed.
-  const TARGET_ORG = process.env.STAGING_ORG ?? "Sunday Church";
+  const TARGET_ORG = process.env.STAGING_ORG ?? "Tap Worship";
   const org = await prisma.org.findUnique({
     where: { name: TARGET_ORG },
     select: { id: true, name: true },
