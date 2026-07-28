@@ -119,15 +119,13 @@ export async function POST(
 
   // Choir: seat everyone on the team who's free at this time and isn't already
   // on this set's choir. Unbounded — no capacity, spacing, or load balancing.
+  // Only when the set has choir turned on (opt-in per set); otherwise skip it.
   const alreadyOnChoir = new Set(
     set.assignments.filter((a) => a.role === CHOIR).map((a) => a.userId)
   );
-  const choirUserIds = availableChoirMembers(
-    schedulerSet,
-    eligible,
-    rules,
-    alreadyOnChoir
-  );
+  const choirUserIds = set.choirEnabled
+    ? availableChoirMembers(schedulerSet, eligible, rules, alreadyOnChoir)
+    : [];
 
   // Band picks + choir singers, all committed together.
   const newAssignments = [

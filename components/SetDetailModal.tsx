@@ -334,6 +334,17 @@ export default function SetDetailModal({
       })
     );
 
+  // Turn this set's choir on/off (admin only). Off = no choir section to edit
+  // and "Auto schedule" skips choir; on = admins can add/auto-schedule singers.
+  const toggleChoir = (choirEnabled: boolean) =>
+    runEdit(() =>
+      fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ choirEnabled }),
+      })
+    );
+
   // Set (or clear, with "") this set's designated MD.
   const setMD = (userId: string) =>
     runEdit(() =>
@@ -381,14 +392,19 @@ export default function SetDetailModal({
       onClose={slotToDelete ? () => setSlotToDelete(null) : onClose}
       title={set.label ?? "Worship Set"}
       titleAccessory={
-        /* On the title line: the set's org (matters in "All orgs" views) and,
-           for a private set, a bare lock icon. Sits right of the title rather
-           than down on the date line. */
-        (set.org || set.isPrivate) && (
+        /* On the title line: the set's org (matters in "All orgs" views), its
+           team, and — for a private set — a bare lock icon. Sits right of the
+           title rather than down on the date line. */
+        (set.org || set.team || set.isPrivate) && (
           <span className="flex items-center gap-2">
             {set.org && (
               <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
                 {set.org.name}
+              </span>
+            )}
+            {set.team && (
+              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                {set.team.name}
               </span>
             )}
             {/* Private = only admins + assigned people ever see this modal. */}
@@ -407,7 +423,6 @@ export default function SetDetailModal({
       subtitle={
         <>
           {formatDay(set.startsAt)} · {formatTime(set.startsAt)}
-          {set.team && <> · {set.team.name}</>}
         </>
       }
     >
@@ -597,71 +612,99 @@ export default function SetDetailModal({
         })}
       </ul>
 
-      {/* Choir: a special role with no fixed slot count — an ongoing, unbounded
-          list rather than a fixed set of slots. "Auto schedule" (above) seats
-          every available choir member; admins can also add/remove people by
-          hand here. The dropdowns reuse the same eligibility + availability
-          logic as the band roles above. Hidden entirely when the set has no
-          choir and the viewer can't edit (no empty section for non-admins). */}
-      {(canEditTeam || choirMembers.length > 0) && (
+      {/* Choir: opt-in PER SET. An admin flips it on (below) before anyone can
+          be added or auto-scheduled into it. A special role with no fixed slot
+          count — an unbounded, admin-managed list rather than a fixed set of
+          slots. When on, "Auto schedule" (above) seats every available singer;
+          admins can also add/remove people by hand. The section is hidden for
+          non-admins unless the set actually has a choir with people on it. */}
+      {(canEditTeam || (set.choirEnabled && choirMembers.length > 0)) && (
         <div
           data-testid="choir-section"
           className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
         >
-          <span className="font-medium">
-            Choir
-            {choirMembers.length > 0 && (
-              <span className="ml-1 text-xs text-gray-500">
-                ({choirMembers.length})
-              </span>
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">
+              Choir
+              {set.choirEnabled && choirMembers.length > 0 && (
+                <span className="ml-1 text-xs text-gray-500">
+                  ({choirMembers.length})
+                </span>
+              )}
+            </span>
+            {/* Admins can turn choir off again, but only while it's empty so no
+                one is silently dropped off the roster. */}
+            {canEditTeam && set.choirEnabled && choirMembers.length === 0 && (
+              <button
+                type="button"
+                onClick={() => toggleChoir(false)}
+                disabled={busy}
+                className="text-xs font-medium text-gray-500 hover:text-gray-700 disabled:opacity-50 dark:text-gray-400 dark:hover:text-gray-200"
+              >
+                Turn off
+              </button>
             )}
-          </span>
+          </div>
 
-          <ul className="mt-1 space-y-1 pl-4">
-            {choirMembers.map((a) =>
-              canEditTeam ? (
-                // Picking "None" removes them from the choir; picking someone
-                // else reassigns this slot (resets it to PENDING). No capacity
-                // "✕" — choir slots aren't a fixed shape, so the dropdown's
-                // "None" is the only remove affordance.
-                <li key={a.id} className="flex items-center gap-2">
+          {canEditTeam && !set.choirEnabled ? (
+            // Off: a single enable button (only admins reach this — non-admins
+            // never see the section while choir is off).
+            <div className="mt-2 space-y-2">
+              <p className="text-gray-500 dark:text-gray-400">
+                Choir is off for this set. Turn it on to add singers and include
+                them when you auto-schedule.
+              </p>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => toggleChoir(true)}
+                disabled={busy}
+              >
+                Enable choir
+              </Button>
+            </div>
+          ) : (
+            <ul className="mt-1 space-y-1 pl-4">
+              {choirMembers.map((a) =>
+                canEditTeam ? (
+                  // Picking "None" removes them from the choir; picking someone
+                  // else reassigns this slot (resets it to PENDING). No capacity
+                  // "✕" — choir slots aren't a fixed shape, so the dropdown's
+                  // "None" is the only remove affordance.
+                  <li key={a.id} className="flex items-center gap-2">
+                    <PlayerSelect
+                      selected={{ id: a.user.id, name: a.user.name }}
+                      options={choirOptions}
+                      disabled={busy}
+                      onChange={(userId) =>
+                        userId ? reassign(a.id, userId) : removeAssignment(a.id)
+                      }
+                    />
+                    <StatusBadge status={a.status} />
+                  </li>
+                ) : (
+                  <li key={a.id} className="flex items-center gap-2">
+                    <span>{a.user.name}</span>
+                    <StatusBadge status={a.status} />
+                  </li>
+                )
+              )}
+
+              {/* Admins get one always-present "add someone" row (the list is
+                  unbounded, so unlike band roles there's no slot count to derive). */}
+              {canEditTeam && (
+                <li className="flex items-center gap-2">
                   <PlayerSelect
-                    selected={{ id: a.user.id, name: a.user.name }}
+                    selected={null}
                     options={choirOptions}
                     disabled={busy}
-                    onChange={(userId) =>
-                      userId ? reassign(a.id, userId) : removeAssignment(a.id)
-                    }
+                    dashed
+                    onChange={(userId) => userId && addAssignment(CHOIR, userId)}
                   />
-                  <StatusBadge status={a.status} />
                 </li>
-              ) : (
-                <li key={a.id} className="flex items-center gap-2">
-                  <span>{a.user.name}</span>
-                  <StatusBadge status={a.status} />
-                </li>
-              )
-            )}
-
-            {/* Admins get one always-present "add someone" row (the list is
-                unbounded, so unlike band roles there's no slot count to derive). */}
-            {canEditTeam && (
-              <li className="flex items-center gap-2">
-                <PlayerSelect
-                  selected={null}
-                  options={choirOptions}
-                  disabled={busy}
-                  dashed
-                  onChange={(userId) => userId && addAssignment(CHOIR, userId)}
-                />
-              </li>
-            )}
-
-            {/* Read-only view of an empty choir. */}
-            {!canEditTeam && choirMembers.length === 0 && (
-              <li className="text-gray-400">No one in the choir yet.</li>
-            )}
-          </ul>
+              )}
+            </ul>
+          )}
         </div>
       )}
 

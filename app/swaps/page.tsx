@@ -346,11 +346,6 @@ export default function SwapsPage() {
                     )
                   ) : (
                     <>
-                      {a.status === "PENDING" && (
-                        <Button size="sm" onClick={() => act(a.id, "confirm")}>
-                          Confirm
-                        </Button>
-                      )}
                       {a.status !== "SWAP_REQUESTED" ? (
                         <>
                           <Button
@@ -376,6 +371,12 @@ export default function SwapsPage() {
                           onClick={() => act(a.id, "cancelSwap")}
                         >
                           Cancel cover request
+                        </Button>
+                      )}
+                      {/* Confirm sits last so the primary action is rightmost. */}
+                      {a.status === "PENDING" && (
+                        <Button size="sm" onClick={() => act(a.id, "confirm")}>
+                          Confirm
                         </Button>
                       )}
                     </>

@@ -62,8 +62,11 @@ test("blocks a day by clicking it on the calendar", async ({ page }) => {
   const blockEntry = page.getByRole("listitem").filter({ hasText: "All day" });
   await expect(blockEntry.first()).toBeVisible();
 
-  // Clean up.
+  // Clean up so the block doesn't leak into later specs. The list Delete stays
+  // disabled while the block is still optimistic (its real id hasn't arrived);
+  // Playwright waits for it to enable, so this deletes the real DB row.
   await page.getByRole("button", { name: "Delete" }).first().click();
+  await expect(blockEntry).toHaveCount(0);
 });
 
 test("submits availability and re-opens it for changes", async ({ page }) => {

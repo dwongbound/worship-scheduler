@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FULL_DAY_MIN,
+  applyDayEdit,
   blockedDaysInRange,
   dayBlockLevel,
 } from "@/lib/availability";
@@ -195,5 +196,73 @@ describe("blockedDaysInRange", () => {
     // Wednesdays in [Jul 6, Jul 20]: the 8th and the 15th.
     expect(days.map((d) => d.ymd)).toEqual(["2026-07-08", "2026-07-15"]);
     expect(days.every((d) => d.level === "full")).toBe(true);
+  });
+});
+
+// applyDayEdit is the client-side mirror of /api/availability/block-days, so its
+// result is described the same way the calendar reads it: dayBlockLevel per day.
+describe("applyDayEdit", () => {
+  it("blocks a run of previously-free days", () => {
+    const next = applyDayEdit([], "2026-07-08", "2026-07-10", true);
+    expect(dayBlockLevel(next, "2026-07-07")).toBeNull();
+    expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+    expect(dayBlockLevel(next, "2026-07-09")).toBe("full");
+    expect(dayBlockLevel(next, "2026-07-10")).toBe("full");
+    expect(dayBlockLevel(next, "2026-07-11")).toBeNull();
+  });
+
+  it("merges a new day into an adjacent standalone block into one range", () => {
+    const entries = [specific(isoDay(2026, 7, 8))]; // all-day (null minutes)
+    const next = applyDayEdit(entries, "2026-07-09", "2026-07-09", true);
+    // One contiguous block now covers the 8th and 9th.
+    const allDay = next.filter((e) => e.type === "SPECIFIC");
+    expect(allDay).toHaveLength(1);
+    expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+    expect(dayBlockLevel(next, "2026-07-09")).toBe("full");
+  });
+
+  it("does not double-block a day already covered", () => {
+    const entries = [specific(isoDay(2026, 7, 8))];
+    const next = applyDayEdit(entries, "2026-07-08", "2026-07-08", true);
+    // Nothing to add — returns the original array untouched.
+    expect(next).toBe(entries);
+  });
+
+  it("splits a covering range when a middle day is unblocked", () => {
+    const entries = [
+      specific(isoDay(2026, 7, 8), {
+        endDate: isoDay(2026, 7, 10),
+        startMinute: 0,
+        endMinute: FULL_DAY_MIN,
+      }),
+    ];
+    const next = applyDayEdit(entries, "2026-07-09", "2026-07-09", false);
+    expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+    expect(dayBlockLevel(next, "2026-07-09")).toBeNull(); // cleared
+    expect(dayBlockLevel(next, "2026-07-10")).toBe("full");
+  });
+
+  it("preserves a block's requestId when splitting it", () => {
+    const tied = specific(isoDay(2026, 7, 8), {
+      endDate: isoDay(2026, 7, 10),
+      startMinute: 0,
+      endMinute: FULL_DAY_MIN,
+    });
+    tied.requestId = "req1";
+    const next = applyDayEdit([tied], "2026-07-09", "2026-07-09", false);
+    expect(next.every((e) => e.requestId === "req1")).toBe(true);
+  });
+
+  it("leaves recurring and timed blocks untouched", () => {
+    const entries = [
+      recurring(jul8Weekday), // all-day recurring
+      specific(isoDay(2026, 7, 8), { startMinute: 9 * 60, endMinute: 12 * 60 }),
+    ];
+    const next = applyDayEdit(entries, "2026-07-08", "2026-07-08", false);
+    // The recurring + timed blocks still apply (unblock only touches all-day
+    // SPECIFIC), so the day stays full (recurring wins).
+    expect(next).toContain(entries[0]);
+    expect(next).toContain(entries[1]);
+    expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
   });
 });

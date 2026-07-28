@@ -241,6 +241,11 @@ model Set {
   // Default false = a normal set visible to the whole org.
   isPrivate Boolean @default(false)
 
+  // Choir is opt-in PER SET: an admin flips this on before anyone can be added
+  // to the set's choir or auto-scheduled into it. Default false = no choir on
+  // this set (the choir section is off and "Auto schedule" skips choir).
+  choirEnabled Boolean @default(false)
+
   // The one designated MD for this set. Always someone assigned in an
   // MD-capable role (keys/electric/bass) and never the worship leader — see
   // lib/md.ts for the eligibility rule. Null = no MD chosen yet. SetNull so

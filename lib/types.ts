@@ -49,6 +49,9 @@ export interface ApiSet {
   // server never returns private sets to anyone else, so this is effectively
   // always visible-to-you when present.
   isPrivate: boolean;
+  // Choir opt-in: false = the set has no choir (section off, "Auto schedule"
+  // skips choir); an admin toggles it on to manage/auto-schedule a choir.
+  choirEnabled: boolean;
   // The designated MD's userId, or null (none chosen / doesn't require one).
   // Must be an eligible assignee — see lib/md.ts.
   mdUserId: string | null;
