@@ -63,10 +63,11 @@ function CalendarView() {
   const [adminUsersByOrg, setAdminUsersByOrg] = useState<
     Record<string, ApiAdminUser[]>
   >({});
-  // Calendar filters, both dropdowns. personFilter: "" = everyone, otherwise a
-  // userId — admins can pick anyone, non-admins get just "My sets" (their own
-  // id). statusFilter: "all" or one SetStatus.
-  const [personFilter, setPersonFilter] = useState("");
+  // Calendar filters, both dropdowns. `filter` ("Show sets for"): "" = all
+  // sets; "team:<teamId>" = one team's sets (anyone can pick these); otherwise
+  // a userId — "My sets" for everyone, and admins can also pick any person.
+  // statusFilter: "all" or one SetStatus.
+  const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<SetStatus | "all">("all");
 
   // Org context: the navbar switcher's view filter ("all" or one org), and
@@ -179,14 +180,33 @@ function CalendarView() {
   usePageLoading(!sets);
   if (!sets) return null;
 
-  // Apply the filters: sets the chosen person is on (personFilter = "" is
-  // everyone) AND a status match (statusFilter = "all" matches every status).
+  // Apply the "Show sets for" filter (by team or by person) AND a status match
+  // (statusFilter = "all" matches every status). filter = "" shows everything.
   const visibleSets = sets.filter((s) => {
-    if (personFilter && !s.assignments.some((a) => a.user.id === personFilter))
-      return false;
+    if (filter.startsWith("team:")) {
+      // Team filter: only sets belonging to the chosen team.
+      if ((s.teamId ?? s.team?.id) !== filter.slice("team:".length))
+        return false;
+    } else if (filter) {
+      // Person filter: only sets the chosen user is assigned to.
+      if (!s.assignments.some((a) => a.user.id === filter)) return false;
+    }
     if (statusFilter !== "all" && setStatus(s) !== statusFilter) return false;
     return true;
   });
+
+  // Teams to offer in the "Show sets for" dropdown — every distinct team that
+  // has a set in view (derived from the loaded sets, so it naturally follows
+  // the org view without a separate fetch). Sorted by name.
+  const teamSeen = new Set<string>();
+  const filterTeams = sets
+    .flatMap((s) => (s.team ? [s.team] : []))
+    .filter((t) => {
+      if (teamSeen.has(t.id)) return false;
+      teamSeen.add(t.id);
+      return true;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // People the admin person-filter can pick — every member across my admin
   // orgs (deduped), except the current user (covered by "My sets").
@@ -211,18 +231,33 @@ function CalendarView() {
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-52">
           <Select
-            label={isAdmin ? "Show sets for" : "Show"}
-            value={personFilter}
-            onChange={(e) => setPersonFilter(e.target.value)}
+            label="Show sets for"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
           >
-            <option value="">{isAdmin ? "Everyone" : "All sets"}</option>
+            <option value="">All sets</option>
             {myId && <option value={myId}>My sets</option>}
-            {isAdmin &&
-              otherPeople.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
+            {/* Team filters first, grouped so they read as a distinct block.
+                Anyone can filter by team — teams no longer gate visibility. */}
+            {filterTeams.length > 0 && (
+              <optgroup label="Teams">
+                {filterTeams.map((t) => (
+                  <option key={t.id} value={`team:${t.id}`}>
+                    {t.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {/* Per-person filter stays admin-only. */}
+            {isAdmin && otherPeople.length > 0 && (
+              <optgroup label="People">
+                {otherPeople.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </Select>
         </div>
         <div className="w-52">

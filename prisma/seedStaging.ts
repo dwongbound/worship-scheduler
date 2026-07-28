@@ -335,8 +335,14 @@ async function main() {
   let created = 0;
   let updated = 0;
   for (const p of ROSTER) {
-    const teamNames = ["Prayer Room Team"];
-    if (SUNDAY_TEAM_EMAILS.has(p.email)) teamNames.push("Sunday Team");
+    // Everyone on the worship roster is on Prayer Room Team — but choir-only
+    // people are NOT (being in choir doesn't imply Prayer Room membership).
+    const isChoirOnly = p.instruments.length === 1 && p.instruments[0] === CHOIR;
+    const teamNames: string[] = [];
+    if (!isChoirOnly) teamNames.push("Prayer Room Team");
+    // Sunday Team: named on the Sunday list, or in choir (all choir → Sunday).
+    if (SUNDAY_TEAM_EMAILS.has(p.email) || CHOIR_EMAILS.has(p.email))
+      teamNames.push("Sunday Team");
     const teamIds = teamNames
       .map((n) => teamByName.get(n))
       .filter((id): id is string => !!id)
