@@ -303,8 +303,10 @@ async function main() {
       { setId: sunday.id, userId: id.erin, role: "ELECTRIC_GUITAR", status: "PENDING" },
       { setId: sunday.id, userId: id.henry, role: "STRINGS", status: "PENDING" },
 
-      // Wednesday Night.
-      { setId: wednesday.id, userId: id.kate, role: "DRUMS", status: "CONFIRMED" },
+      // Wednesday Night. Kate's drums slot is left PENDING so she always has a
+      // set to confirm — backs the swaps e2e "confirm all pending" test, which
+      // otherwise had nothing to act on once taking a cover auto-confirms it.
+      { setId: wednesday.id, userId: id.kate, role: "DRUMS", status: "PENDING" },
       { setId: wednesday.id, userId: id.ivy, role: "KEYS", status: "PENDING" },
       { setId: wednesday.id, userId: id.jack, role: "WORSHIP_LEADER", status: "PENDING" },
       { setId: wednesday.id, userId: id.omar, role: "BASS", status: "PENDING" },

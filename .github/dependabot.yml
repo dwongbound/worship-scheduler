@@ -4,18 +4,29 @@ updates:
   # npm dependencies (package.json / package-lock.json at repo root)
   - package-ecosystem: "npm"
     directory: "/"
+    # Open PRs against dev (not the default branch, main).
+    target-branch: "dev"
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 10
-    # Bundle the many minor/patch bumps into one PR to cut noise; let majors open individually.
-    groups:
-      minor-and-patch:
+    # Only routine-bump PRs for majors; skip minor/patch version updates to cut noise.
+    # Security fixes still open PRs regardless of these ignores (security updates
+    # bypass the ignore list), so important bug/vuln fixes still reach us.
+    ignore:
+      - dependency-name: "*"
         update-types:
-          - "minor"
-          - "patch"
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"
 
   # GitHub Actions used in .github/workflows
   - package-ecosystem: "github-actions"
     directory: "/"
+    # Open PRs against dev (not the default branch, main).
+    target-branch: "dev"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-patch"

@@ -234,12 +234,12 @@ test("filters the calendar by my sets and by status", async ({ page }) => {
   const chip = page.getByText("Filter Fixture").filter({ visible: true });
   await expect(chip.first()).toBeVisible();
 
-  // Person filter → "My sets": admin isn't on it → hidden. Back to "Everyone"
+  // "Show sets for" → "My sets": admin isn't on it → hidden. Back to "All sets"
   // shows it again.
   const personFilter = page.getByLabel("Show sets for");
   await personFilter.selectOption({ label: "My sets" });
   await expect(chip).toHaveCount(0);
-  await personFilter.selectOption({ label: "Everyone" });
+  await personFilter.selectOption({ label: "All sets" });
   await expect(chip.first()).toBeVisible();
 
   // Status "Unconfirmed": an empty set has no pending assignment → hidden.
