@@ -10,6 +10,7 @@ import Card from "@/components/common/Card";
 import LoadingDots from "@/components/common/LoadingDots";
 import ExportIcsButton from "@/components/ExportIcsButton";
 import SetDetailModal from "@/components/SetDetailModal";
+import SwapModal from "@/components/SwapModal";
 import { usePageLoading } from "@/components/LoadingProvider";
 import StatusBadge from "@/components/StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
@@ -19,6 +20,7 @@ import { INSTRUMENT_LABELS } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
 import type {
   ApiAdminUser,
+  ApiIncomingSwap,
   ApiMyAssignment,
   ApiSet,
   ApiSwapRequest,
@@ -27,6 +29,12 @@ import type {
 export default function SwapsPage() {
   const [mine, setMine] = useState<ApiMyAssignment[] | null>(null);
   const [openSwaps, setOpenSwaps] = useState<ApiSwapRequest[] | null>(null);
+  // Targeted trades awaiting MY accept/reject (shown in Cover Requests).
+  const [incoming, setIncoming] = useState<ApiIncomingSwap[] | null>(null);
+  // The assignment I'm offering in the swap picker (null = picker closed).
+  const [swapAssignment, setSwapAssignment] = useState<ApiMyAssignment | null>(
+    null
+  );
   // Full sets (with rosters) for the "Details" modal — the /api/assignments and
   // /api/swaps payloads omit assignments, so we fetch the sets alongside them
   // and look one up by id when a Details button is clicked.
@@ -52,17 +60,47 @@ export default function SwapsPage() {
     // Both endpoints return arrays; fall back to [] on any error so a hiccup
     // shows an empty list instead of crashing on `.map`.
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
-    const [mineData, swapsData, setsData] = await Promise.all([
+    const [mineData, swapsData, setsData, incomingData] = await Promise.all([
       fetchJsonArray<ApiMyAssignment>(`/api/assignments${orgParam}`),
       fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
       fetchJsonArray<ApiSet>(`/api/sets${orgParam}`),
+      fetchJsonArray<ApiIncomingSwap>(
+        `/api/swaps/proposals/incoming${orgParam}`
+      ),
     ]);
     setMine(mineData);
     setOpenSwaps(swapsData);
     setAllSets(setsData);
+    setIncoming(incomingData);
     // Nudge the navbar to refresh its red dot.
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
   }, [viewOrgId]);
+
+  // Accept or reject a targeted swap proposed to me.
+  async function respondSwap(proposalId: string, action: "accept" | "reject") {
+    setBusyId(proposalId);
+    try {
+      await fetch(`/api/swaps/proposals/${proposalId}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      await reload();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Withdraw a swap I proposed (restores both slots to their prior status).
+  async function cancelSwap(proposalId: string) {
+    setBusyId(proposalId);
+    try {
+      await fetch(`/api/swaps/proposals/${proposalId}`, { method: "DELETE" });
+      await reload();
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   // One admin-users fetch per org I administer — feeds the Details modal's
   // assignment dropdowns (mirrors the calendar page). Non-admin orgs stay
@@ -128,8 +166,8 @@ export default function SwapsPage() {
 
   // Full-page loader only for the initial data load — never for mutations.
   // Wait on allSets too so a Details click always finds its full set.
-  usePageLoading(!mine || !openSwaps || !allSets);
-  if (!mine || !openSwaps || !allSets) return null;
+  usePageLoading(!mine || !openSwaps || !allSets || !incoming);
+  if (!mine || !openSwaps || !allSets || !incoming) return null;
 
   const pendingCount = mine.filter((a) => a.status === "PENDING").length;
   // The full set behind the open Details modal (null = closed / not found).
@@ -137,14 +175,62 @@ export default function SwapsPage() {
 
   return (
     <div className="space-y-8">
-      {/* ── Cover requests I could take ─────────────────────────────── */}
+      {/* ── Cover requests I could take + swaps proposed to me ───────── */}
       <section>
         <h1 className="mb-3 text-2xl font-bold">Cover Requests</h1>
-        {openSwaps.length === 0 && (
+        {openSwaps.length === 0 && incoming.length === 0 && (
           <p className="text-gray-500">
-            No open cover requests for your instruments.
+            No open cover requests or swaps for your instruments.
           </p>
         )}
+
+        {/* Targeted swaps someone proposed to me — accept takes their set and
+            hands them mine; reject leaves both unchanged. */}
+        {incoming.length > 0 && (
+          <ul className="mb-3 space-y-3">
+            {incoming.map((s) => (
+              <li key={s.id}>
+                <Card className="flex flex-wrap items-center justify-between gap-3 border-indigo-200 dark:border-indigo-800">
+                  <div>
+                    <p className="flex flex-wrap items-center gap-2 font-semibold">
+                      Swap: take {s.receive.label ?? "Worship Set"} —{" "}
+                      {INSTRUMENT_LABELS[s.role]}
+                      {showOrgChips && <OrgChip name={s.receive.org.name} />}
+                    </p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {formatDay(s.receive.startsAt)} ·{" "}
+                      {formatTime(s.receive.startsAt)} · {s.requestedBy.name}{" "}
+                      takes your {s.giveUp.label ?? "Worship Set"} (
+                      {formatDay(s.giveUp.startsAt)})
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {busyId === s.id ? (
+                      <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+                    ) : (
+                      <>
+                        <Button
+                          size="sm"
+                          onClick={() => respondSwap(s.id, "accept")}
+                        >
+                          Accept
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => respondSwap(s.id, "reject")}
+                        >
+                          Reject
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+
         <ul className="space-y-3">
           {openSwaps.map((swap) => (
             // id anchors the calendar's "Take this set →" link (#cover-<id>);
@@ -242,6 +328,22 @@ export default function SwapsPage() {
                   </Button>
                   {busyId === a.id ? (
                     <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+                  ) : a.status === "PENDING_SWAP" ? (
+                    // Frozen mid-trade: the requester can withdraw; the
+                    // recipient acts from Cover Requests above.
+                    a.pendingSwap?.isRequester ? (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => cancelSwap(a.pendingSwap!.proposalId)}
+                      >
+                        Cancel swap
+                      </Button>
+                    ) : (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        Respond in Cover Requests ↑
+                      </span>
+                    )
                   ) : (
                     <>
                       {a.status === "PENDING" && (
@@ -250,13 +352,23 @@ export default function SwapsPage() {
                         </Button>
                       )}
                       {a.status !== "SWAP_REQUESTED" ? (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => act(a.id, "requestSwap")}
-                        >
-                          Request cover
-                        </Button>
+                        <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => act(a.id, "requestSwap")}
+                          >
+                            Request cover
+                          </Button>
+                          {/* Targeted trade with a specific person's set. */}
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setSwapAssignment(a)}
+                          >
+                            Swap
+                          </Button>
+                        </>
                       ) : (
                         <Button
                           size="sm"
@@ -268,13 +380,14 @@ export default function SwapsPage() {
                       )}
                     </>
                   )}
-                  {/* Per-set .ics download (this one set, with my role). */}
-                  {a.status != "PENDING"  && a.status != "SWAP_REQUESTED" && <ExportIcsButton
-                    href={`/api/export/${a.set.id}`}
-                    label="Export this set (.ics)"
-                    size="sm"
-                  />
-                  }
+                  {/* Per-set .ics download (confirmed sets only). */}
+                  {a.status === "CONFIRMED" && (
+                    <ExportIcsButton
+                      href={`/api/export/${a.set.id}`}
+                      label="Export this set (.ics)"
+                      size="sm"
+                    />
+                  )}
                 </div>
               </Card>
             </li>
@@ -293,6 +406,13 @@ export default function SwapsPage() {
         users={detailSet?.org ? adminUsersByOrg[detailSet.org.id] ?? [] : []}
         allSets={allSets}
         onChanged={reload}
+      />
+
+      {/* Targeted-swap picker opened by a "Swap" button. */}
+      <SwapModal
+        assignment={swapAssignment}
+        onClose={() => setSwapAssignment(null)}
+        onProposed={reload}
       />
     </div>
   );

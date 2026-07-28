@@ -2,7 +2,11 @@
 // team-shape resolver and the API-input validator.
 import { describe, expect, it } from "vitest";
 import {
+  ALL_INSTRUMENTS,
+  CHOIR,
+  INSTRUMENT_LABELS,
   MAX_SLOTS_PER_ROLE,
+  ROLE_ORDER,
   SLOT_CAPACITIES,
   resolveCapacities,
   validateSlotCapacities,
@@ -47,5 +51,25 @@ describe("validateSlotCapacities", () => {
     expect(validateSlotCapacities(null)).toBeNull();
     expect(validateSlotCapacities([1, 2])).toBeNull();
     expect(validateSlotCapacities("VOCALS")).toBeNull();
+  });
+
+  it("rejects CHOIR — it has no slot count and never belongs in a team shape", () => {
+    expect(validateSlotCapacities({ CHOIR: 2 })).toBeNull();
+    expect(validateSlotCapacities({ VOCALS: 2, CHOIR: 1 })).toBeNull();
+  });
+});
+
+describe("choir role", () => {
+  it("is a selectable instrument with a label but not a band/capacity role", () => {
+    expect(ALL_INSTRUMENTS).toContain(CHOIR);
+    expect(INSTRUMENT_LABELS[CHOIR]).toBe("Choir");
+    // Choir has no slot count, so it stays out of the capacity-only lists.
+    expect(ROLE_ORDER).not.toContain(CHOIR);
+    expect(Object.keys(SLOT_CAPACITIES)).not.toContain(CHOIR);
+    expect(resolveCapacities(null)).not.toHaveProperty(CHOIR);
+  });
+
+  it("lists every band role plus choir, choir last", () => {
+    expect(ALL_INSTRUMENTS).toEqual([...ROLE_ORDER, CHOIR]);
   });
 });

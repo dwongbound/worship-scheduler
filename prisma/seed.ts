@@ -46,11 +46,11 @@ const USERS: {
 }[] = [
   { username: ADMIN_USERNAME, name: "Alice Admin", instruments: ["WORSHIP_LEADER", "VOCALS"], isAdmin: true, completed: true },
   { username: "bob", name: "Bob Baker", instruments: ["DRUMS"], completed: true },
-  { username: "carol", name: "Carol Chen", instruments: ["KEYS", "VOCALS"] },
+  { username: "carol", name: "Carol Chen", instruments: ["KEYS", "VOCALS", "CHOIR"] },
   { username: "dave", name: "Dave Diaz", instruments: ["BASS"], completed: true },
   { username: "erin", name: "Erin Evans", instruments: ["ELECTRIC_GUITAR"] },
   { username: "frank", name: "Frank Ford", instruments: ["ACOUSTIC_GUITAR", "ELECTRIC_GUITAR"] },
-  { username: "grace", name: "Grace Gao", instruments: ["VOCALS"], completed: true, prayer: true, college: true },
+  { username: "grace", name: "Grace Gao", instruments: ["VOCALS", "CHOIR"], completed: true, prayer: true, college: true },
   { username: "henry", name: "Henry Hill", instruments: ["STRINGS"], prayer: true },
   { username: "ivy", name: "Ivy Ito", instruments: ["KEYS"], prayer: true },
   // MDs — they lead from an MD-eligible role (keys), which is the only kind of
@@ -60,7 +60,7 @@ const USERS: {
   { username: "nina", name: "Nina Nguyen", instruments: ["VOCALS", "KEYS"], completed: true },
   { username: "omar", name: "Omar Osei", instruments: ["ELECTRIC_GUITAR", "BASS"] },
   { username: "paul", name: "Paul Park", instruments: ["WORSHIP_LEADER", "ACOUSTIC_GUITAR", "VOCALS", "KEYS"], isAdmin: true, isMD: true, completed: true, prayer: true, college: true },
-  { username: "quinn", name: "Quinn Quezada", instruments: ["STRINGS", "VOCALS"] },
+  { username: "quinn", name: "Quinn Quezada", instruments: ["STRINGS", "VOCALS", "CHOIR"] },
   { username: "ruth", name: "Ruth Rivera", instruments: ["DRUMS", "BASS"], prayer: true, college: true },
   // A brand-new member who has joined an org but not yet finished their
   // profile: no instruments/roles picked. Drives the "finish setup" reminder

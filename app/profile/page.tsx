@@ -13,8 +13,8 @@ import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
 import {
+  ALL_INSTRUMENTS,
   INSTRUMENT_LABELS,
-  ROLE_ORDER,
   type Instrument,
 } from "@/lib/constants";
 
@@ -263,7 +263,7 @@ export default function ProfilePage() {
               ) : null}
             </legend>
             <div className="grid grid-cols-2 gap-2">
-              {ROLE_ORDER.map((inst) => (
+              {ALL_INSTRUMENTS.map((inst) => (
                 <Checkbox
                   key={inst}
                   label={INSTRUMENT_LABELS[inst]}

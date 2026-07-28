@@ -6,7 +6,7 @@ import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { promoteMDIfEmpty } from "@/lib/setMd";
-import { SLOT_CAPACITIES } from "@/lib/constants";
+import { ALL_INSTRUMENTS } from "@/lib/constants";
 
 export async function POST(req: NextRequest) {
   const sessionUser = await getSessionUser();
@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   if (
     typeof setId !== "string" ||
     typeof userId !== "string" ||
-    !Object.keys(SLOT_CAPACITIES).includes(role)
+    !(ALL_INSTRUMENTS as string[]).includes(role)
   ) {
     return NextResponse.json({ error: "Invalid assignment" }, { status: 400 });
   }

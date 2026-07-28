@@ -20,30 +20,41 @@ import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Dropdown from "@/components/common/Dropdown";
 import LoadingDots from "@/components/common/LoadingDots";
 import Select from "@/components/common/Select";
+import SlackIcon from "@/components/common/SlackIcon";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import {
+  ALL_INSTRUMENTS,
   INSTRUMENT_LABELS,
-  ROLE_ORDER,
   type Instrument,
 } from "@/lib/constants";
 import { STAT_RANGES, rangeForDays } from "@/lib/stats";
-import type { UserSetBreakdown } from "@/app/api/admin/users/stats/route";
+import type { UserStats } from "@/app/api/admin/users/stats/route";
 import type { ApiAdminUser, ApiTeam } from "@/lib/types";
 
 // Fixed-width right column of a user card: how many sets they're on in the
 // selected range, broken down by set type (e.g. "Sunday Worship (3)").
 // Hidden on phones (along with the range selector) — the metrics don't fit.
 function SetBreakdown({
-  breakdown,
+  stats,
   loading,
 }: {
-  breakdown: UserSetBreakdown[] | undefined;
+  stats: UserStats | undefined;
   loading: boolean;
 }) {
-  const total = breakdown?.reduce((sum, b) => sum + b.count, 0) ?? 0;
+  const teams = stats?.teams ?? [];
+  const total = teams.reduce((sum, b) => sum + b.count, 0);
+  // Cover/swap activity lines — only shown when non-zero.
+  const activity: { label: string; count: number }[] = stats
+    ? [
+        { label: "Covers requested", count: stats.coversRequested },
+        { label: "Covers taken", count: stats.coversTaken },
+        { label: "Swaps requested", count: stats.swapsRequested },
+        { label: "Swaps taken", count: stats.swapsTaken },
+      ].filter((a) => a.count > 0)
+    : [];
   return (
     <div className="hidden sm:block sm:w-52 sm:flex-shrink-0 sm:border-l sm:border-gray-200 sm:pl-4 dark:sm:border-gray-700">
       <p className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -51,15 +62,16 @@ function SetBreakdown({
         {!loading && <Badge tone="blue">{total}</Badge>}
       </p>
       {/* Fixed height + independent scroll so every card is the same height
-          no matter how many set types a person has. */}
+          no matter how many teams / activity lines a person has. */}
       <div className="h-24 overflow-y-auto pr-1">
         {loading ? (
           <p className="text-sm text-gray-400">…</p>
-        ) : total === 0 ? (
+        ) : total === 0 && activity.length === 0 ? (
           <p className="text-sm text-gray-400">None in range</p>
         ) : (
           <ul className="space-y-1 text-sm">
-            {breakdown!.map((b) => (
+            {/* Sets grouped by team. */}
+            {teams.map((b) => (
               <li key={b.label} className="flex justify-between gap-2">
                 <span className="text-gray-700 dark:text-gray-300">
                   {b.label}
@@ -67,6 +79,16 @@ function SetBreakdown({
                 <span className="tabular-nums text-gray-500 dark:text-gray-400">
                   {b.count}
                 </span>
+              </li>
+            ))}
+            {/* Cover / swap activity (only the non-zero ones). */}
+            {activity.map((a) => (
+              <li
+                key={a.label}
+                className="flex justify-between gap-2 text-xs text-gray-500 dark:text-gray-400"
+              >
+                <span>{a.label}</span>
+                <span className="tabular-nums">{a.count}</span>
               </li>
             ))}
           </ul>
@@ -101,9 +123,7 @@ function UsersPageInner() {
     toYmd(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
   );
   // userId → per-set-type breakdown for the active range (null while loading).
-  const [stats, setStats] = useState<Record<string, UserSetBreakdown[]> | null>(
-    null
-  );
+  const [stats, setStats] = useState<Record<string, UserStats> | null>(null);
   // True from the moment the admin org changes until users, teams AND stats
   // have all reloaded — keeps the full-page loader up so the switch happens as
   // one atomic swap instead of each section updating piecewise.
@@ -431,6 +451,17 @@ function UsersPageInner() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <span className="font-semibold">{user.name}</span>
+                      {/* Slack linked in THIS org — a small mark + check. */}
+                      {user.slackConnected && (
+                        <span
+                          title="Connected to this organization's Slack"
+                          aria-label="Connected to this organization's Slack"
+                          className="inline-flex items-center gap-0.5 text-green-600 dark:text-green-400"
+                        >
+                          <SlackIcon className="h-4 w-4 shrink-0" />
+                          <span aria-hidden className="text-xs font-semibold">✓</span>
+                        </span>
+                      )}
                       {user.isAdmin && <Badge tone="amber">Admin</Badge>}
                       {user.isMD && <Badge tone="blue">MD</Badge>}
                     </div>
@@ -464,7 +495,7 @@ function UsersPageInner() {
                       Instruments / roles
                     </p>
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {ROLE_ORDER.map((inst) => (
+                      {ALL_INSTRUMENTS.map((inst) => (
                         <Checkbox
                           key={inst}
                           label={INSTRUMENT_LABELS[inst]}
@@ -519,7 +550,7 @@ function UsersPageInner() {
                   })()}
                 </div>
 
-                <SetBreakdown breakdown={stats?.[user.id]} loading={stats === null} />
+                <SetBreakdown stats={stats?.[user.id]} loading={stats === null} />
               </div>
             </Card>
           </li>

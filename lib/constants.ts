@@ -15,11 +15,25 @@ export const SLOT_CAPACITIES = {
   BASS: 1,
 } as const;
 
-export type Instrument = keyof typeof SLOT_CAPACITIES;
+// The capacity-bearing "band" roles — the ones that make up a team's shape.
+// These are exactly the keys of SLOT_CAPACITIES.
+export type BandRole = keyof typeof SLOT_CAPACITIES;
 
-// A per-set/-template override of the team shape: how many of each role to
+// Choir is a real Instrument (people list it as a skill, and it fills slots on a
+// set) but it is NOT a band role: it has no fixed slot count and never appears
+// in SLOT_CAPACITIES / ROLE_ORDER / the capacity editor. Instead it's an
+// unbounded, admin-managed list on a set — the set-detail modal's "Auto
+// schedule" seats everyone available, and admins add the rest by hand.
+export const CHOIR = "CHOIR" as const;
+
+// Every schedulable role: the band roles plus choir. `Instrument` mirrors the
+// Prisma enum of the same name.
+export type Instrument = BandRole | typeof CHOIR;
+
+// A per-set/-template override of the team shape: how many of each band role to
 // fill. Partial — any role omitted falls back to the SLOT_CAPACITIES default.
-export type SlotCapacityMap = Partial<Record<Instrument, number>>;
+// (Choir has no capacity, so it's intentionally excluded from this map.)
+export type SlotCapacityMap = Partial<Record<BandRole, number>>;
 
 // Largest number of one instrument we allow on a single set — a sanity cap
 // on the capacity editor + API validation.
@@ -33,7 +47,7 @@ export const MAX_SLOTS_PER_ROLE = 20;
  */
 export function resolveCapacities(
   stored?: SlotCapacityMap | null
-): Record<Instrument, number> {
+): Record<BandRole, number> {
   return { ...SLOT_CAPACITIES, ...(stored ?? {}) };
 }
 
@@ -55,16 +69,20 @@ export function validateSlotCapacities(raw: unknown): SlotCapacityMap | null {
     ) {
       return null;
     }
-    out[key as Instrument] = value;
+    out[key as BandRole] = value;
   }
   return out;
 }
 
-export type AssignmentStatus = "PENDING" | "CONFIRMED" | "SWAP_REQUESTED";
+export type AssignmentStatus =
+  | "PENDING"
+  | "CONFIRMED"
+  | "SWAP_REQUESTED"
+  | "PENDING_SWAP";
 
 // Order roles are displayed in AND filled in by the scheduler.
 // Scarce/critical roles first so they get first pick of people.
-export const ROLE_ORDER: Instrument[] = [
+export const ROLE_ORDER: BandRole[] = [
   "WORSHIP_LEADER",
   "DRUMS",
   "BASS",
@@ -75,10 +93,16 @@ export const ROLE_ORDER: Instrument[] = [
   "VOCALS",
 ];
 
+// Every selectable role, in display order: the band roles (scarce-first) then
+// choir. Used for the user instrument picker, instrument/role validation, and
+// anywhere a roster is listed for display (Slack summaries, .ics titles) — i.e.
+// the places that must include choir, unlike the capacity-only ROLE_ORDER.
+export const ALL_INSTRUMENTS: Instrument[] = [...ROLE_ORDER, CHOIR];
+
 // The only roles a musical director can lead from. A required-MD set is only
 // "covered" when an MD is assigned to one of these; the auto-scheduler seats a
 // reserved MD into one of them (never drums/vocals/etc.).
-export const MD_ROLES: Instrument[] = ["KEYS", "ELECTRIC_GUITAR", "BASS"];
+export const MD_ROLES: BandRole[] = ["KEYS", "ELECTRIC_GUITAR", "BASS"];
 
 // A person normally fills at most one role on a set. The only sanctioned
 // double-ups are these unordered pairs: worship leader + acoustic guitar, and
@@ -107,12 +131,14 @@ export const INSTRUMENT_LABELS: Record<Instrument, string> = {
   STRINGS: "Strings",
   DRUMS: "Drums",
   BASS: "Bass",
+  CHOIR: "Choir",
 };
 
 export const STATUS_LABELS: Record<AssignmentStatus, string> = {
   PENDING: "Pending confirmation",
   CONFIRMED: "Confirmed",
   SWAP_REQUESTED: "Requesting cover",
+  PENDING_SWAP: "Pending swap",
 };
 
 export type SetHistoryEventType =

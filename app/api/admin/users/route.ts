@@ -21,10 +21,11 @@ export async function GET(req: NextRequest) {
       isMD: true,
       instruments: true,
       // The caller's org's membership row — its isAdmin is what the Team
-      // page's checkbox reads/toggles.
+      // page's checkbox reads/toggles; slackUserId (set once the person links
+      // Slack in THIS org) drives the Team page's "connected" badge.
       memberships: {
         where: { orgId: admin.orgId },
-        select: { isAdmin: true },
+        select: { isAdmin: true, slackUserId: true },
       },
       // Team memberships within this org — gate the assignment dropdowns +
       // Team page editing.
@@ -57,12 +58,13 @@ export async function GET(req: NextRequest) {
     orderBy: { name: "asc" },
   });
 
-  // Flatten the single-org membership row into the isAdmin boolean the
-  // client has always consumed.
+  // Flatten the single-org membership row into the isAdmin boolean the client
+  // has always consumed, plus slackConnected (Slack linked in THIS org).
   return NextResponse.json(
     users.map(({ memberships, ...u }) => ({
       ...u,
       isAdmin: memberships[0]?.isAdmin ?? false,
+      slackConnected: memberships[0]?.slackUserId != null,
     }))
   );
 }

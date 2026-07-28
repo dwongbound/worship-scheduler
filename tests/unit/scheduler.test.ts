@@ -1,6 +1,7 @@
 // Unit tests for the auto-scheduling algorithm (lib/scheduler.ts).
 import { describe, expect, it } from "vitest";
 import {
+  availableChoirMembers,
   buildSchedule,
   isUserAvailable,
   type SchedulerSet,
@@ -517,5 +518,59 @@ describe("buildSchedule spacing", () => {
       new Map([["d2", 5]])
     );
     expect(who(result, "week-2")).toEqual(["d2"]);
+  });
+
+  it("never fills CHOIR (it isn't a capacity band role)", () => {
+    // A pure choir member is ignored by the greedy fill — choir is seated
+    // separately, via availableChoirMembers.
+    const singer = user("c1", ["CHOIR"]);
+    expect(buildSchedule([tuesdaySet], [singer], [])).toEqual([]);
+  });
+
+  it("ignores a pre-assigned CHOIR slot so the singer stays free for a band role", () => {
+    // p1 is already on the set's choir AND plays drums. The choir slot must not
+    // count as a constraint that blocks them from the open drums slot.
+    const player = user("p1", ["DRUMS", "CHOIR"]);
+    const result = buildSchedule(
+      [{ ...tuesdaySet, preAssigned: [{ userId: "p1", role: "CHOIR" }] }],
+      [player],
+      []
+    );
+    expect(result).toContainEqual({ setId: "set-1", userId: "p1", role: "DRUMS" });
+  });
+});
+
+describe("availableChoirMembers", () => {
+  it("returns every available team member who lists CHOIR", () => {
+    const users = [
+      user("c1", ["CHOIR"]),
+      user("c2", ["VOCALS", "CHOIR"]),
+      user("d1", ["DRUMS"]), // not a choir member
+    ];
+    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+  });
+
+  it("excludes people who are unavailable at the set's time", () => {
+    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
+    const rules: UnavailabilityRule[] = [
+      // c2 is blocked Tuesday evening.
+      { userId: "c2", type: "RECURRING", dayOfWeek: 2, startMinute: 1080, endMinute: 1260 },
+    ];
+    expect(availableChoirMembers(tuesdaySet, users, rules)).toEqual(["c1"]);
+  });
+
+  it("excludes people already on the set's choir", () => {
+    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
+    const already = new Set(["c1"]);
+    expect(availableChoirMembers(tuesdaySet, users, [], already)).toEqual(["c2"]);
+  });
+
+  it("respects the set's team: only its members are eligible", () => {
+    const teamSet: SchedulerSet = { ...tuesdaySet, teamId: "team-A" };
+    const users = [
+      { ...user("c1", ["CHOIR"]), teamIds: ["team-A"] },
+      { ...user("c2", ["CHOIR"]), teamIds: ["team-B"] }, // other team
+    ];
+    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1"]);
   });
 });

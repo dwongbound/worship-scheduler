@@ -19,10 +19,12 @@
 // DB) so one-off sets also avoid people who just served nearby.
 
 import {
+  CHOIR,
   MD_ROLES,
   ROLE_ORDER,
   resolveCapacities,
   rolesMayOverlap,
+  type BandRole,
   type Instrument,
   type SlotCapacityMap,
 } from "./constants";
@@ -188,7 +190,12 @@ export function buildSchedule(
 
   for (const set of chronological) {
     const setTime = set.startsAt.getTime();
-    const preAssigned = set.preAssigned ?? [];
+    // Only band roles are slot-filled here. Choir has no capacity, so a
+    // pre-assigned choir member is NOT a fill constraint — dropping them keeps
+    // them free to also take a band role and out of the spacing tally.
+    const preAssigned = (set.preAssigned ?? []).filter(
+      (p): p is typeof p & { role: BandRole } => p.role !== CHOIR
+    );
     // Roles each person already holds on this set — seeded with the pre-assigned
     // people. Normally one slot per person, but one person may hold BOTH worship
     // leader and acoustic guitar (OVERLAP_ALLOWED_ROLES); see canTakeRole.
@@ -218,8 +225,9 @@ export function buildSchedule(
       return true;
     };
 
-    // Commit a pick: record it and update all running tallies.
-    const assign = (userId: string, role: Instrument) => {
+    // Commit a pick: record it and update all running tallies. Only ever called
+    // with band roles (choir isn't slot-filled here — see availableChoirMembers).
+    const assign = (userId: string, role: BandRole) => {
       const held = rolesOnSet.get(userId) ?? new Set<Instrument>();
       held.add(role);
       rolesOnSet.set(userId, held);
@@ -277,6 +285,9 @@ export function buildSchedule(
     }
 
     // ── Normal greedy fill of the remaining slots ───────────────────────
+    // Only the band roles (ROLE_ORDER) are capacity-filled here. Choir is not a
+    // band role and has no slot count, so it's handled separately — see
+    // availableChoirMembers, called by the set-detail "Auto schedule".
     for (const role of ROLE_ORDER) {
       while (remaining[role] > 0) {
         const pick = bestFor(role);
@@ -287,4 +298,26 @@ export function buildSchedule(
   }
 
   return proposals;
+}
+
+/**
+ * Everyone who should join a set's choir on "Auto schedule": every team member
+ * who lists CHOIR as a skill and is free at the set's time. Unlike the band
+ * roles, choir has no capacity — it's an unbounded list, so we don't balance or
+ * space it, we simply seat all the available singers. Returns their userIds,
+ * excluding anyone already on this set's choir (`alreadyOnChoir`). Pure +
+ * separate from buildSchedule so the modal's autofill can layer choir on top.
+ */
+export function availableChoirMembers(
+  set: SchedulerSet,
+  users: SchedulerUser[],
+  rules: UnavailabilityRule[],
+  alreadyOnChoir: Set<string> = new Set()
+): string[] {
+  return users
+    .filter((u) => !set.teamId || (u.teamIds ?? []).includes(set.teamId))
+    .filter((u) => u.instruments.includes(CHOIR))
+    .filter((u) => !alreadyOnChoir.has(u.id))
+    .filter((u) => isUserAvailable(u.id, set, rules))
+    .map((u) => u.id);
 }

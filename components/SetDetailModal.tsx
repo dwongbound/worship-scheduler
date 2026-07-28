@@ -11,10 +11,12 @@ import Modal from "./common/Modal";
 import Button from "./common/Button";
 import InfoTooltip from "./common/InfoTooltip";
 import LoadingDots from "./common/LoadingDots";
+import SlackIcon from "./common/SlackIcon";
 import ExportIcsButton from "./ExportIcsButton";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
+  CHOIR,
   INSTRUMENT_LABELS,
   MD_ROLES,
   ROLE_ORDER,
@@ -32,31 +34,6 @@ import type {
   ApiSet,
   ApiSetHistoryEvent,
 } from "@/lib/types";
-
-// The Slack logo mark (four lozenges), inline SVG per the no-raster-assets
-// convention. Sized to sit inside a small button next to its label.
-function SlackIcon() {
-  return (
-    <svg viewBox="0 0 122.8 122.8" aria-hidden className="h-3.5 w-3.5 shrink-0">
-      <path
-        d="M25.8 77.6c0 7.1-5.8 12.9-12.9 12.9S0 84.7 0 77.6s5.8-12.9 12.9-12.9h12.9v12.9zm6.5 0c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9v32.3c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V77.6z"
-        fill="#e01e5a"
-      />
-      <path
-        d="M45.2 25.8c-7.1 0-12.9-5.8-12.9-12.9S38.1 0 45.2 0s12.9 5.8 12.9 12.9v12.9H45.2zm0 6.5c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H12.9C5.8 58.1 0 52.3 0 45.2s5.8-12.9 12.9-12.9h32.3z"
-        fill="#36c5f0"
-      />
-      <path
-        d="M97 45.2c0-7.1 5.8-12.9 12.9-12.9s12.9 5.8 12.9 12.9-5.8 12.9-12.9 12.9H97V45.2zm-6.5 0c0 7.1-5.8 12.9-12.9 12.9s-12.9-5.8-12.9-12.9V12.9C64.7 5.8 70.5 0 77.6 0s12.9 5.8 12.9 12.9v32.3z"
-        fill="#2eb67d"
-      />
-      <path
-        d="M77.6 97c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9-12.9-5.8-12.9-12.9V97h12.9zm0-6.5c-7.1 0-12.9-5.8-12.9-12.9s5.8-12.9 12.9-12.9h32.3c7.1 0 12.9 5.8 12.9 12.9s-5.8 12.9-12.9 12.9H77.6z"
-        fill="#ecb22e"
-      />
-    </svg>
-  );
-}
 
 interface SetDetailModalProps {
   set: ApiSet | null; // null = closed
@@ -194,6 +171,11 @@ export default function SetDetailModal({
   // The set's own team shape (falls back to the global default per role).
   const capacities = resolveCapacities(set.slotCapacities);
 
+  // The set's choir roster (its dropdown options are computed after eligibleFor
+  // is defined, below). Choir is a role with no fixed slot count — see the
+  // Choir section in the JSX.
+  const choirMembers = set.assignments.filter((a) => a.role === CHOIR);
+
   // MD picker data. Eligible = an assignee who is an MD, plays an MD-capable
   // role (keys/electric/bass), and isn't the worship leader (see lib/md.ts).
   const mdAssignments = set.assignments.map((a) => ({
@@ -247,7 +229,7 @@ export default function SetDetailModal({
     );
     // In an MD-capable role, mark the musical directors — picking them here
     // makes them an eligible MD for the set.
-    const roleAllowsMD = MD_ROLES.includes(role);
+    const roleAllowsMD = (MD_ROLES as Instrument[]).includes(role);
     return users
       // Only this set's team members are offered (no team = open to everyone).
       .filter((u) => isOnTeam(u, set.teamId ?? set.team?.id))
@@ -268,6 +250,10 @@ export default function SetDetailModal({
           a.name.localeCompare(b.name)
       );
   };
+
+  // Choir dropdown options — same shared eligibility/availability logic as the
+  // band roles (see the Choir section in the JSX).
+  const choirOptions = eligibleFor(CHOIR);
 
   async function runEdit(fn: () => Promise<Response>) {
     setBusy(true);
@@ -610,6 +596,74 @@ export default function SetDetailModal({
           );
         })}
       </ul>
+
+      {/* Choir: a special role with no fixed slot count — an ongoing, unbounded
+          list rather than a fixed set of slots. "Auto schedule" (above) seats
+          every available choir member; admins can also add/remove people by
+          hand here. The dropdowns reuse the same eligibility + availability
+          logic as the band roles above. Hidden entirely when the set has no
+          choir and the viewer can't edit (no empty section for non-admins). */}
+      {(canEditTeam || choirMembers.length > 0) && (
+        <div
+          data-testid="choir-section"
+          className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
+        >
+          <span className="font-medium">
+            Choir
+            {choirMembers.length > 0 && (
+              <span className="ml-1 text-xs text-gray-500">
+                ({choirMembers.length})
+              </span>
+            )}
+          </span>
+
+          <ul className="mt-1 space-y-1 pl-4">
+            {choirMembers.map((a) =>
+              canEditTeam ? (
+                // Picking "None" removes them from the choir; picking someone
+                // else reassigns this slot (resets it to PENDING). No capacity
+                // "✕" — choir slots aren't a fixed shape, so the dropdown's
+                // "None" is the only remove affordance.
+                <li key={a.id} className="flex items-center gap-2">
+                  <PlayerSelect
+                    selected={{ id: a.user.id, name: a.user.name }}
+                    options={choirOptions}
+                    disabled={busy}
+                    onChange={(userId) =>
+                      userId ? reassign(a.id, userId) : removeAssignment(a.id)
+                    }
+                  />
+                  <StatusBadge status={a.status} />
+                </li>
+              ) : (
+                <li key={a.id} className="flex items-center gap-2">
+                  <span>{a.user.name}</span>
+                  <StatusBadge status={a.status} />
+                </li>
+              )
+            )}
+
+            {/* Admins get one always-present "add someone" row (the list is
+                unbounded, so unlike band roles there's no slot count to derive). */}
+            {canEditTeam && (
+              <li className="flex items-center gap-2">
+                <PlayerSelect
+                  selected={null}
+                  options={choirOptions}
+                  disabled={busy}
+                  dashed
+                  onChange={(userId) => userId && addAssignment(CHOIR, userId)}
+                />
+              </li>
+            )}
+
+            {/* Read-only view of an empty choir. */}
+            {!canEditTeam && choirMembers.length === 0 && (
+              <li className="text-gray-400">No one in the choir yet.</li>
+            )}
+          </ul>
+        </div>
+      )}
 
       {/* MD picker (only for sets that require one). One MD per set, chosen from
           the assignees — clickable only for those who qualify (an MD playing

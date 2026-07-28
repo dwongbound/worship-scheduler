@@ -9,7 +9,7 @@ import {
   INSTRUMENT_LABELS,
   MAX_SLOTS_PER_ROLE,
   ROLE_ORDER,
-  type Instrument,
+  type BandRole,
 } from "@/lib/constants";
 
 export default function SlotCapacityEditor({
@@ -17,11 +17,13 @@ export default function SlotCapacityEditor({
   onChange,
   disabled,
 }: {
-  value: Record<Instrument, number>;
-  onChange: (next: Record<Instrument, number>) => void;
+  // Team shape covers only the capacity-bearing band roles (ROLE_ORDER) —
+  // choir has no slot count and never appears here.
+  value: Record<BandRole, number>;
+  onChange: (next: Record<BandRole, number>) => void;
   disabled?: boolean;
 }) {
-  const setRole = (role: Instrument, raw: string) => {
+  const setRole = (role: BandRole, raw: string) => {
     // Clamp to [0, MAX] and coerce blank/NaN to 0 so state stays a valid map.
     const n = Math.max(0, Math.min(MAX_SLOTS_PER_ROLE, Math.floor(Number(raw) || 0)));
     onChange({ ...value, [role]: n });
