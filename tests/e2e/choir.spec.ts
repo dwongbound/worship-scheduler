@@ -1,6 +1,8 @@
 // E2E: the Choir role. Unlike the band roles, choir has no fixed slot count —
-// it's an unbounded, admin-managed list. "Auto schedule" seats every available
-// choir member, and admins can also add people by hand from the same dropdown.
+// it's an unbounded, admin-managed list. Choir is opt-in PER SET: an admin
+// enables it on a set before anyone can be added or auto-scheduled into it.
+// Once on, "Auto schedule" seats every available choir member, and admins can
+// also add people by hand from the same dropdown.
 import { expect, test } from "@playwright/test";
 import { login, openSetByLabel } from "./helpers";
 
@@ -26,10 +28,11 @@ test("admin manually adds a person to the choir", async ({ page }) => {
   await login(page, "admin");
   const modal = await createEmptySet(page, "Choir Manual", "14:11");
 
-  // The Choir section starts empty with a single "None" add dropdown. Carol
+  // Choir is off by default — turn it on before anyone can be added. Carol
   // lists CHOIR as a skill (seed) and has no unavailability, so she's offered.
   const choir = modal.getByTestId("choir-section");
   await expect(choir.getByText("Choir", { exact: true })).toBeVisible();
+  await choir.getByRole("button", { name: "Enable choir" }).click();
 
   await choir.getByRole("button", { name: "None" }).click();
   await choir.getByPlaceholder("Search by name…").fill("Carol");
@@ -40,7 +43,7 @@ test("admin manually adds a person to the choir", async ({ page }) => {
   await expect(choir.getByText("Pending confirmation")).toBeVisible();
 });
 
-test("auto schedule seats every available choir member", async ({ page }) => {
+test("auto schedule seats every available choir member once choir is on", async ({ page }) => {
   await login(page, "admin");
   const modal = await createEmptySet(page, "Choir Auto", "14:22");
 
@@ -48,9 +51,27 @@ test("auto schedule seats every available choir member", async ({ page }) => {
   // Empty to start — no seeded choir member is in it yet.
   await expect(choir.getByText("Carol Chen")).toHaveCount(0);
 
+  // Enable choir so auto-schedule includes it.
+  await choir.getByRole("button", { name: "Enable choir" }).click();
   await modal.getByRole("button", { name: "Auto schedule" }).click();
 
   // Carol has no unavailability, so auto-schedule always seats her on the choir
   // (grace/quinn join too whenever they're free at the set's time).
   await expect(choir.getByText("Carol Chen")).toBeVisible();
+});
+
+test("auto schedule skips choir while it's off", async ({ page }) => {
+  await login(page, "admin");
+  const modal = await createEmptySet(page, "Choir Off", "14:33");
+
+  const choir = modal.getByTestId("choir-section");
+  // Left off: the enable button is showing and no add dropdown is present.
+  await expect(choir.getByRole("button", { name: "Enable choir" })).toBeVisible();
+
+  await modal.getByRole("button", { name: "Auto schedule" }).click();
+
+  // The band fills, but no choir singer is seated while choir is off — Carol
+  // (a choir member with no band role on this team) is never added.
+  await expect(choir.getByRole("button", { name: "Enable choir" })).toBeVisible();
+  await expect(choir.getByText("Carol Chen")).toHaveCount(0);
 });
