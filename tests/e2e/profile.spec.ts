@@ -76,8 +76,9 @@ test("toggling a role fires exactly one write and no session/org refetch", async
 }) => {
   // Regression guard for the save cascade: a role toggle used to trigger a JWT
   // refresh (/api/auth/session) plus a navbar-wide refetch (/api/orgs,
-  // /api/availability-request). It should now be a single PUT plus the one
-  // GET /api/me that refreshes the setup-reminder dot — nothing else.
+  // /api/availability-request). It should now be a single PUT /api/me plus the
+  // one aggregated GET /api/notifications that refreshes the reminder dots —
+  // no session refresh, no /api/orgs, no per-badge availability fetch.
   await login(page, "carol");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();

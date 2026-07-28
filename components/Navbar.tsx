@@ -11,11 +11,10 @@ import OrgSwitcher from "./OrgSwitcher";
 import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
 import { useOrgs } from "./OrgProvider";
-import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { setNavDirection } from "@/lib/navDirection";
 import { useSwipe } from "./SwipeProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
-import type { ApiAvailabilityStatus } from "@/lib/types";
+import type { ApiAvailabilityStatus, ApiNotifications } from "@/lib/types";
 
 // Fired by the Swaps tab after any swap action so the red dot refreshes
 // immediately instead of waiting for the next poll.
@@ -59,7 +58,7 @@ export default function Navbar() {
   const router = useRouter();
   // The org the admin tabs operate on — the teamless reminder scopes to it, so
   // its banner links land on the /users list that actually shows those people.
-  const { adminOrgId, isAdminAny } = useOrgs();
+  const { adminOrgId } = useOrgs();
 
   // Shared with SwipePager: the navbar writes the live tab list / active index /
   // navigate fn here, and reads back `previewIndex` — the tab the in-progress
@@ -136,89 +135,47 @@ export default function Navbar() {
   const themeIcon = theme === "light" ? "☀️" : theme === "dark" ? "🌙" : "🖥️";
   const themeLabel = `Theme: ${theme} (click to change)`;
 
-  // Red dot: poll for open swap requests matching my instruments.
-  const refreshSwapCount = useCallback(async () => {
+  // Every navbar reminder dot/banner comes from ONE request: the swap-dot
+  // count, availability status, whether the profile still needs instruments,
+  // and (for the selected admin org) its team-less members. Aggregating avoids
+  // the four parallel fetches + re-polls the navbar used to fire on every page.
+  const refreshNotifications = useCallback(async () => {
     try {
-      const res = await fetch("/api/swaps");
+      // Pass the admin org so team-less members scope to it (the server returns
+      // them only to that org's admins; a non-admin or absent org yields []).
+      const url = adminOrgId
+        ? `/api/notifications?orgId=${adminOrgId}`
+        : "/api/notifications";
+      const res = await fetch(url);
       if (!res.ok) return;
-      const swaps = await res.json();
-      setOpenSwapCount(swaps.length);
+      const data: ApiNotifications = await res.json();
+      setOpenSwapCount(data.swapCount);
+      setAvailStatus(data.availability);
+      setNeedsInstruments(data.needsInstruments);
+      setTeamlessUsers(data.teamless);
     } catch {
-      // network hiccup — keep the old count
+      // network hiccup — keep the old values
     }
-  }, []);
-
-  // Each org's active availability request + whether I still owe a response
-  // to any of them (drives the Availabilities dot + reminder banner).
-  const refreshAvailability = useCallback(async () => {
-    try {
-      const res = await fetch("/api/availability-request");
-      if (!res.ok) return;
-      setAvailStatus(await res.json());
-    } catch {
-      // keep old state
-    }
-  }, []);
-
-  // Whether I still owe my instruments/roles (empty = brand-new account that
-  // hasn't finished setting up its profile).
-  const refreshProfile = useCallback(async () => {
-    try {
-      const res = await fetch("/api/me");
-      if (!res.ok) return;
-      const me = await res.json();
-      setNeedsInstruments((me.instruments?.length ?? 0) === 0);
-    } catch {
-      // keep old state
-    }
-  }, []);
-
-  // Members of the selected admin org who aren't on any team. Only admins can
-  // hit the endpoint, and it needs an org to scope to, so bail out otherwise
-  // (and clear any stale list, e.g. after switching to a non-admin org).
-  const refreshTeamless = useCallback(async () => {
-    if (!isAdminAny || !adminOrgId) {
-      setTeamlessUsers([]);
-      return;
-    }
-    try {
-      const users = await fetchJsonArray<{
-        id: string;
-        name: string;
-        username: string;
-      }>(
-        "/api/admin/users/teamless",
-        { headers: orgHeaders(adminOrgId) }
-      );
-      setTeamlessUsers(users);
-    } catch {
-      // keep old state
-    }
-  }, [isAdminAny, adminOrgId]);
+  }, [adminOrgId]);
 
   useEffect(() => {
     if (!session) return;
-    refreshSwapCount();
-    refreshAvailability();
-    refreshProfile();
-    refreshTeamless();
-    const interval = setInterval(() => {
-      refreshSwapCount();
-      refreshAvailability();
-      refreshTeamless();
-    }, 60_000);
-    window.addEventListener(SWAPS_CHANGED_EVENT, refreshSwapCount);
-    window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshAvailability);
-    window.addEventListener(PROFILE_CHANGED_EVENT, refreshProfile);
-    window.addEventListener(TEAMS_CHANGED_EVENT, refreshTeamless);
+    refreshNotifications();
+    // Poll so the dots stay fresh without a reload; every reminder-changing
+    // action also fires an event below for an instant refresh.
+    const interval = setInterval(refreshNotifications, 60_000);
+    window.addEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
+    window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
+    window.addEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
+    window.addEventListener(TEAMS_CHANGED_EVENT, refreshNotifications);
     return () => {
       clearInterval(interval);
-      window.removeEventListener(SWAPS_CHANGED_EVENT, refreshSwapCount);
-      window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshAvailability);
-      window.removeEventListener(PROFILE_CHANGED_EVENT, refreshProfile);
-      window.removeEventListener(TEAMS_CHANGED_EVENT, refreshTeamless);
+      window.removeEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
+      window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
+      window.removeEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
+      window.removeEventListener(TEAMS_CHANGED_EVENT, refreshNotifications);
     };
-  }, [session, refreshSwapCount, refreshAvailability, refreshProfile, refreshTeamless]);
+  }, [session, refreshNotifications]);
 
   // A dismissal only applies to the org it was made for — switching admin orgs
   // brings the (differently-scoped) teamless banner back.

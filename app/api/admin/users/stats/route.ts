@@ -1,15 +1,27 @@
-// GET /api/admin/users/stats?start=<ISO>&end=<ISO> — for each user, how many
-// sets they're on within the given date range, broken down by set type (the
-// set's label). Powers the team stats panel on the Users tab. Admin only.
+// GET /api/admin/users/stats?start=<ISO>&end=<ISO> — per-user activity within
+// the range, for the team stats panel on the Users tab. Admin only.
+//   • sets grouped BY TEAM (not by event/label), e.g. "Sunday Team: 5",
+//   • coversRequested / coversTaken — open-cover requests raised / taken,
+//   • swapsRequested / swapsTaken — targeted trades initiated / accepted.
+// Every count is scoped to sets whose start time falls in [start, end].
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 
-// Per-user list of set-type counts, e.g. [{ label: "Sunday Worship", count: 3 }].
+// One team's set count for a user, e.g. { label: "Sunday Team", count: 3 }.
 export type UserSetBreakdown = { label: string; count: number };
 
-// Ad-hoc sets have no label — mirror the "Worship Set" fallback used elsewhere.
-const NO_LABEL = "Worship Set";
+// The full per-user stats bundle the panel renders.
+export type UserStats = {
+  teams: UserSetBreakdown[];
+  coversRequested: number;
+  coversTaken: number;
+  swapsRequested: number;
+  swapsTaken: number;
+};
+
+// Sets with no team are "open to the whole org" — group them under this label.
+const NO_TEAM = "No team";
 
 export async function GET(req: NextRequest) {
   const admin = await requireOrgAdmin(req);
@@ -28,30 +40,72 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Pull the assignments in range with just the user id and their set's label,
-  // then tally per user by label in memory (label lives on Set, so it can't be
-  // a groupBy key on Assignment).
-  const assignments = await prisma.assignment.findMany({
-    where: { set: { orgId: admin.orgId, startsAt: { gte: start, lte: end } } },
-    select: { userId: true, set: { select: { label: true } } },
-  });
+  const orgId = admin.orgId;
+  const inRange = { orgId, startsAt: { gte: start, lte: end } };
 
-  // userId → (label → count)
-  const tally = new Map<string, Map<string, number>>();
+  // Everything we need, in parallel: assignments (for the team breakdown),
+  // cover history events, and swap proposals.
+  const [assignments, coverEvents, requested, taken] = await Promise.all([
+    prisma.assignment.findMany({
+      where: { set: inRange },
+      select: {
+        userId: true,
+        set: { select: { team: { select: { name: true } } } },
+      },
+    }),
+    // Open-cover activity, keyed by who did it.
+    prisma.setHistoryEvent.findMany({
+      where: {
+        type: { in: ["SWAP_REQUESTED", "SWAP_TAKEN"] },
+        actorId: { not: null },
+        set: inRange,
+      },
+      select: { actorId: true, type: true },
+    }),
+    // Targeted trades initiated (by the requester), tied to their own set.
+    prisma.swapProposal.findMany({
+      where: { fromAssignment: { set: inRange } },
+      select: { requestedById: true },
+    }),
+    // Targeted trades accepted (by the recipient), tied to the set they took.
+    prisma.swapProposal.findMany({
+      where: { status: "ACCEPTED", fromAssignment: { set: inRange } },
+      select: { recipientId: true },
+    }),
+  ]);
+
+  // Seed a per-user stats object lazily as we encounter each user.
+  const result: Record<string, UserStats> = {};
+  const statsFor = (userId: string): UserStats =>
+    (result[userId] ??= {
+      teams: [],
+      coversRequested: 0,
+      coversTaken: 0,
+      swapsRequested: 0,
+      swapsTaken: 0,
+    });
+
+  // Sets by team → a per-user Map(teamName → count) we shape into teams[] below.
+  const teamTally = new Map<string, Map<string, number>>();
   for (const a of assignments) {
-    const label = a.set.label ?? NO_LABEL;
-    const byLabel = tally.get(a.userId) ?? new Map<string, number>();
-    byLabel.set(label, (byLabel.get(label) ?? 0) + 1);
-    tally.set(a.userId, byLabel);
+    const team = a.set.team?.name ?? NO_TEAM;
+    const byTeam = teamTally.get(a.userId) ?? new Map<string, number>();
+    byTeam.set(team, (byTeam.get(team) ?? 0) + 1);
+    teamTally.set(a.userId, byTeam);
   }
-
-  // Shape into userId → breakdown[], each sorted by count (desc) then label.
-  const result: Record<string, UserSetBreakdown[]> = {};
-  for (const [userId, byLabel] of tally) {
-    result[userId] = [...byLabel.entries()]
+  for (const [userId, byTeam] of teamTally) {
+    statsFor(userId).teams = [...byTeam.entries()]
       .map(([label, count]) => ({ label, count }))
       .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
   }
+
+  for (const e of coverEvents) {
+    const s = statsFor(e.actorId!);
+    if (e.type === "SWAP_REQUESTED") s.coversRequested += 1;
+    else s.coversTaken += 1;
+  }
+  for (const p of requested) statsFor(p.requestedById).swapsRequested += 1;
+  for (const p of taken) statsFor(p.recipientId).swapsTaken += 1;
 
   return NextResponse.json(result);
 }

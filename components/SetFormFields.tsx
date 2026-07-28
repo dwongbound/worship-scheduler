@@ -9,7 +9,7 @@ import Input from "./common/Input";
 import Select from "./common/Select";
 import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
-import { resolveCapacities, type Instrument } from "@/lib/constants";
+import { resolveCapacities, type BandRole } from "@/lib/constants";
 import type { ApiTeam } from "@/lib/types";
 
 // Set durations, offered in half-hour steps (0.5h–8h) but stored as minutes.
@@ -28,7 +28,7 @@ export interface SetFormState {
   duration: number; // minutes
   requiresMD: boolean; // set needs a musical director on its team
   isPrivate: boolean; // only admins + assigned people can see this set
-  capacities: Record<Instrument, number> | null;
+  capacities: Record<BandRole, number> | null;
   // Which team the set is for. "" until the teams list loads; callers default
   // it to the first team and block submit while it's empty.
   teamId: string;

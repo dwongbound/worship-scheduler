@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { SLOT_CAPACITIES } from "@/lib/constants";
+import { ALL_INSTRUMENTS } from "@/lib/constants";
 import { resolveProfileEmail } from "@/lib/profile";
 
 export async function GET() {
@@ -69,10 +69,11 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Name is required" }, { status: 400 });
   }
 
-  // Only accept known instrument values.
-  const validInstruments = Object.keys(SLOT_CAPACITIES);
+  // Only accept known instrument values (band roles + choir).
   const instruments = Array.isArray(body.instruments)
-    ? body.instruments.filter((i: string) => validInstruments.includes(i))
+    ? body.instruments.filter((i: string) =>
+        (ALL_INSTRUMENTS as string[]).includes(i)
+      )
     : [];
 
   // Google (OAuth-only) accounts sign in with their Google email, so it's not

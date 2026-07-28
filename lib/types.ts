@@ -69,6 +69,43 @@ export interface ApiMyAssignment {
   role: Instrument;
   status: AssignmentStatus;
   set: Omit<ApiSet, "assignments">;
+  // Present only for PENDING_SWAP rows: the open proposal + whether I started
+  // it (so the row can offer Cancel vs. pointing me at my Cover Requests).
+  pendingSwap: { proposalId: string; isRequester: boolean } | null;
+}
+
+// One set I could trade my assignment into (GET /api/swaps/candidates). Same
+// role + team as my slot, currently held by `counterparty`.
+export interface ApiSwapCandidate {
+  toAssignmentId: string;
+  role: Instrument;
+  status: AssignmentStatus; // the counterparty's current status
+  counterparty: ApiUserRef;
+  set: {
+    id: string;
+    label: string | null;
+    startsAt: string;
+    durationMinutes: number;
+    team: { id: string; name: string } | null;
+  };
+  youAvailable: boolean; // I'm free for their set's date
+  theyAvailable: boolean; // they're free for my set's date
+  theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
+}
+
+// A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).
+export interface ApiIncomingSwap {
+  id: string;
+  role: Instrument;
+  requestedBy: ApiUserRef;
+  giveUp: SwapSetRef; // my current set (I'd give this up)
+  receive: SwapSetRef; // their set (I'd take this)
+}
+export interface SwapSetRef {
+  id: string;
+  label: string | null;
+  startsAt: string;
+  org: { id: string; name: string };
 }
 
 // Someone else's swap request I could take.
@@ -134,6 +171,17 @@ export interface ApiAvailabilityStatus {
   needsResponse: boolean;
 }
 
+// GET /api/notifications: everything the navbar's reminder dots + banners need,
+// in one request. Replaces four parallel badge fetches (swaps, availability,
+// profile, teamless). `teamless` is populated only when the query names an org
+// the caller administers; otherwise it's an empty list.
+export interface ApiNotifications {
+  swapCount: number; // open covers + trades awaiting me → the swap dot
+  availability: ApiAvailabilityStatus; // the Availabilities dot + banner
+  needsInstruments: boolean; // brand-new profile → the "finish setup" dot
+  teamless: { id: string; name: string; username: string }[];
+}
+
 // A scheduled weekly Slack reminder for one team (Org settings page). Carries
 // the team's name + Slack channel so the table can flag teams with no channel.
 export interface ApiWeeklyReminder {
@@ -154,6 +202,9 @@ export interface ApiAdminUser {
   username: string; // stable, human-readable deep-link key (?user=<username>)
   isAdmin: boolean;
   isMD: boolean; // can be a set's musical director
+  // Whether this person has linked their Slack account in THIS org (drives the
+  // Team page's Slack-connected badge). Per-org: they may be linked elsewhere.
+  slackConnected: boolean;
   instruments: Instrument[];
   // Teams this person belongs to — gates which sets they can be scheduled on.
   teams: ApiTeam[];

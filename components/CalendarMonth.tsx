@@ -189,11 +189,14 @@ export default function CalendarMonth({
         ))}
       </div>
 
-      {/* Day grid — fills the remaining height, its rows sharing it evenly
-          (min 6rem each) and scrolling only when the viewport can't fit them. */}
+      {/* Day grid — fills the remaining height, its rows sharing it evenly so
+          the whole month always fits the page rather than forcing a scroll.
+          `minmax(0, 1fr)` lets the rows shrink to fit a short viewport (each
+          cell is overflow-hidden and collapses extra sets into "+N more");
+          overflow-y-auto stays only as a safety net for an extreme squeeze. */}
       <div
         className="grid min-h-0 flex-1 grid-cols-7 overflow-y-auto"
-        style={{ gridTemplateRows: `repeat(${weekRows}, minmax(6rem, 1fr))` }}
+        style={{ gridTemplateRows: `repeat(${weekRows}, minmax(0, 1fr))` }}
       >
         {cells.map((date, i) => {
           const inMonth = date.getMonth() === month;

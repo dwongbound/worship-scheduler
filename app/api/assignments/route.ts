@@ -26,5 +26,43 @@ export async function GET(req: NextRequest) {
     orderBy: { set: { startsAt: "asc" } },
   });
 
-  return NextResponse.json(assignments);
+  // Attach the pending targeted-swap (if any) for PENDING_SWAP rows, so the UI
+  // can offer "Cancel swap" (requester) or point the recipient at their Cover
+  // Requests. isRequester = I initiated it (I own the proposal's fromAssignment).
+  const swapIds = assignments
+    .filter((a) => a.status === "PENDING_SWAP")
+    .map((a) => a.id);
+  const proposals = swapIds.length
+    ? await prisma.swapProposal.findMany({
+        where: {
+          status: "PENDING",
+          OR: [
+            { fromAssignmentId: { in: swapIds } },
+            { toAssignmentId: { in: swapIds } },
+          ],
+        },
+        select: { id: true, fromAssignmentId: true, toAssignmentId: true },
+      })
+    : [];
+  const swapByAssignment = new Map<
+    string,
+    { proposalId: string; isRequester: boolean }
+  >();
+  for (const p of proposals) {
+    swapByAssignment.set(p.fromAssignmentId, {
+      proposalId: p.id,
+      isRequester: true,
+    });
+    swapByAssignment.set(p.toAssignmentId, {
+      proposalId: p.id,
+      isRequester: false,
+    });
+  }
+
+  return NextResponse.json(
+    assignments.map((a) => ({
+      ...a,
+      pendingSwap: swapByAssignment.get(a.id) ?? null,
+    }))
+  );
 }

@@ -5,7 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { SLOT_CAPACITIES } from "@/lib/constants";
+import { ALL_INSTRUMENTS } from "@/lib/constants";
 
 export async function PATCH(
   req: NextRequest,
@@ -38,9 +38,8 @@ export async function PATCH(
   }
 
   if (Array.isArray(body.instruments)) {
-    const validInstruments = Object.keys(SLOT_CAPACITIES);
     data.instruments = body.instruments.filter((i: string) =>
-      validInstruments.includes(i)
+      (ALL_INSTRUMENTS as string[]).includes(i)
     );
   }
 

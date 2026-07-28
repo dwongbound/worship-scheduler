@@ -30,6 +30,11 @@ enum Instrument {
   STRINGS
   DRUMS
   BASS
+  // Choir is a special role: unlike the band roles above it has no fixed slot
+  // count in the team shape (SLOT_CAPACITIES / ROLE_ORDER omit it). It's an
+  // unbounded, admin-managed list on a set — the set-detail modal's "Auto
+  // schedule" seats everyone on the team who's free, and admins add more by hand.
+  CHOIR
 }
 
 // Lifecycle of an assignment:
@@ -39,10 +44,14 @@ enum Instrument {
 //   SWAP_REQUESTED — user wants out; visible to others with the same
 //                    instrument until someone takes it (back to PENDING
 //                    under the new user).
+//   PENDING_SWAP   — part of a proposed targeted trade (see SwapProposal);
+//                    frozen until the recipient accepts (both CONFIRMED) or
+//                    rejects (both restored to their captured prior status).
 enum AssignmentStatus {
   PENDING
   CONFIRMED
   SWAP_REQUESTED
+  PENDING_SWAP
 }
 
 enum UnavailabilityType {
@@ -203,6 +212,9 @@ model User {
   historyActed    SetHistoryEvent[] @relation("SetHistoryActor")
   historyTargeted SetHistoryEvent[] @relation("SetHistoryTarget")
   historyPrevious SetHistoryEvent[] @relation("SetHistoryPrevious")
+  // Targeted swaps this person initiated / was offered (see SwapProposal).
+  swapsRequested  SwapProposal[]    @relation("SwapRequestedBy")
+  swapsReceived   SwapProposal[]    @relation("SwapRecipient")
   // Sets where this person is the designated musical director.
   mdSets          Set[]             @relation("SetMD")
 
@@ -272,10 +284,60 @@ model Assignment {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Targeted swaps this assignment is either side of (see SwapProposal).
+  swapFrom SwapProposal[] @relation("SwapFrom")
+  swapTo   SwapProposal[] @relation("SwapTo")
+
   // A person can hold several roles on one set (e.g. worship leader + acoustic
   // guitar) but never the same role twice.
   @@unique([setId, userId, role])
   @@map("assignments")
+}
+
+// A targeted swap ("trade") between two assignments in the SAME role: the
+// requester offers their slot (fromAssignment) for someone else's
+// (toAssignment). While PENDING both assignments sit at PENDING_SWAP;
+// accepting exchanges their users (both CONFIRMED), rejecting restores the
+// captured prior statuses. Only one PENDING proposal may touch a given
+// assignment at a time (enforced in the API, not the schema).
+model SwapProposal {
+  id String @id @default(cuid())
+
+  fromAssignment   Assignment @relation("SwapFrom", fields: [fromAssignmentId], references: [id], onDelete: Cascade)
+  fromAssignmentId String
+  toAssignment     Assignment @relation("SwapTo", fields: [toAssignmentId], references: [id], onDelete: Cascade)
+  toAssignmentId   String
+
+  // Who initiated the trade (owns fromAssignment); the recipient (owner of
+  // toAssignment) is who accepts or rejects it. recipientId is captured
+  // explicitly because toAssignment.userId flips to the requester on accept —
+  // so it's the only durable record of who received (and possibly accepted) it.
+  requestedBy   User   @relation("SwapRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  requestedById String
+  recipient     User   @relation("SwapRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId   String
+
+  status SwapProposalStatus @default(PENDING)
+
+  // Captured at propose-time so a reject restores each side exactly.
+  fromPrevStatus AssignmentStatus
+  toPrevStatus   AssignmentStatus
+
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  @@index([toAssignmentId, status])
+  @@index([fromAssignmentId, status])
+  @@index([requestedById])
+  @@index([recipientId, status])
+  @@map("swap_proposals")
+}
+
+enum SwapProposalStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  CANCELED
 }
 
 // One line in a set's activity log — see SetHistoryEventType for what each

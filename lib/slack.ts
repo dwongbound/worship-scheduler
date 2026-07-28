@@ -11,8 +11,9 @@
 // the API routes, never by importing it directly.
 import { prisma } from "./prisma";
 import { decryptSecret } from "./crypto";
-import { INSTRUMENT_LABELS, ROLE_ORDER, type Instrument } from "./constants";
+import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "./constants";
 import { formatDay, formatTime, shortDateLabel } from "./dates";
+import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
 
 const SLACK_API = "https://slack.com/api";
 
@@ -203,7 +204,7 @@ export function teamRosterText(
     names.push(a.user.name);
     namesByRole.set(a.role, names);
   }
-  return ROLE_ORDER.filter((role) => namesByRole.has(role))
+  return ALL_INSTRUMENTS.filter((role) => namesByRole.has(role))
     .map((role) => `*${INSTRUMENT_LABELS[role]}:* ${namesByRole.get(role)!.join(", ")}`)
     .join("\n");
 }
@@ -222,7 +223,17 @@ function appUrl(path = ""): string {
 export async function notifySwapRequested(assignmentId: string): Promise<void> {
   const assignment = await prisma.assignment.findUnique({
     where: { id: assignmentId },
-    include: { set: { select: { label: true, startsAt: true, orgId: true } } },
+    include: {
+      set: {
+        select: {
+          label: true,
+          startsAt: true,
+          durationMinutes: true,
+          orgId: true,
+          teamId: true,
+        },
+      },
+    },
   });
   if (!assignment) return;
 
@@ -230,15 +241,57 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
   if (!token && !slackDryRun()) return;
 
   // Same eligibility rule as GET /api/swaps: plays this role, isn't the
-  // requester, is in the set's org, and has linked Slack in THAT org.
+  // requester, is in the set's org, is on the set's team (a team-less set is
+  // open to the whole org), and has linked Slack in THAT org (so people who
+  // never connected Slack are simply skipped — the graceful-fail path).
   const eligible = await prisma.orgMembership.findMany({
     where: {
       orgId: assignment.set.orgId,
       userId: { not: assignment.userId },
       slackUserId: { not: null },
-      user: { instruments: { has: assignment.role } },
+      user: {
+        instruments: { has: assignment.role },
+        ...(assignment.set.teamId
+          ? { teams: { some: { id: assignment.set.teamId } } }
+          : {}),
+      },
     },
-    select: { slackUserId: true },
+    select: {
+      userId: true,
+      slackUserId: true,
+      // Busy blocks are global to the person (they apply in every org), so we
+      // can filter out anyone unavailable at this set's time before DMing.
+      user: {
+        select: {
+          unavailability: {
+            select: {
+              type: true,
+              dayOfWeek: true,
+              startMinute: true,
+              endMinute: true,
+              startDate: true,
+              endDate: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Drop anyone whose availability blocks this set's day/time — no point
+  // pinging people who already said they can't serve then.
+  const schedulerSet = {
+    id: assignmentId,
+    startsAt: assignment.set.startsAt,
+    durationMinutes: assignment.set.durationMinutes,
+    teamId: assignment.set.teamId,
+  };
+  const available = eligible.filter((m) => {
+    const rules: UnavailabilityRule[] = m.user.unavailability.map((u) => ({
+      ...u,
+      userId: m.userId,
+    }));
+    return isUserAvailable(m.userId, schedulerSet, rules);
   });
 
   const url = appUrl("/swaps");
@@ -248,7 +301,7 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
     (url ? ` Take it here: ${url}` : "");
 
   await Promise.all(
-    eligible.map((m) => postDirectMessage(token, m.slackUserId!, text))
+    available.map((m) => postDirectMessage(token, m.slackUserId!, text))
   );
 }
 
@@ -281,6 +334,87 @@ export async function notifySwapTaken(
     `✅ ${takerName} took your ${INSTRUMENT_LABELS[assignment.role]} slot on ` +
     `${setLabel(assignment.set)}. You're off the hook!`;
   await postDirectMessage(token, owner.slackUserId, text);
+}
+
+// A proposal's two sets + the org they share, plus each party's per-org Slack
+// id. Shared by the targeted-swap notifications below.
+async function loadProposalSlack(proposalId: string) {
+  const p = await prisma.swapProposal.findUnique({
+    where: { id: proposalId },
+    include: {
+      requestedBy: { select: { id: true, name: true } },
+      fromAssignment: {
+        select: {
+          role: true,
+          set: { select: { label: true, startsAt: true, orgId: true } },
+        },
+      },
+      toAssignment: {
+        select: {
+          userId: true,
+          user: { select: { name: true } },
+          set: { select: { label: true, startsAt: true } },
+        },
+      },
+    },
+  });
+  if (!p) return null;
+  const orgId = p.fromAssignment.set.orgId;
+  const token = await orgBotToken(orgId);
+  if (!token && !slackDryRun()) return null;
+  // Per-org Slack ids for the two parties.
+  const memberships = await prisma.orgMembership.findMany({
+    where: { orgId, userId: { in: [p.requestedById, p.toAssignment.userId] } },
+    select: { userId: true, slackUserId: true },
+  });
+  const slackIdOf = (userId: string) =>
+    memberships.find((m) => m.userId === userId)?.slackUserId ?? null;
+  return { p, token, slackIdOf };
+}
+
+/**
+ * A targeted swap was proposed. DM the recipient (who'd give up their slot) so
+ * they can accept or reject it. No-op if they haven't linked Slack.
+ */
+export async function notifySwapProposed(proposalId: string): Promise<void> {
+  const loaded = await loadProposalSlack(proposalId);
+  if (!loaded) return;
+  const { p, token, slackIdOf } = loaded;
+  const slackId = slackIdOf(p.toAssignment.userId);
+  if (!slackId) return;
+
+  const url = appUrl("/swaps");
+  const text =
+    `🔁 ${p.requestedBy.name} wants to swap their ` +
+    `${INSTRUMENT_LABELS[p.fromAssignment.role]} slot on ` +
+    `${setLabel(p.fromAssignment.set)} for yours on ` +
+    `${setLabel(p.toAssignment.set)}.` +
+    (url ? ` Accept or decline here: ${url}` : "");
+  await postDirectMessage(token, slackId, text);
+}
+
+/**
+ * A targeted swap was accepted or rejected. DM the requester with the outcome.
+ * No-op if they haven't linked Slack.
+ */
+export async function notifySwapResolved(
+  proposalId: string,
+  accepted: boolean
+): Promise<void> {
+  const loaded = await loadProposalSlack(proposalId);
+  if (!loaded) return;
+  const { p, token, slackIdOf } = loaded;
+  const slackId = slackIdOf(p.requestedById);
+  if (!slackId) return;
+
+  const who = p.toAssignment.user.name;
+  const text = accepted
+    ? `✅ ${who} accepted your swap — you're now on ` +
+      `${setLabel(p.toAssignment.set)} and they've got ` +
+      `${setLabel(p.fromAssignment.set)}.`
+    : `🚫 ${who} declined your swap for ` +
+      `${setLabel(p.fromAssignment.set)}. Your slot is unchanged.`;
+  await postDirectMessage(token, slackId, text);
 }
 
 /**
@@ -401,9 +535,13 @@ export function weeklySummaryText(
     `${shortDateLabel(range.start)} – ${shortDateLabel(range.end)}`;
   const blocks = sets.map((set) => {
     const header = `*${set.label ?? "Worship set"}* — ${formatDay(set.startsAt)} · ${formatTime(set.startsAt)}`;
-    // Sort into ROLE_ORDER, keeping the original order within a role.
+    // Sort into display order (band roles then choir), keeping the original
+    // order within a role.
     const lines = [...set.assignments]
-      .sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role))
+      .sort(
+        (a, b) =>
+          ALL_INSTRUMENTS.indexOf(a.role) - ALL_INSTRUMENTS.indexOf(b.role)
+      )
       .map(
         (a) =>
           `• ${a.user.name} — ${INSTRUMENT_LABELS[a.role]}${a.user.id === set.mdUserId ? " (MD)" : ""}`
