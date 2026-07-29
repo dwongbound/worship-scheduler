@@ -476,16 +476,23 @@ export async function messageSetTeamOnSlack(
     return { ok: false, error: "Slack isn't connected for this org yet." };
   }
 
-  // Per-org member ids for the assigned people (member ids are workspace-scoped).
+  // Per-org member ids (workspace-scoped) for everyone who should be in the
+  // chat: the set's assigned people, PLUS anyone in the org flagged
+  // "alwaysInGroupChats" (e.g. a ministry lead who wants to be in every set's
+  // chat, even sets they aren't on). People without a linked Slack are silently
+  // excluded (slackUserId filter); duplicates are de-duped.
   const linked = await prisma.orgMembership.findMany({
     where: {
       orgId: set.orgId,
       slackUserId: { not: null },
-      userId: { in: set.assignments.map((a) => a.userId) },
+      OR: [
+        { userId: { in: set.assignments.map((a) => a.userId) } },
+        { alwaysInGroupChats: true },
+      ],
     },
     select: { slackUserId: true },
   });
-  const ids = linked.map((m) => m.slackUserId!);
+  const ids = [...new Set(linked.map((m) => m.slackUserId!))];
   if (ids.length === 0) {
     return { ok: false, error: "No one on this set has linked their Slack yet." };
   }
@@ -504,6 +511,51 @@ export async function messageSetTeamOnSlack(
   return posted
     ? { ok: true }
     : { ok: false, error: "Could not post the message." };
+}
+
+/**
+ * Auto group-chat cron worker. For every team with a group-chat lead time set,
+ * open the Slack group chat for any of its upcoming sets that fall within the
+ * lead window and haven't had one made yet, then stamp `groupChatCreatedAt` so
+ * it's only made once. Best-effort and silent: a set with no linked members (or
+ * an org without Slack) is skipped and left unmarked so a later daily run can
+ * retry once people link — and it naturally stops once the set is in the past.
+ */
+export async function runDueGroupChats(
+  now: Date = new Date()
+): Promise<{ created: number; considered: number }> {
+  const teams = await prisma.team.findMany({
+    where: { groupChatLeadDays: { not: null } },
+    select: { id: true, groupChatLeadDays: true },
+  });
+
+  let created = 0;
+  let considered = 0;
+  for (const team of teams) {
+    const lead = team.groupChatLeadDays!;
+    const windowEnd = new Date(now.getTime() + lead * 24 * 60 * 60 * 1000);
+    const due = await prisma.set.findMany({
+      where: {
+        teamId: team.id,
+        groupChatCreatedAt: null,
+        startsAt: { gte: now, lte: windowEnd },
+      },
+      select: { id: true },
+    });
+    for (const s of due) {
+      considered++;
+      const result = await messageSetTeamOnSlack(s.id);
+      if (result.ok) {
+        await prisma.set.update({
+          where: { id: s.id },
+          data: { groupChatCreatedAt: new Date() },
+        });
+        created++;
+      }
+      // Not ok (nobody linked yet, or Slack off): leave it unmarked to retry.
+    }
+  }
+  return { created, considered };
 }
 
 // ── Weekly team summary (posted to the team's Slack channel) ───────────────

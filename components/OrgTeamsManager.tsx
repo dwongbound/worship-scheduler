@@ -1,27 +1,20 @@
 "use client";
-// Org settings: full team management (create/delete teams, manage members and
-// each team's Slack channel via the shared members modal) plus the scheduled
-// weekly Slack reminders table. Admin-only; every request is scoped to `orgId`
-// via the x-org-id header. Keyed on orgId by the parent so it remounts on an
-// org switch. Mirrors the team management the /team tab used to hold.
+// Org settings: full team management (create/delete teams, manage members,
+// each team's Slack channel, and its weekly Slack reminders — all via the
+// shared members modal). Admin-only; every request is scoped to `orgId` via
+// the x-org-id header. Keyed on orgId by the parent so it remounts on an org
+// switch. Mirrors the team management the /team tab used to hold.
 import { useCallback, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
-import Select from "@/components/common/Select";
 import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import { DAY_LABELS } from "@/lib/constants";
-import { minutesToTimeLabel, timeStringToMinutes } from "@/lib/dates";
-import type { ApiAdminUser, ApiTeam, ApiWeeklyReminder } from "@/lib/types";
-
-// Days ordered Monday→Sunday (labels are indexed 0=Sun) for the picker.
-const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 0];
+import type { ApiAdminUser, ApiTeam } from "@/lib/types";
 
 export default function OrgTeamsManager({ orgId }: { orgId: string }) {
   const [teams, setTeams] = useState<ApiTeam[] | null>(null);
   const [users, setUsers] = useState<ApiAdminUser[] | null>(null);
-  const [reminders, setReminders] = useState<ApiWeeklyReminder[] | null>(null);
 
   // Team management state (create + members modal).
   const [newTeamName, setNewTeamName] = useState("");
@@ -32,13 +25,6 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
   const [memberQuery, setMemberQuery] = useState("");
   const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
 
-  // Reminder "add" form state.
-  const [remTeamId, setRemTeamId] = useState("");
-  const [remDay, setRemDay] = useState(0);
-  const [remTime, setRemTime] = useState("09:00");
-  const [remBusy, setRemBusy] = useState(false);
-  const [remError, setRemError] = useState("");
-
   const loadTeams = useCallback(() => {
     fetchJsonArray<ApiTeam>(`/api/teams?orgId=${orgId}`).then(setTeams);
   }, [orgId]);
@@ -47,17 +33,11 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
       headers: orgHeaders(orgId),
     }).then(setUsers);
   }, [orgId]);
-  const loadReminders = useCallback(() => {
-    fetchJsonArray<ApiWeeklyReminder>("/api/admin/reminders", {
-      headers: orgHeaders(orgId),
-    }).then(setReminders);
-  }, [orgId]);
 
   useEffect(() => {
     loadTeams();
     loadUsers();
-    loadReminders();
-  }, [loadTeams, loadUsers, loadReminders]);
+  }, [loadTeams, loadUsers]);
 
   // ── Teams ────────────────────────────────────────────────────────────
   async function addTeam() {
@@ -92,7 +72,6 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
       await fetch(`/api/teams/${id}`, { method: "DELETE" });
       loadTeams();
       loadUsers();
-      loadReminders(); // its reminders cascade away
       window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
     } finally {
       setTeamBusy(false);
@@ -118,36 +97,21 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
   const memberCount = (teamId: string) =>
     users?.filter((u) => u.teams.some((t) => t.id === teamId)).length ?? 0;
 
-  // ── Reminders ────────────────────────────────────────────────────────
-  async function addReminder() {
-    const teamId = remTeamId || teams?.[0]?.id;
-    if (!teamId) return;
-    setRemBusy(true);
-    setRemError("");
-    try {
-      const res = await fetch("/api/admin/reminders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...orgHeaders(orgId) },
-        body: JSON.stringify({
-          teamId,
-          dayOfWeek: remDay,
-          minute: timeStringToMinutes(remTime),
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setRemError(data.error ?? "Could not add the reminder.");
-        return;
-      }
-      loadReminders();
-    } finally {
-      setRemBusy(false);
-    }
-  }
-
-  async function deleteReminder(id: string) {
-    await fetch(`/api/admin/reminders/${id}`, { method: "DELETE" });
-    loadReminders();
+  // Toggle a member's "add me to every group chat this org creates" flag
+  // (optimistic, then PATCH; revert to server state on failure).
+  async function setAlwaysInGroupChats(user: ApiAdminUser, value: boolean) {
+    setUsers(
+      (prev) =>
+        prev?.map((u) =>
+          u.id === user.id ? { ...u, alwaysInGroupChats: value } : u
+        ) ?? prev
+    );
+    const res = await fetch(`/api/admin/users/${user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...orgHeaders(orgId) },
+      body: JSON.stringify({ alwaysInGroupChats: value }),
+    });
+    if (!res.ok) loadUsers();
   }
 
   return (
@@ -229,116 +193,37 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
         )}
       </div>
 
-      {/* Weekly Slack reminders */}
+      {/* Group-chat always-invites: people added to EVERY Slack group chat this
+          org creates, even for sets they aren't assigned to. */}
       <div>
-        <p className="mb-1 text-sm font-medium">Weekly Slack reminders</p>
+        <p className="mb-1 text-sm font-medium">Include in all group chats</p>
         <p className="mb-3 text-sm text-gray-500">
-          Automatically post a team&rsquo;s upcoming sets to its Slack channel
-          every week. Sent on a daily schedule, so the time is approximate.
+          These people are added to every Slack group chat this org creates —
+          even sets they aren&rsquo;t on. They still need a linked Slack account.
         </p>
-
-        {/* Add form */}
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-[10rem] flex-1">
-            <Select
-              label="Team"
-              value={remTeamId || teams?.[0]?.id || ""}
-              onChange={(e) => setRemTeamId(e.target.value)}
-            >
-              {(teams ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="w-32">
-            <Select
-              label="Day"
-              value={remDay}
-              onChange={(e) => setRemDay(Number(e.target.value))}
-            >
-              {DAY_OPTIONS.map((d) => (
-                <option key={d} value={d}>
-                  {DAY_LABELS[d]}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Time
-            </label>
-            <input
-              type="time"
-              value={remTime}
-              onChange={(e) => setRemTime(e.target.value)}
-              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm
-                dark:border-gray-600 dark:bg-gray-900"
-            />
-          </div>
-          <Button
-            onClick={addReminder}
-            disabled={remBusy || !teams || teams.length === 0}
-          >
-            Add
-          </Button>
-        </div>
-        {remError && (
-          <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
-            {remError}
-          </p>
-        )}
-
-        {/* Table */}
-        {reminders && reminders.length > 0 && (
-          <table className="mt-4 w-full text-left text-sm">
-            <thead className="border-b border-gray-200 text-gray-500 dark:border-gray-700">
-              <tr>
-                <th className="py-2 pr-4">Team</th>
-                <th className="py-2 pr-4">When</th>
-                <th className="py-2">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {reminders.map((r) => (
-                <tr
-                  key={r.id}
-                  className="border-b border-gray-100 last:border-0 dark:border-gray-700/50"
-                >
-                  <td className="py-2 pr-4 font-medium">
-                    {r.teamName}
-                    {!r.teamSlackChannelId && (
-                      <span className="mt-0.5 flex items-center gap-1 text-xs font-normal text-amber-600 dark:text-amber-400">
-                        <span
-                          aria-hidden
-                          className="flex h-4 w-4 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700 dark:bg-amber-900/50 dark:text-amber-300"
-                        >
-                          !
-                        </span>
-                        Add Slack ID to team
-                      </span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-4">
-                    {DAY_LABELS[r.dayOfWeek]} · {minutesToTimeLabel(r.minute)}
-                  </td>
-                  <td className="py-2 text-right">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
-                      onClick={() => deleteReminder(r.id)}
-                    >
-                      Delete
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {!users || users.length === 0 ? (
+          <p className="text-sm text-gray-400">No members yet.</p>
+        ) : (
+          <ul className="scrollbar-visible max-h-64 space-y-1 overflow-y-auto pr-1">
+            {users.map((u) => (
+              <li key={u.id}>
+                <label className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/60">
+                  <input
+                    type="checkbox"
+                    checked={u.alwaysInGroupChats}
+                    onChange={(e) => setAlwaysInGroupChats(u, e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-gray-600"
+                  />
+                  <span>{u.name}</span>
+                  {!u.slackConnected && (
+                    <span className="text-xs text-gray-400">
+                      (no Slack linked)
+                    </span>
+                  )}
+                </label>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
 

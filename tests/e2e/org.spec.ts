@@ -20,6 +20,33 @@ async function pickOrg(page: import("@playwright/test").Page, label: string) {
   await page.getByRole("button", { name: label, exact: true }).click();
 }
 
+// Assert a set's calendar chip is visible, advancing the month view if needed:
+// a seeded set on "next <weekday>" can land in the following month near a
+// month's end, and the calendar opens on the current month. Scope to the
+// visible grid chip (the hidden mobile panel repeats the label).
+async function expectChipVisible(
+  page: import("@playwright/test").Page,
+  label: string
+) {
+  // First make sure the set is actually in the user's data — after a join the
+  // calendar refetches async, and racing that would wrongly page past the set.
+  await expect(async () => {
+    const sets = (await (await page.request.get("/api/sets")).json()) as {
+      label: string | null;
+    }[];
+    expect(sets.some((s) => s.label === label)).toBeTruthy();
+  }).toPass();
+
+  const chip = () => page.getByText(label).filter({ visible: true }).first();
+  // It's in the current month or (at most) the next one — advance once if the
+  // current month doesn't show it, then assert (a full timeout absorbs the
+  // grid's own refetch after a join).
+  if (!(await chip().isVisible().catch(() => false))) {
+    await page.getByRole("button", { name: "Next month" }).click();
+  }
+  await expect(chip()).toBeVisible();
+}
+
 test("calendar defaults to All orgs, filters per org, and persists the choice", async ({
   page,
 }) => {
@@ -27,10 +54,7 @@ test("calendar defaults to All orgs, filters per org, and persists the choice", 
 
   // Default view: everything from both orgs, switcher reads "All orgs".
   await expect(page.getByTestId("org-switcher")).toContainText("All orgs");
-  // Scope to the visible grid chip — the hidden mobile panel repeats the label.
-  await expect(
-    page.getByText("College Night").filter({ visible: true }).first()
-  ).toBeVisible();
+  await expectChipVisible(page, "College Night");
 
   // The set detail modal names the set's org with a chip.
   const modal = await openSetByLabel(page, "College Night");
@@ -82,11 +106,8 @@ test("a member can join another org by key from the navbar", async ({
     .fill(entry.slice(entry.lastIndexOf(":") + 1).trim());
   await page.getByRole("button", { name: "Join", exact: true }).click();
 
-  // Org 2's sets now show up in the (still "All orgs") calendar view. Scope to
-  // the visible grid chip (the hidden mobile panel repeats the label).
-  await expect(
-    page.getByText("College Night").filter({ visible: true }).first()
-  ).toBeVisible();
+  // Org 2's sets now show up in the (still "All orgs") calendar view.
+  await expectChipVisible(page, "College Night");
   // And the switcher menu now lists the new org.
   await page.getByTestId("org-switcher").click();
   await expect(

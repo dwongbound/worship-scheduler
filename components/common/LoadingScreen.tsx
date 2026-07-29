@@ -6,7 +6,7 @@
 
 const APP_NAME = "Worship Scheduler";
 // Fixed subtext — the same on every full-screen loader, by design.
-const SUBTEXT = "\"I'm calling on the God of Dacob\" — Joe Lee";
+const SUBTEXT = "\"Let's give a clap offering!\" — Joe Lee";
 
 // Equalizer bar heights + per-bar timing, tuned so it reads like music
 // rather than a mechanical loop. Colors are drawn from the app favicon

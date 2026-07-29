@@ -1,8 +1,8 @@
 // PATCH /api/sets/:id — edit a set's notes (org admins + the set's worship
 // leader, who runs it), its designated MD (org admins only), its private flag
-// (org admins only), or its choir opt-in flag (org admins only). Send
-// { notes }, { mdUserId } (null clears the MD), { isPrivate }, or
-// { choirEnabled }.
+// (org admins only), its choir opt-in flag (org admins only), or whether it
+// requires an MD (org admins only). Send { notes }, { mdUserId } (null clears
+// the MD), { isPrivate }, { choirEnabled }, or { requiresMD }.
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
@@ -25,11 +25,13 @@ export async function PATCH(
   const editingMD = "mdUserId" in body;
   const editingPrivate = "isPrivate" in body;
   const editingChoir = "choirEnabled" in body;
-  // Only a plain notes edit (not MD/privacy/choir) requires a notes string.
+  const editingRequiresMD = "requiresMD" in body;
+  // Only a plain notes edit (not MD/privacy/choir/requiresMD) needs a notes string.
   if (
     !editingMD &&
     !editingPrivate &&
     !editingChoir &&
+    !editingRequiresMD &&
     typeof body.notes !== "string"
   ) {
     return NextResponse.json({ error: "notes is required" }, { status: 400 });
@@ -47,7 +49,13 @@ export async function PATCH(
   // by the set's assigned worship leader.
   const admin = await requireOrgAdminFor(set.orgId);
   let allowed = !!admin;
-  if (!allowed && !editingMD && !editingPrivate && !editingChoir) {
+  if (
+    !allowed &&
+    !editingMD &&
+    !editingPrivate &&
+    !editingChoir &&
+    !editingRequiresMD
+  ) {
     const leaderSlot = await prisma.assignment.findFirst({
       where: { setId: id, userId: user.id, role: "WORSHIP_LEADER" },
     });
@@ -55,6 +63,20 @@ export async function PATCH(
   }
   if (!allowed) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  if (editingRequiresMD) {
+    if (typeof body.requiresMD !== "boolean") {
+      return NextResponse.json(
+        { error: "requiresMD must be a boolean" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { requiresMD: body.requiresMD },
+    });
+    return NextResponse.json(updated);
   }
 
   if (editingChoir) {

@@ -541,7 +541,7 @@ describe("buildSchedule spacing", () => {
 });
 
 describe("availableChoirMembers", () => {
-  it("returns every available team member who lists CHOIR", () => {
+  it("returns every available singer who lists CHOIR", () => {
     const users = [
       user("c1", ["CHOIR"]),
       user("c2", ["VOCALS", "CHOIR"]),
@@ -565,12 +565,15 @@ describe("availableChoirMembers", () => {
     expect(availableChoirMembers(tuesdaySet, users, [], already)).toEqual(["c2"]);
   });
 
-  it("respects the set's team: only its members are eligible", () => {
+  it("ignores the set's team: choir is org-wide, not team-scoped", () => {
+    // Unlike band roles, choir isn't restricted to the set's team — any singer
+    // in the org may join, even one on a different team (or no team at all).
     const teamSet: SchedulerSet = { ...tuesdaySet, teamId: "team-A" };
     const users = [
       { ...user("c1", ["CHOIR"]), teamIds: ["team-A"] },
       { ...user("c2", ["CHOIR"]), teamIds: ["team-B"] }, // other team
+      user("c3", ["CHOIR"]), // no team at all
     ];
-    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1"]);
+    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1", "c2", "c3"]);
   });
 });

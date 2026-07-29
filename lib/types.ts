@@ -23,6 +23,9 @@ export interface ApiTeam {
   // Only present on GET /api/teams (other endpoints embed just {id, name}).
   orgId?: string;
   slackChannelId?: string | null;
+  // Auto group-chat lead time in days (null/absent = off). Present on
+  // GET /api/teams and the team PATCH response.
+  groupChatLeadDays?: number | null;
 }
 
 export interface ApiUserRef {
@@ -208,6 +211,9 @@ export interface ApiAdminUser {
   // Whether this person has linked their Slack account in THIS org (drives the
   // Team page's Slack-connected badge). Per-org: they may be linked elsewhere.
   slackConnected: boolean;
+  // When true, this person is added to every Slack group chat this org creates,
+  // even for sets they aren't on (per-org membership flag).
+  alwaysInGroupChats: boolean;
   instruments: Instrument[];
   // Teams this person belongs to — gates which sets they can be scheduled on.
   teams: ApiTeam[];

@@ -82,15 +82,13 @@ test("admin creates a private set from the calendar, then toggles it public", as
     (await fetchSets(page)).find((s) => s.label === "Secret Set")
   ).toBeFalsy();
 
-  // Admin toggles it public from the detail modal's "Private" checkbox.
-  // Scope by role: the modal also has a lock badge whose aria-label is
-  // "Private", so a bare getByLabel("Private") would be ambiguous.
+  // Admin toggles it public from the detail modal's overflow (⋮) menu, where
+  // the "Private" toggle now lives. The menu's item is a button named
+  // "Private"; the title's lock badge is a span, so this doesn't collide.
   await login(page, "admin");
   const detail = await openSetByLabel(page, "Secret Set");
-  // Click (not uncheck): the box is controlled by the set's saved state, which
-  // only flips after the PATCH + refetch — uncheck() would fail waiting for an
-  // immediate state change. The toPass below confirms the server actually saved.
-  await detail.getByRole("checkbox", { name: "Private" }).click();
+  await detail.getByRole("button", { name: "More actions" }).click();
+  await detail.getByRole("button", { name: "Private" }).click();
   await expect(async () => {
     const nowPublic = (await fetchSets(page)).find((s) => s.label === "Secret Set");
     expect(nowPublic?.isPrivate).toBe(false);

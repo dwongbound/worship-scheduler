@@ -162,9 +162,10 @@ test("assignment dropdown flags people who are unavailable for the set", async (
     // are already filled, so Vox is the only role with an open slot she
     // qualifies for.
     await login(page, "admin");
-    await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
-    const modal = page.getByRole("dialog");
-    await expect(modal).toBeVisible();
+    // Deep-link to the set instead of clicking its calendar chip: near a
+    // month's end the seeded Wednesday set can land in the next month, which
+    // the calendar isn't showing, so the chip wouldn't be visible to click.
+    const modal = await openSetByLabel(page, "Wednesday Night");
 
     const voxRow = modal.getByRole("listitem").filter({ hasText: "Vox" });
     await voxRow.getByRole("button", { name: "None" }).first().click();
