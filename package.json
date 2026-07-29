@@ -2,6 +2,7 @@
   "name": "worship-scheduler",
   "version": "0.1.1",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "dotenv -e env/dev.env -- next dev",
     "build": "prisma generate && next build",

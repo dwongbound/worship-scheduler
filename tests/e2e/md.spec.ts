@@ -62,3 +62,63 @@ test("auto-scheduling a required-MD set from its detail modal seats an MD", asyn
   ).toHaveCount(0);
   await expect(modal.getByText("* (MD)").first()).toBeVisible();
 });
+
+test("the set actions (⋮) menu lists the actions and toggles Require MD", async ({
+  page,
+}) => {
+  await login(page, "admin");
+
+  // Create a fresh, empty set that does NOT require an MD — via the API so the
+  // test doesn't depend on the (crowded) calendar-cell "New set" flow. Any team
+  // in admin's org works; grab one off an existing set.
+  const existing = await (await page.request.get("/api/sets")).json();
+  const teamId = existing.find(
+    (s: { team: { id: string } | null }) => s.team
+  ).team.id;
+  const startsAt = new Date(Date.now() + 40 * 24 * 60 * 60 * 1000).toISOString();
+  const created = await page.request.post("/api/sets", {
+    data: { label: "Actions Menu", startsAt, durationMinutes: 60, teamId },
+  });
+  expect(created.ok()).toBeTruthy();
+
+  const modal = await openSetByLabel(page, "Actions Menu");
+  // No MD requirement yet → no "no MD" warning.
+  await expect(
+    modal.getByText(/requires an MD but none is assigned/)
+  ).toHaveCount(0);
+
+  // The ⋮ menu lists every set action (toggles as buttons, export as a link).
+  const openMenu = () =>
+    modal.getByRole("button", { name: "More actions" }).click();
+  await openMenu();
+  await expect(
+    modal.getByRole("button", { name: "Require MD", exact: true })
+  ).toBeVisible();
+  await expect(
+    modal.getByRole("button", { name: "Include choir in set" })
+  ).toBeVisible();
+  await expect(
+    modal.getByRole("button", { name: "Private", exact: true })
+  ).toBeVisible();
+  await expect(modal.getByRole("link", { name: "Export (.ics)" })).toBeVisible();
+
+  // The hamburger toggles the menu back shut, then open again.
+  await modal.getByRole("button", { name: "More actions" }).click();
+  await expect(
+    modal.getByRole("button", { name: "Require MD", exact: true })
+  ).toBeHidden();
+  await openMenu();
+
+  // Toggle Require MD on → the "needs an MD" warning appears (empty set).
+  await modal.getByRole("button", { name: "Require MD", exact: true }).click();
+  await expect(
+    modal.getByText(/requires an MD but none is assigned/)
+  ).toBeVisible();
+
+  // Toggle it back off → the warning clears.
+  await openMenu();
+  await modal.getByRole("button", { name: "Require MD", exact: true }).click();
+  await expect(
+    modal.getByText(/requires an MD but none is assigned/)
+  ).toHaveCount(0);
+});

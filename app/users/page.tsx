@@ -22,6 +22,7 @@ import LoadingDots from "@/components/common/LoadingDots";
 import Select from "@/components/common/Select";
 import SlackIcon from "@/components/common/SlackIcon";
 import { usePageLoading } from "@/components/LoadingProvider";
+import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
@@ -110,6 +111,14 @@ function UsersPageInner() {
   const [sendResult, setSendResult] = useState<
     Record<string, { ok: boolean; text: string }>
   >({});
+
+  // Team management modal (same one Org settings uses): which team is open, the
+  // "add member" query, the delete-confirm target, and a busy flag while a
+  // delete request is in flight.
+  const [openTeamId, setOpenTeamId] = useState<string | null>(null);
+  const [memberQuery, setMemberQuery] = useState("");
+  const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
+  const [teamBusy, setTeamBusy] = useState(false);
 
   // Team stats: which range is picked, the custom range's dates, and the
   // userId → set-count map fetched for the active range (null while loading).
@@ -301,6 +310,30 @@ function UsersPageInner() {
     patchUser(user.id, { teams: [...user.teams, team] });
   }
 
+  // Remove this person from a team via the "x" on their membership chip. Same
+  // optimistic patchUser path as addToTeam, just the inverse team set.
+  function removeFromTeam(user: ApiAdminUser, team: ApiTeam) {
+    patchUser(user.id, {
+      teams: user.teams.filter((t) => t.id !== team.id),
+    });
+  }
+
+  // Delete a team from the management modal (the route derives the org from the
+  // team resource, so no org header is needed). Refetch users + teams so the
+  // cards and Teams list reflect the removed memberships, then close.
+  async function deleteTeam(teamId: string) {
+    setTeamBusy(true);
+    try {
+      await fetch(`/api/teams/${teamId}`, { method: "DELETE" });
+      load();
+      window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
+      setConfirmingTeamId(null);
+      setOpenTeamId(null);
+    } finally {
+      setTeamBusy(false);
+    }
+  }
+
   usePageLoading(
     status === "loading" ||
       (!!isAdmin && (switchingOrg || !users || !teams))
@@ -371,7 +404,8 @@ function UsersPageInner() {
         <p className="mb-1 font-semibold">Teams</p>
         <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
           Every set belongs to a team, and only that team&rsquo;s members are
-          scheduled on it. Team settings can only be modified on the{" "}
+          scheduled on it. Click a team to manage its members and Slack channel;
+          scheduled weekly reminders live on the{" "}
           <Link
             href="/orgs"
             className="font-medium text-indigo-600 underline dark:text-indigo-400"
@@ -391,13 +425,25 @@ function UsersPageInner() {
                   key={team.id}
                   className="flex flex-wrap items-center justify-between gap-2 py-2"
                 >
-                  <div>
-                    <p className="text-sm font-medium">{team.name}</p>
+                  {/* Clickable: opens the same team-management modal the Org
+                      settings page uses (members + Slack + delete). */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenTeamId(team.id);
+                      setMemberQuery("");
+                      setConfirmingTeamId(null);
+                    }}
+                    className="-mx-1 rounded px-1 text-left transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                  >
+                    <p className="text-sm font-medium text-indigo-700 hover:underline dark:text-indigo-300">
+                      {team.name}
+                    </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
                       {memberCount(team.id)}{" "}
                       {memberCount(team.id) === 1 ? "member" : "members"}
                     </p>
-                  </div>
+                  </button>
                   <div className="flex items-center gap-2">
                     {result && (
                       <span
@@ -522,6 +568,27 @@ function UsersPageInner() {
                           {user.teams.map((team) => (
                             <Badge key={team.id} tone="indigo">
                               {team.name}
+                              {/* Inline remove: takes this person off the team,
+                                  optimistically (see removeFromTeam). */}
+                              <button
+                                type="button"
+                                onClick={() => removeFromTeam(user, team)}
+                                aria-label={`Remove ${user.name} from ${team.name}`}
+                                title={`Remove from ${team.name}`}
+                                className="-mr-1 ml-1 flex h-3.5 w-3.5 items-center justify-center rounded-full text-indigo-500 transition-colors hover:bg-indigo-200 hover:text-indigo-900 dark:text-indigo-400 dark:hover:bg-indigo-800 dark:hover:text-indigo-100"
+                              >
+                                <svg
+                                  viewBox="0 0 14 14"
+                                  className="h-2.5 w-2.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  aria-hidden="true"
+                                >
+                                  <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                                </svg>
+                              </button>
                             </Badge>
                           ))}
                           {available.length > 0 && (
@@ -556,6 +623,34 @@ function UsersPageInner() {
           </li>
         ))}
       </ul>
+
+      {/* Team-management modal — the same shared component the Org settings
+          page drives. Add/remove members go through patchUser so the user
+          cards + member counts update optimistically. */}
+      <TeamMembersModal
+        team={teams.find((t) => t.id === openTeamId) ?? null}
+        users={users}
+        query={memberQuery}
+        onQueryChange={setMemberQuery}
+        busy={teamBusy}
+        confirmingDelete={confirmingTeamId === openTeamId}
+        onConfirmDelete={(confirming) =>
+          setConfirmingTeamId(confirming ? openTeamId : null)
+        }
+        onDelete={deleteTeam}
+        onAdd={(user, team) => {
+          if (user.teams.some((t) => t.id === team.id)) return;
+          patchUser(user.id, { teams: [...user.teams, team] });
+          setMemberQuery(""); // clear so they can type the next name
+        }}
+        onRemove={(user, team) =>
+          patchUser(user.id, {
+            teams: user.teams.filter((t) => t.id !== team.id),
+          })
+        }
+        onSaved={load}
+        onClose={() => setOpenTeamId(null)}
+      />
     </div>
   );
 }

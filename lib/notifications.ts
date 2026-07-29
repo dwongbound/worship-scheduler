@@ -5,7 +5,7 @@
 // still exist for their other callers and now share this same logic.
 import { prisma } from "./prisma";
 import { getMyOrgIds, resolveOrgScope } from "./org";
-import type { Instrument } from "./constants";
+import { ROLE_ORDER, type Instrument } from "./constants";
 
 // Open cover requests the user could take + targeted trades awaiting their
 // response, across all their orgs — the total behind the swap dot. Only the
@@ -81,6 +81,13 @@ export async function availabilityStatus(userId: string) {
 // reminder dot + banner (admins only; the caller checks admin rights). Team
 // membership is per-org, so `none` is filtered to this org to avoid counting a
 // user who is teamed elsewhere as covered here.
+//
+// Only people who list a BAND role (any instrument except choir) are flagged:
+// a band role can only be scheduled on the person's team, so being teamless
+// blocks them. Choir-only members are skipped — choir isn't team-scoped, so
+// they can join any set's choir without a team. People who haven't picked any
+// role yet are also skipped: they must choose a role before the team even
+// matters. Hence `hasSome: ROLE_ORDER` (the band roles) rather than "any user".
 export async function teamlessMembers(
   orgId: string
 ): Promise<{ id: string; name: string; username: string }[]> {
@@ -88,6 +95,7 @@ export async function teamlessMembers(
     where: {
       memberships: { some: { orgId } },
       teams: { none: { orgId } },
+      instruments: { hasSome: ROLE_ORDER },
     },
     select: { id: true, name: true, username: true },
     orderBy: { name: "asc" },

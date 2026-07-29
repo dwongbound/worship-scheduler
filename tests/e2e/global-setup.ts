@@ -2,7 +2,12 @@
 // reseed fixtures so every run starts from the same known state.
 import { execSync } from "child_process";
 import path from "path";
+import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
+
+// Project runs as ESM ("type": "module"), so the CJS `__dirname` global isn't
+// defined — derive it from this module's URL instead.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default function globalSetup() {
   // Load env/test.env so prisma talks to the test db (port 5433).

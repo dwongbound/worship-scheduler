@@ -26,8 +26,11 @@ export async function GET(req: NextRequest) {
   const sets = await prisma.set.findMany({
     where: {
       orgId: { in: scope },
+      // A rolling ~3-month window both directions. Past sets are kept (not
+      // hidden) so the calendar can show recent history — the client renders
+      // anything before "now" dimmed (see CalendarMonth's SlotChip `past`).
       startsAt: {
-        gte: new Date(now - 7 * MS_PER_DAY),
+        gte: new Date(now - 92 * MS_PER_DAY),
         lte: new Date(now + 92 * MS_PER_DAY),
       },
       // Private sets are visible only to the people assigned to them and to

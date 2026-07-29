@@ -128,6 +128,11 @@ model OrgMembership {
   // it lives here, per membership, rather than once on User.
   slackUserId String?
 
+  // When true, this person is added to EVERY Slack group chat created for this
+  // org's sets — even sets they aren't assigned to (e.g. a ministry lead who
+  // wants to be in every set's chat). Best-effort: needs a linked slackUserId.
+  alwaysInGroupChats Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   @@unique([userId, orgId])
@@ -149,6 +154,10 @@ model Team {
   // Slack channel (C...) the bot posts this team's set summaries to. The bot
   // must be invited to the channel; null = Slack summaries off for this team.
   slackChannelId String?
+
+  // Auto-create a Slack group chat for each of this team's upcoming sets this
+  // many days before it starts (the daily cron does it). Null = off.
+  groupChatLeadDays Int?
 
   users     User[]           @relation("TeamMembers")
   sets      Set[]
@@ -245,6 +254,10 @@ model Set {
   // to the set's choir or auto-scheduled into it. Default false = no choir on
   // this set (the choir section is off and "Auto schedule" skips choir).
   choirEnabled Boolean @default(false)
+
+  // When the auto group-chat cron created this set's Slack group chat, so it's
+  // only made once. Null = not created yet (or the team has the feature off).
+  groupChatCreatedAt DateTime?
 
   // The one designated MD for this set. Always someone assigned in an
   // MD-capable role (keys/electric/bass) and never the worship leader — see

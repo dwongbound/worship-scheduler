@@ -4,7 +4,9 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
 
 interface DropdownProps {
-  trigger: ReactNode; // what you click to open the menu
+  // What you click to open the menu. Pass a function to react to the open
+  // state (e.g. an icon that animates open ⇄ closed).
+  trigger: ReactNode | ((open: boolean) => ReactNode);
   children: ReactNode; // menu contents
   align?: "left" | "right";
   // Extra classes for the menu panel. Defaults to `overflow-hidden` (so item
@@ -36,7 +38,7 @@ export default function Dropdown({
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen((o) => !o)} className="flex items-center">
-        {trigger}
+        {typeof trigger === "function" ? trigger(open) : trigger}
       </button>
       {open && (
         <div

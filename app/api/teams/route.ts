@@ -20,7 +20,13 @@ export async function GET(req: NextRequest) {
   // Oldest-first so the first (usually broadest) team is the forms' default.
   const teams = await prisma.team.findMany({
     where: { orgId: { in: scope } },
-    select: { id: true, name: true, orgId: true, slackChannelId: true },
+    select: {
+      id: true,
+      name: true,
+      orgId: true,
+      slackChannelId: true,
+      groupChatLeadDays: true,
+    },
     orderBy: { createdAt: "asc" },
   });
   return NextResponse.json(teams);

@@ -1,7 +1,7 @@
 // PATCH /api/admin/users/:id — an org admin edits a member's admin flag
-// (for THIS org), musical-director flag, instruments, and this-org team
-// memberships. Org comes from the x-org-id header; the target must be a
-// member of that org.
+// (for THIS org), musical-director flag, instruments, this-org team
+// memberships, and the per-org "always in group chats" flag. Org comes from
+// the x-org-id header; the target must be a member of that org.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -65,8 +65,16 @@ export async function PATCH(
     };
   }
 
-  const setsAdmin = typeof body.isAdmin === "boolean";
-  if (Object.keys(data).length === 0 && !setsAdmin) {
+  // isAdmin and alwaysInGroupChats both live on the org membership, not the
+  // User — collect whichever were sent into one membership update.
+  const membershipData: { isAdmin?: boolean; alwaysInGroupChats?: boolean } = {};
+  if (typeof body.isAdmin === "boolean") membershipData.isAdmin = body.isAdmin;
+  if (typeof body.alwaysInGroupChats === "boolean") {
+    membershipData.alwaysInGroupChats = body.alwaysInGroupChats;
+  }
+  const editsMembership = Object.keys(membershipData).length > 0;
+
+  if (Object.keys(data).length === 0 && !editsMembership) {
     return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
   }
 
@@ -81,7 +89,7 @@ export async function PATCH(
         instruments: true,
         memberships: {
           where: { orgId: admin.orgId },
-          select: { isAdmin: true },
+          select: { isAdmin: true, alwaysInGroupChats: true },
         },
         teams: {
           where: { orgId: admin.orgId },
@@ -93,11 +101,11 @@ export async function PATCH(
         },
       },
     }),
-    ...(setsAdmin
+    ...(editsMembership
       ? [
           prisma.orgMembership.update({
             where: { userId_orgId: { userId: id, orgId: admin.orgId } },
-            data: { isAdmin: body.isAdmin },
+            data: membershipData,
           }),
         ]
       : []),
@@ -106,8 +114,12 @@ export async function PATCH(
   const { memberships, ...fields } = updated;
   return NextResponse.json({
     ...fields,
-    // Reflect the just-written value (the user.update read may predate the
+    // Reflect the just-written values (the user.update read may predate the
     // membership write inside the same transaction).
-    isAdmin: setsAdmin ? body.isAdmin : memberships[0]?.isAdmin ?? false,
+    isAdmin: membershipData.isAdmin ?? memberships[0]?.isAdmin ?? false,
+    alwaysInGroupChats:
+      membershipData.alwaysInGroupChats ??
+      memberships[0]?.alwaysInGroupChats ??
+      false,
   });
 }

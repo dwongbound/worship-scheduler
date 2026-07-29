@@ -44,3 +44,92 @@ test("admin edits a person's instruments and it persists", async ({ page }) => {
   await page.reload();
   await expect(bobStrings()).not.toBeChecked();
 });
+
+test("admin removes a person from a team via the chip's x", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/users");
+
+  const savePatch = () =>
+    page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/admin/users/") &&
+        r.request().method() === "PATCH"
+    );
+  const bobCard = () =>
+    page.getByRole("listitem").filter({ hasText: "Bob Baker" });
+  // Bob is on the Sunday Team (seed) — his card shows a chip with a remove x.
+  const removeBtn = bobCard().getByRole("button", {
+    name: "Remove Bob Baker from Sunday Team",
+  });
+
+  await expect(removeBtn).toBeVisible();
+  await Promise.all([savePatch(), removeBtn.click()]);
+
+  // The chip's remove control is gone once he's off the team; it persists.
+  await expect(removeBtn).toHaveCount(0);
+  await page.reload();
+  await expect(
+    bobCard().getByRole("button", { name: "Remove Bob Baker from Sunday Team" })
+  ).toHaveCount(0);
+
+  // Revert via the card's "+ Add to team" chip so the shared seed is untouched.
+  await bobCard().getByText("+ Add to team").click();
+  await Promise.all([
+    savePatch(),
+    page.getByRole("button", { name: "Sunday Team", exact: true }).click(),
+  ]);
+  await page.reload();
+  await expect(
+    bobCard().getByRole("button", { name: "Remove Bob Baker from Sunday Team" })
+  ).toBeVisible();
+});
+
+test("admin opens the team management modal from the Teams card", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/users");
+
+  // The Teams card lists each team as a clickable button (name + member count).
+  await page
+    .getByRole("button", { name: /Sunday Team\s*\d+ members/ })
+    .click();
+
+  // It opens the same shared modal the Org settings page uses.
+  const modal = page.getByRole("dialog");
+  await expect(modal.getByRole("heading", { name: "Sunday Team" })).toBeVisible();
+  await expect(modal.getByText(/Members \(\d+\)/)).toBeVisible();
+  await expect(modal.getByLabel("Add member")).toBeVisible();
+  await expect(modal.getByRole("button", { name: "Delete team" })).toBeVisible();
+
+  await modal.getByRole("button", { name: "Done" }).click();
+  await expect(modal).not.toBeVisible();
+});
+
+test("admin sets a team's auto group-chat lead time and it persists", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/users");
+
+  const openSunday = () =>
+    page.getByRole("button", { name: /Sunday Team\s*\d+ members/ }).click();
+  const savePatch = () =>
+    page.waitForResponse(
+      (r) =>
+        /\/api\/teams\/[^/]+$/.test(r.url()) && r.request().method() === "PATCH"
+    );
+
+  await openSunday();
+  const leadSelect = () =>
+    page.getByRole("dialog").getByLabel("Create the chat");
+  await expect(leadSelect()).toHaveValue(""); // off by default
+
+  await Promise.all([savePatch(), leadSelect().selectOption("3")]);
+
+  // Persisted: reload, reopen, still "3 days before".
+  await page.reload();
+  await openSunday();
+  await expect(leadSelect()).toHaveValue("3");
+
+  // Restore the shared seed state.
+  await Promise.all([savePatch(), leadSelect().selectOption("")]);
+});

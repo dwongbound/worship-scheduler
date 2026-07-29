@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
       // Slack in THIS org) drives the Team page's "connected" badge.
       memberships: {
         where: { orgId: admin.orgId },
-        select: { isAdmin: true, slackUserId: true },
+        select: { isAdmin: true, slackUserId: true, alwaysInGroupChats: true },
       },
       // Team memberships within this org — gate the assignment dropdowns +
       // Team page editing.
@@ -65,6 +65,7 @@ export async function GET(req: NextRequest) {
       ...u,
       isAdmin: memberships[0]?.isAdmin ?? false,
       slackConnected: memberships[0]?.slackUserId != null,
+      alwaysInGroupChats: memberships[0]?.alwaysInGroupChats ?? false,
     }))
   );
 }

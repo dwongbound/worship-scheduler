@@ -251,6 +251,7 @@ export default function CalendarMonth({
                     set={set}
                     mine={isMine(set)}
                     myId={myId}
+                    past={new Date(set.startsAt) < today}
                     onClick={() => onSelectSet(set)}
                     onConfirm={onConfirm}
                     covers={takeableBySet.get(set.id) ?? []}
@@ -292,7 +293,11 @@ export default function CalendarMonth({
                   setOpenDay(null);
                   onSelectSet(set);
                 }}
-                className="flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-left text-sm hover:border-indigo-400 dark:border-gray-700"
+                className={`flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-left text-sm transition hover:border-indigo-400 dark:border-gray-700 ${
+                  new Date(set.startsAt) < today
+                    ? "opacity-50 hover:opacity-100"
+                    : ""
+                }`}
               >
                 <span>
                   <span className="font-medium">
@@ -323,6 +328,7 @@ function SlotChip({
   set,
   mine,
   myId,
+  past,
   onClick,
   onConfirm,
   covers,
@@ -330,6 +336,8 @@ function SlotChip({
   set: ApiSet;
   mine: boolean;
   myId?: string;
+  // The set already happened — rendered dimmed (but still clickable).
+  past?: boolean;
   onClick: () => void;
   onConfirm?: (assignmentId: string) => Promise<void>;
   // Cover requests on this set the current user could take (may be empty).
@@ -422,10 +430,14 @@ function SlotChip({
       <button
         onClick={onClick}
         title={`${set.label ?? "Worship Set"} · ${formatTime(set.startsAt)}`}
-        className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-xs font-medium transition-colors ${
+        className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-xs font-medium transition ${
           mine
             ? "bg-indigo-600 text-white hover:bg-indigo-700"
             : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/40 dark:text-indigo-300 dark:hover:bg-indigo-900/70"
+        } ${
+          // Past sets read as done: dimmed + desaturated, but still a live
+          // button. Hovering restores full opacity so it's clearly clickable.
+          past ? "opacity-50 grayscale-[35%] hover:opacity-100" : ""
         }`}
       >
         {dot && (

@@ -301,12 +301,15 @@ export function buildSchedule(
 }
 
 /**
- * Everyone who should join a set's choir on "Auto schedule": every team member
- * who lists CHOIR as a skill and is free at the set's time. Unlike the band
- * roles, choir has no capacity — it's an unbounded list, so we don't balance or
- * space it, we simply seat all the available singers. Returns their userIds,
- * excluding anyone already on this set's choir (`alreadyOnChoir`). Pure +
- * separate from buildSchedule so the modal's autofill can layer choir on top.
+ * Everyone who should join a set's choir on "Auto schedule": every singer who
+ * lists CHOIR as a skill and is free at the set's time. Unlike the band roles,
+ * choir has no capacity — it's an unbounded list, so we don't balance or space
+ * it, we simply seat all the available singers. Choir is also NOT team-scoped:
+ * any singer in the org may join any set's choir, regardless of the set's team
+ * (band roles stay restricted to team members — see buildSchedule's bestFor).
+ * Returns their userIds, excluding anyone already on this set's choir
+ * (`alreadyOnChoir`). Pure + separate from buildSchedule so the modal's autofill
+ * can layer choir on top.
  */
 export function availableChoirMembers(
   set: SchedulerSet,
@@ -315,7 +318,6 @@ export function availableChoirMembers(
   alreadyOnChoir: Set<string> = new Set()
 ): string[] {
   return users
-    .filter((u) => !set.teamId || (u.teamIds ?? []).includes(set.teamId))
     .filter((u) => u.instruments.includes(CHOIR))
     .filter((u) => !alreadyOnChoir.has(u.id))
     .filter((u) => isUserAvailable(u.id, set, rules))

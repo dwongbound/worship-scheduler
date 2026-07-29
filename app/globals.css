@@ -39,3 +39,24 @@
     overflow-x: clip;
   }
 }
+
+/* Always-visible, styled scrollbar for capped scroll areas (e.g. the team
+   members list). macOS overlay scrollbars auto-hide, which hides the fact that
+   there's more to scroll; customizing ::-webkit-scrollbar forces it to show. */
+.scrollbar-visible {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: #9ca3af transparent; /* gray-400 thumb */
+}
+.scrollbar-visible::-webkit-scrollbar {
+  width: 8px;
+}
+.scrollbar-visible::-webkit-scrollbar-thumb {
+  background-color: #9ca3af; /* gray-400 */
+  border-radius: 9999px;
+}
+html.dark .scrollbar-visible {
+  scrollbar-color: #4b5563 transparent; /* gray-600 thumb */
+}
+html.dark .scrollbar-visible::-webkit-scrollbar-thumb {
+  background-color: #4b5563; /* gray-600 */
+}

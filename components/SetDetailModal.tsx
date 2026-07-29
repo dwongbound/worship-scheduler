@@ -9,10 +9,10 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
+import Dropdown from "./common/Dropdown";
 import InfoTooltip from "./common/InfoTooltip";
 import LoadingDots from "./common/LoadingDots";
 import SlackIcon from "./common/SlackIcon";
-import ExportIcsButton from "./ExportIcsButton";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
@@ -232,7 +232,9 @@ export default function SetDetailModal({
     const roleAllowsMD = (MD_ROLES as Instrument[]).includes(role);
     return users
       // Only this set's team members are offered (no team = open to everyone).
-      .filter((u) => isOnTeam(u, set.teamId ?? set.team?.id))
+      // Choir is the exception: any singer in the org may join any set's choir,
+      // regardless of team — so we skip the team filter for the CHOIR role.
+      .filter((u) => role === CHOIR || isOnTeam(u, set.teamId ?? set.team?.id))
       // …and only those who actually play this role (Team-tab instruments).
       .filter((u) => u.instruments.includes(role))
       .filter((u) => !inThisRole.has(u.id))
@@ -345,6 +347,17 @@ export default function SetDetailModal({
       })
     );
 
+  // Toggle whether this set needs a musical director (admin only). On surfaces
+  // the MD picker + the "needs an MD" warning; off hides both.
+  const toggleRequiresMD = (requiresMD: boolean) =>
+    runEdit(() =>
+      fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requiresMD }),
+      })
+    );
+
   // Set (or clear, with "") this set's designated MD.
   const setMD = (userId: string) =>
     runEdit(() =>
@@ -426,8 +439,8 @@ export default function SetDetailModal({
         </>
       }
     >
-      {/* Action bar right below the title: Auto schedule (+ Slack) on the
-          left, .ics export on the right. The (i) tooltip opens DOWNWARD so
+      {/* Action bar right below the title: Auto schedule on the left; Slack +
+          the overflow (⋮) menu on the right. The (i) tooltip opens DOWNWARD so
           it isn't clipped by the top of the modal. */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-3 dark:border-gray-700">
         <div className="flex items-center gap-1.5">
@@ -455,17 +468,6 @@ export default function SetDetailModal({
                   </>
                 }
               />
-              {/* Flip visibility: private = only admins + assigned people. */}
-              <label className="ml-1 flex items-center gap-1.5 text-xs font-medium text-gray-600 dark:text-gray-400">
-                <input
-                  type="checkbox"
-                  checked={set.isPrivate}
-                  disabled={busy}
-                  onChange={(e) => togglePrivate(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-gray-600"
-                />
-                Private
-              </label>
             </>
           )}
         </div>
@@ -489,12 +491,85 @@ export default function SetDetailModal({
               Slack Team
             </span>
           </Button>
-          <ExportIcsButton
-            href={`/api/export/${set.id}`}
-            label="Export set (.ics)"
-            text="Export (.ics)"
-            size="sm"
-          />
+
+          {/* Overflow menu: the less-common set actions. Admin-only toggles
+              (Require MD / Choir / Private) plus the .ics export, which stays
+              available to everyone (so the menu always has at least that item). */}
+          <Dropdown
+            align="right"
+            trigger={(menuOpen) => (
+              <span
+                aria-label="More actions"
+                title="More actions"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-300 text-gray-600 transition-colors hover:bg-gray-50 hover:text-indigo-600 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-indigo-400"
+              >
+                {/* Three horizontal lines that morph into an "✕" when the menu
+                    is open (top/bottom rotate to cross, middle fades out). */}
+                <span aria-hidden className="relative block h-4 w-5">
+                  <span
+                    className={`absolute left-0 h-0.5 w-5 rounded bg-current transition-all duration-200 ${
+                      menuOpen
+                        ? "top-1/2 -translate-y-1/2 rotate-45"
+                        : "top-[3px]"
+                    }`}
+                  />
+                  <span
+                    className={`absolute left-0 top-1/2 h-0.5 w-5 -translate-y-1/2 rounded bg-current transition-all duration-200 ${
+                      menuOpen ? "opacity-0" : "opacity-100"
+                    }`}
+                  />
+                  <span
+                    className={`absolute left-0 h-0.5 w-5 rounded bg-current transition-all duration-200 ${
+                      menuOpen
+                        ? "bottom-1/2 translate-y-1/2 -rotate-45"
+                        : "bottom-[3px]"
+                    }`}
+                  />
+                </span>
+              </span>
+            )}
+          >
+            {canEditTeam && (
+              <>
+                <MenuToggle
+                  label="Require MD"
+                  on={set.requiresMD}
+                  disabled={busy}
+                  onClick={() => toggleRequiresMD(!set.requiresMD)}
+                />
+                <MenuToggle
+                  label="Include choir in set"
+                  on={set.choirEnabled}
+                  // Can't turn choir OFF while singers are on it (they'd be
+                  // silently dropped) — matches the Choir section's own rule.
+                  disabled={
+                    busy || (set.choirEnabled && choirMembers.length > 0)
+                  }
+                  title={
+                    set.choirEnabled && choirMembers.length > 0
+                      ? "Remove the choir members first."
+                      : undefined
+                  }
+                  onClick={() => toggleChoir(!set.choirEnabled)}
+                />
+                <MenuToggle
+                  label="Private"
+                  on={set.isPrivate}
+                  disabled={busy}
+                  onClick={() => togglePrivate(!set.isPrivate)}
+                />
+              </>
+            )}
+            <a
+              href={`/api/export/${set.id}`}
+              download
+              title="Export set (.ics)"
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              <span aria-hidden className="w-4" />
+              Export (.ics)
+            </a>
+          </Dropdown>
         </div>
       </div>
       {slackConfigured && slackMsg && (
@@ -668,10 +743,16 @@ export default function SetDetailModal({
               {choirMembers.map((a) =>
                 canEditTeam ? (
                   // Picking "None" removes them from the choir; picking someone
-                  // else reassigns this slot (resets it to PENDING). No capacity
-                  // "✕" — choir slots aren't a fixed shape, so the dropdown's
-                  // "None" is the only remove affordance.
+                  // else reassigns this slot (resets it to PENDING). The "✕"
+                  // matches the band roles — it removes this singer directly.
+                  // Choir has no fixed slot shape, so (unlike band roles) there's
+                  // nothing to confirm: it just drops the person, like "None".
                   <li key={a.id} className="flex items-center gap-2">
+                    <SlotDeleteButton
+                      label={`Remove ${a.user.name} from choir`}
+                      disabled={busy}
+                      onClick={() => removeAssignment(a.id)}
+                    />
                     <PlayerSelect
                       selected={{ id: a.user.id, name: a.user.name }}
                       options={choirOptions}
@@ -691,9 +772,17 @@ export default function SetDetailModal({
               )}
 
               {/* Admins get one always-present "add someone" row (the list is
-                  unbounded, so unlike band roles there's no slot count to derive). */}
+                  unbounded, so unlike band roles there's no slot count to derive).
+                  It has no "✕" (nothing to remove), so a matching-width spacer
+                  keeps its dropdown aligned with the member rows above. */}
               {canEditTeam && (
                 <li className="flex items-center gap-2">
+                  <span
+                    aria-hidden
+                    className="invisible rounded p-0.5 text-xs leading-none"
+                  >
+                    ✕
+                  </span>
                   <PlayerSelect
                     selected={null}
                     options={choirOptions}
@@ -879,6 +968,43 @@ export default function SetDetailModal({
         </Modal>
       )}
     </Modal>
+  );
+}
+
+// A toggle row inside the overflow (⋮) menu. A leading check marks the "on"
+// state; it's aria-hidden so the button's accessible name is just `label`.
+function MenuToggle({
+  label,
+  on,
+  disabled,
+  title,
+  onClick,
+}: {
+  label: string;
+  on: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      aria-pressed={on}
+      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700
+        hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50
+        dark:text-gray-200 dark:hover:bg-gray-700"
+    >
+      <span
+        aria-hidden
+        className="w-4 text-center text-indigo-600 dark:text-indigo-400"
+      >
+        {on ? "✓" : ""}
+      </span>
+      {label}
+    </button>
   );
 }
 

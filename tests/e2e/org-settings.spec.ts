@@ -62,3 +62,33 @@ test("an org admin can change and rotate the org join key", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Save key" })).toBeVisible();
   await expect(page.getByLabel("Join key")).toHaveValue(original);
 });
+
+test("an org admin includes a member in all group chats and it persists", async ({
+  page,
+}) => {
+  await login(page, "admin"); // Alice administers org 1
+  await page.goto("/orgs");
+
+  const savePatch = () =>
+    page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/admin/users/") &&
+        r.request().method() === "PATCH"
+    );
+  // The "Include in all group chats" list has a checkbox per member.
+  const bobBox = () =>
+    page
+      .getByRole("listitem")
+      .filter({ hasText: "Bob Baker" })
+      .getByRole("checkbox");
+
+  await expect(bobBox()).not.toBeChecked();
+  await Promise.all([savePatch(), bobBox().check()]);
+
+  // Persisted server-side.
+  await page.reload();
+  await expect(bobBox()).toBeChecked();
+
+  // Restore shared seed state.
+  await Promise.all([savePatch(), bobBox().uncheck()]);
+});
