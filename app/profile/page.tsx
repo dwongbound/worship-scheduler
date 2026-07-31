@@ -11,6 +11,7 @@ import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
 import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
+import { useMe } from "@/components/MeProvider";
 import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
 import {
   ALL_INSTRUMENTS,
@@ -32,6 +33,7 @@ const SLACK_CONNECT_MESSAGE = "slack-connect-result";
 
 export default function ProfilePage() {
   const { update } = useSession();
+  const { me } = useMe();
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -72,19 +74,19 @@ export default function ProfilePage() {
     }
   }, []);
 
+  // Seed the form from the shared profile (fetched once by AuthGate via
+  // MeProvider) instead of a second /api/me on mount. AuthGate holds the splash
+  // until that fetch resolves, so `me` is populated by the time we render.
   useEffect(() => {
-    fetch("/api/me")
-      .then((res) => res.json())
-      .then((me) => {
-        setName(me.name);
-        setEmail(me.email ?? "");
-        setMemberships(me.memberships ?? []);
-        setInstruments(me.instruments);
-        setHasPassword(me.hasPassword ?? true);
-        savedKeyRef.current = fieldsKey(me.name, me.email ?? "", me.instruments);
-        setLoaded(true);
-      });
-  }, []);
+    if (!me) return;
+    setName(me.name);
+    setEmail(me.email ?? "");
+    setMemberships(me.memberships ?? []);
+    setInstruments(me.instruments);
+    setHasPassword(me.hasPassword);
+    savedKeyRef.current = fieldsKey(me.name, me.email ?? "", me.instruments);
+    setLoaded(true);
+  }, [me]);
 
   // Toggling a role saves immediately (no Save button) — pass the next array
   // explicitly since setInstruments is async and state would still be stale.

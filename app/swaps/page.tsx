@@ -57,6 +57,11 @@ export default function SwapsPage() {
   const showOrgChips = viewOrgId === "all" && (orgs?.length ?? 0) > 1;
 
   const reload = useCallback(async () => {
+    // Wait until the org context has loaded before fetching. viewOrgId starts
+    // at its "all" default and only settles to the persisted org once /api/orgs
+    // resolves; fetching before then would fire once unscoped and again after
+    // it settles. `orgs` in the deps re-runs this the moment it does.
+    if (!orgs) return;
     // Both endpoints return arrays; fall back to [] on any error so a hiccup
     // shows an empty list instead of crashing on `.map`.
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
@@ -74,7 +79,7 @@ export default function SwapsPage() {
     setIncoming(incomingData);
     // Nudge the navbar to refresh its red dot.
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
-  }, [viewOrgId]);
+  }, [orgs, viewOrgId]);
 
   // Accept or reject a targeted swap proposed to me.
   async function respondSwap(proposalId: string, action: "accept" | "reject") {

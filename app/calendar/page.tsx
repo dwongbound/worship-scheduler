@@ -81,6 +81,11 @@ function CalendarView() {
   // clobber) a newer per-org one, leaving the wrong org's sets on screen.
   const setsReqId = useRef(0);
   const refetchSets = useCallback(async () => {
+    // Wait until the org context has loaded before fetching. viewOrgId starts
+    // at its "all" default and only settles to the persisted org once /api/orgs
+    // resolves; fetching before then would fire once with the wrong scope and
+    // again after it settles. `orgs` in the deps re-runs this the moment it does.
+    if (!orgs) return;
     const reqId = ++setsReqId.current;
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
     const [fresh, swaps] = await Promise.all([
@@ -90,7 +95,7 @@ function CalendarView() {
     if (reqId !== setsReqId.current) return; // superseded by a newer refetch
     setSets(fresh);
     setTakeableSwaps(swaps);
-  }, [viewOrgId]);
+  }, [orgs, viewOrgId]);
 
   // Confirm one of my assignments straight from its calendar hover popover
   // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot

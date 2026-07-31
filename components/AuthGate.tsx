@@ -19,6 +19,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import LoadingScreen from "@/components/common/LoadingScreen";
+import { useMe } from "@/components/MeProvider";
 
 // Paths that must render for logged-out users. `/login` is the only one; its
 // own chrome is already suppressed in Navbar.
@@ -30,27 +31,28 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { status } = useSession();
+  const { refreshMe } = useMe();
   const isPublic = isPublicPath(pathname);
   // Flips true once /api/me confirms the session's user still exists.
   const [verified, setVerified] = useState(false);
 
   // Ghost-session probe: once "authenticated", confirm the user row exists.
   // The same probe routes accounts with no org membership to /join — they
-  // can't use any page until they redeem an organization key.
+  // can't use any page until they redeem an organization key. refreshMe() also
+  // publishes the fetched profile to MeProvider, so the profile/org-settings
+  // pages read it instead of firing their own /api/me on mount.
   useEffect(() => {
     if (isPublic || status !== "authenticated") return;
     let cancelled = false;
-    fetch("/api/me")
-      .then(async (res) => {
+    refreshMe()
+      .then(({ status: httpStatus, me }) => {
         if (cancelled) return;
-        if (res.status === 401) {
+        if (httpStatus === 401) {
           // Token's user is gone — clear the cookie and send to /login.
           signOut({ callbackUrl: "/login" });
           return;
         }
-        const me = await res.json().catch(() => null);
-        if (cancelled) return;
-        const memberships = (me?.memberships ?? []) as unknown[];
+        const memberships = me?.memberships ?? [];
         if (memberships.length === 0 && pathname !== "/join") {
           router.replace("/join");
         }
@@ -64,7 +66,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [status, isPublic, pathname, router]);
+  }, [status, isPublic, pathname, router, refreshMe]);
 
   // Belt-and-suspenders for the no-session case (proxy.ts handles it at the
   // edge, but if we ever get here client-side, redirect rather than render).

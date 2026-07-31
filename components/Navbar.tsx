@@ -58,7 +58,7 @@ export default function Navbar() {
   const router = useRouter();
   // The org the admin tabs operate on — the teamless reminder scopes to it, so
   // its banner links land on the /users list that actually shows those people.
-  const { adminOrgId } = useOrgs();
+  const { orgs, adminOrgId } = useOrgs();
 
   // Shared with SwipePager: the navbar writes the live tab list / active index /
   // navigate fn here, and reads back `previewIndex` — the tab the in-progress
@@ -159,7 +159,10 @@ export default function Navbar() {
   }, [adminOrgId]);
 
   useEffect(() => {
-    if (!session) return;
+    // Wait for the org context: adminOrgId settles from "" to the persisted
+    // admin org once /api/orgs resolves, so firing before then would notify
+    // once unscoped and again scoped. Gating on `orgs` collapses that to one.
+    if (!session || !orgs) return;
     refreshNotifications();
     // Poll so the dots stay fresh without a reload; every reminder-changing
     // action also fires an event below for an instant refresh.
@@ -175,7 +178,7 @@ export default function Navbar() {
       window.removeEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(TEAMS_CHANGED_EVENT, refreshNotifications);
     };
-  }, [session, refreshNotifications]);
+  }, [session, orgs, refreshNotifications]);
 
   // A dismissal only applies to the org it was made for — switching admin orgs
   // brings the (differently-scoped) teamless banner back.

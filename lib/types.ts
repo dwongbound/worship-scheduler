@@ -279,3 +279,28 @@ export interface StagedPlan {
   // Sets in the window we left untouched because they're already staffed.
   skipped: number;
 }
+
+// One membership row as GET /api/me returns it — the per-org fields the
+// profile/org-settings pages read (Slack link status, admin flag). Distinct
+// from ApiOrg: this is the shape hung off the current user, not the org list.
+export interface ApiMeMembership {
+  orgId: string;
+  orgName: string;
+  isAdmin: boolean;
+  slackUserId: string | null;
+  // Whether the ORG has connected Slack (bot installed).
+  orgSlackConnected: boolean;
+  slackTeamName: string | null;
+}
+
+// The current user's own profile — GET /api/me. Fetched once by AuthGate and
+// shared via MeProvider so the profile/org-settings pages don't refetch it.
+export interface ApiMe {
+  username: string;
+  name: string;
+  email: string | null;
+  instruments: Instrument[];
+  // Whether a usable password hash exists (OAuth-only accounts have none).
+  hasPassword: boolean;
+  memberships: ApiMeMembership[];
+}
