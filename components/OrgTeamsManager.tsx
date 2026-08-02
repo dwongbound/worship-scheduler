@@ -10,7 +10,7 @@ import Card from "@/components/common/Card";
 import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import type { ApiAdminUser, ApiTeam } from "@/lib/types";
+import type { ApiAdminUser, ApiTeam, ApiTeamRole } from "@/lib/types";
 
 export default function OrgTeamsManager({ orgId }: { orgId: string }) {
   const [teams, setTeams] = useState<ApiTeam[] | null>(null);
@@ -79,7 +79,7 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
   }
 
   // Member add/remove from the modal: optimistic user update, then PATCH.
-  async function patchUserTeams(user: ApiAdminUser, nextTeams: ApiTeam[]) {
+  async function patchUserTeams(user: ApiAdminUser, nextTeams: ApiTeamRole[]) {
     setUsers(
       (prev) =>
         prev?.map((u) => (u.id === user.id ? { ...u, teams: nextTeams } : u)) ??
@@ -240,7 +240,8 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
         onDelete={deleteTeam}
         onAdd={(user, team) => {
           if (user.teams.some((t) => t.id === team.id)) return;
-          patchUserTeams(user, [...user.teams, team]);
+          // New member starts with no roles on the team (they/an admin pick them).
+          patchUserTeams(user, [...user.teams, { id: team.id, name: team.name, roles: [] }]);
           setMemberQuery(""); // clear so they can type the next name
         }}
         onRemove={(user, team) =>

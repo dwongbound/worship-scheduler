@@ -8,15 +8,35 @@ import { ROLE_ORDER, resolveCapacities, type Instrument } from "./constants";
 // Just the user shape the fill checks need (avoids importing the fat Api type).
 interface RosterUser {
   id: string;
-  instruments: Instrument[];
-  // Teams the user belongs to (as {id} refs, matching ApiAdminUser.teams).
-  // Omitted = membership unknown → only counts for team-less sets.
-  teams?: { id: string }[];
+  // Teams the user is on, each with the roles they play there (roles are
+  // per-team, matching ApiTeamRole). Omitted = membership unknown → only counts
+  // for team-less sets.
+  teams?: { id: string; roles: Instrument[] }[];
 }
 
 // Whether this user may serve on a set of this team (no team = open to all).
 export function isOnTeam(user: RosterUser, teamId: string | null | undefined): boolean {
   return !teamId || (user.teams ?? []).some((t) => t.id === teamId);
+}
+
+// The roles a user can fill FOR a set: their roles on the set's team, or the
+// union across all their teams for a team-less set ("open to the whole org").
+export function rolesForSet(
+  user: RosterUser,
+  teamId: string | null | undefined
+): Instrument[] {
+  return teamId
+    ? user.teams?.find((t) => t.id === teamId)?.roles ?? []
+    : (user.teams ?? []).flatMap((t) => t.roles);
+}
+
+// Whether the user can fill `role` on a set of this team (per-team roles).
+export function playsRoleForSet(
+  user: RosterUser,
+  role: Instrument,
+  teamId: string | null | undefined
+): boolean {
+  return rolesForSet(user, teamId).includes(role);
 }
 
 // How many staged assignments each user holds across the whole plan. This is
@@ -98,8 +118,7 @@ export function unfillableRoles(
     if (caps[role] - filled <= 0) continue; // no open slot for this role
     const hasCandidate = users.some(
       (u) =>
-        u.instruments.includes(role) &&
-        isOnTeam(u, set.teamId) &&
+        playsRoleForSet(u, role, set.teamId) &&
         !onSet.has(u.id) &&
         isUserAvailable(u.id, cs, rules)
     );

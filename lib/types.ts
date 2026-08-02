@@ -34,6 +34,17 @@ export interface ApiUserRef {
   isMD?: boolean; // musical director (drives the "* (MD)" marker)
 }
 
+// One team a person serves on plus the roles they play ON THAT team (roles are
+// per-team now). Embedded in ApiMe (their own) and ApiAdminUser (as an admin
+// sees each member). `orgId` is present on ApiMe's copy so the profile page can
+// group a person's teams by org.
+export interface ApiTeamRole {
+  id: string;
+  name: string;
+  orgId?: string;
+  roles: Instrument[];
+}
+
 export interface ApiAssignment {
   id: string;
   role: Instrument;
@@ -184,7 +195,7 @@ export interface ApiAvailabilityStatus {
 export interface ApiNotifications {
   swapCount: number; // open covers + trades awaiting me → the swap dot
   availability: ApiAvailabilityStatus; // the Availabilities dot + banner
-  needsInstruments: boolean; // brand-new profile → the "finish setup" dot
+  needsRoles: boolean; // no roles on any team yet → the "finish setup" dot
   teamless: { id: string; name: string; username: string }[];
 }
 
@@ -214,9 +225,9 @@ export interface ApiAdminUser {
   // When true, this person is added to every Slack group chat this org creates,
   // even for sets they aren't on (per-org membership flag).
   alwaysInGroupChats: boolean;
-  instruments: Instrument[];
-  // Teams this person belongs to — gates which sets they can be scheduled on.
-  teams: ApiTeam[];
+  // Teams this person belongs to, each with the roles they play there — gates
+  // which sets/roles they can be scheduled on. Roles are per-team now.
+  teams: ApiTeamRole[];
   // Which availability requests this person has marked complete (one row per
   // request). Drives the Availability status panel's per-TimeRange dropdown.
   // completedAt = null → a row that's currently marked "not submitted".
@@ -299,8 +310,10 @@ export interface ApiMe {
   username: string;
   name: string;
   email: string | null;
-  instruments: Instrument[];
   // Whether a usable password hash exists (OAuth-only accounts have none).
   hasPassword: boolean;
   memberships: ApiMeMembership[];
+  // Teams this person serves on, each with the roles they've picked there and
+  // the owning org (roles are per-team; the profile page edits them).
+  teams: ApiTeamRole[];
 }

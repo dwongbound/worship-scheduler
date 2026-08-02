@@ -311,19 +311,21 @@ export default function SwapsPage() {
             <li key={a.id}>
               <Card className="flex flex-wrap items-center justify-between gap-3">
                 <div>
+                  {/* Status chip rides up here next to the team/org chip so the
+                      action row below can't overflow the card on phones. */}
                   <p className="flex flex-wrap items-center gap-2 font-semibold">
                     {a.set.label ?? "Worship Set"} —{" "}
                     {INSTRUMENT_LABELS[a.role]}
                     {showOrgChips && a.set.org && (
                       <OrgChip name={a.set.org.name} />
                     )}
+                    <StatusBadge status={a.status} />
                   </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {formatDay(a.set.startsAt)} · {formatTime(a.set.startsAt)}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <StatusBadge status={a.status} />
                   <Button
                     size="sm"
                     variant="secondary"

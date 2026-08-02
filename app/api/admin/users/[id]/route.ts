@@ -1,7 +1,7 @@
 // PATCH /api/admin/users/:id — an org admin edits a member's admin flag
-// (for THIS org), musical-director flag, instruments, this-org team
-// memberships, and the per-org "always in group chats" flag. Org comes from
-// the x-org-id header; the target must be a member of that org.
+// (for THIS org), musical-director flag, this-org team memberships, that
+// member's per-team roles, and the per-org "always in group chats" flag. Org
+// comes from the x-org-id header; the target must be a member of that org.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -28,98 +28,112 @@ export async function PATCH(
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
-  // Only apply the fields that were actually sent, and validate them.
-  // isMD/instruments live on the User (global to the person); isAdmin lives
-  // on the org membership; team edits touch only THIS org's teams.
-  const data: Record<string, unknown> = {};
+  // Only apply the fields that were actually sent, and validate them. isMD
+  // lives on the User; isAdmin/alwaysInGroupChats on the org membership; team
+  // membership + per-team roles on TeamMember. All team edits touch only THIS
+  // org's teams. We run the writes below imperatively (not one $transaction)
+  // because the TeamMember reconciliation depends on reads.
 
   if (typeof body.isMD === "boolean") {
-    data.isMD = body.isMD;
+    await prisma.user.update({ where: { id }, data: { isMD: body.isMD } });
   }
 
-  if (Array.isArray(body.instruments)) {
-    data.instruments = body.instruments.filter((i: string) =>
-      (ALL_INSTRUMENTS as string[]).includes(i)
-    );
-  }
-
+  // Full membership list for THIS org: create missing TeamMembers (roles [])
+  // and delete removed ones, leaving other orgs' memberships untouched.
   if (Array.isArray(body.teamIds)) {
     const teamIds = body.teamIds.filter((t: unknown) => typeof t === "string");
-    // Every referenced team must belong to this org…
     const validCount = await prisma.team.count({
       where: { id: { in: teamIds }, orgId: admin.orgId },
     });
     if (validCount !== teamIds.length) {
       return NextResponse.json({ error: "Unknown team" }, { status: 400 });
     }
-    // …and we must NOT use `teams: { set }` here: that would wipe the user's
-    // team memberships in OTHER orgs. Disconnect only this org's teams, then
-    // connect the new list.
-    const currentOrgTeams = await prisma.team.findMany({
-      where: { orgId: admin.orgId, users: { some: { id } } },
-      select: { id: true },
+    const current = await prisma.teamMember.findMany({
+      where: { userId: id, team: { orgId: admin.orgId } },
+      select: { teamId: true },
     });
-    data.teams = {
-      disconnect: currentOrgTeams.map((t) => ({ id: t.id })),
-      connect: teamIds.map((teamId: string) => ({ id: teamId })),
-    };
+    const currentIds = new Set(current.map((m) => m.teamId));
+    const toAdd = teamIds.filter((t: string) => !currentIds.has(t));
+    const toRemove = [...currentIds].filter((t) => !teamIds.includes(t));
+    if (toRemove.length > 0) {
+      await prisma.teamMember.deleteMany({
+        where: { userId: id, teamId: { in: toRemove } },
+      });
+    }
+    if (toAdd.length > 0) {
+      await prisma.teamMember.createMany({
+        data: toAdd.map((teamId: string) => ({ userId: id, teamId, roles: [] })),
+      });
+    }
   }
 
-  // isAdmin and alwaysInGroupChats both live on the org membership, not the
-  // User — collect whichever were sent into one membership update.
+  // Set the member's roles on one or more of this org's teams (upserts, so it
+  // also joins a team the person wasn't on). Shape: [{ teamId, roles }].
+  if (Array.isArray(body.teamRoles)) {
+    for (const entry of body.teamRoles) {
+      if (!entry || typeof entry.teamId !== "string") continue;
+      const team = await prisma.team.findFirst({
+        where: { id: entry.teamId, orgId: admin.orgId },
+        select: { id: true },
+      });
+      if (!team) {
+        return NextResponse.json({ error: "Unknown team" }, { status: 400 });
+      }
+      const roles = Array.isArray(entry.roles)
+        ? entry.roles.filter((r: string) => (ALL_INSTRUMENTS as string[]).includes(r))
+        : [];
+      await prisma.teamMember.upsert({
+        where: { teamId_userId: { teamId: entry.teamId, userId: id } },
+        create: { teamId: entry.teamId, userId: id, roles },
+        update: { roles },
+      });
+    }
+  }
+
+  // isAdmin and alwaysInGroupChats both live on the org membership.
   const membershipData: { isAdmin?: boolean; alwaysInGroupChats?: boolean } = {};
   if (typeof body.isAdmin === "boolean") membershipData.isAdmin = body.isAdmin;
   if (typeof body.alwaysInGroupChats === "boolean") {
     membershipData.alwaysInGroupChats = body.alwaysInGroupChats;
   }
-  const editsMembership = Object.keys(membershipData).length > 0;
-
-  if (Object.keys(data).length === 0 && !editsMembership) {
-    return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+  if (Object.keys(membershipData).length > 0) {
+    await prisma.orgMembership.update({
+      where: { userId_orgId: { userId: id, orgId: admin.orgId } },
+      data: membershipData,
+    });
   }
 
-  const [updated] = await prisma.$transaction([
-    prisma.user.update({
-      where: { id },
-      data,
-      select: {
-        id: true,
-        name: true,
-        isMD: true,
-        instruments: true,
-        memberships: {
-          where: { orgId: admin.orgId },
-          select: { isAdmin: true, alwaysInGroupChats: true },
-        },
-        teams: {
-          where: { orgId: admin.orgId },
-          select: { id: true, name: true },
-        },
-        availabilityResponses: {
-          where: { request: { orgId: admin.orgId } },
-          select: { requestId: true, completedAt: true, edited: true },
-        },
+  // Re-read the just-written state for this org.
+  const updated = await prisma.user.findUniqueOrThrow({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      isMD: true,
+      memberships: {
+        where: { orgId: admin.orgId },
+        select: { isAdmin: true, alwaysInGroupChats: true },
       },
-    }),
-    ...(editsMembership
-      ? [
-          prisma.orgMembership.update({
-            where: { userId_orgId: { userId: id, orgId: admin.orgId } },
-            data: membershipData,
-          }),
-        ]
-      : []),
-  ]);
+      teamMembers: {
+        where: { team: { orgId: admin.orgId } },
+        select: { roles: true, team: { select: { id: true, name: true } } },
+      },
+      availabilityResponses: {
+        where: { request: { orgId: admin.orgId } },
+        select: { requestId: true, completedAt: true, edited: true },
+      },
+    },
+  });
 
-  const { memberships, ...fields } = updated;
+  const { memberships, teamMembers, ...fields } = updated;
   return NextResponse.json({
     ...fields,
-    // Reflect the just-written values (the user.update read may predate the
-    // membership write inside the same transaction).
-    isAdmin: membershipData.isAdmin ?? memberships[0]?.isAdmin ?? false,
-    alwaysInGroupChats:
-      membershipData.alwaysInGroupChats ??
-      memberships[0]?.alwaysInGroupChats ??
-      false,
+    isAdmin: memberships[0]?.isAdmin ?? false,
+    alwaysInGroupChats: memberships[0]?.alwaysInGroupChats ?? false,
+    teams: teamMembers.map((tm) => ({
+      id: tm.team.id,
+      name: tm.team.name,
+      roles: tm.roles,
+    })),
   });
 }

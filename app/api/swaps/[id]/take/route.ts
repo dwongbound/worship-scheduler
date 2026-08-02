@@ -3,6 +3,7 @@
 // commitment, so there's no separate confirm step.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import type { Instrument } from "@/lib/constants";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { coverEligibility } from "@/lib/sets";
@@ -20,16 +21,7 @@ export async function POST(
 
   const assignment = await prisma.assignment.findUnique({
     where: { id },
-    include: {
-      set: {
-        select: {
-          orgId: true,
-          teamId: true,
-          // Whether the taker is on this set's team (empty array = they're not).
-          team: { select: { users: { where: { id: user.id }, select: { id: true } } } },
-        },
-      },
-    },
+    include: { set: { select: { orgId: true, teamId: true } } },
   });
   if (!assignment) {
     return NextResponse.json(
@@ -41,10 +33,23 @@ export async function POST(
   // Gather the facts the eligibility rule needs, then decide in one place (a
   // pure, unit-tested helper — see lib/sets.ts). Holding a different role on
   // the same set is fine, so only THIS role counts as "already in role".
-  const me = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { instruments: true },
+  //
+  // Roles are per-team: the taker can cover only a role they play on the set's
+  // team (or on any team for a team-less set). Read their per-team roles fresh.
+  const myTeams = await prisma.teamMember.findMany({
+    where: { userId: user.id },
+    select: { teamId: true, roles: true },
   });
+  const setTeamId = assignment.set.teamId;
+  const viewerOnTeam = setTeamId
+    ? myTeams.some((m) => m.teamId === setTeamId)
+    : true; // team-less set = open to the whole org
+  const viewerRolesForSet = (
+    setTeamId
+      ? myTeams.find((m) => m.teamId === setTeamId)?.roles ?? []
+      : myTeams.flatMap((m) => m.roles)
+  ) as Instrument[];
+
   const alreadyInRole = await prisma.assignment.findUnique({
     where: {
       setId_userId_role: {
@@ -59,12 +64,12 @@ export async function POST(
     viewerId: user.id,
     ownerId: assignment.userId,
     assignmentStatus: assignment.status,
-    viewerInstruments: me?.instruments ?? [],
+    viewerRolesForSet,
     role: assignment.role,
     viewerOrgIds: await getMyOrgIds(user.id),
     setOrgId: assignment.set.orgId,
-    setTeamId: assignment.set.teamId,
-    viewerOnTeam: (assignment.set.team?.users.length ?? 0) > 0,
+    setTeamId,
+    viewerOnTeam,
     alreadyInRole: !!alreadyInRole,
   });
   if (!eligibility.ok) {

@@ -117,8 +117,10 @@ describe("conflictedUserIds / totalConflicts", () => {
 });
 
 describe("unfillableRoles / totalUnfillable", () => {
-  function ru(id: string, instruments: Instrument[]) {
-    return { id, instruments };
+  // Roles are per-team; these staged sets are team-less, so a role on any team
+  // counts (playsRoleForSet unions across teams for a team-less set).
+  function ru(id: string, roles: Instrument[]) {
+    return { id, teams: [{ id: "team-default", roles }] };
   }
   // One player for every default role EXCEPT keys — so keys is the only role
   // with no candidate to fill it.

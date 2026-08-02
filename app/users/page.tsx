@@ -116,6 +116,9 @@ function UsersPageInner() {
   // "add member" query, the delete-confirm target, and a busy flag while a
   // delete request is in flight.
   const [openTeamId, setOpenTeamId] = useState<string | null>(null);
+  // The team whose roster + per-team roles the page is focused on ("all" = show
+  // everyone, with role editing off since roles are per-team).
+  const [teamFilter, setTeamFilter] = useState("all");
   const [memberQuery, setMemberQuery] = useState("");
   const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
@@ -269,9 +272,7 @@ function UsersPageInner() {
   const patchUser = useCallback(
     async (
       id: string,
-      patch: Partial<
-        Pick<ApiAdminUser, "isAdmin" | "isMD" | "instruments" | "teams">
-      >
+      patch: Partial<Pick<ApiAdminUser, "isAdmin" | "isMD" | "teams">>
     ) => {
       setUsers(
         (prev) => prev?.map((u) => (u.id === id ? { ...u, ...patch } : u)) ?? prev
@@ -296,18 +297,51 @@ function UsersPageInner() {
     [load, adminOrgId]
   );
 
-  function toggleInstrument(user: ApiAdminUser, inst: Instrument) {
-    const next = user.instruments.includes(inst)
-      ? user.instruments.filter((i) => i !== inst)
-      : [...user.instruments, inst];
-    patchUser(user.id, { instruments: next });
+  // Set a member's roles ON A SPECIFIC TEAM (roles are per-team). Optimistic
+  // local update, then PATCH teamRoles; reload on failure.
+  const setTeamRoles = useCallback(
+    async (user: ApiAdminUser, teamId: string, roles: Instrument[]) => {
+      setUsers(
+        (prev) =>
+          prev?.map((u) =>
+            u.id === user.id
+              ? {
+                  ...u,
+                  teams: u.teams.map((t) =>
+                    t.id === teamId ? { ...t, roles } : t
+                  ),
+                }
+              : u
+          ) ?? prev
+      );
+      const res = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
+        body: JSON.stringify({ teamRoles: [{ teamId, roles }] }),
+      });
+      if (!res.ok) load();
+      // Picking a first role (un)covers the "needs roles" nudge for this person.
+      window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
+    },
+    [load, adminOrgId]
+  );
+
+  function toggleTeamRole(user: ApiAdminUser, teamId: string, role: Instrument) {
+    const current = user.teams.find((t) => t.id === teamId)?.roles ?? [];
+    const next = current.includes(role)
+      ? current.filter((r) => r !== role)
+      : [...current, role];
+    setTeamRoles(user, teamId, next);
   }
 
   // Add this person to a team from their card's "+ Add to team" chip. Goes
-  // through patchUser so the card's chips update optimistically.
+  // through patchUser so the card's chips update optimistically. New members
+  // start with no roles on the team.
   function addToTeam(user: ApiAdminUser, team: ApiTeam) {
     if (user.teams.some((t) => t.id === team.id)) return;
-    patchUser(user.id, { teams: [...user.teams, team] });
+    patchUser(user.id, {
+      teams: [...user.teams, { id: team.id, name: team.name, roles: [] }],
+    });
   }
 
   // Remove this person from a team via the "x" on their membership chip. Same
@@ -358,8 +392,9 @@ function UsersPageInner() {
         <div>
           <h1 className="text-2xl font-bold">Team</h1>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Grant or revoke admin access and set which instruments each person
-            can be scheduled for. Changes save automatically.
+            Pick a team to see its members and set the roles each person plays on
+            it (roles are per-team). Grant or revoke admin access here too.
+            Changes save automatically.
           </p>
         </div>
 
@@ -395,6 +430,27 @@ function UsersPageInner() {
           )}
         </div>
       </div>
+
+      {/* First-class team picker: drives which members show below and whose
+          per-team roles are editable. "All members" shows everyone (role editing
+          off, since a role only means something on a specific team). */}
+      <Card>
+        <div className="sm:max-w-xs">
+          <Select
+            label="Team"
+            data-testid="team-filter"
+            value={teamFilter}
+            onChange={(e) => setTeamFilter(e.target.value)}
+          >
+            <option value="all">All members</option>
+            {teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </Card>
 
       {/* ── Teams: read-only list here; managed on the Org settings page ── */}
       <Card>
@@ -482,7 +538,12 @@ function UsersPageInner() {
       </Card>
 
       <ul className="space-y-3">
-        {users.map((user) => (
+        {users
+          .filter(
+            (u) =>
+              teamFilter === "all" || u.teams.some((t) => t.id === teamFilter)
+          )
+          .map((user) => (
           <li key={user.id} id={`user-card-${user.id}`} className="scroll-mt-24">
             <Card
               className={
@@ -536,21 +597,35 @@ function UsersPageInner() {
                     </div>
                   </div>
 
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Instruments / roles
+                  {/* Roles are per-team: only editable once a specific team is
+                      picked above, showing this person's roles ON THAT team. */}
+                  {teamFilter === "all" ? (
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Pick a team above to set {user.name.split(" ")[0]}’s roles.
                     </p>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {ALL_INSTRUMENTS.map((inst) => (
-                        <Checkbox
-                          key={inst}
-                          label={INSTRUMENT_LABELS[inst]}
-                          checked={user.instruments.includes(inst)}
-                          onChange={() => toggleInstrument(user, inst)}
-                        />
-                      ))}
+                  ) : (
+                    <div>
+                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                        Roles on this team
+                      </p>
+                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                        {ALL_INSTRUMENTS.map((inst) => {
+                          const roles =
+                            user.teams.find((t) => t.id === teamFilter)?.roles ?? [];
+                          return (
+                            <Checkbox
+                              key={inst}
+                              label={INSTRUMENT_LABELS[inst]}
+                              checked={roles.includes(inst)}
+                              onChange={() =>
+                                toggleTeamRole(user, teamFilter, inst)
+                              }
+                            />
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
+                  )}
 
                   {/* Membership chips, plus an inline "+ Add to team" chip in
                       the first free slot so an admin can add this person to any
@@ -640,7 +715,9 @@ function UsersPageInner() {
         onDelete={deleteTeam}
         onAdd={(user, team) => {
           if (user.teams.some((t) => t.id === team.id)) return;
-          patchUser(user.id, { teams: [...user.teams, team] });
+          patchUser(user.id, {
+            teams: [...user.teams, { id: team.id, name: team.name, roles: [] }],
+          });
           setMemberQuery(""); // clear so they can type the next name
         }}
         onRemove={(user, team) =>

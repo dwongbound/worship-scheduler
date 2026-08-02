@@ -159,6 +159,8 @@ model Team {
   // many days before it starts (the daily cron does it). Null = off.
   groupChatLeadDays Int?
 
+  members   TeamMember[]
+  // DEPRECATED: old role-less membership — see User.teams. Dropped after backfill.
   users     User[]           @relation("TeamMembers")
   sets      Set[]
   templates SetTemplate[]
@@ -169,6 +171,27 @@ model Team {
   // Team names only need to be unique within their org.
   @@unique([orgId, name])
   @@map("teams")
+}
+
+// A person's membership on one team, carrying the roles they can fill ON THAT
+// team. Replaces the old implicit User↔Team m-n so roles can differ per team
+// (someone may play keys on Sunday but only sing on the Youth team). An empty
+// `roles` list = on the team but not yet schedulable for anything.
+model TeamMember {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  roles Instrument[] // roles this person can fill on this team (may be empty)
+
+  createdAt DateTime @default(now())
+
+  // One membership row per person per team.
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("team_members")
 }
 
 // A scheduled weekly Slack reminder: post one team's "this week's sets" summary
@@ -203,12 +226,19 @@ model User {
   email        String? @unique
 
   // Musical director: can be the designated MD on a set that requires one.
-  // Note: isMD and instruments are global to the person, not per-org.
+  // Note: isMD is global to the person, not per-org.
   isMD        Boolean      @default(false)
-  instruments Instrument[] // which slots this user can fill
+  // DEPRECATED: roles are now per-team (see TeamMember.roles). Kept only so the
+  // backfill (prisma/backfillTeamRoles.ts) can copy each person's old global
+  // roles onto their teams; a follow-up migration drops this column.
+  instruments Instrument[]
   // Orgs this person belongs to (admin is per-org — see OrgMembership).
   memberships OrgMembership[]
-  // Teams this person serves on — only sets of these teams schedule them.
+  // Teams this person serves on, with the roles they play ON EACH team — only
+  // sets of these teams schedule them, and only for roles listed here.
+  teamMembers TeamMember[]
+  // DEPRECATED: the old role-less team membership. Kept alongside teamMembers
+  // only so the backfill can read existing edges; a follow-up migration drops it.
   teams       Team[]       @relation("TeamMembers")
 
   assignments           Assignment[]

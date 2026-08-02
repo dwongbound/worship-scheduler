@@ -1,7 +1,8 @@
 "use client";
-// Edit personal info: name, email, instruments, and a Slack member ID field
-// for the future Slack integration. Password changes happen in a separate
-// modal that requires typing the new password twice.
+// Edit personal info: name, email, per-team roles, and a Slack member ID field
+// for the future Slack integration. Roles are per-team: pick a team from the
+// dropdown (or join a new one), then check the roles you play on it. Password
+// changes happen in a separate modal that requires typing the new password twice.
 import { useSession } from "next-auth/react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Button from "@/components/common/Button";
@@ -10,14 +11,20 @@ import Checkbox from "@/components/common/Checkbox";
 import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
 import Modal from "@/components/common/Modal";
+import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
+import { fetchJsonArray } from "@/lib/api";
 import {
   ALL_INSTRUMENTS,
   INSTRUMENT_LABELS,
   type Instrument,
 } from "@/lib/constants";
+import type { ApiTeam, ApiTeamRole } from "@/lib/types";
+
+// Sentinel value for the team dropdown's "join a new team" option.
+const JOIN_OPTION = "__join__";
 
 type Membership = {
   orgId: string;
@@ -38,7 +45,15 @@ export default function ProfilePage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [instruments, setInstruments] = useState<Instrument[]>([]);
+  // Teams I'm on, each with the roles I play there (roles are per-team now).
+  const [teams, setTeams] = useState<ApiTeamRole[]>([]);
+  // The team whose roles the editor is showing ("" = none picked yet; the
+  // JOIN_OPTION sentinel = the "join a team" picker is open).
+  const [selectedTeamId, setSelectedTeamId] = useState("");
+  // Every team across my orgs (for the "join a team" picker); fetched on mount.
+  const [allTeams, setAllTeams] = useState<ApiTeam[]>([]);
+  // True while a role toggle / join / leave is in flight (shows inline dots).
+  const [savingRoles, setSavingRoles] = useState(false);
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
   const [message, setMessage] = useState("");
@@ -82,50 +97,115 @@ export default function ProfilePage() {
     setName(me.name);
     setEmail(me.email ?? "");
     setMemberships(me.memberships ?? []);
-    setInstruments(me.instruments);
+    setTeams(me.teams ?? []);
     setHasPassword(me.hasPassword);
-    savedKeyRef.current = fieldsKey(me.name, me.email ?? "", me.instruments);
+    savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
     setLoaded(true);
   }, [me]);
 
-  // Toggling a role saves immediately (no Save button) — pass the next array
-  // explicitly since setInstruments is async and state would still be stale.
-  function toggleInstrument(inst: Instrument) {
-    const next = instruments.includes(inst)
-      ? instruments.filter((i) => i !== inst)
-      : [...instruments, inst];
-    setInstruments(next);
-    saveProfile({ instruments: next });
+  // The teams a person can still join: every team across their orgs they aren't
+  // already on. Fetched once (the dropdown's "Join a team" picker).
+  useEffect(() => {
+    fetchJsonArray<ApiTeam>("/api/teams").then(setAllTeams);
+  }, []);
+
+  // Roles are per-team, saved to their own endpoint. Toggling a role writes the
+  // whole next role list for THAT team; joining/leaving add/remove a team.
+  const selectedTeam = teams.find((t) => t.id === selectedTeamId) ?? null;
+  // Teams I can still join = every team across my orgs I'm not already on.
+  const joinableTeams = allTeams.filter(
+    (t) => !teams.some((mine) => mine.id === t.id)
+  );
+  // Disambiguate teams by org only when I belong to more than one org.
+  const teamLabel = (name: string, orgId?: string) => {
+    if (memberships.length <= 1) return name;
+    const org = memberships.find((m) => m.orgId === orgId)?.orgName;
+    return org ? `${name} (${org})` : name;
+  };
+
+  async function saveTeamRoles(teamId: string, roles: Instrument[]) {
+    setSavingRoles(true);
+    // Optimistic: reflect the toggle immediately, revert on failure.
+    setTeams((prev) => prev.map((t) => (t.id === teamId ? { ...t, roles } : t)));
+    try {
+      const res = await fetch(`/api/me/teams/${teamId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roles }),
+      });
+      if (!res.ok) throw new Error("save failed");
+      // Flash the same "Saved ✓" the name/email save uses.
+      setSaved(true);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 2000);
+      // The "finish your profile" dot depends on whether I have any role yet.
+      window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
+    } catch {
+      setMessage("Error: could not save roles");
+      setTeams(me?.teams ?? []); // fall back to the last known-good state
+    } finally {
+      setSavingRoles(false);
+    }
   }
 
-  // The shared PUT body for the profile fields (used by save + password change).
-  function profilePayload(extra: Record<string, unknown> = {}) {
-    return {
-      name,
-      email: email || null,
-      instruments,
-      ...extra,
-    };
+  function toggleRole(teamId: string, role: Instrument, current: Instrument[]) {
+    const next = current.includes(role)
+      ? current.filter((r) => r !== role)
+      : [...current, role];
+    saveTeamRoles(teamId, next);
   }
 
-  // Stable identity for a set of fields, to detect no-op saves.
-  function fieldsKey(n: string, e: string, ins: Instrument[]) {
-    return JSON.stringify([n.trim(), (e || "").trim(), [...ins].sort()]);
+  async function joinTeam(team: ApiTeam) {
+    setSavingRoles(true);
+    try {
+      const res = await fetch(`/api/me/teams/${team.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ roles: [] }),
+      });
+      if (!res.ok) throw new Error("join failed");
+      setTeams((prev) => [...prev, { id: team.id, name: team.name, roles: [] }]);
+      setSelectedTeamId(team.id); // jump straight to picking roles on it
+      window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
+    } catch {
+      setMessage("Error: could not join team");
+    } finally {
+      setSavingRoles(false);
+    }
   }
 
-  // Auto-save the profile fields. Fields default to current state; callers pass
-  // overrides for values that state hasn't caught up to yet (instrument toggle).
+  async function leaveTeam(teamId: string) {
+    setSavingRoles(true);
+    try {
+      await fetch(`/api/me/teams/${teamId}`, { method: "DELETE" });
+      setTeams((prev) => prev.filter((t) => t.id !== teamId));
+      setSelectedTeamId("");
+      window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
+    } finally {
+      setSavingRoles(false);
+    }
+  }
+
+  // Stable identity for the name/email fields, to detect no-op saves.
+  function fieldsKey(n: string, e: string) {
+    return JSON.stringify([n.trim(), (e || "").trim()]);
+  }
+
+  // Auto-save name/email (roles save separately via their own endpoint).
   async function saveProfile(
-    overrides: { name?: string; email?: string | null; instruments?: Instrument[] } = {}
+    overrides: { name?: string; email?: string | null } = {}
   ) {
-    const payload = profilePayload(overrides);
+    const payload = {
+      name: overrides.name ?? name,
+      email: overrides.email ?? (email || null),
+    };
     // Name is required — never PUT a blank one (it'd 400 and read as a random
-    // error on an unrelated action, e.g. toggling a role).
+    // error on an unrelated action).
     if (!payload.name.trim()) {
       setMessage("Error: name is required");
       return;
     }
-    const key = fieldsKey(payload.name, payload.email ?? "", payload.instruments);
+    const key = fieldsKey(payload.name, payload.email ?? "");
     if (key === savedKeyRef.current) return; // nothing actually changed
 
     setMessage("");
@@ -137,13 +217,10 @@ export default function ProfilePage() {
         body: JSON.stringify(payload),
       });
       if (res.ok) {
-        // What actually changed vs. the last save (key = [name, email, roles]).
-        // Both post-save side effects are expensive, so only fire the one whose
-        // field moved — otherwise a role toggle needlessly refreshes the JWT
-        // (csrf + session round-trip) and re-runs the whole navbar refetch.
-        const [prevName, , prevRoles] = JSON.parse(
-          savedKeyRef.current || '["","",[]]'
-        ) as [string, string, string[]];
+        const [prevName] = JSON.parse(savedKeyRef.current || '["",""]') as [
+          string,
+          string,
+        ];
         savedKeyRef.current = key;
         setSaved(true);
         if (savedTimer.current) clearTimeout(savedTimer.current);
@@ -152,12 +229,6 @@ export default function ProfilePage() {
         // the name — the one profile field the navbar shows — actually changed.
         if (payload.name.trim() !== prevName) {
           await update({ name: payload.name });
-        }
-        // Poke the navbar's setup-reminder dot only when roles changed, since
-        // that's the only thing the dot depends on.
-        const nextRoles = [...payload.instruments].sort();
-        if (JSON.stringify(prevRoles) !== JSON.stringify(nextRoles)) {
-          window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
         }
       } else {
         const data = await res.json();
@@ -191,7 +262,7 @@ export default function ProfilePage() {
       const res = await fetch("/api/me", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(profilePayload({ password: pw1 })),
+        body: JSON.stringify({ name, email: email || null, password: pw1 }),
       });
       if (res.ok) {
         setPwOpen(false);
@@ -250,9 +321,9 @@ export default function ProfilePage() {
           </div>
           <fieldset>
             <legend className="mb-2 flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-              <span>Instruments / roles</span>
-              {/* Auto-save status for the whole profile lives here now. */}
-              {saving ? (
+              <span>Teams &amp; roles</span>
+              {/* Auto-save status (name/email + role toggles both land here). */}
+              {saving || savingRoles ? (
                 <LoadingDots size="sm" />
               ) : saved ? (
                 <span
@@ -264,16 +335,80 @@ export default function ProfilePage() {
                 </span>
               ) : null}
             </legend>
-            <div className="grid grid-cols-2 gap-2">
-              {ALL_INSTRUMENTS.map((inst) => (
-                <Checkbox
-                  key={inst}
-                  label={INSTRUMENT_LABELS[inst]}
-                  checked={instruments.includes(inst)}
-                  onChange={() => toggleInstrument(inst)}
-                />
+
+            {/* Pick a team, then the roles you play on it. Roles are per-team,
+                so someone can play keys on one team and only sing on another. */}
+            <Select
+              label="Team"
+              hideLabel
+              data-testid="profile-team-select"
+              value={selectedTeamId}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+            >
+              <option value="">Select a team…</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {teamLabel(t.name, t.orgId)}
+                </option>
               ))}
-            </div>
+              <option value={JOIN_OPTION}>＋ Join a team…</option>
+            </Select>
+
+            {selectedTeamId === JOIN_OPTION ? (
+              // Join picker: every team across my orgs I'm not already on.
+              <div className="mt-3 space-y-2">
+                {joinableTeams.length === 0 ? (
+                  <p className="text-sm text-gray-500">
+                    You're already on every team in your organizations.
+                  </p>
+                ) : (
+                  joinableTeams.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700"
+                    >
+                      <span className="text-sm">{teamLabel(t.name, t.orgId)}</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => joinTeam(t)}
+                        disabled={savingRoles}
+                      >
+                        Join
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </div>
+            ) : selectedTeam ? (
+              // Role checkboxes for the picked team.
+              <div className="mt-3">
+                <div className="grid grid-cols-2 gap-2">
+                  {ALL_INSTRUMENTS.map((inst) => (
+                    <Checkbox
+                      key={inst}
+                      label={INSTRUMENT_LABELS[inst]}
+                      checked={selectedTeam.roles.includes(inst)}
+                      onChange={() =>
+                        toggleRole(selectedTeam.id, inst, selectedTeam.roles)
+                      }
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => leaveTeam(selectedTeam.id)}
+                  className="mt-3 text-sm text-red-600 hover:underline dark:text-red-400"
+                >
+                  Leave this team
+                </button>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-gray-500">
+                Pick a team to set the roles you play on it — you can’t be
+                scheduled until you do.
+              </p>
+            )}
           </fieldset>
 
           <div>

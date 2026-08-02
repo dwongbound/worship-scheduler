@@ -43,7 +43,7 @@ export default function Navbar() {
   const [bannerDismissed, setBannerDismissed] = useState(false);
   // True until the user has picked at least one instrument/role — new accounts
   // start empty, so this drives a "finish your profile" reminder dot + banner.
-  const [needsInstruments, setNeedsInstruments] = useState(false);
+  const [needsRoles, setNeedsRoles] = useState(false);
   const [instrumentsBannerDismissed, setInstrumentsBannerDismissed] = useState(false);
   // Admins only: members of the selected admin org who aren't on any team yet.
   // Drives the Team tab's reminder dot + a banner linking to each person.
@@ -151,7 +151,7 @@ export default function Navbar() {
       const data: ApiNotifications = await res.json();
       setOpenSwapCount(data.swapCount);
       setAvailStatus(data.availability);
-      setNeedsInstruments(data.needsInstruments);
+      setNeedsRoles(data.needsRoles);
       setTeamlessUsers(data.teamless);
     } catch {
       // network hiccup — keep the old values
@@ -360,7 +360,7 @@ export default function Navbar() {
                 <span data-tour="profile" className="flex items-center gap-2">
                   <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">
                     {(session.user.name ?? "?").charAt(0).toUpperCase()}
-                    {needsInstruments && (
+                    {needsRoles && (
                       // Nudge new users to finish their profile.
                       <span
                         data-testid="profile-dot"
@@ -379,7 +379,7 @@ export default function Navbar() {
                 className="flex items-center justify-between gap-2 px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
               >
                 Edit profile
-                {needsInstruments && (
+                {needsRoles && (
                   <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />
                 )}
               </Link>
@@ -404,7 +404,7 @@ export default function Navbar() {
 
       {/* Onboarding banner: shown until a new user picks the instruments/roles
           they play, so the scheduler can actually assign them. */}
-      {needsInstruments && !instrumentsBannerDismissed && (
+      {needsRoles && !instrumentsBannerDismissed && (
         <Banner
           tone="indigo"
           href="/profile"

@@ -1,14 +1,13 @@
 // GET /api/notifications[?orgId=] — every navbar reminder badge in one request:
 // the swap dot count, availability status, whether the profile still needs
-// instruments, and (for the named admin org) its team-less members. Replaces
-// the four separate fetches the navbar used to fire in parallel and re-poll.
+// roles, and (for the named admin org) its team-less members. Replaces the four
+// separate fetches the navbar used to fire in parallel and re-poll.
 //
 // `orgId` scopes the team-less list to the org the admin tabs are pointed at;
 // it's returned only when the caller actually administers that org.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import type { Instrument } from "@/lib/constants";
 import {
   availabilityStatus,
   swapBadgeCount,
@@ -21,13 +20,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Instruments drive both the swap-match filter and the "finish your profile"
-  // dot — fetch them once and feed both.
-  const me = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { instruments: true },
+  // Roles are per-team: the "finish your profile" dot lights until the user has
+  // picked at least one role on some team.
+  const hasAnyRole = await prisma.teamMember.findFirst({
+    where: { userId: user.id, roles: { isEmpty: false } },
+    select: { id: true },
   });
-  const instruments = (me?.instruments ?? []) as Instrument[];
 
   // Team-less members are admin-only and org-scoped: compute them only when the
   // request names an org AND the caller administers it.
@@ -42,7 +40,7 @@ export async function GET(req: NextRequest) {
   })();
 
   const [swapCount, availability, teamless] = await Promise.all([
-    swapBadgeCount(user.id, instruments),
+    swapBadgeCount(user.id),
     availabilityStatus(user.id),
     teamlessPromise,
   ]);
@@ -50,7 +48,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     swapCount,
     availability,
-    needsInstruments: instruments.length === 0,
+    needsRoles: !hasAnyRole,
     teamless,
   });
 }

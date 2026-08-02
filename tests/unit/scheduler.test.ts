@@ -17,12 +17,23 @@ const tuesdaySet: SchedulerSet = {
   durationMinutes: 60,
 };
 
+// Default team every fixture user is placed on unless a test overrides it.
+// Roles are per-team now, so a candidate must hold the role on SOME team to be
+// eligible (a team-less set draws on the union across the person's teams).
+const DEFAULT_TEAM = "team-default";
+
 function user(
   id: string,
-  instruments: SchedulerUser["instruments"],
-  isMD = false
+  roles: SchedulerUser["rolesByTeam"][string],
+  isMD = false,
+  teamIds: string | string[] = DEFAULT_TEAM
 ): SchedulerUser {
-  return { id, instruments, isMD };
+  const teams = Array.isArray(teamIds) ? teamIds : [teamIds];
+  return {
+    id,
+    isMD,
+    rolesByTeam: Object.fromEntries(teams.map((t) => [t, roles])),
+  };
 }
 
 describe("isUserAvailable", () => {
@@ -225,25 +236,25 @@ describe("buildSchedule", () => {
     expect(result[0].userId).toBe("d2");
   });
 
-  it("only schedules members of the set's team", () => {
+  it("only schedules people who play the role on the set's team", () => {
     const drummers = [
-      { ...user("d1", ["DRUMS"]), teamIds: ["team-b"] },
-      { ...user("d2", ["DRUMS"]), teamIds: ["team-a", "team-b"] },
+      user("d1", ["DRUMS"], false, "team-b"), // drums, but on team-b only
+      user("d2", ["DRUMS"], false, ["team-a", "team-b"]), // drums on team-a too
     ];
     const set: SchedulerSet = { ...tuesdaySet, teamId: "team-a" };
     const result = buildSchedule([set], drummers, []);
     expect(result).toEqual([{ setId: "set-1", userId: "d2", role: "DRUMS" }]);
   });
 
-  it("leaves a slot empty when no team member plays the role", () => {
-    const drummers = [{ ...user("d1", ["DRUMS"]), teamIds: ["team-b"] }];
+  it("leaves a slot empty when no one plays the role on the set's team", () => {
+    const drummers = [user("d1", ["DRUMS"], false, "team-b")];
     const set: SchedulerSet = { ...tuesdaySet, teamId: "team-a" };
     expect(buildSchedule([set], drummers, [])).toHaveLength(0);
   });
 
-  it("treats a team-less set as open to everyone (even non-members)", () => {
-    // No teamId on the set → users with and without teams are all eligible.
-    const drummers = [user("d1", ["DRUMS"])]; // no teamIds at all
+  it("treats a team-less set as open to anyone who plays the role on any team", () => {
+    // No teamId on the set → the union of the person's per-team roles is used.
+    const drummers = [user("d1", ["DRUMS"], false, "some-team")];
     const result = buildSchedule([tuesdaySet], drummers, []);
     expect(result).toHaveLength(1);
   });
@@ -565,15 +576,22 @@ describe("availableChoirMembers", () => {
     expect(availableChoirMembers(tuesdaySet, users, [], already)).toEqual(["c2"]);
   });
 
-  it("ignores the set's team: choir is org-wide, not team-scoped", () => {
-    // Unlike band roles, choir isn't restricted to the set's team — any singer
-    // in the org may join, even one on a different team (or no team at all).
+  it("is team-scoped: only choir members of the set's team are seated", () => {
+    // Choir is a per-team role now — a set's choir draws only on people who
+    // list CHOIR on THAT team, not singers from another team.
     const teamSet: SchedulerSet = { ...tuesdaySet, teamId: "team-A" };
     const users = [
-      { ...user("c1", ["CHOIR"]), teamIds: ["team-A"] },
-      { ...user("c2", ["CHOIR"]), teamIds: ["team-B"] }, // other team
-      user("c3", ["CHOIR"]), // no team at all
+      user("c1", ["CHOIR"], false, "team-A"),
+      user("c2", ["CHOIR"], false, "team-B"), // other team → excluded
     ];
-    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1", "c2", "c3"]);
+    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1"]);
+  });
+
+  it("a team-less set draws choir from anyone with CHOIR on any team", () => {
+    const users = [
+      user("c1", ["CHOIR"], false, "team-A"),
+      user("c2", ["CHOIR"], false, "team-B"),
+    ];
+    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
   });
 });

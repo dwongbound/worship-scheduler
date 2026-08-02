@@ -26,7 +26,7 @@ import {
 import { formatDay, formatTime } from "@/lib/dates";
 import { eligibleMDIds, isValidMD } from "@/lib/md";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
-import { isOnTeam } from "@/lib/stagedPlan";
+import { playsRoleForSet } from "@/lib/stagedPlan";
 import SetHistoryEntry from "./SetHistoryEntry";
 import type {
   ApiAdminUser,
@@ -231,12 +231,10 @@ export default function SetDetailModal({
     // makes them an eligible MD for the set.
     const roleAllowsMD = (MD_ROLES as Instrument[]).includes(role);
     return users
-      // Only this set's team members are offered (no team = open to everyone).
-      // Choir is the exception: any singer in the org may join any set's choir,
-      // regardless of team — so we skip the team filter for the CHOIR role.
-      .filter((u) => role === CHOIR || isOnTeam(u, set.teamId ?? set.team?.id))
-      // …and only those who actually play this role (Team-tab instruments).
-      .filter((u) => u.instruments.includes(role))
+      // Only people who play THIS role on this set's team (roles are per-team;
+      // a team-less set is open to anyone who plays the role on any team). Choir
+      // is team-scoped now like every other role.
+      .filter((u) => playsRoleForSet(u, role, set.teamId ?? set.team?.id))
       .filter((u) => !inThisRole.has(u.id))
       .map((u) => ({
         id: u.id,
