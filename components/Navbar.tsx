@@ -386,8 +386,9 @@ export default function Navbar() {
               {session.user.isSuperAdmin && (
                 <Link
                   href="/platform"
-                  className="block px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-600 hover:bg-gray-100 dark:text-amber-400 dark:hover:bg-gray-700"
                 >
+                  <ShieldIcon />
                   Platform admin
                 </Link>
               )}

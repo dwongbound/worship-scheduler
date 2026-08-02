@@ -3,10 +3,10 @@
 // the page:
 //   /calendar, /swaps — a VIEW filter: "All orgs" + each of my orgs.
 //   /create, /users   — the ADMIN org: exactly one of my admin orgs (no All).
-//   /schedule         — locked to "All orgs" (busy blocks span every org): the
-//                       menu lists the orgs greyed-out/disabled with an (i)
-//                       note explaining the lock; "Org settings" + "Add an
-//                       org…" still work.
+//   /schedule, /profile, /platform — locked to "All orgs" (these pages aren't
+//                       scoped to a single org): the menu lists the orgs
+//                       greyed-out/disabled with an (i) note explaining the
+//                       lock; "Org settings" + "Add an org…" still work.
 // Every mode ends with "Org settings" (admins only, hidden on phones — it opens
 // the full-page /orgs view) and "Add an org…", which prompts for an org key.
 import Link from "next/link";
@@ -25,8 +25,25 @@ function modeFor(pathname: string): "view" | "admin" | "locked" {
   if (pathname.startsWith("/create") || pathname.startsWith("/users")) {
     return "admin";
   }
-  if (pathname.startsWith("/schedule")) return "locked";
+  if (
+    pathname.startsWith("/schedule") ||
+    pathname.startsWith("/profile") ||
+    pathname.startsWith("/platform")
+  ) {
+    return "locked";
+  }
   return "view";
+}
+
+// The (i) note next to the locked "All orgs" — why this page can't narrow.
+function lockedNote(pathname: string): string {
+  if (pathname.startsWith("/profile")) {
+    return "Your profile spans all your orgs, so this filter can’t be narrowed to one.";
+  }
+  if (pathname.startsWith("/platform")) {
+    return "Platform admin isn’t scoped to one org, so this filter can’t be narrowed.";
+  }
+  return "Availabilities always covers all your orgs, so this filter can’t be narrowed to one.";
 }
 
 export default function OrgSwitcher() {
@@ -167,10 +184,7 @@ export default function OrgSwitcher() {
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-indigo-600 dark:text-indigo-400"
             >
               All orgs
-              <InfoTooltip
-                side="bottom"
-                text="Availabilities always covers all your orgs, so this filter can’t be narrowed to one."
-              />
+              <InfoTooltip side="bottom" text={lockedNote(pathname)} />
             </div>
             {orgs.map((org) => (
               <div

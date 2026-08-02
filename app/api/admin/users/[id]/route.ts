@@ -90,17 +90,37 @@ export async function PATCH(
     }
   }
 
-  // isAdmin and alwaysInGroupChats both live on the org membership.
-  const membershipData: { isAdmin?: boolean; alwaysInGroupChats?: boolean } = {};
+  // isAdmin, alwaysInGroupChats, and the Slack member id all live on the org
+  // membership. slackUserId lets an admin set/clear it for a person who can't
+  // (or won't) run the Slack Connect flow themselves; "" clears it.
+  const membershipData: {
+    isAdmin?: boolean;
+    alwaysInGroupChats?: boolean;
+    slackUserId?: string | null;
+  } = {};
   if (typeof body.isAdmin === "boolean") membershipData.isAdmin = body.isAdmin;
   if (typeof body.alwaysInGroupChats === "boolean") {
     membershipData.alwaysInGroupChats = body.alwaysInGroupChats;
   }
+  if (typeof body.slackUserId === "string" || body.slackUserId === null) {
+    membershipData.slackUserId =
+      typeof body.slackUserId === "string" && body.slackUserId.trim()
+        ? body.slackUserId.trim()
+        : null;
+  }
   if (Object.keys(membershipData).length > 0) {
-    await prisma.orgMembership.update({
-      where: { userId_orgId: { userId: id, orgId: admin.orgId } },
-      data: membershipData,
-    });
+    try {
+      await prisma.orgMembership.update({
+        where: { userId_orgId: { userId: id, orgId: admin.orgId } },
+        data: membershipData,
+      });
+    } catch {
+      // The only expected failure is the per-org unique Slack id constraint.
+      return NextResponse.json(
+        { error: "That Slack ID is already linked in this org." },
+        { status: 400 }
+      );
+    }
   }
 
   // Re-read the just-written state for this org.
@@ -112,7 +132,7 @@ export async function PATCH(
       isMD: true,
       memberships: {
         where: { orgId: admin.orgId },
-        select: { isAdmin: true, alwaysInGroupChats: true },
+        select: { isAdmin: true, alwaysInGroupChats: true, slackUserId: true },
       },
       teamMembers: {
         where: { team: { orgId: admin.orgId } },
@@ -130,6 +150,8 @@ export async function PATCH(
     ...fields,
     isAdmin: memberships[0]?.isAdmin ?? false,
     alwaysInGroupChats: memberships[0]?.alwaysInGroupChats ?? false,
+    slackConnected: memberships[0]?.slackUserId != null,
+    slackUserId: memberships[0]?.slackUserId ?? null,
     teams: teamMembers.map((tm) => ({
       id: tm.team.id,
       name: tm.team.name,

@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
       ...u,
       isAdmin: memberships[0]?.isAdmin ?? false,
       slackConnected: memberships[0]?.slackUserId != null,
+      slackUserId: memberships[0]?.slackUserId ?? null,
       alwaysInGroupChats: memberships[0]?.alwaysInGroupChats ?? false,
       // Flatten each team membership to { id, name, roles } — the shape the
       // Team page + assignment dropdowns consume.

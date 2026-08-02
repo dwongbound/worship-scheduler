@@ -9,7 +9,6 @@
 // A master date-range selector at the top drives a per-person count of how
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
@@ -18,6 +17,7 @@ import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Dropdown from "@/components/common/Dropdown";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import LoadingDots from "@/components/common/LoadingDots";
 import Select from "@/components/common/Select";
 import SlackIcon from "@/components/common/SlackIcon";
@@ -119,6 +119,11 @@ function UsersPageInner() {
   // The team whose roster + per-team roles the page is focused on ("all" = show
   // everyone, with role editing off since roles are per-team).
   const [teamFilter, setTeamFilter] = useState("all");
+  // Inline Slack-member-id editor: which user's is open, its draft, and errors.
+  const [editingSlackFor, setEditingSlackFor] = useState<string | null>(null);
+  const [slackDraft, setSlackDraft] = useState("");
+  const [slackSaving, setSlackSaving] = useState(false);
+  const [slackError, setSlackError] = useState<string | null>(null);
   const [memberQuery, setMemberQuery] = useState("");
   const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
@@ -334,6 +339,41 @@ function UsersPageInner() {
     setTeamRoles(user, teamId, next);
   }
 
+  // Open the inline Slack-id editor for a person, prefilled with their current
+  // id (admins can set it for someone who won't run the Connect flow).
+  function startSlackEdit(user: ApiAdminUser) {
+    setEditingSlackFor(user.id);
+    setSlackDraft(user.slackUserId ?? "");
+    setSlackError(null);
+  }
+
+  // Save (or clear, when blank) a person's Slack member id for this org.
+  async function saveSlackId(user: ApiAdminUser) {
+    setSlackSaving(true);
+    setSlackError(null);
+    const value = slackDraft.trim() || null;
+    const res = await fetch(`/api/admin/users/${user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
+      body: JSON.stringify({ slackUserId: value }),
+    });
+    if (res.ok) {
+      setUsers(
+        (prev) =>
+          prev?.map((u) =>
+            u.id === user.id
+              ? { ...u, slackUserId: value, slackConnected: value != null }
+              : u
+          ) ?? prev
+      );
+      setEditingSlackFor(null);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setSlackError(data.error ?? "Could not save Slack ID");
+    }
+    setSlackSaving(false);
+  }
+
   // Add this person to a team from their card's "+ Add to team" chip. Goes
   // through patchUser so the card's chips update optimistically. New members
   // start with no roles on the team.
@@ -431,45 +471,38 @@ function UsersPageInner() {
         </div>
       </div>
 
-      {/* First-class team picker: drives which members show below and whose
-          per-team roles are editable. "All members" shows everyone (role editing
-          off, since a role only means something on a specific team). */}
+      {/* Teams panel: the header's team picker drives which members show below
+          (and whose per-team roles are editable — "All members" turns role
+          editing off, since a role only means something on a specific team). The
+          list below manages each team (click → members/Slack/delete modal). */}
       <Card>
-        <div className="sm:max-w-xs">
-          <Select
-            label="Team"
-            data-testid="team-filter"
-            value={teamFilter}
-            onChange={(e) => setTeamFilter(e.target.value)}
-          >
-            <option value="all">All members</option>
-            {teams.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </Select>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {/* Styled as a heading but rendered as <p>: the e2e specs target the
+                page's "Team" <h1> with a non-exact heading query, and any real
+                heading containing "Team" would collide with it. */}
+            <p className="font-semibold">Teams</p>
+            <InfoTooltip
+              text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page (desktop only)."
+            />
+          </div>
+          <div className="w-full sm:w-64">
+            <Select
+              label="Show members of"
+              hideLabel
+              data-testid="team-filter"
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+            >
+              <option value="all">All members</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
-      </Card>
-
-      {/* ── Teams: read-only list here; managed on the Org settings page ── */}
-      <Card>
-        {/* Styled as a heading but rendered as <p>: the e2e specs target the
-            page's "Team" <h1> with a non-exact heading query, and any real
-            heading containing "Team" would collide with it. */}
-        <p className="mb-1 font-semibold">Teams</p>
-        <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
-          Every set belongs to a team, and only that team&rsquo;s members are
-          scheduled on it. Click a team to manage its members and Slack channel;
-          scheduled weekly reminders live on the{" "}
-          <Link
-            href="/orgs"
-            className="font-medium text-indigo-600 underline dark:text-indigo-400"
-          >
-            Org settings page
-          </Link>{" "}
-          (desktop only).
-        </p>
         {teams.length === 0 ? (
           <p className="text-sm text-gray-400">No teams yet.</p>
         ) : (
@@ -556,18 +589,52 @@ function UsersPageInner() {
               <div className="flex flex-col gap-4 sm:flex-row">
                 <div className="flex-1 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold">{user.name}</span>
-                      {/* Slack linked in THIS org — a small mark + check. */}
-                      {user.slackConnected && (
-                        <span
-                          title="Connected to this organization's Slack"
-                          aria-label="Connected to this organization's Slack"
-                          className="inline-flex items-center gap-0.5 text-green-600 dark:text-green-400"
+                      {/* Slack member id for THIS org — click to set/edit it by
+                          hand (the fallback to the person's own Connect flow). */}
+                      {editingSlackFor === user.id ? (
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            value={slackDraft}
+                            onChange={(e) => setSlackDraft(e.target.value)}
+                            placeholder="Slack member ID (U…)"
+                            aria-label={`Slack member ID for ${user.name}`}
+                            autoFocus
+                            className="w-44 rounded border border-gray-300 px-2 py-0.5 text-xs focus:border-indigo-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800"
+                          />
+                          <Button size="sm" onClick={() => saveSlackId(user)} disabled={slackSaving}>
+                            {slackSaving ? <LoadingDots size="sm" /> : "Save"}
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingSlackFor(null)}
+                            className="text-xs text-gray-500 hover:underline dark:text-gray-400"
+                          >
+                            Cancel
+                          </button>
+                          {slackError && (
+                            <span className="text-xs text-red-600">{slackError}</span>
+                          )}
+                        </span>
+                      ) : user.slackConnected ? (
+                        <button
+                          type="button"
+                          onClick={() => startSlackEdit(user)}
+                          title="Edit Slack member ID"
+                          className="inline-flex items-center gap-0.5 text-green-600 hover:opacity-80 dark:text-green-400"
                         >
                           <SlackIcon className="h-4 w-4 shrink-0" />
                           <span aria-hidden className="text-xs font-semibold">✓</span>
-                        </span>
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => startSlackEdit(user)}
+                          className="inline-flex items-center gap-1 rounded-full border border-dashed border-gray-300 px-2 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
+                        >
+                          <SlackIcon className="h-3.5 w-3.5" /> Set Slack ID
+                        </button>
                       )}
                       {user.isAdmin && <Badge tone="amber">Admin</Badge>}
                       {user.isMD && <Badge tone="blue">MD</Badge>}

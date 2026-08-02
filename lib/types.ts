@@ -222,6 +222,9 @@ export interface ApiAdminUser {
   // Whether this person has linked their Slack account in THIS org (drives the
   // Team page's Slack-connected badge). Per-org: they may be linked elsewhere.
   slackConnected: boolean;
+  // The actual Slack member id for THIS org (null = unset). Admins can edit it
+  // from the Team page; used to prefill that inline editor.
+  slackUserId: string | null;
   // When true, this person is added to every Slack group chat this org creates,
   // even for sets they aren't on (per-org membership flag).
   alwaysInGroupChats: boolean;

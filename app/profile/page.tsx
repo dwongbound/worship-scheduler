@@ -23,9 +23,6 @@ import {
 } from "@/lib/constants";
 import type { ApiTeam, ApiTeamRole } from "@/lib/types";
 
-// Sentinel value for the team dropdown's "join a new team" option.
-const JOIN_OPTION = "__join__";
-
 type Membership = {
   orgId: string;
   orgName: string;
@@ -54,6 +51,9 @@ export default function ProfilePage() {
   const [allTeams, setAllTeams] = useState<ApiTeam[]>([]);
   // True while a role toggle / join / leave is in flight (shows inline dots).
   const [savingRoles, setSavingRoles] = useState(false);
+  // "Add a team" modal: whether it's open and which teams are checked to join.
+  const [addTeamOpen, setAddTeamOpen] = useState(false);
+  const [addSelection, setAddSelection] = useState<Set<string>>(new Set());
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
   const [message, setMessage] = useState("");
@@ -172,6 +172,25 @@ export default function ProfilePage() {
     } finally {
       setSavingRoles(false);
     }
+  }
+
+  // Toggle a team in the "Add a team" modal's checkbox selection.
+  function toggleAddSelection(teamId: string) {
+    setAddSelection((prev) => {
+      const next = new Set(prev);
+      next.has(teamId) ? next.delete(teamId) : next.add(teamId);
+      return next;
+    });
+  }
+
+  // Join every team checked in the modal, then close it. joinTeam leaves the
+  // last-joined team selected so its roles are ready to pick.
+  async function addSelectedTeams() {
+    for (const t of joinableTeams.filter((t) => addSelection.has(t.id))) {
+      await joinTeam(t);
+    }
+    setAddSelection(new Set());
+    setAddTeamOpen(false);
   }
 
   async function leaveTeam(teamId: string) {
@@ -294,6 +313,19 @@ export default function ProfilePage() {
           }}
           className="space-y-4"
         >
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Account
+            </h2>
+            {/* Name/email save on blur — show the same in-flight/saved feedback. */}
+            {saving ? (
+              <LoadingDots size="sm" />
+            ) : saved ? (
+              <span className="text-green-600" aria-label="Saved">
+                ✓
+              </span>
+            ) : null}
+          </div>
           <Input
             label="Name"
             value={name}
@@ -319,98 +351,6 @@ export default function ProfilePage() {
               </p>
             )}
           </div>
-          <fieldset>
-            <legend className="mb-2 flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-              <span>Teams &amp; roles</span>
-              {/* Auto-save status (name/email + role toggles both land here). */}
-              {saving || savingRoles ? (
-                <LoadingDots size="sm" />
-              ) : saved ? (
-                <span
-                  className="text-green-600"
-                  aria-label="Saved"
-                  data-testid="profile-saved"
-                >
-                  ✓
-                </span>
-              ) : null}
-            </legend>
-
-            {/* Pick a team, then the roles you play on it. Roles are per-team,
-                so someone can play keys on one team and only sing on another. */}
-            <Select
-              label="Team"
-              hideLabel
-              data-testid="profile-team-select"
-              value={selectedTeamId}
-              onChange={(e) => setSelectedTeamId(e.target.value)}
-            >
-              <option value="">Select a team…</option>
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {teamLabel(t.name, t.orgId)}
-                </option>
-              ))}
-              <option value={JOIN_OPTION}>＋ Join a team…</option>
-            </Select>
-
-            {selectedTeamId === JOIN_OPTION ? (
-              // Join picker: every team across my orgs I'm not already on.
-              <div className="mt-3 space-y-2">
-                {joinableTeams.length === 0 ? (
-                  <p className="text-sm text-gray-500">
-                    You're already on every team in your organizations.
-                  </p>
-                ) : (
-                  joinableTeams.map((t) => (
-                    <div
-                      key={t.id}
-                      className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 dark:border-gray-700"
-                    >
-                      <span className="text-sm">{teamLabel(t.name, t.orgId)}</span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() => joinTeam(t)}
-                        disabled={savingRoles}
-                      >
-                        Join
-                      </Button>
-                    </div>
-                  ))
-                )}
-              </div>
-            ) : selectedTeam ? (
-              // Role checkboxes for the picked team.
-              <div className="mt-3">
-                <div className="grid grid-cols-2 gap-2">
-                  {ALL_INSTRUMENTS.map((inst) => (
-                    <Checkbox
-                      key={inst}
-                      label={INSTRUMENT_LABELS[inst]}
-                      checked={selectedTeam.roles.includes(inst)}
-                      onChange={() =>
-                        toggleRole(selectedTeam.id, inst, selectedTeam.roles)
-                      }
-                    />
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => leaveTeam(selectedTeam.id)}
-                  className="mt-3 text-sm text-red-600 hover:underline dark:text-red-400"
-                >
-                  Leave this team
-                </button>
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-gray-500">
-                Pick a team to set the roles you play on it — you can’t be
-                scheduled until you do.
-              </p>
-            )}
-          </fieldset>
-
           <div>
             <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
               Password
@@ -451,6 +391,127 @@ export default function ProfilePage() {
           )}
         </form>
       </Card>
+
+      {/* Teams & roles — its own panel. Pick a team, then the roles you play on
+          it (roles are per-team); "Add a team" opens a modal to join more. */}
+      <Card>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <span>Teams &amp; roles</span>
+            {savingRoles ? (
+              <LoadingDots size="sm" />
+            ) : saved ? (
+              <span
+                className="text-green-600"
+                aria-label="Saved"
+                data-testid="profile-saved"
+              >
+                ✓
+              </span>
+            ) : null}
+          </h2>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() => {
+              setAddSelection(new Set());
+              setAddTeamOpen(true);
+            }}
+          >
+            Add a team
+          </Button>
+        </div>
+
+        {teams.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            You’re not on any teams yet. Add a team to pick the roles you play —
+            you can’t be scheduled until you do.
+          </p>
+        ) : (
+          <>
+            <Select
+              label="Team"
+              hideLabel
+              data-testid="profile-team-select"
+              value={selectedTeamId}
+              onChange={(e) => setSelectedTeamId(e.target.value)}
+            >
+              <option value="">Select a team…</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {teamLabel(t.name, t.orgId)}
+                </option>
+              ))}
+            </Select>
+
+            {selectedTeam ? (
+              <div className="mt-3">
+                <div className="grid grid-cols-2 gap-2">
+                  {ALL_INSTRUMENTS.map((inst) => (
+                    <Checkbox
+                      key={inst}
+                      label={INSTRUMENT_LABELS[inst]}
+                      checked={selectedTeam.roles.includes(inst)}
+                      onChange={() =>
+                        toggleRole(selectedTeam.id, inst, selectedTeam.roles)
+                      }
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => leaveTeam(selectedTeam.id)}
+                  className="mt-3 text-sm text-red-600 hover:underline dark:text-red-400"
+                >
+                  Leave this team
+                </button>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-gray-500">
+                Pick a team above to set the roles you play on it.
+              </p>
+            )}
+          </>
+        )}
+      </Card>
+
+      {/* Join-a-team modal: check any teams across your orgs you're not on. */}
+      <Modal
+        open={addTeamOpen}
+        onClose={() => setAddTeamOpen(false)}
+        title="Add a team"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setAddTeamOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={addSelectedTeams}
+              disabled={addSelection.size === 0 || savingRoles}
+            >
+              {savingRoles ? <LoadingDots size="sm" label="Adding" /> : "Add"}
+            </Button>
+          </div>
+        }
+      >
+        {joinableTeams.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            You’re already on every team in your organizations.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {joinableTeams.map((t) => (
+              <Checkbox
+                key={t.id}
+                label={teamLabel(t.name, t.orgId)}
+                checked={addSelection.has(t.id)}
+                onChange={() => toggleAddSelection(t.id)}
+              />
+            ))}
+          </div>
+        )}
+      </Modal>
 
       <SlackConnections initial={memberships} />
 
