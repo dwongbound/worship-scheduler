@@ -86,7 +86,11 @@ test("Team tab scopes members and teams to one org with no cross-org leakage", a
   await pickOrg(page, orgName(1));
   await expect(page.getByText("Grace Gao")).toBeVisible();
   await expect(page.getByText("Bob Baker")).toHaveCount(0);
-  await expect(page.getByText("College Team").first()).toBeVisible();
+  // The Teams card lists this org's team as a button (name + member count).
+  // (getByText would also match the hidden <option> in the team filter select.)
+  await expect(
+    page.getByRole("button", { name: /College Team\s*\d+ member/ })
+  ).toBeVisible();
   await expect(page.getByText("Sunday Team")).toHaveCount(0);
 });
 

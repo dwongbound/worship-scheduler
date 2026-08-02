@@ -1,5 +1,5 @@
-// E2E: the admin-only Team page — access control + editing a person's
-// instruments (which auto-saves).
+// E2E: the admin-only Team page — access control + editing a person's per-team
+// roles (which auto-saves).
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
@@ -13,13 +13,19 @@ test("non-admins can't see or open the Team page", async ({ page }) => {
   ).toBeVisible();
 });
 
-test("admin edits a person's instruments and it persists", async ({ page }) => {
+test("admin edits a person's team roles and it persists", async ({ page }) => {
   await login(page, "admin");
   await page.getByRole("link", { name: "Team" }).click();
   await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
 
-  // Bob plays only Drums — add Strings to his card. Edits save automatically
+  // Roles are per-team: pick the Sunday team so its members' role checkboxes
+  // show (the picker resets to "All members" on reload, so re-select each time).
+  // Bob plays only Drums there — add Strings. Edits save automatically
   // (optimistic UI + a background PATCH), so wait for the PATCH before reload.
+  const pickSunday = () =>
+    page.getByTestId("team-filter").selectOption({ label: "Sunday Team" });
+  await pickSunday();
+
   const savePatch = () =>
     page.waitForResponse(
       (r) =>
@@ -37,11 +43,13 @@ test("admin edits a person's instruments and it persists", async ({ page }) => {
 
   // Reload to prove it was persisted server-side, not just local state.
   await page.reload();
+  await pickSunday();
   await expect(bobStrings()).toBeChecked();
 
   // Revert.
   await Promise.all([savePatch(), bobStrings().uncheck()]);
   await page.reload();
+  await pickSunday();
   await expect(bobStrings()).not.toBeChecked();
 });
 

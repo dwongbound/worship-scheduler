@@ -34,6 +34,17 @@ export interface ApiUserRef {
   isMD?: boolean; // musical director (drives the "* (MD)" marker)
 }
 
+// One team a person serves on plus the roles they play ON THAT team (roles are
+// per-team now). Embedded in ApiMe (their own) and ApiAdminUser (as an admin
+// sees each member). `orgId` is present on ApiMe's copy so the profile page can
+// group a person's teams by org.
+export interface ApiTeamRole {
+  id: string;
+  name: string;
+  orgId?: string;
+  roles: Instrument[];
+}
+
 export interface ApiAssignment {
   id: string;
   role: Instrument;
@@ -184,7 +195,7 @@ export interface ApiAvailabilityStatus {
 export interface ApiNotifications {
   swapCount: number; // open covers + trades awaiting me → the swap dot
   availability: ApiAvailabilityStatus; // the Availabilities dot + banner
-  needsInstruments: boolean; // brand-new profile → the "finish setup" dot
+  needsRoles: boolean; // no roles on any team yet → the "finish setup" dot
   teamless: { id: string; name: string; username: string }[];
 }
 
@@ -211,12 +222,15 @@ export interface ApiAdminUser {
   // Whether this person has linked their Slack account in THIS org (drives the
   // Team page's Slack-connected badge). Per-org: they may be linked elsewhere.
   slackConnected: boolean;
+  // The actual Slack member id for THIS org (null = unset). Admins can edit it
+  // from the Team page; used to prefill that inline editor.
+  slackUserId: string | null;
   // When true, this person is added to every Slack group chat this org creates,
   // even for sets they aren't on (per-org membership flag).
   alwaysInGroupChats: boolean;
-  instruments: Instrument[];
-  // Teams this person belongs to — gates which sets they can be scheduled on.
-  teams: ApiTeam[];
+  // Teams this person belongs to, each with the roles they play there — gates
+  // which sets/roles they can be scheduled on. Roles are per-team now.
+  teams: ApiTeamRole[];
   // Which availability requests this person has marked complete (one row per
   // request). Drives the Availability status panel's per-TimeRange dropdown.
   // completedAt = null → a row that's currently marked "not submitted".
@@ -278,4 +292,31 @@ export interface StagedPlan {
   sets: StagedSet[];
   // Sets in the window we left untouched because they're already staffed.
   skipped: number;
+}
+
+// One membership row as GET /api/me returns it — the per-org fields the
+// profile/org-settings pages read (Slack link status, admin flag). Distinct
+// from ApiOrg: this is the shape hung off the current user, not the org list.
+export interface ApiMeMembership {
+  orgId: string;
+  orgName: string;
+  isAdmin: boolean;
+  slackUserId: string | null;
+  // Whether the ORG has connected Slack (bot installed).
+  orgSlackConnected: boolean;
+  slackTeamName: string | null;
+}
+
+// The current user's own profile — GET /api/me. Fetched once by AuthGate and
+// shared via MeProvider so the profile/org-settings pages don't refetch it.
+export interface ApiMe {
+  username: string;
+  name: string;
+  email: string | null;
+  // Whether a usable password hash exists (OAuth-only accounts have none).
+  hasPassword: boolean;
+  memberships: ApiMeMembership[];
+  // Teams this person serves on, each with the roles they've picked there and
+  // the owning org (roles are per-team; the profile page edits them).
+  teams: ApiTeamRole[];
 }

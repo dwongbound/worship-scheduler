@@ -57,6 +57,11 @@ export default function SwapsPage() {
   const showOrgChips = viewOrgId === "all" && (orgs?.length ?? 0) > 1;
 
   const reload = useCallback(async () => {
+    // Wait until the org context has loaded before fetching. viewOrgId starts
+    // at its "all" default and only settles to the persisted org once /api/orgs
+    // resolves; fetching before then would fire once unscoped and again after
+    // it settles. `orgs` in the deps re-runs this the moment it does.
+    if (!orgs) return;
     // Both endpoints return arrays; fall back to [] on any error so a hiccup
     // shows an empty list instead of crashing on `.map`.
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
@@ -74,7 +79,7 @@ export default function SwapsPage() {
     setIncoming(incomingData);
     // Nudge the navbar to refresh its red dot.
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
-  }, [viewOrgId]);
+  }, [orgs, viewOrgId]);
 
   // Accept or reject a targeted swap proposed to me.
   async function respondSwap(proposalId: string, action: "accept" | "reject") {
@@ -306,19 +311,21 @@ export default function SwapsPage() {
             <li key={a.id}>
               <Card className="flex flex-wrap items-center justify-between gap-3">
                 <div>
+                  {/* Status chip rides up here next to the team/org chip so the
+                      action row below can't overflow the card on phones. */}
                   <p className="flex flex-wrap items-center gap-2 font-semibold">
                     {a.set.label ?? "Worship Set"} —{" "}
                     {INSTRUMENT_LABELS[a.role]}
                     {showOrgChips && a.set.org && (
                       <OrgChip name={a.set.org.name} />
                     )}
+                    <StatusBadge status={a.status} />
                   </p>
                   <p className="text-sm text-gray-600 dark:text-gray-400">
                     {formatDay(a.set.startsAt)} · {formatTime(a.set.startsAt)}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <StatusBadge status={a.status} />
                   <Button
                     size="sm"
                     variant="secondary"

@@ -61,7 +61,9 @@ export interface CoverEligibilityInput {
   viewerId: string;
   ownerId: string; // who currently holds the swap-requested slot
   assignmentStatus: string; // must be "SWAP_REQUESTED" to be takeable
-  viewerInstruments: Instrument[];
+  // Roles the viewer can play FOR THIS SET — their roles on the set's team, or
+  // (for a team-less set) the union across all their teams. Roles are per-team.
+  viewerRolesForSet: Instrument[];
   role: Instrument; // the slot's instrument
   viewerOrgIds: string[]; // orgs the viewer belongs to
   setOrgId: string;
@@ -93,7 +95,7 @@ export function coverEligibility(i: CoverEligibilityInput): CoverEligibility {
   if (i.ownerId === i.viewerId) {
     return { ok: false, status: 400, error: "Cannot take your own swap" };
   }
-  if (!i.viewerInstruments.includes(i.role)) {
+  if (!i.viewerRolesForSet.includes(i.role)) {
     return { ok: false, status: 400, error: "You don't play this instrument" };
   }
   if (i.alreadyInRole) {

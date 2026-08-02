@@ -99,9 +99,13 @@ export async function POST(req: NextRequest) {
       where: { memberships: { some: { orgId: admin.orgId } } },
       select: {
         id: true,
-        instruments: true,
         isMD: true,
-        teams: { select: { id: true } },
+        // Per-team roles drive eligibility now (a person may play different
+        // roles on different teams). Only this org's teams matter here.
+        teamMembers: {
+          where: { team: { orgId: admin.orgId } },
+          select: { teamId: true, roles: true },
+        },
       },
     }),
     // Deliberately unscoped: busy blocks are global to the person, so a block
@@ -214,9 +218,10 @@ export async function POST(req: NextRequest) {
     })),
     users.map((u) => ({
       id: u.id,
-      instruments: u.instruments as Instrument[],
       isMD: u.isMD,
-      teamIds: u.teams.map((t) => t.id),
+      rolesByTeam: Object.fromEntries(
+        u.teamMembers.map((m) => [m.teamId, m.roles as Instrument[]])
+      ),
     })),
     rules,
     existingCounts,

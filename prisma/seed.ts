@@ -148,11 +148,15 @@ async function main() {
               : []),
           ],
         },
-        teams: {
-          connect: [
-            { id: sundayTeam.id },
-            ...(u.prayer ? [{ id: prayerTeam.id }] : []),
-            ...(u.college ? [{ id: collegeTeam.id }] : []),
+        // Roles are per-team now (TeamMember.roles). Everyone plays the same
+        // set of roles on each team they serve — their old global list — which
+        // is enough for the demo/tests. `newbie` joins Sunday with no roles yet
+        // (drives the "finish your profile" reminder).
+        teamMembers: {
+          create: [
+            { teamId: sundayTeam.id, roles: u.instruments },
+            ...(u.prayer ? [{ teamId: prayerTeam.id, roles: u.instruments }] : []),
+            ...(u.college ? [{ teamId: collegeTeam.id, roles: u.instruments }] : []),
           ],
         },
       },

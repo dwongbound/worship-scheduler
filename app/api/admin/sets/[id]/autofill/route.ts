@@ -53,9 +53,12 @@ export async function POST(
       where: { memberships: { some: { orgId: set.orgId } } },
       select: {
         id: true,
-        instruments: true,
         isMD: true,
-        teams: { select: { id: true } },
+        // Per-team roles: only this org's teams are relevant to this set.
+        teamMembers: {
+          where: { team: { orgId: set.orgId } },
+          select: { teamId: true, roles: true },
+        },
       },
     }),
     // Unscoped on purpose: busy blocks are global to the person.
@@ -76,9 +79,10 @@ export async function POST(
 
   const eligible = users.map((u) => ({
     id: u.id,
-    instruments: u.instruments as Instrument[],
     isMD: u.isMD,
-    teamIds: u.teams.map((t) => t.id),
+    rolesByTeam: Object.fromEntries(
+      u.teamMembers.map((m) => [m.teamId, m.roles as Instrument[]])
+    ),
   }));
   const existingCounts = new Map(existing.map((e) => [e.userId, e._count]));
 

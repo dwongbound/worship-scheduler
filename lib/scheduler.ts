@@ -31,11 +31,20 @@ import {
 
 export interface SchedulerUser {
   id: string;
-  instruments: Instrument[];
   // True if this person can serve as a set's musical director.
   isMD?: boolean;
-  // Teams this person belongs to. Only consulted when a set has a teamId.
-  teamIds?: string[];
+  // Roles this person can fill, PER TEAM (only teams they're on appear). The
+  // scheduler consults the entry for the set's team; a team-less set uses the
+  // union across all the person's teams (preserves "open to the whole org").
+  rolesByTeam: Record<string, Instrument[]>;
+}
+
+// The roles a user may fill on a given set: their roles on the set's team, or —
+// for a team-less set — the union of their roles across every team they're on.
+function rolesFor(user: SchedulerUser, set: SchedulerSet): Instrument[] {
+  return set.teamId
+    ? user.rolesByTeam[set.teamId] ?? []
+    : Object.values(user.rolesByTeam).flat();
 }
 
 export interface SchedulerSet {
@@ -247,12 +256,11 @@ export function buildSchedule(
     // designated MD is a separate choice (Set.mdUserId, see lib/md.ts).
     const bestFor = (role: Instrument, mdOnly = false) =>
       users
-        .filter(
-          // Team-restricted set: only its members may be scheduled on it.
-          (u) => !set.teamId || (u.teamIds ?? []).includes(set.teamId)
-        )
+        // Eligible = plays this role on the set's team (team-restricted set), or
+        // on any team for a team-less set. A person on the team with no roles
+        // for it is naturally excluded — rolesFor returns [].
+        .filter((u) => rolesFor(u, set).includes(role))
         .filter((u) => (mdOnly ? u.isMD : true))
-        .filter((u) => u.instruments.includes(role))
         .filter((u) => canTakeRole(u.id, role))
         .filter((u) => isUserAvailable(u.id, set, rules))
         .sort(
@@ -302,12 +310,11 @@ export function buildSchedule(
 
 /**
  * Everyone who should join a set's choir on "Auto schedule": every singer who
- * lists CHOIR as a skill and is free at the set's time. Unlike the band roles,
- * choir has no capacity — it's an unbounded list, so we don't balance or space
- * it, we simply seat all the available singers. Choir is also NOT team-scoped:
- * any singer in the org may join any set's choir, regardless of the set's team
- * (band roles stay restricted to team members — see buildSchedule's bestFor).
- * Returns their userIds, excluding anyone already on this set's choir
+ * lists CHOIR on the set's team and is free at the set's time. Unlike the band
+ * roles, choir has no capacity — it's an unbounded list, so we don't balance or
+ * space it, we simply seat all the available singers. Choir is team-scoped like
+ * every other role now (rolesFor): a team-less set draws on anyone with CHOIR on
+ * any team. Returns their userIds, excluding anyone already on this set's choir
  * (`alreadyOnChoir`). Pure + separate from buildSchedule so the modal's autofill
  * can layer choir on top.
  */
@@ -318,7 +325,7 @@ export function availableChoirMembers(
   alreadyOnChoir: Set<string> = new Set()
 ): string[] {
   return users
-    .filter((u) => u.instruments.includes(CHOIR))
+    .filter((u) => rolesFor(u, set).includes(CHOIR))
     .filter((u) => !alreadyOnChoir.has(u.id))
     .filter((u) => isUserAvailable(u.id, set, rules))
     .map((u) => u.id);

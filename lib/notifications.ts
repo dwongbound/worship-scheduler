@@ -5,32 +5,34 @@
 // still exist for their other callers and now share this same logic.
 import { prisma } from "./prisma";
 import { getMyOrgIds, resolveOrgScope } from "./org";
-import { ROLE_ORDER, type Instrument } from "./constants";
 
 // Open cover requests the user could take + targeted trades awaiting their
 // response, across all their orgs — the total behind the swap dot. Only the
 // count is needed here, so we COUNT rather than fetch the rows (cf. GET
 // /api/swaps and /api/swaps/proposals/incoming, which return the full lists for
 // the Set Manager UI; the WHERE clauses here mirror theirs).
-export async function swapBadgeCount(
-  userId: string,
-  instruments: Instrument[]
-): Promise<number> {
+export async function swapBadgeCount(userId: string): Promise<number> {
   const scope = await resolveOrgScope(userId, null); // all my orgs
   const now = new Date();
-  const [covers, incoming] = await Promise.all([
-    prisma.assignment.count({
+
+  // Roles are per-team, so cover eligibility (plays the role on the set's team,
+  // or any team for a team-less set) can't be a single count query — fetch the
+  // caller's per-team roles and the candidate rows, then count matches in JS.
+  const myTeams = await prisma.teamMember.findMany({
+    where: { userId },
+    select: { teamId: true, roles: true },
+  });
+  const rolesByTeam = new Map(myTeams.map((m) => [m.teamId, m.roles]));
+  const anyRole = new Set(myTeams.flatMap((m) => m.roles));
+
+  const [coverCandidates, incoming] = await Promise.all([
+    prisma.assignment.findMany({
       where: {
         status: "SWAP_REQUESTED",
         userId: { not: userId },
-        role: { in: instruments },
-        set: {
-          startsAt: { gte: now },
-          orgId: { in: scope },
-          // Team-scoped: only the set's team can cover it (null team = whole org).
-          OR: [{ teamId: null }, { team: { users: { some: { id: userId } } } }],
-        },
+        set: { startsAt: { gte: now }, orgId: { in: scope } },
       },
+      select: { role: true, set: { select: { teamId: true } } },
     }),
     prisma.swapProposal.count({
       where: {
@@ -42,6 +44,12 @@ export async function swapBadgeCount(
       },
     }),
   ]);
+
+  const covers = coverCandidates.filter((a) =>
+    a.set.teamId
+      ? rolesByTeam.get(a.set.teamId)?.includes(a.role) ?? false
+      : anyRole.has(a.role)
+  ).length;
   return covers + incoming;
 }
 
@@ -78,24 +86,17 @@ export async function availabilityStatus(userId: string) {
 }
 
 // The org's members who aren't on any team in THAT org yet — the Team tab's
-// reminder dot + banner (admins only; the caller checks admin rights). Team
-// membership is per-org, so `none` is filtered to this org to avoid counting a
-// user who is teamed elsewhere as covered here.
-//
-// Only people who list a BAND role (any instrument except choir) are flagged:
-// a band role can only be scheduled on the person's team, so being teamless
-// blocks them. Choir-only members are skipped — choir isn't team-scoped, so
-// they can join any set's choir without a team. People who haven't picked any
-// role yet are also skipped: they must choose a role before the team even
-// matters. Hence `hasSome: ROLE_ORDER` (the band roles) rather than "any user".
+// reminder dot + banner (admins only; the caller checks admin rights). Roles are
+// per-team now, so anyone off every team in this org can't be scheduled at all;
+// the banner nudges the admin to add them to a team (where they/the admin then
+// pick roles). Team membership is per-org, so `none` is filtered to this org.
 export async function teamlessMembers(
   orgId: string
 ): Promise<{ id: string; name: string; username: string }[]> {
   return prisma.user.findMany({
     where: {
       memberships: { some: { orgId } },
-      teams: { none: { orgId } },
-      instruments: { hasSome: ROLE_ORDER },
+      teamMembers: { none: { team: { orgId } } },
     },
     select: { id: true, name: true, username: true },
     orderBy: { name: "asc" },

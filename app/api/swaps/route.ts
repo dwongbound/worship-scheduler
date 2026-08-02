@@ -14,15 +14,16 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Instruments can change any time on the profile page, so read them
-  // fresh from the db rather than trusting a stale JWT.
-  const me = await prisma.user.findUnique({
-    where: { id: user.id },
-    select: { instruments: true },
+  // Roles are per-team now, so a person can cover a set only if they play its
+  // role ON THAT set's team. Read the caller's per-team roles fresh from the db
+  // (they change on the profile page). rolesByTeam[teamId] = their roles there;
+  // anyRole = the union, used for team-less sets ("open to the whole org").
+  const myTeams = await prisma.teamMember.findMany({
+    where: { userId: user.id },
+    select: { teamId: true, roles: true },
   });
-  if (!me) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const rolesByTeam = new Map(myTeams.map((m) => [m.teamId, m.roles]));
+  const anyRole = new Set(myTeams.flatMap((m) => m.roles));
 
   const scope = await resolveOrgScope(
     user.id,
@@ -33,18 +34,7 @@ export async function GET(req: NextRequest) {
     where: {
       status: "SWAP_REQUESTED",
       userId: { not: user.id },
-      role: { in: me.instruments },
-      set: {
-        startsAt: { gte: new Date() },
-        orgId: { in: scope },
-        // Stay within the set's team: only its members can cover it. A set with
-        // no team is open to everyone in the org (matches the scheduler's
-        // "null team = whole org" rule).
-        OR: [
-          { teamId: null },
-          { team: { users: { some: { id: user.id } } } },
-        ],
-      },
+      set: { startsAt: { gte: new Date() }, orgId: { in: scope } },
     },
     include: {
       set: { include: { org: { select: { id: true, name: true } } } },
@@ -53,5 +43,13 @@ export async function GET(req: NextRequest) {
     orderBy: { set: { startsAt: "asc" } },
   });
 
-  return NextResponse.json(swaps);
+  // Per-team eligibility (small N, so filter in JS): I can cover a set if I play
+  // its role on its team — or on any team for a team-less set.
+  const eligible = swaps.filter((s) =>
+    s.set.teamId
+      ? rolesByTeam.get(s.set.teamId)?.includes(s.role) ?? false
+      : anyRole.has(s.role)
+  );
+
+  return NextResponse.json(eligible);
 }

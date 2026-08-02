@@ -56,22 +56,25 @@ test("admin manually adds a person to the choir", async ({ page }) => {
   await expect(choir.getByText("Carol Chen")).toHaveCount(0);
 });
 
-test("choir is org-wide: a singer off the set's team can still be added", async ({ page }) => {
+test("choir is team-scoped: a singer off the set's team is not offered", async ({ page }) => {
   await login(page, "admin");
-  // A Prayer Room Team set. Carol lists CHOIR but is only on the Sunday Team
-  // (seed) — for band roles she'd be excluded, but choir isn't team-scoped, so
-  // she must still be offered here.
+  // A Prayer Room Team set. Carol lists CHOIR but only on the Sunday Team
+  // (seed), so — now that choir is a per-team role — she is NOT offered here.
+  // Grace, who's on the Prayer Room Team with CHOIR, is.
   const modal = await createEmptySet(page, "Choir Cross Team", "15:11", "Prayer Room Team");
 
   const choir = modal.getByTestId("choir-section");
   await choir.getByRole("button", { name: "Enable choir" }).click();
-
   await choir.getByRole("button", { name: "None" }).click();
-  await choir.getByPlaceholder("Search by name…").fill("Carol");
-  await choir.getByRole("button", { name: "Carol Chen" }).click();
 
-  // She's seated on this off-team set's choir as PENDING.
-  await expect(choir.getByText("Carol Chen")).toBeVisible();
+  // Carol (Sunday-only) doesn't appear in this team's choir picker.
+  await choir.getByPlaceholder("Search by name…").fill("Carol");
+  await expect(choir.getByRole("button", { name: "Carol Chen" })).toHaveCount(0);
+
+  // Grace (on the Prayer Room Team, with CHOIR) does, and can be seated.
+  await choir.getByPlaceholder("Search by name…").fill("Grace");
+  await choir.getByRole("button", { name: "Grace Gao" }).click();
+  await expect(choir.getByText("Grace Gao")).toBeVisible();
   await expect(choir.getByText("Pending confirmation")).toBeVisible();
 });
 
