@@ -54,6 +54,43 @@ test("a brand-new member is nudged to pick their roles, then the nudge clears", 
   await expect(page.getByTestId("profile-dot")).toBeVisible();
 });
 
+test("a user joins a team via the Add-a-team modal, then leaves it", async ({
+  page,
+}) => {
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  // Carol is on the Sunday Team only, so Prayer Room Team is joinable.
+  const teamSelect = page.getByTestId("profile-team-select");
+  await expect(teamSelect).not.toContainText("Prayer Room Team");
+
+  await page.getByRole("button", { name: "Add a team" }).click();
+  const modal = page.getByRole("dialog");
+  await modal.getByLabel("Prayer Room Team").check();
+  await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/me/teams/") && r.request().method() === "PUT"
+    ),
+    modal.getByRole("button", { name: "Add", exact: true }).click(),
+  ]);
+
+  // Joined: it's in the dropdown now, and auto-selected (roles panel shows).
+  await expect(teamSelect).toContainText("Prayer Room Team");
+  await expect(page.getByRole("button", { name: "Leave this team" })).toBeVisible();
+
+  // Leave it to restore the shared seed state.
+  await Promise.all([
+    page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/me/teams/") && r.request().method() === "DELETE"
+    ),
+    page.getByRole("button", { name: "Leave this team" }).click(),
+  ]);
+  await expect(teamSelect).not.toContainText("Prayer Room Team");
+});
+
 test("an established member sees no profile-setup nudge", async ({ page }) => {
   // Carol already has roles on her team, so neither the dot nor banner appears.
   await login(page, "carol");

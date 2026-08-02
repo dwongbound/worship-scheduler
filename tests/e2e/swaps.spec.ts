@@ -45,12 +45,14 @@ test("kate takes the swap and the set becomes hers (confirmed)", async ({ page }
     .click();
 
   // Taking a cover is itself the commitment, so it lands already confirmed —
-  // no separate confirm step needed.
+  // no separate confirm step needed. Taking triggers a POST + a full refetch,
+  // which can run past the default 5s when the suite hammers the db in parallel,
+  // so give this first post-take assertion extra headroom.
   const myCard = page
     .locator("li")
     .filter({ hasText: "Sunday Morning — Drums" })
     .first();
-  await expect(myCard.getByText("Confirmed")).toBeVisible();
+  await expect(myCard.getByText("Confirmed")).toBeVisible({ timeout: 15_000 });
 
   // And bob's request is gone from the open list.
   await expect(page.getByText("requested by Bob Baker")).not.toBeVisible();

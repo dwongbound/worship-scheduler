@@ -1,6 +1,14 @@
 // Shared e2e helpers.
 import { Locator, Page, expect } from "@playwright/test";
 
+// Local YYYY-MM-DD, matching lib/dates.toYmd (the format the picker's cells use
+// in their data-date). Inlined so this test helper needs no app import.
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
 /**
  * The <section> whose own <h2> is `heading`.
  *
@@ -43,11 +51,11 @@ export function orgKey(index: number): string {
  */
 export async function pickSingleDay(page: Page) {
   const dialog = page.getByRole("dialog");
-  // Today's grid cell — the enabled button carrying today's day number (the
-  // same number in a padding month is rendered disabled, so exclude those).
-  const todayCell = dialog
-    .getByRole("button", { name: String(new Date().getDate()), exact: true })
-    .and(page.locator("button:not([disabled])"));
+  // Today's grid cell, keyed by its `data-date` (YYYY-MM-DD) so it's the ONE
+  // current-month cell — matching by day number alone is ambiguous when a
+  // padding cell from an adjacent month shows the same number enabled (e.g. on
+  // the 2nd, next month's "2" is a trailing padding day).
+  const todayCell = dialog.locator(`[data-date="${ymd(new Date())}"]`);
 
   // One click sets the range start, which both availability forms accept as a
   // single-day block (they require only the start; endDate is optional). We
