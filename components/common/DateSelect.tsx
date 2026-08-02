@@ -293,6 +293,10 @@ export default function DateSelect({
                   <button
                     key={ymd}
                     type="button"
+                    // Stable per-cell date hook: each cell's full date is unique,
+                    // so tests can target the in-month day unambiguously (matching
+                    // by day number alone collides with adjacent-month padding).
+                    data-date={ymd}
                     disabled={blocked}
                     onClick={() => pick(d)}
                     onMouseEnter={() => {

@@ -12,6 +12,12 @@
 //   3. Ties break on user id so results are deterministic (nice for tests).
 // Slots with no viable candidate stay empty rather than blocking the run.
 //
+// ACOUSTIC GUITAR is a special case: it's filled LAST (after worship leader and
+// vocals are seated) and only by someone already holding one of those roles who
+// also plays acoustic — the acoustic guitarist should double as the leader/a
+// singer. If none of them play it, the slot is left empty (never a dedicated
+// acoustic-only player). See ACOUSTIC_HOST_ROLES.
+//
 // SPACING: someone who served (or is being scheduled) within MIN_GAP_DAYS of
 // a set is deprioritized for it, not excluded — with enough people this makes
 // weekly sets rotate round-robin, but a small pool still gets fully staffed.
@@ -19,6 +25,7 @@
 // DB) so one-off sets also avoid people who just served nearby.
 
 import {
+  ACOUSTIC_HOST_ROLES,
   CHOIR,
   MD_ROLES,
   ROLE_ORDER,
@@ -254,13 +261,20 @@ export function buildSchedule(
     // to MDs (used only by the MD reservation below). MDs are otherwise treated
     // as ordinary players — they may fill any role on any set; being the set's
     // designated MD is a separate choice (Set.mdUserId, see lib/md.ts).
-    const bestFor = (role: Instrument, mdOnly = false) =>
+    const bestFor = (
+      role: Instrument,
+      mdOnly = false,
+      // Extra hard filter on candidates (e.g. "already seated as WL/vocals" for
+      // the acoustic pass below). Defaults to no restriction.
+      eligible: (u: SchedulerUser) => boolean = () => true
+    ) =>
       users
         // Eligible = plays this role on the set's team (team-restricted set), or
         // on any team for a team-less set. A person on the team with no roles
         // for it is naturally excluded — rolesFor returns [].
         .filter((u) => rolesFor(u, set).includes(role))
         .filter((u) => (mdOnly ? u.isMD : true))
+        .filter((u) => eligible(u))
         .filter((u) => canTakeRole(u.id, role))
         .filter((u) => isUserAvailable(u.id, set, rules))
         .sort(
@@ -296,12 +310,31 @@ export function buildSchedule(
     // Only the band roles (ROLE_ORDER) are capacity-filled here. Choir is not a
     // band role and has no slot count, so it's handled separately — see
     // availableChoirMembers, called by the set-detail "Auto schedule".
+    // ACOUSTIC_GUITAR is skipped here and filled in its own pass afterward,
+    // because its candidate must ALREADY be seated as the worship leader or a
+    // vocalist (which VOCALS, filled last in ROLE_ORDER, only becomes after).
     for (const role of ROLE_ORDER) {
+      if (role === "ACOUSTIC_GUITAR") continue;
       while (remaining[role] > 0) {
         const pick = bestFor(role);
         if (!pick) break; // nobody left for this role — leave slot empty
         assign(pick.id, role);
       }
+    }
+
+    // ── Acoustic guitar: only a seated worship leader or vocalist ────────
+    // The acoustic guitarist should also be singing/leading — never a dedicated
+    // acoustic-only player. Now that every other role is seated, hand the slot
+    // to a worship leader or vocalist on this set who also plays acoustic
+    // (canTakeRole already sanctions that double-up). If none do, leave it empty.
+    const holdsHostRole = (userId: string): boolean => {
+      const held = rolesOnSet.get(userId);
+      return held ? ACOUSTIC_HOST_ROLES.some((r) => held.has(r)) : false;
+    };
+    while (remaining.ACOUSTIC_GUITAR > 0) {
+      const pick = bestFor("ACOUSTIC_GUITAR", false, (u) => holdsHostRole(u.id));
+      if (!pick) break; // no seated WL/vocalist plays acoustic — leave it empty
+      assign(pick.id, "ACOUSTIC_GUITAR");
     }
   }
 

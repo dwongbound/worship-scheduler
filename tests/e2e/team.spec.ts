@@ -53,6 +53,51 @@ test("admin edits a person's team roles and it persists", async ({ page }) => {
   await expect(bobStrings()).not.toBeChecked();
 });
 
+test("admin sets and clears a person's Slack member id", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/users");
+  await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
+
+  const bobCard = () =>
+    page.getByRole("listitem").filter({ hasText: "Bob Baker" });
+  const savePatch = () =>
+    page.waitForResponse(
+      (r) =>
+        r.url().includes("/api/admin/users/") &&
+        r.request().method() === "PATCH"
+    );
+  const slackInput = () =>
+    bobCard().getByLabel("Slack member ID for Bob Baker");
+
+  // Bob has no Slack id in the seed → his card offers "Set Slack ID".
+  await bobCard().getByRole("button", { name: /Set Slack ID/ }).click();
+  await slackInput().fill("U123TEST");
+  await Promise.all([
+    savePatch(),
+    bobCard().getByRole("button", { name: "Save" }).click(),
+  ]);
+
+  // It now shows the connected (editable) Slack mark, and it persists.
+  await expect(
+    bobCard().getByRole("button", { name: "Edit Slack member ID" })
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    bobCard().getByRole("button", { name: "Edit Slack member ID" })
+  ).toBeVisible();
+
+  // Clearing it (blank save) restores the shared seed state.
+  await bobCard().getByRole("button", { name: "Edit Slack member ID" }).click();
+  await slackInput().fill("");
+  await Promise.all([
+    savePatch(),
+    bobCard().getByRole("button", { name: "Save" }).click(),
+  ]);
+  await expect(
+    bobCard().getByRole("button", { name: /Set Slack ID/ })
+  ).toBeVisible();
+});
+
 test("admin removes a person from a team via the chip's x", async ({ page }) => {
   await login(page, "admin");
   await page.goto("/users");

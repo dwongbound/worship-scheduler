@@ -115,6 +115,13 @@ export const OVERLAP_ALLOWED_PAIRS: [Instrument, Instrument][] = [
   ["ACOUSTIC_GUITAR", "VOCALS"],
 ];
 
+// The acoustic guitarist must double as one of these — the auto-scheduler only
+// fills a set's acoustic slot with someone already seated as the worship leader
+// or a vocalist who also plays acoustic. If none of them play it, the slot is
+// left empty rather than seating a dedicated acoustic-only player. (These are
+// exactly the roles acoustic guitar may overlap with — see OVERLAP_ALLOWED_PAIRS.)
+export const ACOUSTIC_HOST_ROLES: BandRole[] = ["WORSHIP_LEADER", "VOCALS"];
+
 // True if two distinct roles may be held by the same person on one set.
 export function rolesMayOverlap(a: Instrument, b: Instrument): boolean {
   return OVERLAP_ALLOWED_PAIRS.some(

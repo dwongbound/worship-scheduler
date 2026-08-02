@@ -184,6 +184,40 @@ describe("buildSchedule", () => {
     expect(roles).toEqual(["ACOUSTIC_GUITAR", "VOCALS"]);
   });
 
+  it("leaves acoustic empty when no worship leader or vocalist plays it", () => {
+    // a1 plays ONLY acoustic (not WL/vox), so the acoustic slot must stay empty
+    // rather than seating a dedicated acoustic-only player. Drums fills as usual.
+    const players = [user("a1", ["ACOUSTIC_GUITAR"]), user("d1", ["DRUMS"])];
+    const result = buildSchedule([tuesdaySet], players, []);
+    expect(result.some((a) => a.role === "ACOUSTIC_GUITAR")).toBe(false);
+    expect(result).toContainEqual({ setId: "set-1", userId: "d1", role: "DRUMS" });
+  });
+
+  it("hands acoustic to a seated vocalist over an acoustic-only player", () => {
+    // v1 sings AND plays acoustic; a1 only plays acoustic. The acoustic slot
+    // goes to v1 (who is already a vocalist), and a1 is never seated.
+    const v1 = user("v1", ["VOCALS", "ACOUSTIC_GUITAR"]);
+    const a1 = user("a1", ["ACOUSTIC_GUITAR"]);
+    const result = buildSchedule([tuesdaySet], [v1, a1], []);
+    expect(result).toContainEqual({ setId: "set-1", userId: "v1", role: "VOCALS" });
+    expect(result).toContainEqual({
+      setId: "set-1",
+      userId: "v1",
+      role: "ACOUSTIC_GUITAR",
+    });
+    expect(result.some((a) => a.userId === "a1")).toBe(false);
+  });
+
+  it("leaves acoustic empty when the only vocalist doesn't play it", () => {
+    // v1 sings but can't play acoustic; a1 plays acoustic but doesn't sing/lead.
+    // Neither qualifies, so acoustic stays empty even though someone plays it.
+    const v1 = user("v1", ["VOCALS"]);
+    const a1 = user("a1", ["ACOUSTIC_GUITAR"]);
+    const result = buildSchedule([tuesdaySet], [v1, a1], []);
+    expect(result).toContainEqual({ setId: "set-1", userId: "v1", role: "VOCALS" });
+    expect(result.some((a) => a.role === "ACOUSTIC_GUITAR")).toBe(false);
+  });
+
   it("disallows a non-sanctioned overlap (keys + electric guitar)", () => {
     const player = user("p1", ["KEYS", "ELECTRIC_GUITAR"]);
     const result = buildSchedule([tuesdaySet], [player], []);
