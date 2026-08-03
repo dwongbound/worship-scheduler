@@ -83,6 +83,7 @@ export default function CreateSetModal({
           durationMinutes: form.duration,
           requiresMD: form.requiresMD,
           isPrivate: form.isPrivate,
+          groupChatLeadDays: form.groupChatLeadDays,
           // null capacities → the set uses the global default team shape.
           slotCapacities: form.capacities ?? undefined,
           teamId: form.teamId,

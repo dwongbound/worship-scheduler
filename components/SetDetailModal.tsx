@@ -75,6 +75,9 @@ export default function SetDetailModal({
   // team can start the group chat); it's disabled until this org connects Slack.
   const [slackConfigured, setSlackConfigured] = useState(false);
   const [slackMsg, setSlackMsg] = useState("");
+  // Draft for the auto-create-group-chat lead time (days). Kept local so typing
+  // doesn't PATCH per keystroke — it saves on blur. Synced from the set below.
+  const [leadDraft, setLeadDraft] = useState("");
 
   // The set's activity log (History section, bottom of the modal).
   const [history, setHistory] = useState<ApiSetHistoryEvent[]>([]);
@@ -84,6 +87,11 @@ export default function SetDetailModal({
   useEffect(() => {
     setNotesDraft(set?.notes ?? "");
   }, [set?.id, set?.notes]);
+
+  // Keep the lead-time input in sync with the set (incl. after a save refetch).
+  useEffect(() => {
+    setLeadDraft(set?.groupChatLeadDays != null ? String(set.groupChatLeadDays) : "");
+  }, [set?.id, set?.groupChatLeadDays]);
 
   // Reset the delete confirmations + Slack feedback whenever a different set opens.
   useEffect(() => {
@@ -383,6 +391,18 @@ export default function SetDetailModal({
     }
   };
 
+  // Set (or turn off, with null) when this set's private Slack channel is auto-
+  // created ahead of time (admin only). The daily cron makes it once inside the
+  // window; the manual "Slack Team" button still works regardless.
+  const setGroupChatLead = (value: number | null) =>
+    runEdit(() =>
+      fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ groupChatLeadDays: value }),
+      })
+    );
+
   // Delete the whole set (assignments cascade). Closes the modal afterwards.
   const deleteSet = async () => {
     setBusy(true);
@@ -574,6 +594,35 @@ export default function SetDetailModal({
         <p className="-mt-1 mb-4 text-sm text-gray-600 dark:text-gray-400">
           {slackMsg}
         </p>
+      )}
+
+      {/* Admin-only: when to auto-create this set's private Slack channel. The
+          daily cron makes it once inside the window; "Slack Team" above still
+          creates it on demand. Only meaningful once the org has Slack. */}
+      {canEditTeam && slackConfigured && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
+          <span className="text-gray-600 dark:text-gray-400">
+            Auto-create group chat
+          </span>
+          <input
+            type="number"
+            min={1}
+            value={leadDraft}
+            onChange={(e) => setLeadDraft(e.target.value)}
+            onBlur={() => {
+              const n = Number(leadDraft);
+              const next = leadDraft === "" || Number.isNaN(n) ? null : n;
+              if (next !== (set.groupChatLeadDays ?? null)) setGroupChatLead(next);
+            }}
+            disabled={busy}
+            placeholder="Off"
+            aria-label="Auto-create group chat, days before the set"
+            className="w-20 rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800"
+          />
+          <span className="text-gray-500 dark:text-gray-400">
+            days before (blank = off)
+          </span>
+        </div>
       )}
 
       {/* Amber warning while a required-MD set still has no musical director;

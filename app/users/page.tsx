@@ -18,6 +18,7 @@ import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Dropdown from "@/components/common/Dropdown";
 import InfoTooltip from "@/components/common/InfoTooltip";
+import TeamActivityModal from "@/components/TeamActivityModal";
 import LoadingDots from "@/components/common/LoadingDots";
 import Select from "@/components/common/Select";
 import SlackIcon from "@/components/common/SlackIcon";
@@ -119,11 +120,21 @@ function UsersPageInner() {
   // The team whose roster + per-team roles the page is focused on ("all" = show
   // everyone, with role editing off since roles are per-team).
   const [teamFilter, setTeamFilter] = useState("all");
+  // Per-person team selection: which team's roles each member card is showing
+  // (userId → teamId). The top "Set all to" dropdown bulk-fills this for every
+  // member on the chosen team; each card can then diverge on its own.
+  const [teamByUser, setTeamByUser] = useState<Record<string, string>>({});
+  // Team Activity log modal.
+  const [activityOpen, setActivityOpen] = useState(false);
   // Inline Slack-member-id editor: which user's is open, its draft, and errors.
   const [editingSlackFor, setEditingSlackFor] = useState<string | null>(null);
   const [slackDraft, setSlackDraft] = useState("");
   const [slackSaving, setSlackSaving] = useState(false);
   const [slackError, setSlackError] = useState<string | null>(null);
+  // Whether THIS org's Slack bot is installed. Manual member-id entry only makes
+  // sense once it is (the id belongs to that workspace, and it's what we'd DM
+  // through) — until then we hide the "Set Slack ID" affordance entirely.
+  const [orgSlackConnected, setOrgSlackConnected] = useState(false);
   const [memberQuery, setMemberQuery] = useState("");
   const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
@@ -187,6 +198,16 @@ function UsersPageInner() {
   useEffect(() => {
     if (switchingOrg && users && teams && stats) setSwitchingOrg(false);
   }, [switchingOrg, users, teams, stats]);
+
+  // Track whether the selected org has Slack connected, to gate manual id entry.
+  useEffect(() => {
+    if (!adminOrgId) return;
+    setOrgSlackConnected(false);
+    fetch(`/api/slack/status?orgId=${adminOrgId}`)
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d) => setOrgSlackConnected(!!d.enabled))
+      .catch(() => setOrgSlackConnected(false));
+  }, [adminOrgId]);
 
   // Post one team's "this week's sets" to its Slack channel on demand. Full
   // team management (create/delete, members, channel id) lives on the Org page.
@@ -485,16 +506,38 @@ function UsersPageInner() {
             <InfoTooltip
               text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page (desktop only)."
             />
+            {/* All cover/swap/approval activity across the org, filterable. */}
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setActivityOpen(true)}
+            >
+              Team Activity
+            </Button>
           </div>
           <div className="w-full sm:w-64">
             <Select
-              label="Show members of"
+              label="Set all to team"
               hideLabel
               data-testid="team-filter"
               value={teamFilter}
-              onChange={(e) => setTeamFilter(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTeamFilter(v);
+                // Bulk-set every member on the chosen team to it; "all" clears
+                // each card's selection so nobody's roles are shown.
+                if (v === "all") {
+                  setTeamByUser({});
+                } else {
+                  const next: Record<string, string> = {};
+                  for (const u of users ?? []) {
+                    if (u.teams.some((t) => t.id === v)) next[u.id] = v;
+                  }
+                  setTeamByUser(next);
+                }
+              }}
             >
-              <option value="all">All members</option>
+              <option value="all">Set all to a team…</option>
               {teams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name}
@@ -571,12 +614,7 @@ function UsersPageInner() {
       </Card>
 
       <ul className="space-y-3">
-        {users
-          .filter(
-            (u) =>
-              teamFilter === "all" || u.teams.some((t) => t.id === teamFilter)
-          )
-          .map((user) => (
+        {users.map((user) => (
           <li key={user.id} id={`user-card-${user.id}`} className="scroll-mt-24">
             <Card
               className={
@@ -618,16 +656,28 @@ function UsersPageInner() {
                           )}
                         </span>
                       ) : user.slackConnected ? (
-                        <button
-                          type="button"
-                          onClick={() => startSlackEdit(user)}
-                          title="Edit Slack member ID"
-                          className="inline-flex items-center gap-0.5 text-green-600 hover:opacity-80 dark:text-green-400"
-                        >
-                          <SlackIcon className="h-4 w-4 shrink-0" />
-                          <span aria-hidden className="text-xs font-semibold">✓</span>
-                        </button>
-                      ) : (
+                        // Editable only while the org's bot is installed;
+                        // otherwise show the id as a plain read-only badge.
+                        orgSlackConnected ? (
+                          <button
+                            type="button"
+                            onClick={() => startSlackEdit(user)}
+                            title="Edit Slack member ID"
+                            className="inline-flex items-center gap-0.5 text-green-600 hover:opacity-80 dark:text-green-400"
+                          >
+                            <SlackIcon className="h-4 w-4 shrink-0" />
+                            <span aria-hidden className="text-xs font-semibold">✓</span>
+                          </button>
+                        ) : (
+                          <span
+                            title="Slack member ID"
+                            className="inline-flex items-center gap-0.5 text-green-600 dark:text-green-400"
+                          >
+                            <SlackIcon className="h-4 w-4 shrink-0" />
+                            <span aria-hidden className="text-xs font-semibold">✓</span>
+                          </span>
+                        )
+                      ) : orgSlackConnected ? (
                         <button
                           type="button"
                           onClick={() => startSlackEdit(user)}
@@ -635,19 +685,39 @@ function UsersPageInner() {
                         >
                           <SlackIcon className="h-3.5 w-3.5" /> Set Slack ID
                         </button>
+                      ) : (
+                        // Org hasn't connected Slack yet — nothing to link to,
+                        // so no manual-entry affordance is shown.
+                        <></>
                       )}
                       {user.isAdmin && <Badge tone="amber">Admin</Badge>}
                       {user.isMD && <Badge tone="blue">MD</Badge>}
                     </div>
-                    <div className="flex items-center gap-4">
-                      {/* Musical director: eligible to be a required-MD set's MD. */}
-                      <Checkbox
-                        label="MD"
-                        checked={user.isMD}
-                        onChange={(e) =>
-                          patchUser(user.id, { isMD: e.target.checked })
-                        }
-                      />
+                    <div className="flex items-center gap-3">
+                      {/* Which team's roles this card is editing — on the header
+                          row so it's the first choice you make per person. It
+                          drives the role checkboxes below; the top "Set all to"
+                          dropdown fills these in bulk. */}
+                      <div className="w-44">
+                        <Select
+                          label={`Team for ${user.name}`}
+                          hideLabel
+                          value={teamByUser[user.id] ?? ""}
+                          onChange={(e) =>
+                            setTeamByUser((prev) => ({
+                              ...prev,
+                              [user.id]: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Select a team…</option>
+                          {user.teams.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                       {/* Can't change your own admin flag (avoids lockout). */}
                       <Checkbox
                         label={
@@ -664,35 +734,53 @@ function UsersPageInner() {
                     </div>
                   </div>
 
-                  {/* Roles are per-team: only editable once a specific team is
-                      picked above, showing this person's roles ON THAT team. */}
-                  {teamFilter === "all" ? (
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      Pick a team above to set {user.name.split(" ")[0]}’s roles.
-                    </p>
-                  ) : (
-                    <div>
-                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                        Roles on this team
-                      </p>
-                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                        {ALL_INSTRUMENTS.map((inst) => {
-                          const roles =
-                            user.teams.find((t) => t.id === teamFilter)?.roles ?? [];
-                          return (
-                            <Checkbox
-                              key={inst}
-                              label={INSTRUMENT_LABELS[inst]}
-                              checked={roles.includes(inst)}
-                              onChange={() =>
-                                toggleTeamRole(user, teamFilter, inst)
-                              }
-                            />
-                          );
-                        })}
+                  {/* Roles are per-team; the header's team dropdown picks which
+                      team this shows. The top "Set all to" dropdown fills these
+                      in bulk. MD sits here (not the header) since it's a
+                      scheduling attribute, alongside the roles. */}
+                  {(() => {
+                    const selTeam = teamByUser[user.id] ?? "";
+                    const roles =
+                      user.teams.find((t) => t.id === selTeam)?.roles ?? [];
+                    return (
+                      <div>
+                        <div className="mb-2 flex flex-wrap items-center gap-3">
+                          <p className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            Team roles
+                          </p>
+                          {/* Musical director: eligible to be a required-MD
+                              set's MD. */}
+                          <Checkbox
+                            label="MD"
+                            checked={user.isMD}
+                            onChange={(e) =>
+                              patchUser(user.id, { isMD: e.target.checked })
+                            }
+                          />
+                        </div>
+                        {selTeam ? (
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                            {ALL_INSTRUMENTS.map((inst) => (
+                              <Checkbox
+                                key={inst}
+                                label={INSTRUMENT_LABELS[inst]}
+                                checked={roles.includes(inst)}
+                                onChange={() =>
+                                  toggleTeamRole(user, selTeam, inst)
+                                }
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {user.teams.length === 0
+                              ? `Add ${user.name.split(" ")[0]} to a team first.`
+                              : `Pick a team to set ${user.name.split(" ")[0]}’s roles.`}
+                          </p>
+                        )}
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Membership chips, plus an inline "+ Add to team" chip in
                       the first free slot so an admin can add this person to any
@@ -794,6 +882,13 @@ function UsersPageInner() {
         }
         onSaved={load}
         onClose={() => setOpenTeamId(null)}
+      />
+
+      <TeamActivityModal
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        orgId={adminOrgId}
+        teams={teams}
       />
     </div>
   );

@@ -72,15 +72,17 @@ const COMMON_STEPS: Step[] = [
 // Extra steps shown only to admins, covering the admin-only tabs.
 const ADMIN_STEPS: Step[] = [
   {
+    // The admin tabs are collapsed under a single "Admin" dropdown, so both
+    // admin steps spotlight that trigger (their copy names the tab inside it).
     title: "Create sets & schedules",
-    body: "The Create tab is where you add sets, roll out weekly templates, auto-generate a roster, and send availability requests.",
-    target: "/create",
+    body: "Under the Admin menu, the Create tab is where you add sets, roll out weekly templates, auto-generate a roster, and send availability requests.",
+    target: "/admin",
     href: "/create",
   },
   {
     title: "Manage your team",
-    body: "Under Team you can add members, grant or revoke admin, set the instruments people play, and organize ministry teams.",
-    target: "/users",
+    body: "Under the Admin menu, the Team tab lets you add members, grant or revoke admin, set the instruments people play, and organize ministry teams.",
+    target: "/admin",
     href: "/users",
   },
 ];

@@ -63,8 +63,11 @@ async function slackApi(
 ): Promise<Record<string, any> | null> {
   if (slackDryRun()) {
     console.log(`[slack] DRY RUN ${method}:`, JSON.stringify(body));
-    // Fake the only response field callers read back: the opened channel id.
-    return method === "conversations.open" ? { channel: { id: "C_DRY_RUN" } } : {};
+    // Fake the only response field callers read back: the channel id from
+    // opening a DM or creating a channel.
+    return method === "conversations.open" || method === "conversations.create"
+      ? { channel: { id: "C_DRY_RUN" } }
+      : {};
   }
   if (!token) return null;
   try {
@@ -123,17 +126,51 @@ export async function postDirectMessage(
   return postToChannel(token, channelId, text);
 }
 
-/** Open a group DM among several users; returns the channel id for posting. */
-export async function openGroupConversation(
+// Create a PRIVATE channel and return its id. Channel names must be lowercase
+// and unique in the workspace, so on a name clash we retry once with a short
+// random suffix. Needs the groups:write scope (added at install).
+export async function createPrivateChannel(
   token: string | null,
-  slackUserIds: string[]
+  name: string
 ): Promise<string | null> {
-  return openConversation(token, slackUserIds);
+  const suffix = Math.random().toString(36).slice(2, 6);
+  for (const candidate of [name, `${name}-${suffix}`]) {
+    const data = await slackApi(
+      "conversations.create",
+      { name: candidate, is_private: true },
+      token
+    );
+    const id = data?.channel?.id as string | undefined;
+    if (id) return id;
+  }
+  return null;
 }
 
-// MPIMs have no "name" field the way channels do — conversations.rename
-// only works on channels. The closest equivalent is the conversation topic,
-// which Slack does support setting on an mpim (requires mpim:write.topic).
+// Invite users to a channel. Best-effort: Slack rejects the whole call if any
+// user is already in the channel (re-invite) or can't be added, so a failure
+// here shouldn't stop the roster message from going out.
+export async function inviteToChannel(
+  token: string | null,
+  channelId: string,
+  slackUserIds: string[]
+): Promise<void> {
+  if (slackUserIds.length === 0) return;
+  await slackApi(
+    "conversations.invite",
+    { channel: channelId, users: slackUserIds.join(",") },
+    token
+  );
+}
+
+/** Archive a channel (used once a set's event date has passed). */
+export async function archiveChannel(
+  token: string | null,
+  channelId: string
+): Promise<boolean> {
+  return !!(await slackApi("conversations.archive", { channel: channelId }, token));
+}
+
+// The channel topic doubles as a human label: "<date>-<set name>".
 export async function setConversationTopic(
   token: string | null,
   channelId: string,
@@ -187,10 +224,20 @@ function setLabel(set: SetLike): string {
   return `${name} on ${formatDay(set.startsAt)} at ${formatTime(set.startsAt)}`;
 }
 
-// The MPIM topic doubles as its "name": "<date>-<set name>".
+// The channel topic doubles as a readable name: "<date>-<set name>".
 function setTopicName(set: SetLike): string {
   const name = set.label ?? "Worship Set";
   return `${shortDateLabel(set.startsAt)}-${name}`;
+}
+
+// A Slack channel name from a set: lowercase, only a-z/0-9/hyphen, ≤72 chars
+// (leaving room for the collision-retry suffix). e.g. "jul-12-sunday-worship".
+function channelNameForSet(set: SetLike): string {
+  return `${shortDateLabel(set.startsAt)}-${set.label ?? "worship-set"}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
 }
 
 // "Worship Leader: Alice\nVocals: Bob, Carol\n…" in scarce-first role order,
@@ -449,11 +496,41 @@ export async function notifyAvailabilityRequest(request: {
 }
 
 /**
- * Open a group DM among a set's assigned team members, name it after the set,
- * and post the team roster. Returns a small result the admin route can
- * surface to the UI. (Unlike the notify* helpers this reports failures,
- * since it's a deliberate user action rather than a fire-and-forget side
- * effect.)
+ * A cover-take or accepted swap just entered PENDING_APPROVAL. DM every admin
+ * of the set's org (with linked Slack) so they know something's waiting on the
+ * Approvals tab. Fire-and-forget; no-op without Slack.
+ */
+export async function notifyAdminsPendingApproval(
+  orgId: string,
+  info: { kind: "cover" | "swap"; role: Instrument; set: SetLike }
+): Promise<void> {
+  const token = await orgBotToken(orgId);
+  if (!token && !slackDryRun()) return;
+
+  const admins = await prisma.orgMembership.findMany({
+    where: { orgId, isAdmin: true, slackUserId: { not: null } },
+    select: { slackUserId: true },
+  });
+  if (admins.length === 0) return;
+
+  const url = appUrl("/approvals");
+  const what = info.kind === "cover" ? "cover" : "swap";
+  const text =
+    `🛎️ A ${INSTRUMENT_LABELS[info.role]} ${what} on ${setLabel(info.set)} ` +
+    `is awaiting your approval.` +
+    (url ? ` Review it here: ${url}` : "");
+
+  await Promise.all(
+    admins.map((m) => postDirectMessage(token, m.slackUserId!, text))
+  );
+}
+
+/**
+ * Create (or reuse) a set's PRIVATE Slack channel, invite its team, and post
+ * the roster. Backs both the manual "Message Team on Slack" button and the
+ * auto group-chat cron. The channel id is persisted on the set so the archive
+ * cron can find it later; groupChatCreatedAt is stamped on creation so it's
+ * only made once. Reports failures (deliberate action, not fire-and-forget).
  */
 export async function messageSetTeamOnSlack(
   setId: string
@@ -464,6 +541,7 @@ export async function messageSetTeamOnSlack(
       label: true,
       startsAt: true,
       orgId: true,
+      groupChatChannelId: true,
       assignments: {
         select: { userId: true, role: true, user: { select: { name: true } } },
       },
@@ -477,7 +555,7 @@ export async function messageSetTeamOnSlack(
   }
 
   // Per-org member ids (workspace-scoped) for everyone who should be in the
-  // chat: the set's assigned people, PLUS anyone in the org flagged
+  // channel: the set's assigned people, PLUS anyone in the org flagged
   // "alwaysInGroupChats" (e.g. a ministry lead who wants to be in every set's
   // chat, even sets they aren't on). People without a linked Slack are silently
   // excluded (slackUserId filter); duplicates are de-duped.
@@ -497,11 +575,22 @@ export async function messageSetTeamOnSlack(
     return { ok: false, error: "No one on this set has linked their Slack yet." };
   }
 
-  const channelId = await openGroupConversation(token, ids);
-  if (!channelId) return { ok: false, error: "Could not open the group chat." };
+  // Reuse the set's channel if it already has one (a re-click, or the cron
+  // after a manual create); otherwise create a fresh private channel and record
+  // it so we never make a second one and the archive cron can find it.
+  let channelId = set.groupChatChannelId;
+  if (!channelId) {
+    channelId = await createPrivateChannel(token, channelNameForSet(set));
+    if (!channelId) return { ok: false, error: "Could not create the channel." };
+    await prisma.set.update({
+      where: { id: setId },
+      data: { groupChatChannelId: channelId, groupChatCreatedAt: new Date() },
+    });
+  }
 
-  // Best-effort: some workspace configs restrict topic writes on mpims, but
-  // that shouldn't stop the roster message from going out.
+  // Best-effort: invite the team and set the topic. Slack rejects invites for
+  // people already in the channel, so neither should block the roster message.
+  await inviteToChannel(token, channelId, ids);
   await setConversationTopic(token, channelId, setTopicName(set));
 
   const text =
@@ -513,49 +602,82 @@ export async function messageSetTeamOnSlack(
     : { ok: false, error: "Could not post the message." };
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Auto group-chat cron worker. For every team with a group-chat lead time set,
- * open the Slack group chat for any of its upcoming sets that fall within the
- * lead window and haven't had one made yet, then stamp `groupChatCreatedAt` so
- * it's only made once. Best-effort and silent: a set with no linked members (or
- * an org without Slack) is skipped and left unmarked so a later daily run can
- * retry once people link — and it naturally stops once the set is in the past.
+ * Auto group-chat cron worker. For every upcoming set with a per-set lead time
+ * that's now inside its window and has no channel yet, create the channel (via
+ * messageSetTeamOnSlack, which stamps groupChatCreatedAt so it's only made
+ * once). Best-effort and silent: a set with no linked members (or an org
+ * without Slack) is left unmarked so a later daily run can retry once people
+ * link — and it naturally stops once the set is in the past.
  */
 export async function runDueGroupChats(
   now: Date = new Date()
 ): Promise<{ created: number; considered: number }> {
-  const teams = await prisma.team.findMany({
-    where: { groupChatLeadDays: { not: null } },
-    select: { id: true, groupChatLeadDays: true },
+  const candidates = await prisma.set.findMany({
+    where: {
+      groupChatLeadDays: { not: null },
+      groupChatCreatedAt: null,
+      startsAt: { gte: now },
+    },
+    select: { id: true, startsAt: true, groupChatLeadDays: true },
   });
 
   let created = 0;
   let considered = 0;
-  for (const team of teams) {
-    const lead = team.groupChatLeadDays!;
-    const windowEnd = new Date(now.getTime() + lead * 24 * 60 * 60 * 1000);
-    const due = await prisma.set.findMany({
-      where: {
-        teamId: team.id,
-        groupChatCreatedAt: null,
-        startsAt: { gte: now, lte: windowEnd },
-      },
-      select: { id: true },
-    });
-    for (const s of due) {
-      considered++;
-      const result = await messageSetTeamOnSlack(s.id);
-      if (result.ok) {
-        await prisma.set.update({
-          where: { id: s.id },
-          data: { groupChatCreatedAt: new Date() },
-        });
-        created++;
-      }
-      // Not ok (nobody linked yet, or Slack off): leave it unmarked to retry.
-    }
+  for (const s of candidates) {
+    // Only once we're within `leadDays` of the set's start.
+    const windowStart = new Date(s.startsAt.getTime() - s.groupChatLeadDays! * DAY_MS);
+    if (now < windowStart) continue;
+    considered++;
+    const result = await messageSetTeamOnSlack(s.id);
+    if (result.ok) created++;
+    // Not ok (nobody linked yet, or Slack off): messageSetTeamOnSlack didn't
+    // stamp groupChatCreatedAt, so it's retried on the next daily run.
   }
   return { created, considered };
+}
+
+/**
+ * Auto-archive cron worker. Archive the Slack channel of any set whose event
+ * date has fully passed (start before the start of today), stamping
+ * `groupChatArchivedAt` so it's only archived once. Runs on the same daily
+ * cron, so archiving lands the day after the event rather than at 11:59pm
+ * sharp — the closest a once-daily cron can get. Best-effort; a failure is
+ * left unmarked to retry next run.
+ */
+export async function archiveDueGroupChats(
+  now: Date = new Date()
+): Promise<{ archived: number; considered: number }> {
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const due = await prisma.set.findMany({
+    where: {
+      groupChatChannelId: { not: null },
+      groupChatArchivedAt: null,
+      startsAt: { lt: startOfToday },
+    },
+    select: { id: true, orgId: true, groupChatChannelId: true },
+  });
+
+  // Cache one token per org so a batch of sets in the same org reuses it.
+  const tokenByOrg = new Map<string, string | null>();
+  let archived = 0;
+  for (const s of due) {
+    if (!tokenByOrg.has(s.orgId)) {
+      tokenByOrg.set(s.orgId, await orgBotToken(s.orgId));
+    }
+    const token = tokenByOrg.get(s.orgId) ?? null;
+    if (!token && !slackDryRun()) continue;
+    if (await archiveChannel(token, s.groupChatChannelId!)) {
+      await prisma.set.update({
+        where: { id: s.id },
+        data: { groupChatArchivedAt: new Date() },
+      });
+      archived++;
+    }
+  }
+  return { archived, considered: due.length };
 }
 
 // ── Weekly team summary (posted to the team's Slack channel) ───────────────

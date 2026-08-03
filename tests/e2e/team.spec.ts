@@ -15,6 +15,8 @@ test("non-admins can't see or open the Team page", async ({ page }) => {
 
 test("admin edits a person's team roles and it persists", async ({ page }) => {
   await login(page, "admin");
+  // The admin tabs live under a hover "Admin" dropdown — reveal it first.
+  await page.getByRole("button", { name: "Admin", exact: true }).hover();
   await page.getByRole("link", { name: "Team" }).click();
   await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
 
@@ -53,49 +55,26 @@ test("admin edits a person's team roles and it persists", async ({ page }) => {
   await expect(bobStrings()).not.toBeChecked();
 });
 
-test("admin sets and clears a person's Slack member id", async ({ page }) => {
+test("Slack member id entry is gated on the org having Slack connected", async ({
+  page,
+}) => {
   await login(page, "admin");
   await page.goto("/users");
   await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
 
   const bobCard = () =>
     page.getByRole("listitem").filter({ hasText: "Bob Baker" });
-  const savePatch = () =>
-    page.waitForResponse(
-      (r) =>
-        r.url().includes("/api/admin/users/") &&
-        r.request().method() === "PATCH"
-    );
-  const slackInput = () =>
-    bobCard().getByLabel("Slack member ID for Bob Baker");
 
-  // Bob has no Slack id in the seed → his card offers "Set Slack ID".
-  await bobCard().getByRole("button", { name: /Set Slack ID/ }).click();
-  await slackInput().fill("U123TEST");
-  await Promise.all([
-    savePatch(),
-    bobCard().getByRole("button", { name: "Save" }).click(),
-  ]);
-
-  // It now shows the connected (editable) Slack mark, and it persists.
-  await expect(
-    bobCard().getByRole("button", { name: "Edit Slack member ID" })
-  ).toBeVisible();
-  await page.reload();
-  await expect(
-    bobCard().getByRole("button", { name: "Edit Slack member ID" })
-  ).toBeVisible();
-
-  // Clearing it (blank save) restores the shared seed state.
-  await bobCard().getByRole("button", { name: "Edit Slack member ID" }).click();
-  await slackInput().fill("");
-  await Promise.all([
-    savePatch(),
-    bobCard().getByRole("button", { name: "Save" }).click(),
-  ]);
+  // The seed org hasn't installed the Slack bot. A member's id belongs to a
+  // specific workspace and is only useful once that bot exists (after which we
+  // auto-resolve ids by email), so the manual-entry affordance is hidden until
+  // the org connects Slack — no "Set Slack ID" and no edit control.
   await expect(
     bobCard().getByRole("button", { name: /Set Slack ID/ })
-  ).toBeVisible();
+  ).toHaveCount(0);
+  await expect(
+    bobCard().getByRole("button", { name: "Edit Slack member ID" })
+  ).toHaveCount(0);
 });
 
 test("admin removes a person from a team via the chip's x", async ({ page }) => {
@@ -137,6 +116,19 @@ test("admin removes a person from a team via the chip's x", async ({ page }) => 
   ).toBeVisible();
 });
 
+test("admin opens the Team Activity log", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/users");
+
+  await page.getByRole("button", { name: "Team Activity" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(
+    modal.getByRole("heading", { name: "Team Activity" })
+  ).toBeVisible();
+  // The activity-type filter is present (the log itself may be empty).
+  await expect(modal.getByLabel("Activity")).toBeVisible();
+});
+
 test("admin opens the team management modal from the Teams card", async ({ page }) => {
   await login(page, "admin");
   await page.goto("/users");
@@ -157,32 +149,6 @@ test("admin opens the team management modal from the Teams card", async ({ page 
   await expect(modal).not.toBeVisible();
 });
 
-test("admin sets a team's auto group-chat lead time and it persists", async ({
-  page,
-}) => {
-  await login(page, "admin");
-  await page.goto("/users");
-
-  const openSunday = () =>
-    page.getByRole("button", { name: /Sunday Team\s*\d+ members/ }).click();
-  const savePatch = () =>
-    page.waitForResponse(
-      (r) =>
-        /\/api\/teams\/[^/]+$/.test(r.url()) && r.request().method() === "PATCH"
-    );
-
-  await openSunday();
-  const leadSelect = () =>
-    page.getByRole("dialog").getByLabel("Create the chat");
-  await expect(leadSelect()).toHaveValue(""); // off by default
-
-  await Promise.all([savePatch(), leadSelect().selectOption("3")]);
-
-  // Persisted: reload, reopen, still "3 days before".
-  await page.reload();
-  await openSunday();
-  await expect(leadSelect()).toHaveValue("3");
-
-  // Restore the shared seed state.
-  await Promise.all([savePatch(), leadSelect().selectOption("")]);
-});
+// Note: per-set auto group chats are configured on the set/template now (see the
+// set detail modal and the recurring-set form), not on the team, so there's no
+// team-level lead-time control here anymore.

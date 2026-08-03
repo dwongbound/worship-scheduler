@@ -3,7 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { validateSlotCapacities } from "@/lib/constants";
+import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 
 export async function GET(req: NextRequest) {
   const admin = await requireOrgAdmin(req);
@@ -32,6 +32,7 @@ export async function POST(req: NextRequest) {
     durationMinutes,
     slotCapacities,
     requiresMD,
+    groupChatLeadDays,
     teamId,
   } = await req.json();
   if (
@@ -71,6 +72,7 @@ export async function POST(req: NextRequest) {
       startMinute,
       durationMinutes,
       requiresMD: Boolean(requiresMD),
+      groupChatLeadDays: parseGroupChatLeadDays(groupChatLeadDays),
       slotCapacities: capacities ?? undefined,
       teamId,
       orgId: admin.orgId,

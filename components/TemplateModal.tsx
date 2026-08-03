@@ -6,7 +6,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
-import Select from "./common/Select";
+import Checkbox from "./common/Checkbox";
 import LoadingDots from "./common/LoadingDots";
 import SetFormFields, { SetFormState, emptySetForm } from "./SetFormFields";
 import { useOrgs } from "./OrgProvider";
@@ -25,7 +25,9 @@ export default function TemplateModal({
   onCreated: () => void | Promise<void>;
 }) {
   const { adminOrgId } = useOrgs();
-  const [dayOfWeek, setDayOfWeek] = useState(0); // Sunday
+  // Days this weekly time recurs on (0 = Sun … 6 = Sat). One template row is
+  // created per checked day, so an admin can add e.g. Sun + Wed in one go.
+  const [days, setDays] = useState<number[]>([]);
   const [form, setForm] = useState<SetFormState>(emptySetForm);
   const [busy, setBusy] = useState(false);
   const [teams, setTeams] = useState<ApiTeam[]>([]);
@@ -38,7 +40,7 @@ export default function TemplateModal({
   // fetch lands and wipe whatever the admin already typed.
   useEffect(() => {
     if (!open || !adminOrgId) return;
-    setDayOfWeek(0);
+    setDays([]);
     const cached = teamsOrg === adminOrgId;
     setForm({ ...emptySetForm(), teamId: cached ? teams[0]?.id ?? "" : "" });
     if (!cached) {
@@ -53,24 +55,37 @@ export default function TemplateModal({
 
   if (!open) return null;
 
+  function toggleDay(day: number) {
+    setDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+    );
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (days.length === 0) return;
     setBusy(true);
     try {
-      await fetch("/api/admin/templates", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
-        body: JSON.stringify({
-          label: form.label,
-          dayOfWeek,
-          startMinute: timeStringToMinutes(form.startTime),
-          durationMinutes: form.duration,
-          requiresMD: form.requiresMD,
-          // null capacities → the template uses the global default team shape.
-          slotCapacities: form.capacities ?? undefined,
-          teamId: form.teamId,
-        }),
-      });
+      // One template row per checked day — the rest of the body is shared.
+      const shared = {
+        label: form.label,
+        startMinute: timeStringToMinutes(form.startTime),
+        durationMinutes: form.duration,
+        requiresMD: form.requiresMD,
+        groupChatLeadDays: form.groupChatLeadDays,
+        // null capacities → the template uses the global default team shape.
+        slotCapacities: form.capacities ?? undefined,
+        teamId: form.teamId,
+      };
+      await Promise.all(
+        days.map((dayOfWeek) =>
+          fetch("/api/admin/templates", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
+            body: JSON.stringify({ ...shared, dayOfWeek }),
+          })
+        )
+      );
       await onCreated();
       onClose();
     } finally {
@@ -88,18 +103,23 @@ export default function TemplateModal({
           disabled={busy}
           labelRequired
           scheduleField={
-            <Select
-              label="Day of week"
-              value={dayOfWeek}
-              onChange={(e) => setDayOfWeek(Number(e.target.value))}
-              disabled={busy}
-            >
-              {DAY_LABELS.map((d, i) => (
-                <option key={i} value={i}>
-                  Every {d}
-                </option>
-              ))}
-            </Select>
+            <fieldset disabled={busy}>
+              <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                Days of week
+              </legend>
+              {/* Multi-select: a template is created for each checked day. */}
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {DAY_LABELS.map((d, i) => (
+                  <Checkbox
+                    key={i}
+                    label={d}
+                    checked={days.includes(i)}
+                    onChange={() => toggleDay(i)}
+                    disabled={busy}
+                  />
+                ))}
+              </div>
+            </fieldset>
           }
         />
 

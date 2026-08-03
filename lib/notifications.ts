@@ -85,6 +85,28 @@ export async function availabilityStatus(userId: string) {
   };
 }
 
+// How many cover-takes + targeted swaps in this org are awaiting an admin's
+// approval — the Approvals tab's reminder dot (admins only; the caller checks
+// admin rights). Mirrors the two lists GET /api/admin/approvals returns.
+export async function pendingApprovalCount(orgId: string): Promise<number> {
+  const [swaps, covers] = await Promise.all([
+    prisma.swapProposal.count({
+      where: {
+        status: "PENDING_APPROVAL",
+        toAssignment: { set: { orgId } },
+      },
+    }),
+    prisma.assignment.count({
+      where: {
+        status: "PENDING_APPROVAL",
+        pendingCoverFromUserId: { not: null },
+        set: { orgId },
+      },
+    }),
+  ]);
+  return swaps + covers;
+}
+
 // The org's members who aren't on any team in THAT org yet — the Team tab's
 // reminder dot + banner (admins only; the caller checks admin rights). Roles are
 // per-team now, so anyone off every team in this org can't be scheduled at all;

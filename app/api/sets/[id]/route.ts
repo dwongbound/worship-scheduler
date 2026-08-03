@@ -10,6 +10,7 @@ import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { isValidMD } from "@/lib/md";
+import { parseGroupChatLeadDays } from "@/lib/constants";
 
 export async function PATCH(
   req: NextRequest,
@@ -26,12 +27,15 @@ export async function PATCH(
   const editingPrivate = "isPrivate" in body;
   const editingChoir = "choirEnabled" in body;
   const editingRequiresMD = "requiresMD" in body;
-  // Only a plain notes edit (not MD/privacy/choir/requiresMD) needs a notes string.
+  const editingGroupChatLead = "groupChatLeadDays" in body;
+  // Only a plain notes edit (not MD/privacy/choir/requiresMD/group-chat) needs a
+  // notes string.
   if (
     !editingMD &&
     !editingPrivate &&
     !editingChoir &&
     !editingRequiresMD &&
+    !editingGroupChatLead &&
     typeof body.notes !== "string"
   ) {
     return NextResponse.json({ error: "notes is required" }, { status: 400 });
@@ -54,7 +58,8 @@ export async function PATCH(
     !editingMD &&
     !editingPrivate &&
     !editingChoir &&
-    !editingRequiresMD
+    !editingRequiresMD &&
+    !editingGroupChatLead
   ) {
     const leaderSlot = await prisma.assignment.findFirst({
       where: { setId: id, userId: user.id, role: "WORSHIP_LEADER" },
@@ -75,6 +80,22 @@ export async function PATCH(
     const updated = await prisma.set.update({
       where: { id },
       data: { requiresMD: body.requiresMD },
+    });
+    return NextResponse.json(updated);
+  }
+
+  if (editingGroupChatLead) {
+    // null = off; a number is normalized to a valid 1–30 day count (out-of-range
+    // → off). Admin-only, guarded above.
+    if (body.groupChatLeadDays !== null && typeof body.groupChatLeadDays !== "number") {
+      return NextResponse.json(
+        { error: "groupChatLeadDays must be a number or null" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { groupChatLeadDays: parseGroupChatLeadDays(body.groupChatLeadDays) },
     });
     return NextResponse.json(updated);
   }

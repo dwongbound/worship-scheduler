@@ -95,16 +95,39 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
   await expect(incoming).toBeVisible();
   await incoming.getByRole("button", { name: "Accept" }).click();
 
-  // omar now holds a confirmed Sunday Morning Electric Guitar slot (erin's old
-  // one). The proposal card is gone.
+  // The slots switch immediately, but as PENDING_APPROVAL — an admin still has
+  // to sign off before it's final. The proposal card is gone from omar's view.
   const omarCard = page
     .locator("li")
     .filter({ hasText: "Sunday Morning — Electric Guitar" })
     .first();
-  await expect(omarCard.getByText("Confirmed")).toBeVisible();
+  await expect(omarCard.getByText("Pending approval")).toBeVisible();
   await expect(page.getByText("Erin Evans")).toHaveCount(0);
 
-  // ── Stats moved: erin requested one swap, omar took (accepted) one. ──────
+  // ── An admin approves the swap → both slots finalize to Confirmed. ───────
+  await login(page, "admin");
+  await page.goto("/approvals");
+  const swapItem = page
+    .locator("li")
+    .filter({ hasText: "Swap" })
+    .filter({ hasText: "Omar Osei" })
+    .first();
+  await expect(swapItem).toBeVisible();
+  await swapItem.getByRole("button", { name: "Approve" }).click();
+  await expect(swapItem).not.toBeVisible();
+
+  await login(page, "omar");
+  await page.goto("/swaps");
+  await expect(
+    page
+      .locator("li")
+      .filter({ hasText: "Sunday Morning — Electric Guitar" })
+      .first()
+      .getByText("Confirmed")
+  ).toBeVisible();
+
+  // ── Stats moved (only once the swap was APPROVED): erin requested one swap,
+  //    omar took (accepted) one. ──────────────────────────────────────────
   await login(page, "admin");
   expect((await statsFor(page, "erin")).swapsRequested).toBe(erinBefore + 1);
   expect((await statsFor(page, "omar")).swapsTaken).toBe(omarBefore + 1);

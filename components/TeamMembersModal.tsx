@@ -124,17 +124,6 @@ export default function TeamMembersModal({
     loadReminders(t);
   }
 
-  // Set (or clear, with null) the team's auto group-chat lead time, then let
-  // the parent refetch so the select reflects the saved value.
-  async function saveGroupChatLead(t: ApiTeam, days: number | null) {
-    await fetch(`/api/teams/${t.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ groupChatLeadDays: days }),
-    });
-    onSaved();
-  }
-
   async function saveChannel(t: ApiTeam) {
     setSlackBusy(true);
     setSlackMsg(null);
@@ -324,36 +313,10 @@ export default function TeamMembersModal({
         </div>
       </div>
 
-      {/* Auto group chat: open a Slack group DM of a set's members some days
-          before it. Best-effort — people without a linked Slack are skipped. */}
-      <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
-        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          Auto group chat
-        </p>
-        <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
-          Automatically start a Slack group chat with each set&rsquo;s members
-          ahead of time. People who haven&rsquo;t linked Slack are skipped.
-        </p>
-        <div className="w-48">
-          <Select
-            label="Create the chat"
-            value={team.groupChatLeadDays ?? ""}
-            onChange={(e) =>
-              saveGroupChatLead(
-                team,
-                e.target.value === "" ? null : Number(e.target.value)
-              )
-            }
-          >
-            <option value="">Off</option>
-            <option value="1">1 day before</option>
-            <option value="2">2 days before</option>
-            <option value="3">3 days before</option>
-            <option value="5">5 days before</option>
-            <option value="7">7 days before</option>
-          </Select>
-        </div>
-      </div>
+      {/* Auto group chats are configured PER SET / template now (each set's
+          detail modal and the recurring-set form), not on the team — a set's
+          chat is its own private channel. The team's standing summary channel
+          below is a separate thing. */}
 
       {/* Weekly Slack reminders for THIS team (moved here from Org settings). */}
       <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">

@@ -7,6 +7,8 @@ test("admin flags a member as a musical director and it persists", async ({
   page,
 }) => {
   await login(page, "admin");
+  // The admin tabs live under a hover "Admin" dropdown — reveal it first.
+  await page.getByRole("button", { name: "Admin", exact: true }).hover();
   await page.getByRole("link", { name: "Team" }).click();
   await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
 

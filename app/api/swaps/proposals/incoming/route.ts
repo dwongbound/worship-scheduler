@@ -51,6 +51,7 @@ export async function GET(req: NextRequest) {
     id: p.id,
     role: p.toAssignment.role,
     requestedBy: p.requestedBy,
+    reason: p.reason, // the proposer's optional note
     giveUp: p.toAssignment.set, // my current set
     receive: p.fromAssignment.set, // their set I'd take
   }));

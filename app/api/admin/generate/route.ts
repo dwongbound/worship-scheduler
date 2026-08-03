@@ -159,6 +159,7 @@ export async function POST(req: NextRequest) {
       durationMinutes: number;
       capacities: SlotCapacityMap | null;
       requiresMD: boolean;
+      groupChatLeadDays: number | null;
       teamId: string | null;
       existing: boolean;
     }
@@ -197,6 +198,7 @@ export async function POST(req: NextRequest) {
         durationMinutes: template.durationMinutes,
         capacities: template.slotCapacities as SlotCapacityMap | null,
         requiresMD: template.requiresMD,
+        groupChatLeadDays: template.groupChatLeadDays,
         teamId: template.teamId,
         existing: existingByKey.has(matchKey),
       });
@@ -259,6 +261,7 @@ export async function POST(req: NextRequest) {
             )
           : null,
         slotCapacities: s.capacities,
+        groupChatLeadDays: s.groupChatLeadDays,
         teamId: s.teamId,
         existing: s.existing,
         assignments,

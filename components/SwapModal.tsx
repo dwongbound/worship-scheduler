@@ -29,6 +29,8 @@ export default function SwapModal({
   const [loading, setLoading] = useState(false);
   const [proposingId, setProposingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Optional note sent with the proposal (shown to the recipient).
+  const [reason, setReason] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   // Guard against overlapping page fetches (scroll can fire rapidly).
   const loadingRef = useRef(false);
@@ -62,6 +64,7 @@ export default function SwapModal({
     setItems([]);
     setHasMore(true);
     setError(null);
+    setReason("");
     if (assignmentId) {
       loadingRef.current = false;
       loadMore();
@@ -88,6 +91,7 @@ export default function SwapModal({
         body: JSON.stringify({
           fromAssignmentId: assignment.id,
           toAssignmentId: candidate.toAssignmentId,
+          reason,
         }),
       });
       if (!res.ok) {
@@ -121,6 +125,16 @@ export default function SwapModal({
         Pick a set to trade into. They&apos;ll take your set and you&apos;ll take
         theirs once they accept.
       </p>
+
+      {/* Optional note the recipient sees with the proposal. */}
+      <textarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Reason (optional) — e.g. away this weekend"
+        rows={2}
+        aria-label="Reason for the swap (optional)"
+        className="mb-3 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-800"
+      />
 
       {error && (
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">

@@ -49,6 +49,8 @@ test("admin can generate for an availability request's date range", async ({
 
 test("admin can add a weekly template and generate a schedule", async ({ page }) => {
   await login(page, "admin");
+  // The admin tabs live under a hover "Admin" dropdown — reveal it first.
+  await page.getByRole("button", { name: "Admin", exact: true }).hover();
   await page.getByRole("link", { name: "Create" }).click();
   await expect(page.getByRole("heading", { name: "Create Sets" })).toBeVisible();
 

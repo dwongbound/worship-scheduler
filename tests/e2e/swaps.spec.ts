@@ -17,6 +17,11 @@ test("bob requests a swap on his Sunday set", async ({ page }) => {
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "Request cover" }).click();
 
+  // A modal asks for an optional reason — leave a note, then confirm.
+  const modal = page.getByRole("dialog");
+  await modal.getByLabel("Reason for cover (optional)").fill("Out of town this week");
+  await modal.getByRole("button", { name: "Request cover" }).click();
+
   await expect(card.getByText("Requesting cover")).toBeVisible();
 });
 
@@ -32,9 +37,13 @@ test("kate sees the red dot and the open swap request", async ({ page }) => {
     .filter({ hasText: "Sunday Morning — Drums" })
     .filter({ hasText: "requested by Bob Baker" });
   await expect(request).toBeVisible();
+  // Bob's cover note rides along with the open request.
+  await expect(request.getByText("Out of town this week")).toBeVisible();
 });
 
-test("kate takes the swap and the set becomes hers (confirmed)", async ({ page }) => {
+test("kate takes the cover; it awaits admin approval, then an admin approves it", async ({
+  page,
+}) => {
   await login(page, "kate");
   await page.goto("/swaps");
 
@@ -44,18 +53,37 @@ test("kate takes the swap and the set becomes hers (confirmed)", async ({ page }
     .getByRole("button", { name: "Take this set" })
     .click();
 
-  // Taking a cover is itself the commitment, so it lands already confirmed —
-  // no separate confirm step needed. Taking triggers a POST + a full refetch,
-  // which can run past the default 5s when the suite hammers the db in parallel,
-  // so give this first post-take assertion extra headroom.
+  // Taking now hands the slot to kate but as PENDING_APPROVAL — an admin still
+  // has to sign off. It drops off the open list immediately.
   const myCard = page
     .locator("li")
     .filter({ hasText: "Sunday Morning — Drums" })
     .first();
-  await expect(myCard.getByText("Confirmed")).toBeVisible({ timeout: 15_000 });
-
-  // And bob's request is gone from the open list.
+  await expect(myCard.getByText("Pending approval")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("requested by Bob Baker")).not.toBeVisible();
+
+  // An admin approves it from the Approvals tab → it finalizes to Confirmed.
+  await login(page, "admin");
+  await page.goto("/approvals");
+  const item = page
+    .locator("li")
+    .filter({ hasText: "Sunday Morning" })
+    .filter({ hasText: "Kate Kim" })
+    .first();
+  await expect(item).toBeVisible();
+  await item.getByRole("button", { name: "Approve" }).click();
+  await expect(item).not.toBeVisible();
+
+  // Kate's slot is now confirmed.
+  await login(page, "kate");
+  await page.goto("/swaps");
+  await expect(
+    page
+      .locator("li")
+      .filter({ hasText: "Sunday Morning — Drums" })
+      .first()
+      .getByText("Confirmed")
+  ).toBeVisible();
 });
 
 test("kate confirms all pending sets at once", async ({ page }) => {
@@ -119,11 +147,39 @@ test("a teammate can take the team-scoped cover", async ({ page }) => {
     .getByRole("button", { name: "Take this set" })
     .click();
 
-  // Lands already confirmed under jack, and drops off the open list.
+  // Lands under jack as PENDING_APPROVAL (awaiting an admin), and drops off the
+  // open list.
   const mine = page
     .locator("li")
     .filter({ hasText: "Prayer Cover Test" })
     .first();
-  await expect(mine.getByText("Confirmed")).toBeVisible();
+  await expect(mine.getByText("Pending approval")).toBeVisible();
   await expect(page.getByText("requested by Ivy Ito")).not.toBeVisible();
+});
+
+test("an admin rejects the cover-take and it re-opens for others", async ({
+  page,
+}) => {
+  // jack's take of "Prayer Cover Test" (previous test) is pending approval.
+  await login(page, "admin");
+  await page.goto("/approvals");
+  const item = page
+    .locator("li")
+    .filter({ hasText: "Prayer Cover Test" })
+    .filter({ hasText: "Jack Jones" })
+    .first();
+  await expect(item).toBeVisible();
+  await item.getByRole("button", { name: "Reject" }).click();
+  await expect(item).not.toBeVisible();
+
+  // Reject re-opens the cover (back to the original owner as SWAP_REQUESTED),
+  // so jack — a Prayer Room keys player — sees it as takeable again.
+  await login(page, "jack");
+  await page.goto("/swaps");
+  await expect(
+    page
+      .locator("li")
+      .filter({ hasText: "Prayer Cover Test" })
+      .filter({ hasText: "requested by Ivy Ito" })
+  ).toBeVisible();
 });

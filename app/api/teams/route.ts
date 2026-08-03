@@ -25,7 +25,6 @@ export async function GET(req: NextRequest) {
       name: true,
       orgId: true,
       slackChannelId: true,
-      groupChatLeadDays: true,
     },
     orderBy: { createdAt: "asc" },
   });

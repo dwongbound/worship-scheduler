@@ -79,13 +79,15 @@ test("Team tab scopes members and teams to one org with no cross-org leakage", a
 
   // Default admin org = the oldest one paul administers (org 1): the whole
   // congregation is listed.
-  await expect(page.getByText("Bob Baker")).toBeVisible();
+  // exact:true — each member card has an sr-only "Team for <name>" select label
+  // that a substring match would also catch.
+  await expect(page.getByText("Bob Baker", { exact: true })).toBeVisible();
 
   // Switch the admin org to org 2: only its four members remain, only its
   // team exists, and nothing hints at org 1.
   await pickOrg(page, orgName(1));
-  await expect(page.getByText("Grace Gao")).toBeVisible();
-  await expect(page.getByText("Bob Baker")).toHaveCount(0);
+  await expect(page.getByText("Grace Gao", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bob Baker", { exact: true })).toHaveCount(0);
   // The Teams card lists this org's team as a button (name + member count).
   // (getByText would also match the hidden <option> in the team filter select.)
   await expect(
