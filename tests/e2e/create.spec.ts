@@ -58,12 +58,18 @@ test("admin can add a weekly template and generate a schedule", async ({ page })
   await page.getByRole("button", { name: "Add weekly set time" }).click();
   const modal = page.getByRole("dialog");
   await modal.getByLabel("Label").fill("Sunday Service");
-  await modal.getByLabel("Day of week").selectOption("0");
+  // A template is created for each checked day and must name a team (its
+  // members are who the generated sets can be staffed from).
+  await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
+  // Target the day by role: getByLabel("Sunday") also matches the Team select,
+  // whose accessible name concatenates its option text ("…Sunday Team…").
+  await modal.getByRole("checkbox", { name: "Sunday" }).check();
   await modal.getByLabel("Start time").fill("09:00");
   await modal.getByLabel("Duration").selectOption("90"); // 1.5 Hrs
   await modal.getByRole("button", { name: "Add template" }).click();
-  // The new template shows as a table row: Name | "Sunday · 9:00 AM".
-  await expect(page.getByText(/Sunday · 9:00 AM/)).toBeVisible();
+  // The new template shows as a table row: Name | "Sundays · 9:00 AM" (the day
+  // is pluralized now that a template can cover several days).
+  await expect(page.getByText(/Sundays · 9:00 AM/)).toBeVisible();
 
   // Run the scheduler for 4 weeks — this stages a preview, it doesn't save yet.
   // (Target the number input by role: "Weeks ahead" also appears as an option
@@ -125,7 +131,8 @@ test("admin can set a custom team shape on a template", async ({ page }) => {
   await page.getByRole("button", { name: "Add weekly set time" }).click();
   const modal = page.getByRole("dialog");
   await modal.getByLabel("Label").fill("Tuesday Morning");
-  await modal.getByLabel("Day of week").selectOption("2"); // Tuesday
+  await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
+  await modal.getByRole("checkbox", { name: "Tuesday" }).check();
   await modal.getByLabel("Start time").fill("09:00");
 
   // Custom shape: 3 electric guitars, no acoustic guitar (opt into the editor).

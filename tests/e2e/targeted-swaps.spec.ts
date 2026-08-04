@@ -78,7 +78,13 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
   await expect(
     modal.getByRole("heading", { name: "Swap this set" })
   ).toBeVisible();
-  const omarRow = modal.locator("div.rounded-lg").filter({ hasText: "Omar Osei" });
+  // omar's Sunday Morning set specifically — other suite tests (the generate
+  // flow) can seat omar on Electric Guitar in extra Thursday Rehearsal sets,
+  // which would also match on his name alone, so pin the set label too.
+  const omarRow = modal
+    .locator("div.rounded-lg")
+    .filter({ hasText: "Sunday Morning" })
+    .filter({ hasText: "Omar Osei" });
   await expect(omarRow).toBeVisible();
   await omarRow.getByRole("button", { name: "Request swap" }).click();
 
