@@ -10,8 +10,11 @@ import crypto from "crypto";
 // Note: users:read.email is only granted alongside users:read — requesting it
 // without users:read makes Slack reject the whole install ("Invalid permissions
 // requested"). We call users.lookupByEmail, which needs both.
+// groups:write lets the bot create/invite/topic/archive PRIVATE channels (the
+// per-set group chats). im:write stays for the notify* DMs. Changing this list
+// requires each org to re-run the install OAuth to re-consent.
 export const SLACK_BOT_SCOPES =
-  "chat:write,im:write,mpim:write,mpim:write.topic,users:read,users:read.email";
+  "chat:write,im:write,groups:write,users:read,users:read.email";
 export const SLACK_USER_SCOPES = "openid,email,profile";
 
 export type SlackOAuthState = {

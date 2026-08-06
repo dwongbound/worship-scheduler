@@ -52,6 +52,9 @@ enum AssignmentStatus {
   CONFIRMED
   SWAP_REQUESTED
   PENDING_SWAP
+  // A cover/swap the recipient accepted or took — the slot already shows the
+  // new person, but it's awaiting an admin's approval before it's final.
+  PENDING_APPROVAL
 }
 
 enum UnavailabilityType {
@@ -77,6 +80,12 @@ enum SetHistoryEventType {
   SWAP_REQUESTED
   SWAP_CANCELED
   SWAP_TAKEN
+  // A targeted swap proposed, and (once the recipient accepts) awaiting approval.
+  SWAP_PROPOSED
+  SWAP_ACCEPTED
+  // Admin decision on a pending cover/swap.
+  APPROVED
+  REJECTED
 }
 
 // An organization — the highest-level tenant boundary (e.g. one church).
@@ -153,11 +162,8 @@ model Team {
 
   // Slack channel (C...) the bot posts this team's set summaries to. The bot
   // must be invited to the channel; null = Slack summaries off for this team.
+  // (Per-set auto group chats are configured on the Set/SetTemplate, not here.)
   slackChannelId String?
-
-  // Auto-create a Slack group chat for each of this team's upcoming sets this
-  // many days before it starts (the daily cron does it). Null = off.
-  groupChatLeadDays Int?
 
   members   TeamMember[]
   // DEPRECATED: old role-less membership — see User.teams. Dropped after backfill.
@@ -285,9 +291,23 @@ model Set {
   // this set (the choir section is off and "Auto schedule" skips choir).
   choirEnabled Boolean @default(false)
 
-  // When the auto group-chat cron created this set's Slack group chat, so it's
-  // only made once. Null = not created yet (or the team has the feature off).
+  // Auto-create this set's private Slack channel this many days before it
+  // starts (the daily cron does it). Null = off. Copied from the SetTemplate at
+  // generate time; editable per set. Distinct from Team.slackChannelId (the
+  // team's standing channel for weekly summaries) — this is a per-set chat.
+  groupChatLeadDays Int?
+
+  // When the cron created this set's Slack channel, so it's only made once.
+  // Null = not created yet (or the feature is off for this set).
   groupChatCreatedAt DateTime?
+
+  // The private Slack channel (C…) created for this set, so the archive cron can
+  // find it after the event. Null until the channel is created.
+  groupChatChannelId String?
+
+  // When the cron archived this set's channel (once the event date passed), so
+  // it's only archived once. Null = still open (or never had a channel).
+  groupChatArchivedAt DateTime?
 
   // The one designated MD for this set. Always someone assigned in an
   // MD-capable role (keys/electric/bass) and never the worship leader — see
@@ -329,6 +349,16 @@ model Assignment {
   role   Instrument
   status AssignmentStatus @default(PENDING)
 
+  // Optional note the owner leaves when requesting cover (status
+  // SWAP_REQUESTED) — shown to people who could take the set. Cleared when the
+  // request is cancelled/confirmed/taken.
+  swapReason String?
+
+  // While a cover-take is PENDING_APPROVAL, the slot already shows the taker;
+  // this holds the original owner so an admin REJECT can re-open the cover to
+  // them. Null except during that window. (No FK — it's a transient pointer.)
+  pendingCoverFromUserId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -365,6 +395,9 @@ model SwapProposal {
   recipient     User   @relation("SwapRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
   recipientId   String
 
+  // Optional note the proposer leaves — shown to the recipient with the trade.
+  reason String?
+
   status SwapProposalStatus @default(PENDING)
 
   // Captured at propose-time so a reject restores each side exactly.
@@ -383,6 +416,8 @@ model SwapProposal {
 
 enum SwapProposalStatus {
   PENDING
+  // The recipient accepted; now awaiting an admin's approval before it's final.
+  PENDING_APPROVAL
   ACCEPTED
   REJECTED
   CANCELED
@@ -462,6 +497,10 @@ model SetTemplate {
   // The team shape this template's sets should have — see Set.slotCapacities.
   // Null = use the global SLOT_CAPACITIES default.
   slotCapacities Json?
+
+  // Sets expanded from this template inherit this per-set auto group-chat lead
+  // time (see Set.groupChatLeadDays). Null = off for the generated sets.
+  groupChatLeadDays Int?
 
   // The org this template (and its expanded sets) belongs to.
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)

@@ -51,6 +51,9 @@ export default function Navbar() {
     { id: string; name: string; username: string }[]
   >([]);
   const [teamlessBannerDismissed, setTeamlessBannerDismissed] = useState(false);
+  // Admins only: pending cover/swap approvals in the selected admin org →
+  // the Approvals tab's reminder dot.
+  const [approvalCount, setApprovalCount] = useState(0);
   // Href of the tab just clicked, so it highlights immediately instead of
   // waiting for `pathname` to update after the new page mounts.
   const [pendingHref, setPendingHref] = useState<string | null>(null);
@@ -153,6 +156,7 @@ export default function Navbar() {
       setAvailStatus(data.availability);
       setNeedsRoles(data.needsRoles);
       setTeamlessUsers(data.teamless);
+      setApprovalCount(data.approvalCount);
     } catch {
       // network hiccup — keep the old values
     }
@@ -247,6 +251,14 @@ export default function Navbar() {
             dot: teamlessUsers.length > 0,
             dotTestId: "team-dot",
           },
+          {
+            href: "/approvals",
+            label: "Approvals",
+            icon: CHECK_ICON,
+            admin: true,
+            dot: approvalCount > 0,
+            dotTestId: "approval-dot",
+          },
         ]
       : []),
   ];
@@ -269,6 +281,13 @@ export default function Navbar() {
       beginNavigation();
     }
   };
+
+  // Admin tabs are collapsed into a single hover "Admin" dropdown on the
+  // desktop strip. The trigger reads as active when any admin page is open, and
+  // shows a red dot if any of its tabs (Team/Approvals) has one.
+  const adminTabs = tabs.filter((t) => "admin" in t && t.admin === true);
+  const adminGroupActive = adminTabs.some((t) => isActive(t.href));
+  const adminHasDot = adminTabs.some((t) => "dot" in t && t.dot);
 
   // Feed the swipe handler the current tab order, active tab, and a navigate
   // fn (same optimistic highlight + loader a tab tap gets, then a real push).
@@ -295,25 +314,28 @@ export default function Navbar() {
           <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
             <Logo className="h-9 w-9" />
           </Link>
-          {/* Tab strip — hidden on phones, where the floating bottom bar
-              (below) takes over. `overflow-x-auto` guards awkward mid-size
-              widths, but setting overflow-x also makes the browser clip
-              overflow-y, which would cut off the notification dots that stick
-              out past each tab's top-right corner. `p-2 -m-2` pads all four
+          {/* Desktop tab area — hidden on phones, where the floating bottom bar
+              (below) takes over. The Admin dropdown sits OUTSIDE the scrolling
+              strip: `overflow-x-auto` there forces overflow-y to clip too, which
+              would cut off the dropdown panel dropping below the bar. */}
+          <div className="hidden items-center gap-1 sm:flex">
+          {/* Main tabs strip — `overflow-x-auto` guards awkward mid-size widths.
+              Clipping overflow-y would cut off the notification dots that stick
+              out past each tab's top-right corner, so `p-2 -m-2` pads all four
               sides inside the clip box (room for the dots) and cancels it with a
-              matching negative margin, so the layout is unchanged. */}
-          <div className="hidden gap-1 overflow-x-auto p-2 -m-2 sm:flex">
+              matching negative margin, leaving the layout unchanged. */}
+          <div className="flex gap-1 overflow-x-auto p-2 -m-2">
             {tabs.map((tab, i) => {
-            const isAdminTab = "admin" in tab && tab.admin === true;
+            // Admin tabs render inside the "Admin" dropdown below, not inline.
+            if ("admin" in tab && tab.admin === true) return null;
             return (
               <Link
                 key={tab.href}
                 href={tab.href}
                 data-tour={tab.href}
                 onClick={() => handleTabClick(tab.href)}
-                className={tabClassName(tabActive(i, tab.href), isAdminTab)}
+                className={tabClassName(tabActive(i, tab.href), false)}
               >
-                {isAdminTab && <ShieldIcon />}
                 {tab.label}
                 {"dot" in tab && tab.dot && (
                   // The "something new" red dot.
@@ -325,6 +347,67 @@ export default function Navbar() {
               </Link>
             );
           })}
+          </div>
+
+            {/* Admin dropdown: collapses the amber admin tabs into one "Admin"
+                trigger that reveals them on hover (or keyboard focus). The
+                `group` + `group-hover` CSS drives both the reveal and the
+                chevron flip. `pt-2` on the panel bridges the gap to the trigger
+                so the pointer can travel into the menu without dropping hover. */}
+            {adminTabs.length > 0 && (
+              <div className="group relative">
+                <button
+                  type="button"
+                  data-tour="/admin"
+                  aria-haspopup="menu"
+                  // The menu is hover-driven; a mouse click on the trigger
+                  // shouldn't focus it, since group-focus-within would then
+                  // latch the panel open after the pointer leaves. Preventing
+                  // the mousedown default keeps focus off on click while still
+                  // allowing keyboard Tab focus to reveal the menu.
+                  onMouseDown={(e) => e.preventDefault()}
+                  className={adminTriggerClassName(adminGroupActive)}
+                >
+                  <ShieldIcon />
+                  Admin
+                  {adminHasDot && (
+                    <span
+                      data-testid="admin-dot"
+                      className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500"
+                    />
+                  )}
+                  <ChevronIcon className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-180 group-focus-within:rotate-180" />
+                </button>
+                <div className="invisible absolute left-0 top-full z-40 pt-2 opacity-0 transition-opacity duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
+                  <div className="flex min-w-[11rem] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                    {adminTabs.map((tab) => (
+                      <Link
+                        key={tab.href}
+                        href={tab.href}
+                        data-tour={tab.href}
+                        onClick={(e) => {
+                          handleTabClick(tab.href);
+                          // Drop focus so the group-focus-within reveal
+                          // releases and the menu closes on navigation
+                          // instead of staying latched open.
+                          e.currentTarget.blur();
+                        }}
+                        className={adminMenuItemClassName(isActive(tab.href))}
+                      >
+                        <TabIcon d={tab.icon} className="h-4 w-4 shrink-0" />
+                        {tab.label}
+                        {"dot" in tab && tab.dot && (
+                          <span
+                            data-testid={"dotTestId" in tab ? tab.dotTestId : undefined}
+                            className="ml-auto h-2 w-2 rounded-full bg-red-500"
+                          />
+                        )}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -553,6 +636,28 @@ function tabClassName(active: boolean, admin: boolean): string {
   return `${base} text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700`;
 }
 
+// The collapsed "Admin" dropdown trigger. Mirrors an admin tab's amber accent;
+// reads as active whenever the current route is one of the admin pages.
+function adminTriggerClassName(active: boolean): string {
+  const base =
+    "relative flex shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none";
+  if (active) {
+    return `${base} bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300`;
+  }
+  return `${base} text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/30`;
+}
+
+// One row inside the Admin dropdown: icon + label, with the active page's row
+// filled amber the same way an active tab is.
+function adminMenuItemClassName(active: boolean): string {
+  const base =
+    "flex items-center gap-2 px-3 py-2 text-sm font-medium transition-colors focus:outline-none";
+  if (active) {
+    return `${base} bg-amber-50 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300`;
+  }
+  return `${base} text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/30`;
+}
+
 // Bottom-bar tab styling: stacked icon + label, evenly sharing the pill's
 // width. Same indigo/amber active cues as the top strip.
 function bottomTabClassName(active: boolean, admin: boolean): string {
@@ -581,11 +686,15 @@ const SWAP_ICON =
   "M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5";
 const CLOCK_ICON = "M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z";
 const PLUS_ICON = "M12 9v6m3-3H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z";
+// Check-in-a-badge (approvals).
+const CHECK_ICON =
+  "M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z";
 const USERS_ICON =
   "M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z";
 
-// Renders one of the outline paths above as a bottom-bar icon.
-function TabIcon({ d }: { d: string }) {
+// Renders one of the outline paths above as an icon. Defaults to the bottom-bar
+// size; the admin dropdown passes a smaller className.
+function TabIcon({ d, className = "h-6 w-6" }: { d: string; className?: string }) {
   return (
     <svg
       viewBox="0 0 24 24"
@@ -595,9 +704,27 @@ function TabIcon({ d }: { d: string }) {
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
-      className="h-6 w-6"
+      className={className}
     >
       <path d={d} />
+    </svg>
+  );
+}
+
+// Chevron for the "Admin" dropdown trigger — rotates 180° when the menu opens.
+function ChevronIcon({ className = "" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M6 8l4 4 4-4" />
     </svg>
   );
 }

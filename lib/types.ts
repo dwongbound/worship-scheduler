@@ -22,10 +22,9 @@ export interface ApiTeam {
   name: string;
   // Only present on GET /api/teams (other endpoints embed just {id, name}).
   orgId?: string;
+  // The team's standing Slack channel for weekly summaries (per-set auto group
+  // chats are configured on the set/template, not here).
   slackChannelId?: string | null;
-  // Auto group-chat lead time in days (null/absent = off). Present on
-  // GET /api/teams and the team PATCH response.
-  groupChatLeadDays?: number | null;
 }
 
 export interface ApiUserRef {
@@ -70,6 +69,9 @@ export interface ApiSet {
   // Must be an eligible assignee — see lib/md.ts.
   mdUserId: string | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
+  // Auto-create the set's private Slack channel this many days before it starts
+  // (null = off). See Set.groupChatLeadDays.
+  groupChatLeadDays?: number | null;
   // The team this set is for (null = open to the whole org, e.g. its team
   // was deleted). Optional because some endpoints return sets without it.
   teamId?: string | null;
@@ -115,6 +117,7 @@ export interface ApiIncomingSwap {
   id: string;
   role: Instrument;
   requestedBy: ApiUserRef;
+  reason: string | null; // the proposer's optional note
   giveUp: SwapSetRef; // my current set (I'd give this up)
   receive: SwapSetRef; // their set (I'd take this)
 }
@@ -130,6 +133,7 @@ export interface ApiSwapRequest {
   id: string;
   role: Instrument;
   user: ApiUserRef;
+  reason: string | null; // the owner's optional cover note
   set: Omit<ApiSet, "assignments">;
 }
 
@@ -142,6 +146,13 @@ export interface ApiSetHistoryEvent {
   targetUser: ApiUserRef | null; // null if that user was later deleted
   previousUser: ApiUserRef | null;
   createdAt: string;
+}
+
+// One row of the org-wide Team Activity log (GET /api/admin/activity): a set
+// history event plus which set/team it happened on.
+export interface ApiActivityEvent extends ApiSetHistoryEvent {
+  set: { id: string; label: string | null; startsAt: string };
+  teamName: string | null;
 }
 
 export interface ApiUnavailability {
@@ -197,7 +208,33 @@ export interface ApiNotifications {
   availability: ApiAvailabilityStatus; // the Availabilities dot + banner
   needsRoles: boolean; // no roles on any team yet → the "finish setup" dot
   teamless: { id: string; name: string; username: string }[];
+  approvalCount: number; // pending cover/swap approvals in the admin org → dot
 }
+
+// One item on the admin Approvals tab (GET /api/admin/approvals). A cover-take
+// or a targeted swap that's been accepted/taken and now needs admin sign-off.
+export interface ApiApprovalSwap {
+  kind: "swap";
+  id: string; // proposal id
+  role: Instrument;
+  reason: string | null;
+  createdAt: string;
+  requester: ApiUserRef;
+  recipient: ApiUserRef;
+  receive: SwapSetRef; // requester's set, now the recipient's
+  giveUp: SwapSetRef; // recipient's set, now the requester's
+}
+export interface ApiApprovalCover {
+  kind: "cover";
+  id: string; // assignment id
+  role: Instrument;
+  reason: string | null;
+  createdAt: string;
+  taker: ApiUserRef;
+  originalOwner: ApiUserRef | null;
+  set: SwapSetRef;
+}
+export type ApiApproval = ApiApprovalSwap | ApiApprovalCover;
 
 // A scheduled weekly Slack reminder for one team (Org settings page). Carries
 // the team's name + Slack channel so the table can flag teams with no channel.
@@ -278,6 +315,9 @@ export interface StagedSet {
   // The proposed MD's userId (from lib/md.ts defaultMDId), or null if none.
   mdUserId: string | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
+  // Per-set auto group-chat lead time inherited from the template (days before
+  // start; null = off). Baked onto the created set at apply time.
+  groupChatLeadDays?: number | null;
   // Team the set belongs to (see ApiSet.teamId). Optional so older plans and
   // test fixtures without a team keep working (= open to everyone).
   teamId?: string | null;

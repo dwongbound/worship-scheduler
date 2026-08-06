@@ -15,6 +15,7 @@ import CalendarMonth from "@/components/CalendarMonth";
 import SetDetailModal from "@/components/SetDetailModal";
 import CreateSetModal from "@/components/CreateSetModal";
 import MySetsPanel from "@/components/MySetsPanel";
+import ExportModal from "@/components/ExportModal";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
@@ -56,6 +57,8 @@ function CalendarView() {
   // Day whose inline "+" (admin) create form is open, or null.
   const [createDate, setCreateDate] = useState<Date | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  // Whether the export dialog (range picker + .ics/Excel) is open.
+  const [exportOpen, setExportOpen] = useState(false);
   // Sidebar width; defaults to ~30% of the screen once mounted.
   const [panelWidth, setPanelWidth] = useState(420);
   // Per-org admin user lists (assignment dropdowns are scoped to the open
@@ -282,10 +285,16 @@ function CalendarView() {
 
         {/* Actions: right-aligned, bottom-aligned with the dropdown controls. */}
         <div className="ml-auto flex items-center gap-2">
-          {/* Plain link download: the browser sends session cookies along. */}
-          <a href="/api/export" download>
-            <Button variant="secondary">Export my sets (.ics)</Button>
-          </a>
+          {/* Opens the export dialog (range picker + .ics/Excel). The chevron
+              bounces on hover to signal it opens a menu, not a direct download. */}
+          <Button
+            variant="secondary"
+            className="group"
+            onClick={() => setExportOpen(true)}
+          >
+            Export
+            <ExportChevron />
+          </Button>
           {/* Rightmost: expands the "My sets" sidebar. */}
           <Button
             onClick={() => setPanelOpen((open) => !open)}
@@ -377,7 +386,36 @@ function CalendarView() {
         onClose={() => setCreateDate(null)}
         onCreated={refetchSets}
       />
+
+      {/* Export dialog. It receives the on-screen (already filtered) sets and
+          layers a look-ahead range on top before building the .ics/.xlsx. */}
+      <ExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        sets={visibleSets}
+      />
     </>
+  );
+}
+
+// Down-chevron on the Export button; bounces on button hover to hint that it
+// opens a chooser rather than downloading straight away.
+function ExportChevron() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      className="h-4 w-4 transition-transform group-hover:animate-bounce"
+    >
+      <path
+        d="M6 8l4 4 4-4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

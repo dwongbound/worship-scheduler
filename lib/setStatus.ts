@@ -9,6 +9,12 @@ export type SetStatus = "empty" | "confirmed" | "unconfirmed" | "cover";
 export function setStatus(set: Pick<ApiSet, "assignments">): SetStatus {
   if (set.assignments.length === 0) return "empty";
   if (set.assignments.some((a) => a.status === "SWAP_REQUESTED")) return "cover";
-  if (set.assignments.some((a) => a.status === "PENDING")) return "unconfirmed";
+  // A slot pending confirmation OR pending admin approval isn't settled yet.
+  if (
+    set.assignments.some(
+      (a) => a.status === "PENDING" || a.status === "PENDING_APPROVAL"
+    )
+  )
+    return "unconfirmed";
   return "confirmed";
 }

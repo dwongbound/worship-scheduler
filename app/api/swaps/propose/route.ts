@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { fromAssignmentId, toAssignmentId } = await req.json();
+  const { fromAssignmentId, toAssignmentId, reason } = await req.json();
   if (!fromAssignmentId || !toAssignmentId) {
     return NextResponse.json(
       { error: "fromAssignmentId and toAssignmentId are required" },
@@ -109,6 +109,16 @@ export async function POST(req: NextRequest) {
       where: { id: to.id },
       data: { status: "PENDING_SWAP" },
     });
+    // Log the proposal on the requester's set (activity feed).
+    await tx.setHistoryEvent.create({
+      data: {
+        setId: from.setId,
+        role: from.role,
+        type: "SWAP_PROPOSED",
+        actorId: user.id,
+        targetUserId: user.id,
+      },
+    });
     return tx.swapProposal.create({
       data: {
         fromAssignmentId: from.id,
@@ -117,6 +127,8 @@ export async function POST(req: NextRequest) {
         recipientId: to.userId,
         fromPrevStatus: from.status,
         toPrevStatus: to.status,
+        reason:
+          typeof reason === "string" && reason.trim() ? reason.trim() : null,
       },
     });
   });

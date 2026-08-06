@@ -78,7 +78,8 @@ export type AssignmentStatus =
   | "PENDING"
   | "CONFIRMED"
   | "SWAP_REQUESTED"
-  | "PENDING_SWAP";
+  | "PENDING_SWAP"
+  | "PENDING_APPROVAL";
 
 // Order roles are displayed in AND filled in by the scheduler.
 // Scarce/critical roles first so they get first pick of people.
@@ -146,6 +147,7 @@ export const STATUS_LABELS: Record<AssignmentStatus, string> = {
   CONFIRMED: "Confirmed",
   SWAP_REQUESTED: "Requesting cover",
   PENDING_SWAP: "Pending swap",
+  PENDING_APPROVAL: "Pending approval",
 };
 
 export type SetHistoryEventType =
@@ -155,7 +157,40 @@ export type SetHistoryEventType =
   | "CONFIRMED"
   | "SWAP_REQUESTED"
   | "SWAP_CANCELED"
-  | "SWAP_TAKEN";
+  | "SWAP_TAKEN"
+  | "SWAP_PROPOSED"
+  | "SWAP_ACCEPTED"
+  | "APPROVED"
+  | "REJECTED";
+
+// All event types + friendly labels — drives the Team Activity filter dropdown.
+export const ALL_HISTORY_TYPES: SetHistoryEventType[] = [
+  "ADDED",
+  "REMOVED",
+  "REASSIGNED",
+  "CONFIRMED",
+  "SWAP_REQUESTED",
+  "SWAP_CANCELED",
+  "SWAP_TAKEN",
+  "SWAP_PROPOSED",
+  "SWAP_ACCEPTED",
+  "APPROVED",
+  "REJECTED",
+];
+
+export const HISTORY_TYPE_LABELS: Record<SetHistoryEventType, string> = {
+  ADDED: "Added",
+  REMOVED: "Removed",
+  REASSIGNED: "Reassigned (by admin)",
+  CONFIRMED: "Confirmed",
+  SWAP_REQUESTED: "Cover requested",
+  SWAP_CANCELED: "Cover canceled",
+  SWAP_TAKEN: "Cover taken",
+  SWAP_PROPOSED: "Swap proposed",
+  SWAP_ACCEPTED: "Swap accepted",
+  APPROVED: "Approved",
+  REJECTED: "Rejected",
+};
 
 export const DAY_LABELS = [
   "Sunday",
@@ -166,3 +201,17 @@ export const DAY_LABELS = [
   "Friday",
   "Saturday",
 ];
+
+// How many days before a set the auto group-chat channel is created. The set +
+// template forms take an arbitrary day count (blank = off); this is just a sane
+// upper bound so a typo can't schedule a channel absurdly far out.
+export const MAX_GROUP_CHAT_LEAD_DAYS = 365;
+
+// Normalize a client-supplied group-chat lead time to a valid day count or null
+// (off). Empty/non-integer/< 1 → null (off); anything larger is clamped to MAX
+// (so a big number caps rather than silently turning the feature off).
+export function parseGroupChatLeadDays(raw: unknown): number | null {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) return null;
+  return Math.min(n, MAX_GROUP_CHAT_LEAD_DAYS);
+}

@@ -45,11 +45,14 @@ export async function GET(req: NextRequest) {
 
   // Per-team eligibility (small N, so filter in JS): I can cover a set if I play
   // its role on its team — or on any team for a team-less set.
-  const eligible = swaps.filter((s) =>
-    s.set.teamId
-      ? rolesByTeam.get(s.set.teamId)?.includes(s.role) ?? false
-      : anyRole.has(s.role)
-  );
+  const eligible = swaps
+    .filter((s) =>
+      s.set.teamId
+        ? rolesByTeam.get(s.set.teamId)?.includes(s.role) ?? false
+        : anyRole.has(s.role)
+    )
+    // Surface the owner's cover note as `reason` (see ApiSwapRequest).
+    .map((s) => ({ ...s, reason: s.swapReason }));
 
   return NextResponse.json(eligible);
 }

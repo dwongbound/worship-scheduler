@@ -502,6 +502,21 @@ function SlotChip({
                       Cover needed — you can take{" "}
                       {covers.map((c) => INSTRUMENT_LABELS[c.role]).join(", ")}.
                     </p>
+                    {/* The requesters' optional notes, if any. */}
+                    {covers.some((c) => c.reason) && (
+                      <ul className="mb-1 space-y-0.5">
+                        {covers
+                          .filter((c) => c.reason)
+                          .map((c) => (
+                            <li
+                              key={c.id}
+                              className="italic text-gray-500 dark:text-gray-400"
+                            >
+                              “{c.reason}” — {c.user.name}
+                            </li>
+                          ))}
+                      </ul>
+                    )}
                     <Link
                       href={`/swaps#cover-${covers[0].id}`}
                       className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"

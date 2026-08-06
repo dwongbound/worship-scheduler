@@ -10,6 +10,7 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import {
   availabilityStatus,
+  pendingApprovalCount,
   swapBadgeCount,
   teamlessMembers,
 } from "@/lib/notifications";
@@ -30,25 +31,33 @@ export async function GET(req: NextRequest) {
   // Team-less members are admin-only and org-scoped: compute them only when the
   // request names an org AND the caller administers it.
   const orgId = req.nextUrl.searchParams.get("orgId");
-  const teamlessPromise = (async () => {
-    if (!orgId) return [];
+  // The teamless list AND the pending-approval count are both admin-only and
+  // scoped to the named org — gate them behind one membership check.
+  const adminScoped = (async () => {
+    if (!orgId) return { teamless: [], approvalCount: 0 };
     const membership = await prisma.orgMembership.findUnique({
       where: { userId_orgId: { userId: user.id, orgId } },
       select: { isAdmin: true },
     });
-    return membership?.isAdmin ? teamlessMembers(orgId) : [];
+    if (!membership?.isAdmin) return { teamless: [], approvalCount: 0 };
+    const [teamless, approvalCount] = await Promise.all([
+      teamlessMembers(orgId),
+      pendingApprovalCount(orgId),
+    ]);
+    return { teamless, approvalCount };
   })();
 
-  const [swapCount, availability, teamless] = await Promise.all([
+  const [swapCount, availability, admin] = await Promise.all([
     swapBadgeCount(user.id),
     availabilityStatus(user.id),
-    teamlessPromise,
+    adminScoped,
   ]);
 
   return NextResponse.json({
     swapCount,
     availability,
     needsRoles: !hasAnyRole,
-    teamless,
+    teamless: admin.teamless,
+    approvalCount: admin.approvalCount,
   });
 }

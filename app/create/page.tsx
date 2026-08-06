@@ -9,6 +9,7 @@ import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Input from "@/components/common/Input";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import Select from "@/components/common/Select";
 import LoadingDots from "@/components/common/LoadingDots";
 import Modal from "@/components/common/Modal";
@@ -99,6 +100,18 @@ export default function CreatePage() {
   // selection. Every admin API call names it via the x-org-id header.
   const { adminOrgId, isAdminAny } = useOrgs();
 
+  // Whether this org has Slack connected — gates the "Remind on Slack" button
+  // (a reminder DMs members through the org's bot, so it's useless without one).
+  const [orgSlackConnected, setOrgSlackConnected] = useState(false);
+  useEffect(() => {
+    if (!adminOrgId) return;
+    setOrgSlackConnected(false);
+    fetch(`/api/slack/status?orgId=${adminOrgId}`)
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d) => setOrgSlackConnected(!!d.enabled))
+      .catch(() => setOrgSlackConnected(false));
+  }, [adminOrgId]);
+
   const reload = useCallback(async () => {
     if (!adminOrgId) return;
     const init = { headers: orgHeaders(adminOrgId) };
@@ -164,9 +177,8 @@ export default function CreatePage() {
         `/api/admin/availability-request/${selectedRequestId}/remind`,
         { method: "POST", headers: orgHeaders(adminOrgId) }
       );
-      setRemindResult(
-        res.ok ? "Reminder sent on Slack." : "Could not send the reminder."
-      );
+      // No success confirmation (the DM speaks for itself); only surface errors.
+      setRemindResult(res.ok ? "" : "Could not send the reminder.");
     } catch {
       setRemindResult("Could not send the reminder.");
     } finally {
@@ -390,7 +402,8 @@ export default function CreatePage() {
                       )}
                     </td>
                     <td className="py-2 pr-4">
-                      {DAY_LABELS[t.dayOfWeek]} · {minutesToTimeLabel(t.startMinute)}
+                      {/* Plural — it recurs every week (e.g. "Thursdays"). */}
+                      {DAY_LABELS[t.dayOfWeek]}s · {minutesToTimeLabel(t.startMinute)}
                     </td>
                     <td className="py-2 text-right">
                       <Button
@@ -449,12 +462,10 @@ export default function CreatePage() {
       <div className="grid gap-6 md:grid-cols-2">
         {/* Left: request the team to enter their availability */}
         <Card>
-          <h2 className="mb-3 font-semibold">Request availabilities</h2>
-          <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
-            Ask the team to enter when they&rsquo;re unavailable over a date
-            range. Everyone who hasn&rsquo;t responded sees a reminder until
-            they do.
-          </p>
+          <div className="mb-3 flex items-center gap-1.5">
+            <h2 className="font-semibold">Request availabilities</h2>
+            <InfoTooltip text="Ask the team to enter when they’re unavailable over a date range. Manage an availability request on the right panel, ." />
+          </div>
           <div className="space-y-3">
             <Input
               label="Name (optional)"
@@ -503,6 +514,12 @@ export default function CreatePage() {
               <Button
                 size="sm"
                 variant="secondary"
+                disabled={!orgSlackConnected}
+                title={
+                  orgSlackConnected
+                    ? undefined
+                    : "Connect Slack for this organization to send reminders."
+                }
                 onClick={() => {
                   setRemindResult("");
                   setRemindOpen(true);

@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { resolveOrgScope, requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { validateSlotCapacities } from "@/lib/constants";
+import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -63,6 +63,7 @@ export async function POST(req: NextRequest) {
     slotCapacities,
     requiresMD,
     isPrivate,
+    groupChatLeadDays,
     teamId,
   } = await req.json();
 
@@ -110,6 +111,7 @@ export async function POST(req: NextRequest) {
       durationMinutes,
       requiresMD: Boolean(requiresMD),
       isPrivate: Boolean(isPrivate),
+      groupChatLeadDays: parseGroupChatLeadDays(groupChatLeadDays),
       slotCapacities: capacities ?? undefined,
       teamId,
       orgId: team.orgId,

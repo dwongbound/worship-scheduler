@@ -6,7 +6,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { notifySwapResolved } from "@/lib/slack";
+import { notifySwapResolved, notifyAdminsPendingApproval } from "@/lib/slack";
 
 export async function POST(
   req: NextRequest,
@@ -25,7 +25,12 @@ export async function POST(
 
   const proposal = await prisma.swapProposal.findUnique({
     where: { id },
-    include: { fromAssignment: true, toAssignment: true },
+    include: {
+      fromAssignment: {
+        include: { set: { select: { orgId: true, label: true, startsAt: true } } },
+      },
+      toAssignment: true,
+    },
   });
   if (!proposal || proposal.toAssignment.userId !== user.id) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -80,20 +85,23 @@ export async function POST(
     );
   }
 
+  // The two slots exchange users immediately (the sets show the new people),
+  // but as PENDING_APPROVAL — an admin still has to approve the trade before
+  // it's final. The proposal likewise sits at PENDING_APPROVAL.
   await prisma.$transaction([
     // Recipient takes the requester's slot.
     prisma.assignment.update({
       where: { id: from.id },
-      data: { userId: recipientId, status: "CONFIRMED" },
+      data: { userId: recipientId, status: "PENDING_APPROVAL" },
     }),
     // Requester takes the recipient's slot.
     prisma.assignment.update({
       where: { id: to.id },
-      data: { userId: requesterId, status: "CONFIRMED" },
+      data: { userId: requesterId, status: "PENDING_APPROVAL" },
     }),
     prisma.swapProposal.update({
       where: { id: proposal.id },
-      data: { status: "ACCEPTED", respondedAt: new Date() },
+      data: { status: "PENDING_APPROVAL", respondedAt: new Date() },
     }),
     // Activity log on both sets (actor = the accepter). REASSIGNED (not
     // SWAP_TAKEN) keeps a targeted trade distinct from an open-cover take in
@@ -102,7 +110,7 @@ export async function POST(
       data: {
         setId: from.setId,
         role: from.role,
-        type: "REASSIGNED",
+        type: "SWAP_ACCEPTED",
         actorId: recipientId,
         targetUserId: recipientId,
         previousUserId: requesterId,
@@ -112,7 +120,7 @@ export async function POST(
       data: {
         setId: to.setId,
         role: to.role,
-        type: "REASSIGNED",
+        type: "SWAP_ACCEPTED",
         actorId: recipientId,
         targetUserId: requesterId,
         previousUserId: recipientId,
@@ -120,6 +128,13 @@ export async function POST(
     }),
   ]);
 
+  // Tell the requester it was accepted, and ping the org's admins that the
+  // trade now needs approval. Both no-op without Slack.
   await notifySwapResolved(proposal.id, true);
-  return NextResponse.json({ ok: true, status: "ACCEPTED" });
+  await notifyAdminsPendingApproval(from.set.orgId, {
+    kind: "swap",
+    role: from.role,
+    set: { label: from.set.label, startsAt: from.set.startsAt },
+  });
+  return NextResponse.json({ ok: true, status: "PENDING_APPROVAL" });
 }

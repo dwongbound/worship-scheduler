@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { ALL_INSTRUMENTS } from "@/lib/constants";
+import { isOrgSlackConnected } from "@/lib/slack";
 
 export async function PATCH(
   req: NextRequest,
@@ -103,10 +104,21 @@ export async function PATCH(
     membershipData.alwaysInGroupChats = body.alwaysInGroupChats;
   }
   if (typeof body.slackUserId === "string" || body.slackUserId === null) {
-    membershipData.slackUserId =
+    const next =
       typeof body.slackUserId === "string" && body.slackUserId.trim()
         ? body.slackUserId.trim()
         : null;
+    // A member id only means something once the org's bot is installed — the
+    // id belongs to that specific workspace, and it's what we'd DM through.
+    // After connecting we auto-resolve ids by email, so manual entry is just a
+    // fallback; block SETTING one before Slack exists (clearing stays allowed).
+    if (next && !(await isOrgSlackConnected(admin.orgId))) {
+      return NextResponse.json(
+        { error: "Connect Slack for this org before adding member IDs." },
+        { status: 400 }
+      );
+    }
+    membershipData.slackUserId = next;
   }
   if (Object.keys(membershipData).length > 0) {
     try {

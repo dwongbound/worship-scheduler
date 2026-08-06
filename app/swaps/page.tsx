@@ -9,6 +9,7 @@ import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import LoadingDots from "@/components/common/LoadingDots";
 import ExportIcsButton from "@/components/ExportIcsButton";
+import RequestCoverModal from "@/components/RequestCoverModal";
 import SetDetailModal from "@/components/SetDetailModal";
 import SwapModal from "@/components/SwapModal";
 import { usePageLoading } from "@/components/LoadingProvider";
@@ -32,6 +33,8 @@ export default function SwapsPage() {
   // Targeted trades awaiting MY accept/reject (shown in Cover Requests).
   const [incoming, setIncoming] = useState<ApiIncomingSwap[] | null>(null);
   // The assignment I'm offering in the swap picker (null = picker closed).
+  // The assignment whose "Request cover" reason modal is open, or null.
+  const [coverForId, setCoverForId] = useState<string | null>(null);
   const [swapAssignment, setSwapAssignment] = useState<ApiMyAssignment | null>(
     null
   );
@@ -135,13 +138,14 @@ export default function SwapsPage() {
 
   // PATCH one of my assignments: confirm / requestSwap / cancelSwap. Only the
   // acted-on row shows a loading state (busyId); the page stays mounted.
-  async function act(assignmentId: string, action: string) {
+  // `reason` is the optional cover note (requestSwap only).
+  async function act(assignmentId: string, action: string, reason?: string) {
     setBusyId(assignmentId);
     try {
       await fetch(`/api/assignments/${assignmentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, reason }),
       });
       await reload();
     } finally {
@@ -208,6 +212,11 @@ export default function SwapsPage() {
                       takes your {s.giveUp.label ?? "Worship Set"} (
                       {formatDay(s.giveUp.startsAt)})
                     </p>
+                    {s.reason && (
+                      <p className="mt-1 text-sm italic text-gray-500 dark:text-gray-400">
+                        “{s.reason}”
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     {busyId === s.id ? (
@@ -255,6 +264,11 @@ export default function SwapsPage() {
                     {formatTime(swap.set.startsAt)} · requested by{" "}
                     {swap.user.name}
                   </p>
+                  {swap.reason && (
+                    <p className="mt-1 text-sm italic text-gray-500 dark:text-gray-400">
+                      “{swap.reason}”
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Button
@@ -335,6 +349,11 @@ export default function SwapsPage() {
                   </Button>
                   {busyId === a.id ? (
                     <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+                  ) : a.status === "PENDING_APPROVAL" ? (
+                    // Taken/accepted, now frozen until an admin approves it.
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      Waiting for admin approval
+                    </span>
                   ) : a.status === "PENDING_SWAP" ? (
                     // Frozen mid-trade: the requester can withdraw; the
                     // recipient acts from Cover Requests above.
@@ -358,7 +377,7 @@ export default function SwapsPage() {
                           <Button
                             size="sm"
                             variant="secondary"
-                            onClick={() => act(a.id, "requestSwap")}
+                            onClick={() => setCoverForId(a.id)}
                           >
                             Request cover
                           </Button>
@@ -421,6 +440,19 @@ export default function SwapsPage() {
         assignment={swapAssignment}
         onClose={() => setSwapAssignment(null)}
         onProposed={reload}
+      />
+
+      {/* "Request cover" reason prompt. */}
+      <RequestCoverModal
+        open={coverForId !== null}
+        onClose={() => setCoverForId(null)}
+        busy={busyId === coverForId}
+        onConfirm={async (reason) => {
+          const id = coverForId;
+          if (!id) return;
+          setCoverForId(null);
+          await act(id, "requestSwap", reason);
+        }}
       />
     </div>
   );

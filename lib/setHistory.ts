@@ -58,9 +58,29 @@ export function describeSetHistoryEvent(
     case "SWAP_CANCELED":
       return { actor: target, tokens: ["canceled their swap request for", role] };
     case "SWAP_TAKEN":
+      // Now a pending state — the take awaits an admin's approval.
       return {
         actor: target,
-        tokens: ["took over", role, "from", { name: previous, struck: true }],
+        tokens: [
+          "took over",
+          role,
+          "from",
+          { name: previous, struck: true },
+          "· awaiting approval",
+        ],
       };
+    case "SWAP_PROPOSED":
+      return { actor: target, tokens: ["proposed a swap for", role] };
+    case "SWAP_ACCEPTED":
+      // The recipient accepted; the trade awaits an admin's approval.
+      return {
+        actor: target,
+        tokens: ["accepted a swap for", role, "· awaiting approval"],
+      };
+    // Admin decisions on a pending cover/swap (actor = the admin).
+    case "APPROVED":
+      return { actor, tokens: ["approved the change for", role] };
+    case "REJECTED":
+      return { actor, tokens: ["rejected the change for", role] };
   }
 }

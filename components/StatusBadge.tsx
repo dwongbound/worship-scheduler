@@ -8,6 +8,7 @@ const STATUS_TONES: Record<AssignmentStatus, BadgeTone> = {
   CONFIRMED: "green",
   SWAP_REQUESTED: "red",
   PENDING_SWAP: "blue",
+  PENDING_APPROVAL: "amber",
 };
 
 export default function StatusBadge({ status }: { status: AssignmentStatus }) {

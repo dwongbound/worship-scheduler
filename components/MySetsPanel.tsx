@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import Button from "./common/Button";
 import LoadingDots from "./common/LoadingDots";
 import Select from "./common/Select";
+import RequestCoverModal from "./RequestCoverModal";
 import StatusBadge from "./StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "./Navbar";
 import { INSTRUMENT_LABELS } from "@/lib/constants";
@@ -34,6 +35,8 @@ export default function MySetsPanel({
 }) {
   // Id of the assignment currently updating — only that row shows dots.
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Assignment whose "Request cover" reason modal is open, or null.
+  const [coverForId, setCoverForId] = useState<string | null>(null);
   // Sort order: soonest upcoming first (default), or float sets I still need
   // to confirm to the top.
   const [sortBy, setSortBy] = useState<"date" | "unconfirmed">("date");
@@ -49,13 +52,14 @@ export default function MySetsPanel({
   );
 
   // PATCH my assignment: confirm / requestSwap / cancelSwap, then refresh.
-  async function act(assignmentId: string, action: string) {
+  // `reason` is the optional cover note (requestSwap only).
+  async function act(assignmentId: string, action: string, reason?: string) {
     setBusyId(assignmentId);
     try {
       await fetch(`/api/assignments/${assignmentId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, reason }),
       });
       await onChanged();
       window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
@@ -161,7 +165,7 @@ export default function MySetsPanel({
                       <Button
                         size="sm"
                         variant="secondary"
-                        onClick={() => act(a.id, "requestSwap")}
+                        onClick={() => setCoverForId(a.id)}
                       >
                         Request cover
                       </Button>
@@ -183,6 +187,21 @@ export default function MySetsPanel({
       </ul>
     );
 
+  // "Request cover" reason prompt — shared by both layouts (Modal portals out).
+  const coverModal = (
+    <RequestCoverModal
+      open={coverForId !== null}
+      onClose={() => setCoverForId(null)}
+      busy={busyId === coverForId}
+      onConfirm={async (reason) => {
+        const id = coverForId;
+        if (!id) return;
+        setCoverForId(null);
+        await act(id, "requestSwap", reason);
+      }}
+    />
+  );
+
   // Mobile: page heading + controls, then the bare list of set cards.
   if (!asSidebar) {
     return (
@@ -192,6 +211,7 @@ export default function MySetsPanel({
           {controls}
         </div>
         {list}
+        {coverModal}
       </div>
     );
   }
@@ -209,6 +229,7 @@ export default function MySetsPanel({
 
         <div className="flex-1 overflow-y-auto p-3">{list}</div>
       </aside>
+      {coverModal}
     </div>
   );
 }
