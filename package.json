@@ -21,7 +21,7 @@
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
     "bcryptjs": "^3.0.3",
-    "next": "^16.2.10",
+    "next": "^16.3.0",
     "next-auth": "^4.24.14",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
@@ -34,7 +34,7 @@
     "@types/react-dom": "^19.2.3",
     "dotenv": "^16.4.5",
     "dotenv-cli": "^7.4.2",
-    "postcss": "^8.4.39",
+    "postcss": "^8.5.23",
     "prisma": "^7.8.0",
     "tailwindcss": "^4.3.2",
     "tsx": "^4.16.2",
