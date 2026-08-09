@@ -49,6 +49,7 @@ export async function GET(req: NextRequest) {
       assignments: {
         include: { user: { select: { id: true, name: true, isMD: true } } },
       },
+      songs: { orderBy: { order: "asc" } },
     },
   });
 

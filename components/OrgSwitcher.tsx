@@ -150,6 +150,7 @@ export default function OrgSwitcher() {
   return (
     <>
       <Dropdown
+        hover
         trigger={trigger}
         // Locked mode has an (i) hover popover next to "All orgs" that needs to
         // escape the panel; other modes keep the default clipped corners.

@@ -233,6 +233,51 @@ export default function OrgSettingsPage() {
                   )}
                 </div>
 
+                {/* Spotify — the shared church account this org's set playlists
+                    are created under. Same connect/disconnect shape as Slack. */}
+                <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                  <p className="text-sm font-medium">Spotify account</p>
+                  <p className="text-sm text-gray-500">
+                    {slack === null
+                      ? "Checking…"
+                      : slack.orgSpotifyConnected
+                        ? `Connected as ${slack.spotifyDisplayName ?? "Spotify"} ✓`
+                        : "Not connected — set playlists can't be created yet."}
+                  </p>
+
+                  {selected.isAdmin ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button
+                        onClick={() => {
+                          window.location.href = `/api/spotify/connect?orgId=${selected.id}`;
+                        }}
+                      >
+                        {slack?.orgSpotifyConnected
+                          ? "Reconnect Spotify"
+                          : "Connect to Spotify"}
+                      </Button>
+                      {slack?.orgSpotifyConnected && (
+                        <Button
+                          variant="secondary"
+                          onClick={async () => {
+                            await fetch(
+                              `/api/spotify/connect?orgId=${selected.id}`,
+                              { method: "DELETE" }
+                            );
+                            await refreshMe();
+                          }}
+                        >
+                          Disconnect
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="pt-1 text-xs text-gray-400">
+                      Only an admin of this org can change its Spotify connection.
+                    </p>
+                  )}
+                </div>
+
                 {/* Join key — admins can copy it, set a custom one, or rotate
                     to a fresh random key (invalidating the old one). */}
                 {selected.isAdmin && (

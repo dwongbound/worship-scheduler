@@ -51,6 +51,15 @@ export interface ApiAssignment {
   user: ApiUserRef;
 }
 
+// One song in a set's setlist (see the Song model). `key` is one of SONG_KEYS
+// or null (unspecified); `order` is the 0-based position in the list.
+export interface ApiSong {
+  id: string;
+  title: string;
+  key: string | null;
+  order: number;
+}
+
 export interface ApiSet {
   id: string;
   label: string | null;
@@ -80,6 +89,11 @@ export interface ApiSet {
   // drives the org chip when viewing "All orgs").
   org?: { id: string; name: string };
   assignments: ApiAssignment[];
+  // The worship leader's setlist, ordered. Present on GET /api/sets; may be
+  // absent (undefined) on endpoints that don't include it.
+  songs?: ApiSong[];
+  // The set's collaborative Spotify playlist, once created (null before then).
+  spotifyPlaylistUrl?: string | null;
 }
 
 // My assignment with its set attached (Swaps tab).
@@ -190,6 +204,10 @@ export interface ApiAvailabilityRequest {
   // Present on member-facing endpoints (availability, availability-request)
   // where requests from several orgs mix and need an org chip.
   org?: { id: string; name: string };
+  // Present on the admin endpoint: the teams this request was aimed at — only
+  // their members are asked to fill it in. Empty = the whole org (older
+  // requests, and orgs with no teams). See lib/availabilityTargets.ts.
+  teams?: { id: string; name: string }[];
 }
 
 // GET /api/availability-request: each of my orgs' active request + whether I
@@ -345,6 +363,10 @@ export interface ApiMeMembership {
   // Whether the ORG has connected Slack (bot installed).
   orgSlackConnected: boolean;
   slackTeamName: string | null;
+  // Whether the ORG has connected its shared Spotify account, + the account's
+  // display name (cosmetic, shown on the org settings page).
+  orgSpotifyConnected: boolean;
+  spotifyDisplayName: string | null;
 }
 
 // The current user's own profile — GET /api/me. Fetched once by AuthGate and

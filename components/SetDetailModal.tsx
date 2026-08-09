@@ -6,7 +6,24 @@
 //     "✕" beside each row), and edit the notes.
 //   • The set's worship leader can also edit the notes.
 //   • Everyone else sees it read-only.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
 import Dropdown from "./common/Dropdown";
@@ -20,6 +37,7 @@ import {
   INSTRUMENT_LABELS,
   MD_ROLES,
   ROLE_ORDER,
+  SONG_KEYS,
   resolveCapacities,
   type Instrument,
 } from "@/lib/constants";
@@ -79,6 +97,16 @@ export default function SetDetailModal({
   // doesn't PATCH per keystroke — it saves on blur. Synced from the set below.
   const [leadDraft, setLeadDraft] = useState("");
 
+  // The worship leader's setlist, edited as local draft rows ({ title, key })
+  // and saved as a whole list (PUT replaces). key "" = unspecified. Synced from
+  // the set below so a save-refetch (or opening another set) reflows it.
+  // Each row carries a stable `id` so dnd-kit can track it across reorders
+  // (existing songs reuse their db id; new blank rows get a generated one). The
+  // id is local-only — saves send just { title, key }.
+  const [songDraft, setSongDraft] = useState<
+    { id: string; title: string; key: string }[]
+  >([]);
+
   // The set's activity log (History section, bottom of the modal).
   const [history, setHistory] = useState<ApiSetHistoryEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -92,6 +120,44 @@ export default function SetDetailModal({
   useEffect(() => {
     setLeadDraft(set?.groupChatLeadDays != null ? String(set.groupChatLeadDays) : "");
   }, [set?.id, set?.groupChatLeadDays]);
+
+  // Load the songs editor whenever a (different) set opens. Keyed on the set id
+  // ONLY — not set.songs — so the auto-save refetch below (same set, new object)
+  // doesn't reset the draft and clobber whatever the user is mid-typing. The
+  // sets list always ships each set's songs, so the id changing is enough.
+  useEffect(() => {
+    setSongDraft(
+      (set?.songs ?? []).map((s) => ({
+        id: s.id,
+        title: s.title,
+        key: s.key ?? "",
+      }))
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [set?.id]);
+
+  // Auto-save the setlist — there's no explicit "save" button. Debounced so we
+  // PUT once the user pauses (not on every keystroke), and only when the draft
+  // actually differs from what's saved on the server. `runEdit` refetches the
+  // set afterwards so the Spotify/history sections stay current. The row ids are
+  // stripped — only { title, key } (in order) is persisted or compared.
+  useEffect(() => {
+    if (!set) return;
+    const saved = (set.songs ?? []).map((s) => ({ title: s.title, key: s.key ?? "" }));
+    const draft = songDraft.map((r) => ({ title: r.title, key: r.key }));
+    if (JSON.stringify(saved) === JSON.stringify(draft)) return;
+    const timer = setTimeout(() => {
+      runEdit(() =>
+        fetch(`/api/sets/${set.id}/songs`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ songs: draft }),
+        })
+      );
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [songDraft, set]);
 
   // Reset the delete confirmations + Slack feedback whenever a different set opens.
   useEffect(() => {
@@ -171,6 +237,15 @@ export default function SetDetailModal({
     return counts;
   }, [allSets, set?.id, set?.startsAt]);
 
+  // Song-reorder sensors: a pointer sensor (mouse + touch) with a small
+  // activation distance so focusing a row's handle doesn't start a drag, plus a
+  // keyboard sensor for accessibility. Kept above the early return so hook
+  // order stays stable.
+  const songSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
+
   if (!set) return null;
   // Narrowed copy of the id for closures (nested functions below don't
   // retain TS's null-check narrowing of the `set` prop itself).
@@ -216,6 +291,11 @@ export default function SetDetailModal({
     );
   const canEditNotes = isAdmin || isSetWorshipLeader;
   const canEditTeam = isAdmin;
+  // The setlist may be managed by an org admin OR anyone assigned to the set
+  // (any band member can help build the setlist).
+  const isSetMember =
+    !!currentUserId && set.assignments.some((a) => a.user.id === currentUserId);
+  const canEditSongs = isAdmin || isSetMember;
 
   // Options for a role's dropdown. We offer this set's team members who play
   // THIS role (per their Team-tab instruments) and aren't already filling it
@@ -330,6 +410,19 @@ export default function SetDetailModal({
         body: JSON.stringify({ notes: notesDraft }),
       })
     );
+
+  // Drag-and-drop reorder (dnd-kit): apply the move on drop. The debounced
+  // auto-save persists the new order. (Sensors are set up with the hooks above.)
+  const handleSongDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    setSongDraft((rows) => {
+      const from = rows.findIndex((r) => r.id === active.id);
+      const to = rows.findIndex((r) => r.id === over.id);
+      if (from < 0 || to < 0) return rows;
+      return arrayMove(rows, from, to);
+    });
+  };
 
   // Flip this set's private flag (admin only). Private = hidden from everyone
   // except org admins and the people assigned to it.
@@ -515,6 +608,7 @@ export default function SetDetailModal({
               available to everyone (so the menu always has at least that item). */}
           <Dropdown
             align="right"
+            hover
             trigger={(menuOpen) => (
               <span
                 aria-label="More actions"
@@ -523,21 +617,21 @@ export default function SetDetailModal({
               >
                 {/* Three horizontal lines that morph into an "✕" when the menu
                     is open (top/bottom rotate to cross, middle fades out). */}
-                <span aria-hidden className="relative block h-4 w-5">
+                <span aria-hidden className="relative block h-4 w-3.5">
                   <span
-                    className={`absolute left-0 h-0.5 w-5 rounded bg-current transition-all duration-200 ${
+                    className={`absolute left-0 h-0.5 w-3.5 rounded bg-current transition-all duration-200 ${
                       menuOpen
                         ? "top-1/2 -translate-y-1/2 rotate-45"
                         : "top-[3px]"
                     }`}
                   />
                   <span
-                    className={`absolute left-0 top-1/2 h-0.5 w-5 -translate-y-1/2 rounded bg-current transition-all duration-200 ${
+                    className={`absolute left-0 top-1/2 h-0.5 w-3.5 -translate-y-1/2 rounded bg-current transition-all duration-200 ${
                       menuOpen ? "opacity-0" : "opacity-100"
                     }`}
                   />
                   <span
-                    className={`absolute left-0 h-0.5 w-5 rounded bg-current transition-all duration-200 ${
+                    className={`absolute left-0 h-0.5 w-3.5 rounded bg-current transition-all duration-200 ${
                       menuOpen
                         ? "bottom-1/2 translate-y-1/2 -rotate-45"
                         : "bottom-[3px]"
@@ -578,6 +672,47 @@ export default function SetDetailModal({
                 />
               </>
             )}
+            {/* Admin-only: when to auto-create this set's private Slack group
+                chat. The daily cron makes it once inside the window; "Slack
+                Team" still creates it on demand. Only meaningful once the org
+                has Slack. `stopPropagation` keeps clicks in the input from
+                closing the menu. */}
+            {canEditTeam && slackConfigured && (
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="border-t border-gray-200 px-3 py-2 dark:border-gray-700"
+              >
+                <span className="block text-xs font-medium text-gray-600 dark:text-gray-300">
+                  Auto-create group chat
+                </span>
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={1}
+                    value={leadDraft}
+                    onChange={(e) => setLeadDraft(e.target.value)}
+                    onBlur={() => {
+                      const n = Number(leadDraft);
+                      const next =
+                        leadDraft === "" || Number.isNaN(n) ? null : n;
+                      if (next !== (set.groupChatLeadDays ?? null)) {
+                        setGroupChatLead(next);
+                      }
+                    }}
+                    disabled={busy}
+                    placeholder="Off"
+                    aria-label="Auto-create group chat, days before the set"
+                    className="w-14 rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800"
+                  />
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    days before
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
+                  Blank = off
+                </p>
+              </div>
+            )}
             <a
               href={`/api/export/${set.id}`}
               download
@@ -594,35 +729,6 @@ export default function SetDetailModal({
         <p className="-mt-1 mb-4 text-sm text-gray-600 dark:text-gray-400">
           {slackMsg}
         </p>
-      )}
-
-      {/* Admin-only: when to auto-create this set's private Slack channel. The
-          daily cron makes it once inside the window; "Slack Team" above still
-          creates it on demand. Only meaningful once the org has Slack. */}
-      {canEditTeam && slackConfigured && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
-          <span className="text-gray-600 dark:text-gray-400">
-            Auto-create group chat
-          </span>
-          <input
-            type="number"
-            min={1}
-            value={leadDraft}
-            onChange={(e) => setLeadDraft(e.target.value)}
-            onBlur={() => {
-              const n = Number(leadDraft);
-              const next = leadDraft === "" || Number.isNaN(n) ? null : n;
-              if (next !== (set.groupChatLeadDays ?? null)) setGroupChatLead(next);
-            }}
-            disabled={busy}
-            placeholder="Off"
-            aria-label="Auto-create group chat, days before the set"
-            className="w-20 rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800"
-          />
-          <span className="text-gray-500 dark:text-gray-400">
-            days before (blank = off)
-          </span>
-        </div>
       )}
 
       {/* Amber warning while a required-MD set still has no musical director;
@@ -746,12 +852,17 @@ export default function SetDetailModal({
           className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
         >
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">
-              Choir
-              {set.choirEnabled && choirMembers.length > 0 && (
-                <span className="ml-1 text-xs text-gray-500">
-                  ({choirMembers.length})
-                </span>
+            <span className="flex items-center gap-1.5 font-medium">
+              <span>
+                Choir
+                {set.choirEnabled && choirMembers.length > 0 && (
+                  <span className="ml-1 text-xs text-gray-500">
+                    ({choirMembers.length})
+                  </span>
+                )}
+              </span>
+              {canEditTeam && (
+                <InfoTooltip text="Choir is opt-in per set. Turn it on to add singers and include them when you auto-schedule — it's an unbounded, admin-managed list." />
               )}
             </span>
             {/* Admins can turn choir off again, but only while it's empty so no
@@ -770,12 +881,9 @@ export default function SetDetailModal({
 
           {canEditTeam && !set.choirEnabled ? (
             // Off: a single enable button (only admins reach this — non-admins
-            // never see the section while choir is off).
-            <div className="mt-2 space-y-2">
-              <p className="text-gray-500 dark:text-gray-400">
-                Choir is off for this set. Turn it on to add singers and include
-                them when you auto-schedule.
-              </p>
+            // never see the section while choir is off). The what/why now lives
+            // in the header's (i) tooltip.
+            <div className="mt-2">
               <Button
                 size="sm"
                 variant="secondary"
@@ -850,17 +958,18 @@ export default function SetDetailModal({
       {set.requiresMD && (
         <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
           {canEditTeam ? (
-            eligibleMdIds.size === 0 ? (
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                <span className="font-medium">Musical director:</span> none of
-                the people currently assigned to this set can be MD. The MD must
-                be a musical director playing keys, electric guitar, or bass.
-              </p>
-            ) : (
-              <div className="space-y-1.5">
-                <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Musical director
-                </span>
+            <div className="space-y-1.5">
+              {/* The eligibility rule (who can be MD) lives in the header's (i)
+                  tooltip rather than as inline body text. */}
+              <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700 dark:text-gray-300">
+                Musical director
+                <InfoTooltip text="The MD must be a musical director who plays keys, electric guitar, or bass — and never the worship leader." />
+              </span>
+              {eligibleMdIds.size === 0 ? (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  None of the people assigned to this set can be MD yet.
+                </p>
+              ) : (
                 <PlayerSelect
                   selected={
                     mdUserId
@@ -880,8 +989,8 @@ export default function SetDetailModal({
                   disabled={busy}
                   onChange={(userId) => setMD(userId)}
                 />
-              </div>
-            )
+              )}
+            </div>
           ) : (
             <p className="text-sm">
               <span className="font-medium">Musical director:</span>{" "}
@@ -893,6 +1002,95 @@ export default function SetDetailModal({
           )}
         </div>
       )}
+
+      {/* Songs: the worship leader's setlist (title + key). Editable by admins
+          and anyone assigned to the set; everyone else sees it read-only. Feeds
+          the collaborative Spotify playlist auto-created with the group chat. */}
+      <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Songs
+        </p>
+        {canEditSongs ? (
+          <div className="space-y-2">
+            {/* Drag a row by its handle to reorder; the numbered badge shows its
+                position. Only the handle carries the drag listeners, so the
+                inputs stay fully editable and touch drag works (dnd-kit pointer
+                sensor). Changes auto-save (debounced) — there's no save button. */}
+            <DndContext
+              sensors={songSensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleSongDragEnd}
+            >
+              <SortableContext
+                items={songDraft.map((r) => r.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {songDraft.map((row, i) => (
+                  <SortableSongRow
+                    key={row.id}
+                    row={row}
+                    position={i + 1}
+                    onTitle={(v) =>
+                      setSongDraft((rows) =>
+                        rows.map((r) => (r.id === row.id ? { ...r, title: v } : r))
+                      )
+                    }
+                    onKey={(v) =>
+                      setSongDraft((rows) =>
+                        rows.map((r) => (r.id === row.id ? { ...r, key: v } : r))
+                      )
+                    }
+                    onRemove={() =>
+                      setSongDraft((rows) => rows.filter((r) => r.id !== row.id))
+                    }
+                  />
+                ))}
+              </SortableContext>
+            </DndContext>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() =>
+                setSongDraft((rows) => [
+                  ...rows,
+                  { id: crypto.randomUUID(), title: "", key: "" },
+                ])
+              }
+            >
+              + Add song
+            </Button>
+          </div>
+        ) : (set.songs ?? []).length > 0 ? (
+          <ol className="list-decimal space-y-0.5 pl-5 text-sm text-gray-700 dark:text-gray-300">
+            {(set.songs ?? []).map((s) => (
+              <li key={s.id}>
+                {s.title}
+                {s.key && (
+                  <span className="ml-1 text-gray-400">({s.key})</span>
+                )}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="text-sm text-gray-400">No songs yet.</p>
+        )}
+
+        {/* Spotify: the collaborative playlist is created automatically when the
+            set's group chat is made (see lib/slack.ts), so there's no manual
+            button — just a link to open it once it exists. */}
+        {set.spotifyPlaylistUrl && (
+          <div className="mt-3">
+            <a
+              href={set.spotifyPlaylistUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-green-600 hover:underline dark:text-green-400"
+            >
+              Open Spotify playlist ↗
+            </a>
+          </div>
+        )}
+      </div>
 
       {/* Notes (bottom): editable by admins + the worship leader. */}
       <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
@@ -1079,5 +1277,107 @@ function SlotDeleteButton({
     >
       ✕
     </button>
+  );
+}
+
+// One editable, draggable song row. The drag listeners live only on the grip
+// handle so the title/key inputs stay fully usable; dnd-kit's transform/
+// transition animate it while sorting.
+function SortableSongRow({
+  row,
+  position,
+  onTitle,
+  onKey,
+  onRemove,
+}: {
+  row: { id: string; title: string; key: string };
+  position: number;
+  onTitle: (value: string) => void;
+  onKey: (value: string) => void;
+  onRemove: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: row.id });
+
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    // Lift the row above its siblings while it's being dragged.
+    zIndex: isDragging ? 10 : undefined,
+    opacity: isDragging ? 0.6 : undefined,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className="flex items-center gap-2">
+      {/* Drag handle (grip + 1-based position). `touch-none` lets the pointer
+          sensor own touch gestures instead of the browser scrolling. */}
+      <span
+        {...attributes}
+        {...listeners}
+        aria-label="Drag to reorder"
+        className="flex shrink-0 cursor-grab touch-none items-center gap-1 text-gray-400 focus:outline-none active:cursor-grabbing"
+      >
+        <GripIcon />
+        <span className="w-4 text-right text-sm font-medium tabular-nums text-gray-500 dark:text-gray-400">
+          {position}
+        </span>
+      </span>
+      <input
+        value={row.title}
+        onChange={(e) => onTitle(e.target.value)}
+        placeholder="Song title"
+        className="min-w-0 flex-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm
+          focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
+          dark:border-gray-600 dark:bg-gray-800"
+      />
+      <select
+        value={row.key}
+        onChange={(e) => onKey(e.target.value)}
+        aria-label="Key"
+        className="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm
+          focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
+          dark:border-gray-600 dark:bg-gray-800"
+      >
+        <option value="">Key</option>
+        {SONG_KEYS.map((k) => (
+          <option key={k} value={k}>
+            {k}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label="Remove song"
+        className="px-1 text-gray-400 hover:text-red-600"
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+// Six-dot grab handle shown at the left of each editable song row.
+function GripIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="currentColor"
+      aria-hidden="true"
+      className="h-4 w-4"
+    >
+      <circle cx="7" cy="5" r="1.5" />
+      <circle cx="13" cy="5" r="1.5" />
+      <circle cx="7" cy="10" r="1.5" />
+      <circle cx="13" cy="10" r="1.5" />
+      <circle cx="7" cy="15" r="1.5" />
+      <circle cx="13" cy="15" r="1.5" />
+    </svg>
   );
 }

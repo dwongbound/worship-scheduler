@@ -20,31 +20,43 @@ async function pickOrg(page: import("@playwright/test").Page, label: string) {
   await page.getByRole("button", { name: label, exact: true }).click();
 }
 
-// Assert a set's calendar chip is visible, advancing the month view if needed:
-// a seeded set on "next <weekday>" can land in the following month near a
-// month's end, and the calendar opens on the current month. Scope to the
+// Assert a set's calendar chip is visible, paging the month view to the month
+// the set actually falls in (the calendar opens on the current month, and a
+// seeded set on "next <weekday>" can land in the following one). Scope to the
 // visible grid chip (the hidden mobile panel repeats the label).
 async function expectChipVisible(
   page: import("@playwright/test").Page,
   label: string
 ) {
-  // First make sure the set is actually in the user's data — after a join the
-  // calendar refetches async, and racing that would wrongly page past the set.
+  // Read the set from the API first. That both confirms it's in the user's
+  // data (after a join the calendar refetches async) and tells us its month,
+  // so we page straight there instead of guessing — probing the rendered grid
+  // to decide whether to advance raced the refetch and paged past the set.
+  let startsAt = "";
   await expect(async () => {
     const sets = (await (await page.request.get("/api/sets")).json()) as {
       label: string | null;
+      startsAt: string;
     }[];
-    expect(sets.some((s) => s.label === label)).toBeTruthy();
+    const match = sets.find((s) => s.label === label);
+    expect(match, `no set labelled "${label}"`).toBeTruthy();
+    startsAt = match!.startsAt;
   }).toPass();
 
-  const chip = () => page.getByText(label).filter({ visible: true }).first();
-  // It's in the current month or (at most) the next one — advance once if the
-  // current month doesn't show it, then assert (a full timeout absorbs the
-  // grid's own refetch after a join).
-  if (!(await chip().isVisible().catch(() => false))) {
-    await page.getByRole("button", { name: "Next month" }).click();
-  }
-  await expect(chip()).toBeVisible();
+  const now = new Date();
+  const target = new Date(startsAt);
+  const months =
+    (target.getFullYear() - now.getFullYear()) * 12 +
+    (target.getMonth() - now.getMonth());
+  const step = page.getByRole("button", {
+    name: months < 0 ? "Previous month" : "Next month",
+  });
+  for (let i = 0; i < Math.abs(months); i++) await step.click();
+
+  // Full timeout here absorbs the grid's own refetch after a join.
+  await expect(
+    page.getByText(label).filter({ visible: true }).first()
+  ).toBeVisible();
 }
 
 test("calendar defaults to All orgs, filters per org, and persists the choice", async ({

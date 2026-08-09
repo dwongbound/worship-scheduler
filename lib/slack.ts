@@ -11,6 +11,7 @@
 // the API routes, never by importing it directly.
 import { prisma } from "./prisma";
 import { decryptSecret } from "./crypto";
+import { createOrSyncSetPlaylist, isOrgSpotifyConnected } from "./spotify";
 import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "./constants";
 import { formatDay, formatTime, shortDateLabel } from "./dates";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
@@ -473,12 +474,22 @@ export async function notifyAvailabilityRequest(request: {
   startDate: Date;
   endDate: Date;
   orgId: string;
+  // The teams the request targets; empty = the whole org (lib/availabilityTargets).
+  teams: { id: string }[];
 }): Promise<void> {
   const token = await orgBotToken(request.orgId);
   if (!token && !slackDryRun()) return;
 
+  const teamIds = request.teams.map((t) => t.id);
   const members = await prisma.orgMembership.findMany({
-    where: { orgId: request.orgId, slackUserId: { not: null } },
+    where: {
+      orgId: request.orgId,
+      slackUserId: { not: null },
+      // Only members of a targeted team — team membership alone, no roles needed.
+      ...(teamIds.length
+        ? { user: { teamMembers: { some: { teamId: { in: teamIds } } } } }
+        : {}),
+    },
     select: { slackUserId: true },
   });
 
@@ -597,6 +608,26 @@ export async function messageSetTeamOnSlack(
     `🙏 Thanks for serving! Your upcoming set is ${setLabel(set)}.\n\n` +
     `Here's everyone playing in it:\n${teamRosterText(set.assignments)}`;
   const posted = await postToChannel(token, channelId, text);
+
+  // Auto-build the set's collaborative Spotify playlist alongside the group chat
+  // and drop its link in the channel. Best-effort and fully decoupled: skipped
+  // silently when the org hasn't connected Spotify or the set has no songs, and
+  // a Spotify failure never affects the group chat result.
+  try {
+    if (await isOrgSpotifyConnected(set.orgId)) {
+      const playlist = await createOrSyncSetPlaylist(setId);
+      if (playlist.ok) {
+        await postToChannel(
+          token,
+          channelId,
+          `🎵 Spotify playlist for this set: ${playlist.url}`
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[slack] spotify playlist post failed", err);
+  }
+
   return posted
     ? { ok: true }
     : { ok: false, error: "Could not post the message." };

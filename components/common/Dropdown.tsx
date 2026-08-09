@@ -13,6 +13,10 @@ interface DropdownProps {
   // hover backgrounds stay within the rounded corners); pass `overflow-visible`
   // when a child needs to escape the panel, e.g. a hover popover/tooltip.
   menuClassName?: string;
+  // When true, the menu opens on hover (and closes when the pointer leaves the
+  // trigger + panel area) instead of only on click. Click still toggles it, so
+  // touch devices — which have no hover — keep working.
+  hover?: boolean;
 }
 
 export default function Dropdown({
@@ -20,9 +24,16 @@ export default function Dropdown({
   children,
   align = "right",
   menuClassName = "overflow-hidden",
+  hover = false,
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Hover mode only: set when the pointer entering the trigger is what opened
+  // the menu, so the click that follows in the SAME interaction doesn't toggle
+  // it straight back shut. Both a mouse click and a touch tap fire mouseenter
+  // before click, so without this the menu opened and closed in one gesture and
+  // could never be opened by clicking at all.
+  const openedByHover = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -35,20 +46,54 @@ export default function Dropdown({
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
+  // Hover mode opens/closes as the pointer enters/leaves the whole container.
+  const hoverHandlers = hover
+    ? {
+        onMouseEnter: () => {
+          openedByHover.current = true;
+          setOpen(true);
+        },
+        onMouseLeave: () => {
+          openedByHover.current = false;
+          setOpen(false);
+        },
+      }
+    : {};
+
+  // Clicking the trigger toggles the menu — except for the click that lands
+  // right after hover already opened it, which is a no-op. Once that first
+  // click is spent, further clicks (with the pointer still on the trigger)
+  // toggle normally, so the trigger closes the menu again.
+  const onTriggerClick = () => {
+    if (openedByHover.current) {
+      openedByHover.current = false;
+      return;
+    }
+    setOpen((o) => !o);
+  };
+
   return (
-    <div className="relative" ref={ref}>
-      <button onClick={() => setOpen((o) => !o)} className="flex items-center">
+    <div className="relative" ref={ref} {...hoverHandlers}>
+      <button onClick={onTriggerClick} className="flex items-center">
         {typeof trigger === "function" ? trigger(open) : trigger}
       </button>
       {open && (
+        // The `pt-2` wrapper (rather than a margin on the panel) keeps the gap
+        // below the trigger part of the hoverable area, so the pointer can
+        // travel from trigger into the panel without dropping hover and closing.
         <div
-          // Clicks inside the menu (e.g. "Log out") close it too.
-          onClick={() => setOpen(false)}
-          className={`absolute top-full z-40 mt-2 w-48 rounded-lg border
-            border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800
-            ${align === "right" ? "right-0" : "left-0"} ${menuClassName}`}
+          className={`absolute top-full z-40 pt-2 ${
+            align === "right" ? "right-0" : "left-0"
+          }`}
         >
-          {children}
+          <div
+            // Clicks inside the menu (e.g. "Log out") close it too.
+            onClick={() => setOpen(false)}
+            className={`w-48 rounded-lg border border-gray-200 bg-white py-1
+              shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
+          >
+            {children}
+          </div>
         </div>
       )}
     </div>
