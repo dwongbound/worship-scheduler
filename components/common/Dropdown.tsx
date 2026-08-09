@@ -28,6 +28,12 @@ export default function Dropdown({
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Hover mode only: set when the pointer entering the trigger is what opened
+  // the menu, so the click that follows in the SAME interaction doesn't toggle
+  // it straight back shut. Both a mouse click and a touch tap fire mouseenter
+  // before click, so without this the menu opened and closed in one gesture and
+  // could never be opened by clicking at all.
+  const openedByHover = useRef(false);
 
   useEffect(() => {
     if (!open) return;
@@ -43,14 +49,32 @@ export default function Dropdown({
   // Hover mode opens/closes as the pointer enters/leaves the whole container.
   const hoverHandlers = hover
     ? {
-        onMouseEnter: () => setOpen(true),
-        onMouseLeave: () => setOpen(false),
+        onMouseEnter: () => {
+          openedByHover.current = true;
+          setOpen(true);
+        },
+        onMouseLeave: () => {
+          openedByHover.current = false;
+          setOpen(false);
+        },
       }
     : {};
 
+  // Clicking the trigger toggles the menu — except for the click that lands
+  // right after hover already opened it, which is a no-op. Once that first
+  // click is spent, further clicks (with the pointer still on the trigger)
+  // toggle normally, so the trigger closes the menu again.
+  const onTriggerClick = () => {
+    if (openedByHover.current) {
+      openedByHover.current = false;
+      return;
+    }
+    setOpen((o) => !o);
+  };
+
   return (
     <div className="relative" ref={ref} {...hoverHandlers}>
-      <button onClick={() => setOpen((o) => !o)} className="flex items-center">
+      <button onClick={onTriggerClick} className="flex items-center">
         {typeof trigger === "function" ? trigger(open) : trigger}
       </button>
       {open && (
