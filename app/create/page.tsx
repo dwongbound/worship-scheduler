@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
+import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Input from "@/components/common/Input";
 import InfoTooltip from "@/components/common/InfoTooltip";
@@ -24,11 +25,13 @@ import {
 } from "@/lib/constants";
 import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import { requestTargetsTeams } from "@/lib/availabilityTargets";
 import { useOrgs } from "@/components/OrgProvider";
 import type {
   ApiAdminUser,
   ApiAvailabilityRequest,
   ApiSetTemplate,
+  ApiTeam,
   ApiUnavailability,
   StagedPlan,
   StagedSet,
@@ -90,11 +93,14 @@ export default function CreatePage() {
   const [genStart, setGenStart] = useState("");
   const [genEnd, setGenEnd] = useState("");
 
-  // "Request availabilities" form state.
+  // "Request availabilities" form state. `reqTeamIds` = the teams to ask;
+  // it defaults to every team in the org once the team list loads.
   const [reqName, setReqName] = useState("");
   const [reqStart, setReqStart] = useState("");
   const [reqEnd, setReqEnd] = useState("");
   const [reqResult, setReqResult] = useState("");
+  const [teams, setTeams] = useState<ApiTeam[] | null>(null);
+  const [reqTeamIds, setReqTeamIds] = useState<string[]>([]);
 
   // Everything on this page operates on ONE org: the navbar switcher's admin
   // selection. Every admin API call names it via the x-org-id header.
@@ -117,17 +123,21 @@ export default function CreatePage() {
     const init = { headers: orgHeaders(adminOrgId) };
     // Resolve to [] on any error so the page always renders instead of
     // hanging on the loading screen forever when an endpoint fails.
-    const [tpl, us, reqs] = await Promise.all([
+    const [tpl, us, reqs, tms] = await Promise.all([
       fetchJsonArray<ApiSetTemplate>("/api/admin/templates", init),
       fetchJsonArray<ApiAdminUser>("/api/admin/users", init),
       fetchJsonArray<ApiAvailabilityRequest>(
         "/api/admin/availability-request",
         init
       ),
+      fetchJsonArray<ApiTeam>(`/api/teams?orgId=${adminOrgId}`),
     ]);
     setTemplates(tpl);
     setUsers(us);
     setRequests(reqs);
+    setTeams(tms);
+    // A new request asks the whole org by default — every team pre-checked.
+    setReqTeamIds(tms.map((t) => t.id));
     // Default the status filter to the newest request (list is newest-first).
     // Reset on an org switch — the previous org's request id means nothing here.
     setStatusRequestId(reqs[0]?.id || "");
@@ -141,13 +151,16 @@ export default function CreatePage() {
     setTemplates(null);
     setUsers(null);
     setRequests(null);
+    setTeams(null);
     reload();
   }, [reload]);
 
   // Full-page loader only for the initial load — never for mutations.
   usePageLoading(
     status === "loading" ||
-      (isAdminAny && !!adminOrgId && (!templates || !users || !requests))
+      (isAdminAny &&
+        !!adminOrgId &&
+        (!templates || !users || !requests || !teams))
   );
 
   if (status === "loading") return null;
@@ -187,8 +200,9 @@ export default function CreatePage() {
     }
   }
 
-  // Ask the whole team to submit availability over a date range. Everyone who
-  // hasn't responded sees a reminder dot + banner until they do.
+  // Ask the selected teams to submit availability over a date range. Everyone
+  // on those teams who hasn't responded sees a reminder dot + banner until
+  // they do (roles don't matter — being on the team is enough).
   async function requestAvailability() {
     if (!reqStart) return;
     setBusyAction("request");
@@ -202,6 +216,9 @@ export default function CreatePage() {
           startDate: reqStart,
           // No end date → a single-day request (defaults to the start date).
           endDate: reqEnd || reqStart,
+          // Only these teams' members are asked. Omitted when the org has no
+          // teams at all, which the API reads as "everyone in the org".
+          ...(teams && teams.length > 0 ? { teamIds: reqTeamIds } : {}),
         }),
       });
       const data = await res.json();
@@ -281,7 +298,7 @@ export default function CreatePage() {
     }
   }
 
-  if (!templates || !users || !requests) return null;
+  if (!templates || !users || !requests || !teams) return null;
 
   // Human label for a request in the TimeRange dropdown.
   function requestLabel(r: ApiAvailabilityRequest): string {
@@ -301,7 +318,16 @@ export default function CreatePage() {
 
   const selectedRequestId = statusRequestId || requests[0]?.id || "";
   const selectedRequest = requests.find((r) => r.id === selectedRequestId) ?? null;
-  const sortedUsers = [...users].sort((a, b) => {
+  // Only the people the selected request actually asked: members of its
+  // targeted teams (no teams = it went to the whole org). Roles don't matter —
+  // being on the team is what puts someone on the hook.
+  const askedUsers = users.filter((u) =>
+    requestTargetsTeams(
+      selectedRequest?.teams?.map((t) => t.id) ?? [],
+      u.teams.map((t) => t.id)
+    )
+  );
+  const sortedUsers = [...askedUsers].sort((a, b) => {
     const aDone = Boolean(
       a.availabilityResponses.find(
         (r) => r.requestId === selectedRequestId && r.completedAt
@@ -317,6 +343,8 @@ export default function CreatePage() {
   });
 
   const selectedUser = sortedUsers.find((u) => u.id === selectedUserId) ?? null;
+  // The teams the selected request asked (empty = it went to the whole org).
+  const selectedRequestTeams = selectedRequest?.teams ?? [];
   const visibleUnavailability: AdminUnavailabilityEntry[] = selectedUser && selectedRequest
     ? selectedUser.unavailability.filter((entry) => {
         if (entry.type === "SPECIFIC") {
@@ -464,7 +492,7 @@ export default function CreatePage() {
         <Card>
           <div className="mb-3 flex items-center gap-1.5">
             <h2 className="font-semibold">Request availabilities</h2>
-            <InfoTooltip text="Ask the team to enter when they’re unavailable over a date range. Manage an availability request on the right panel, ." />
+            <InfoTooltip text="Ask the teams you pick to enter when they’re unavailable over a date range. Only their members are notified. Manage an availability request on the right panel." />
           </div>
           <div className="space-y-3">
             <Input
@@ -488,9 +516,56 @@ export default function CreatePage() {
                 onChange={setReqEnd}
               />
             </div>
+            {/* Who gets asked. Defaults to every team in the org; only members
+                of the checked teams see the reminder + get the Slack DM. */}
+            {teams.length > 0 && (
+              <div>
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Ask these teams
+                  </span>
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                    onClick={() =>
+                      setReqTeamIds(
+                        reqTeamIds.length === teams.length
+                          ? []
+                          : teams.map((t) => t.id)
+                      )
+                    }
+                  >
+                    {reqTeamIds.length === teams.length
+                      ? "Clear all"
+                      : "Select all"}
+                  </button>
+                </div>
+                <div className="grid max-h-28 gap-1.5 overflow-y-auto rounded-lg border border-gray-200 p-2 sm:grid-cols-2 dark:border-gray-700">
+                  {teams.map((t) => (
+                    <Checkbox
+                      key={t.id}
+                      label={t.name}
+                      checked={reqTeamIds.includes(t.id)}
+                      onChange={(e) =>
+                        setReqTeamIds(
+                          e.target.checked
+                            ? [...reqTeamIds, t.id]
+                            : reqTeamIds.filter((id) => id !== t.id)
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
             <Button
               onClick={requestAvailability}
-              disabled={!reqStart || busyAction === "request"}
+              disabled={
+                !reqStart ||
+                // Nobody to ask — the org has teams but none are checked.
+                (teams.length > 0 && reqTeamIds.length === 0) ||
+                busyAction === "request"
+              }
             >
               {busyAction === "request" ? (
                 <LoadingDots size="sm" />
@@ -550,6 +625,14 @@ export default function CreatePage() {
                   </option>
                 ))}
               </Select>
+              {/* Who this request went out to — the table below lists exactly
+                  those people. */}
+              <p className="mt-1 text-xs text-gray-500">
+                Asked:{" "}
+                {selectedRequestTeams.length > 0
+                  ? selectedRequestTeams.map((t) => t.name).join(", ")
+                  : "everyone in the organization"}
+              </p>
             </div>
           )}
           {requests.length === 0 ? (
@@ -778,8 +861,11 @@ export default function CreatePage() {
         }
       >
         <p className="text-sm text-gray-600 dark:text-gray-400">
-          This sends a direct message on Slack to everyone with Slack linked,
-          asking them to fill out their availability for{" "}
+          This sends a direct message on Slack to everyone this request asked
+          {selectedRequestTeams.length > 0
+            ? ` (${selectedRequestTeams.map((t) => t.name).join(", ")})`
+            : ""}{" "}
+          who has Slack linked, asking them to fill out their availability for{" "}
           <strong>
             {selectedRequest
               ? `${selectedRequest.name || "Availability"} (${shortRangeLabel(

@@ -110,6 +110,15 @@ model Org {
   slackBotToken  String?
   slackBotUserId String?
 
+  // Per-org Spotify connection: ONE shared church account authorizes the app,
+  // and every playlist this org creates lives under it. The long-lived OAuth
+  // refresh token is encrypted at rest (lib/crypto) exactly like slackBotToken
+  // — never plaintext. Null = Spotify not connected (lib/spotify no-ops). The
+  // user id/display name are cosmetic (shown on the admin "connected as" row).
+  spotifyRefreshToken String?
+  spotifyUserId       String?
+  spotifyDisplayName  String?
+
   memberships          OrgMembership[]
   teams                Team[]
   sets                 Set[]
@@ -171,6 +180,8 @@ model Team {
   sets      Set[]
   templates SetTemplate[]
   reminders WeeklyReminder[]
+  // Availability requests aimed at this team (see AvailabilityRequest.teams).
+  availabilityRequests AvailabilityRequest[] @relation("AvailabilityRequestTeams")
 
   createdAt DateTime @default(now())
 
@@ -331,12 +342,43 @@ model Set {
   team   Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
   teamId String?
 
+  // The worship leader's setlist for this set — ordered list of songs (title +
+  // key). Cascade-deletes with the set. Drives the Spotify playlist and (later)
+  // the per-set Drive chart folder.
+  songs Song[]
+
+  // The collaborative Spotify playlist created for this set (under the org's
+  // shared account), so a re-sync updates the SAME playlist instead of making a
+  // duplicate. Both null until a playlist is first created. The url is the
+  // shareable link posted into the set's Slack group chat.
+  spotifyPlaylistId  String?
+  spotifyPlaylistUrl String?
+
   assignments Assignment[]
   history     SetHistoryEvent[]
 
   createdAt DateTime @default(now())
 
   @@map("sets")
+}
+
+// One song in a set's setlist. The worship leader enters a title and (optional)
+// musical key; `order` is the 0-based position in the list. Title feeds the
+// Spotify search (first result) and — later — the Drive chart lookup, which
+// matches files named "<title> (<key>).pdf".
+model Song {
+  id    String @id @default(cuid())
+  set   Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId String
+
+  title String
+  key   String? // musical key, e.g. "C", "Bb" (see SONG_KEYS); null = unspecified
+  order Int // 0-based position in the setlist
+
+  createdAt DateTime @default(now())
+
+  @@index([setId])
+  @@map("songs")
 }
 
 // One user filling one role slot on one set.
@@ -516,8 +558,8 @@ model SetTemplate {
 }
 
 // An admin's request for the team to enter their availability over a date
-// range. The most recent row PER ORG is that org's "active" request; a user
-// owes a response for each of their orgs' active requests. Drives the
+// range. The most recent row PER ORG **that targets you** is your "active"
+// request for that org; you owe a response for each of them. Drives the
 // Availabilities red dot + banner, and the Create tab's status panel.
 model AvailabilityRequest {
   id        String   @id @default(cuid())
@@ -530,6 +572,13 @@ model AvailabilityRequest {
 
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
+
+  // The teams this request is aimed at — only their members are asked to fill
+  // it in (see lib/availabilityTargets.ts). The admin picks them at creation time,
+  // defaulting to every team in the org. EMPTY means "the whole org": that's
+  // how rows created before team targeting behave, and the fallback for an org
+  // with no teams yet.
+  teams Team[] @relation("AvailabilityRequestTeams")
 
   // Specific blocks entered against this request + who has marked it complete.
   unavailability Unavailability[]

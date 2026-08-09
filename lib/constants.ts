@@ -74,6 +74,42 @@ export function validateSlotCapacities(raw: unknown): SlotCapacityMap | null {
   return out;
 }
 
+// The selectable musical keys for a song, in chromatic order. Flat spelling
+// (Bb, Db, Ab, Gb) is used deliberately: it matches how the shared Drive names
+// its chart files ("A Thousand Hallelujahs (Db).pdf"), so the planned per-set
+// Drive lookup can match on the stored key verbatim. A song's key may also be
+// null (unspecified) — this list is only the concrete choices.
+export const SONG_KEYS = [
+  "C",
+  "Db",
+  "D",
+  "Eb",
+  "E",
+  "F",
+  "Gb",
+  "G",
+  "Ab",
+  "A",
+  "Bb",
+  "B",
+] as const;
+
+export type SongKey = (typeof SONG_KEYS)[number];
+
+// Longest a song title may be — a sanity cap on the setlist editor + API.
+export const MAX_SONG_TITLE_LENGTH = 200;
+// No sane setlist is longer than this; caps the replace-all songs payload.
+export const MAX_SONGS_PER_SET = 50;
+
+/**
+ * Normalize a client-supplied song key to a valid SONG_KEYS value or null.
+ * Anything not in the list (including "", undefined) becomes null (unspecified)
+ * rather than an error — the key is optional, so a bad value just clears it.
+ */
+export function normalizeSongKey(raw: unknown): SongKey | null {
+  return SONG_KEYS.includes(raw as SongKey) ? (raw as SongKey) : null;
+}
+
 export type AssignmentStatus =
   | "PENDING"
   | "CONFIRMED"

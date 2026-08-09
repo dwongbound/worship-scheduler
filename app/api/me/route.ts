@@ -30,7 +30,13 @@ export async function GET() {
           isAdmin: true,
           slackUserId: true,
           org: {
-            select: { name: true, slackTeamName: true, slackBotToken: true },
+            select: {
+              name: true,
+              slackTeamName: true,
+              slackBotToken: true,
+              spotifyRefreshToken: true,
+              spotifyDisplayName: true,
+            },
           },
         },
       },
@@ -57,6 +63,9 @@ export async function GET() {
       // helps once an admin has installed the bot for that workspace.
       orgSlackConnected: !!m.org.slackBotToken,
       slackTeamName: m.org.slackTeamName,
+      // Whether the ORG has connected its shared Spotify account, + who as.
+      orgSpotifyConnected: !!m.org.spotifyRefreshToken,
+      spotifyDisplayName: m.org.spotifyDisplayName,
     })),
     teams: teamMembers.map((tm) => ({
       id: tm.team.id,

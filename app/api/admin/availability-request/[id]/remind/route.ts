@@ -1,5 +1,5 @@
 // POST /api/admin/availability-request/[id]/remind — re-send the "please enter
-// your availability" Slack DM to everyone in the request's org who has Slack
+// your availability" Slack DM to everyone the request targets who has Slack
 // linked. Same message the request originally sent; used as a nudge from the
 // Availability status card. Org admin only; the request must belong to the org.
 import { NextRequest, NextResponse } from "next/server";
@@ -19,6 +19,8 @@ export async function POST(
   const { id } = await params;
   const request = await prisma.availabilityRequest.findUnique({
     where: { id },
+    // The DM only goes to the teams the request targeted.
+    include: { teams: { select: { id: true } } },
   });
   // Scope to the caller's org so an admin can't nudge another org's members.
   if (!request || request.orgId !== admin.orgId) {

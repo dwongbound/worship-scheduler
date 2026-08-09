@@ -4,6 +4,7 @@
 // parallel requests (and re-firing them on a 60s poll). The individual routes
 // still exist for their other callers and now share this same logic.
 import { prisma } from "./prisma";
+import { targetsUser } from "./availabilityTargets";
 import { getMyOrgIds, resolveOrgScope } from "./org";
 
 // Open cover requests the user could take + targeted trades awaiting their
@@ -53,9 +54,10 @@ export async function swapBadgeCount(userId: string): Promise<number> {
   return covers + incoming;
 }
 
-// Each of my orgs' active (most recent) availability request + whether I still
-// owe it a response. Drives the Availabilities dot + reminder banner (the dot
-// lights if ANY org has an unanswered active request).
+// Each of my orgs' active (most recent) availability request that TARGETS me +
+// whether I still owe it a response. Drives the Availabilities dot + reminder
+// banner (the dot lights if ANY org has an unanswered active request).
+// Requests aimed at teams I'm not on are invisible to me (lib/availabilityTargets).
 export async function availabilityStatus(userId: string) {
   const orgIds = await getMyOrgIds(userId);
 
@@ -65,7 +67,7 @@ export async function availabilityStatus(userId: string) {
     await Promise.all(
       orgIds.map(async (orgId) => {
         const request = await prisma.availabilityRequest.findFirst({
-          where: { orgId },
+          where: { orgId, ...targetsUser(userId) },
           orderBy: { createdAt: "desc" },
           include: { org: { select: { id: true, name: true } } },
         });

@@ -15,6 +15,8 @@ export async function GET(req: NextRequest) {
   }
   const requests = await prisma.availabilityRequest.findMany({
     where: { orgId: admin.orgId },
+    // The targeted teams drive the status panel's "who was asked" list.
+    include: { teams: { select: { id: true, name: true } } },
     orderBy: { createdAt: "desc" },
   });
   return NextResponse.json(requests);
@@ -38,6 +40,27 @@ export async function POST(req: NextRequest) {
   const name =
     typeof body.name === "string" && body.name.trim() ? body.name.trim() : null;
 
+  // Teams to target — only their members are asked (see lib/availabilityTargets).
+  // Omitted (older clients / API callers) → every team in the org, which is
+  // also what the form defaults to. Ids are re-checked against the org so an
+  // admin can't target another org's team.
+  const orgTeams = await prisma.team.findMany({
+    where: { orgId: admin.orgId },
+    select: { id: true },
+  });
+  const requested: string[] = Array.isArray(body.teamIds)
+    ? body.teamIds.filter((id: unknown) => typeof id === "string")
+    : orgTeams.map((t) => t.id);
+  const teamIds = orgTeams.map((t) => t.id).filter((id) => requested.includes(id));
+  // An org with no teams at all still gets a whole-org request; only a caller
+  // that named teams and matched none is a mistake worth rejecting.
+  if (orgTeams.length > 0 && Array.isArray(body.teamIds) && teamIds.length === 0) {
+    return NextResponse.json(
+      { error: "Pick at least one team to ask" },
+      { status: 400 }
+    );
+  }
+
   // Storage hygiene: requests are otherwise never deleted, so each new one
   // prunes THIS ORG's requests whose window ended over a year ago. Their
   // SPECIFIC unavailability blocks and responses cascade away with them (the
@@ -50,11 +73,18 @@ export async function POST(req: NextRequest) {
   });
 
   const request = await prisma.availabilityRequest.create({
-    data: { name, startDate, endDate, orgId: admin.orgId },
+    data: {
+      name,
+      startDate,
+      endDate,
+      orgId: admin.orgId,
+      teams: { connect: teamIds.map((id) => ({ id })) },
+    },
+    include: { teams: { select: { id: true, name: true } } },
   });
 
-  // DM the org's members asking them to fill it in. Non-throwing and a no-op
-  // when Slack isn't configured.
+  // DM the targeted teams' members asking them to fill it in. Non-throwing and
+  // a no-op when Slack isn't configured.
   await notifyAvailabilityRequest(request);
 
   return NextResponse.json(request, { status: 201 });

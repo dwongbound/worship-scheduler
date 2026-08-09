@@ -439,6 +439,7 @@ export default function Navbar() {
           {/* User menu: avatar initial → Edit profile / Log out */}
           {session?.user && (
             <Dropdown
+              hover
               trigger={
                 <span data-tour="profile" className="flex items-center gap-2">
                   <span className="relative flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-sm font-semibold text-white">
