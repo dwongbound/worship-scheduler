@@ -37,6 +37,7 @@ export async function GET() {
               slackBotToken: true,
               spotifyRefreshToken: true,
               spotifyDisplayName: true,
+              spotifyUserId: true,
             },
           },
         },
@@ -67,6 +68,8 @@ export async function GET() {
       // Whether the ORG has connected its shared Spotify account, + who as.
       orgSpotifyConnected: !!m.org.spotifyRefreshToken,
       spotifyDisplayName: m.org.spotifyDisplayName,
+      // Falls back into the label when Spotify gave us no display_name.
+      spotifyUserId: m.org.spotifyUserId,
     })),
     teams: teamMembers.map((tm) => ({
       id: tm.team.id,

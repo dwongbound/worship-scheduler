@@ -536,20 +536,39 @@ export default function Navbar() {
           onLinkClick={() => handleTabClick("/schedule")}
           onDismiss={() => setBannerDismissed(true)}
         >
+          {/* The request itself is the link, styled like the instruments
+              banner's so it reads as clickable rather than as plain text —
+              the trailing "→" alone was too easy to miss. Both go to the same
+              place; the arrow stays for people who look for it there. */}
           {pendingAvail.request.name ? (
             <>
               {pendingAvail.request.org
                 ? `${pendingAvail.request.org.name} — availability request: `
                 : "Availability request: "}
-              {pendingAvail.request.name}. Please fill it in.
+              <Link
+                href="/schedule"
+                onClick={() => handleTabClick("/schedule")}
+                className="font-semibold underline"
+              >
+                {pendingAvail.request.name}
+              </Link>
+              . Please fill it in.
             </>
           ) : (
             <>
               {pendingAvail.request.org
                 ? `${pendingAvail.request.org.name}: your`
                 : "Your"}{" "}
-              availability request for {monthDay(pendingAvail.request.startDate)} →{" "}
-              {monthDay(pendingAvail.request.endDate)}. Please fill it in.
+              <Link
+                href="/schedule"
+                onClick={() => handleTabClick("/schedule")}
+                className="font-semibold underline"
+              >
+                availability request for{" "}
+                {monthDay(pendingAvail.request.startDate)} →{" "}
+                {monthDay(pendingAvail.request.endDate)}
+              </Link>
+              . Please fill it in.
             </>
           )}
         </Banner>

@@ -10,11 +10,11 @@
 // POST /api/sets — an org admin creates a one-off ("ad-hoc") set from the
 // calendar's inline "+" button. Org comes from the set's team.
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { resolveOrgScope, requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
-import { resolveSetsWindow } from "@/lib/sets";
+import { resolveSetsWindow, visibleSetsFilter } from "@/lib/sets";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -38,14 +38,13 @@ export async function GET(req: NextRequest) {
     where: {
       orgId: { in: scope },
       startsAt: { gte: start, lte: end },
-      // Private sets are visible only to the people assigned to them and to
-      // admins of their org; everyone else never sees them. Normal (public)
-      // sets are unaffected.
-      OR: [
-        { isPrivate: false },
-        { assignments: { some: { userId: user.id } } },
-        { org: { memberships: { some: { userId: user.id, isAdmin: true } } } },
-      ],
+      // Private sets are visible only to the people assigned to them, to
+      // admins of their org, and to super-admins. Normal (public) sets are
+      // unaffected. See lib/sets.ts visibleSetsFilter.
+      ...visibleSetsFilter({
+        userId: user.id,
+        isSuperAdmin: isSuperAdmin(user.email),
+      }),
     },
     orderBy: { startsAt: "asc" },
     include: {

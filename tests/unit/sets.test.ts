@@ -1,11 +1,13 @@
 // Unit tests for the pure set-rules in lib/sets.ts:
 //   • selectUpcomingSets — the calendar "Upcoming sets" drawer.
-//   • canViewSet         — private-set visibility.
+//   • canViewSet /
+//     visibleSetsFilter  — private-set visibility (in memory + as a db filter).
 //   • coverEligibility   — who may take a swap-requested slot.
 //   • resolveSetsWindow  — the GET /api/sets date window.
 import { describe, expect, it } from "vitest";
 import {
   canViewSet,
+  visibleSetsFilter,
   coverEligibility,
   resolveSetsWindow,
   selectUpcomingSets,
@@ -129,6 +131,28 @@ describe("canViewSet", () => {
     expect(
       canViewSet({ isPrivate: true, assignedUserIds: ["someone-else"] }, viewer)
     ).toBe(false);
+  });
+});
+
+// ── visibleSetsFilter ──────────────────────────────────────────────────────
+
+describe("visibleSetsFilter", () => {
+  it("ordinary viewers get the three-branch OR (public / mine / org admin)", () => {
+    const where = visibleSetsFilter({ userId: "u1", isSuperAdmin: false });
+    expect(where).toEqual({
+      OR: [
+        { isPrivate: false },
+        { assignments: { some: { userId: "u1" } } },
+        { org: { memberships: { some: { userId: "u1", isAdmin: true } } } },
+      ],
+    });
+  });
+
+  // A super-admin can create a set in an org they only joined as a member (or
+  // never joined at all); without this an unstaffed private set would vanish
+  // the moment they made it.
+  it("super-admins get no filter at all", () => {
+    expect(visibleSetsFilter({ userId: "u1", isSuperAdmin: true })).toEqual({});
   });
 });
 

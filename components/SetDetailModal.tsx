@@ -1237,8 +1237,8 @@ function MenuToggle({
 
 // The "Auto GC …" row inside the overflow (⋮) menu: shows the set's current
 // group-chat lead time on one line and flies out a list of choices on hover.
-// The flyout opens to the LEFT (the menu itself is pinned to the right edge of
-// the modal, so opening right would run off screen).
+// The flyout opens to the RIGHT, matching the direction the row's chevron
+// points.
 function GroupChatLeadMenu({
   value,
   disabled,
@@ -1287,12 +1287,12 @@ function GroupChatLeadMenu({
       </button>
 
       {open && (
-        // Phones: drop the list below the row (a flyout to the left of an
-        // already right-pinned menu would run off a narrow screen). Wider
-        // screens: fly out to the left, where `pr-1` keeps the gap between
-        // flyout and row hoverable so the pointer can cross it without the
-        // flyout closing.
-        <div className="absolute right-0 top-full z-50 pt-1 sm:right-full sm:top-0 sm:pt-0 sm:pr-1">
+        // Phones: drop the list below the row — there's no room to fly out
+        // beside an already right-pinned menu on a narrow screen. Wider
+        // screens: fly out to the right, the way the row's `›` points, where
+        // `pl-1` keeps the gap between row and flyout hoverable so the pointer
+        // can cross it without the flyout closing.
+        <div className="absolute right-0 top-full z-50 pt-1 sm:left-full sm:right-auto sm:top-0 sm:pl-1 sm:pt-0">
           <div className="w-40 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
             {GROUP_CHAT_LEAD_OPTIONS.map((option) => (
               <button

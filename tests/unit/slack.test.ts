@@ -260,7 +260,7 @@ describe("weeklySummaryText", () => {
     // ROLE_ORDER is WL, DRUMS, BASS, KEYS, … → WL, then Drums, then Keys.
     expect(lines[3]).toBe("• Alice — Worship Leader");
     expect(lines[4]).toBe("• Ryan — Drums");
-    expect(lines[5]).toBe("• Bob — Piano / Keys (MD)");
+    expect(lines[5]).toBe("• Bob — Keys (MD)");
   });
 
   it("uses a fallback name and placeholder line for empty unnamed sets", () => {

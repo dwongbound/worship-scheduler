@@ -51,15 +51,39 @@ export function selectUpcomingSets(
 }
 
 // ── 2. Private-set visibility ────────────────────────────────────────────
-// A private set is visible only to org admins and the people assigned to it;
-// a normal (public) set is visible to anyone in its org. Mirrors the OR filter
-// GET /api/sets applies in the database, and guards the single-set export.
+// A private set is visible only to admins of its org and the people assigned
+// to it; a normal (public) set is visible to anyone in its org. `isOrgAdmin`
+// means "admin over THIS set's org" — callers get it from requireOrgAdminFor,
+// which already counts platform super-admins as admins everywhere.
 export function canViewSet(
   set: { isPrivate: boolean; assignedUserIds: string[] },
   viewer: { userId: string; isOrgAdmin: boolean }
 ): boolean {
   if (!set.isPrivate) return true;
   return viewer.isOrgAdmin || set.assignedUserIds.includes(viewer.userId);
+}
+
+// The same rule as a Prisma `where` fragment, for the endpoints that list many
+// sets at once (GET /api/sets, POST /api/export/schedule). Spread it into the
+// where alongside the org/date scoping.
+//
+// Super-admins are admins of every org — including ones they never joined, or
+// joined as a plain member — so the membership OR branch alone would hide a
+// private set from them (e.g. one they just created and hadn't staffed yet).
+// They're already trusted with every org's data elsewhere, so they skip the
+// filter entirely and see every set inside whatever org scope they asked for.
+export function visibleSetsFilter(viewer: {
+  userId: string;
+  isSuperAdmin: boolean;
+}) {
+  if (viewer.isSuperAdmin) return {};
+  return {
+    OR: [
+      { isPrivate: false },
+      { assignments: { some: { userId: viewer.userId } } },
+      { org: { memberships: { some: { userId: viewer.userId, isAdmin: true } } } },
+    ],
+  };
 }
 
 // ── 3. Swap-cover eligibility ────────────────────────────────────────────
