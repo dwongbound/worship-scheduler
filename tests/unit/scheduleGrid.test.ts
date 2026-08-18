@@ -51,7 +51,6 @@ describe("buildScheduleGrid", () => {
           assignments: [
             { role: "WORSHIP_LEADER", userName: "Alex" },
             { role: "VOCALS", userName: "Judy" },
-            { role: "VOCALS", userName: "Grace" },
           ],
         }),
       ],
@@ -60,11 +59,12 @@ describe("buildScheduleGrid", () => {
     const wlRows = grid.roleRows.filter((r) => r.role === "WORSHIP_LEADER");
     const voxRows = grid.roleRows.filter((r) => r.role === "VOCALS");
     expect(wlRows).toHaveLength(1);
-    // Vox default capacity is 3, so three rows even with two people assigned.
-    expect(voxRows).toHaveLength(3);
+    // Vox default capacity is 2, so two rows even with one person assigned —
+    // the unfilled slot still gets a row.
+    expect(voxRows).toHaveLength(2);
     const cells = grid.columns[0].cells;
     expect(cells.WORSHIP_LEADER[0]).toBe("Alex");
-    expect(cells.VOCALS).toEqual(["Judy", "Grace", ""]);
+    expect(cells.VOCALS).toEqual(["Judy", ""]);
   });
 
   it("grows a role's rows when a set over-assigns past capacity", () => {

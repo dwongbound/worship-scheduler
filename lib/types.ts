@@ -367,6 +367,9 @@ export interface ApiMeMembership {
   // display name (cosmetic, shown on the org settings page).
   orgSpotifyConnected: boolean;
   spotifyDisplayName: string | null;
+  // The connected account's Spotify user id — the label's fallback when the
+  // account has no display_name set.
+  spotifyUserId: string | null;
 }
 
 // The current user's own profile — GET /api/me. Fetched once by AuthGate and

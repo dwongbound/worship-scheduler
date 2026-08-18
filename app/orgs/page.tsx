@@ -15,6 +15,15 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
+import type { ApiMeMembership } from "@/lib/types";
+
+// The "Spotify account" line once an org is connected. Prefers the account's
+// display name, falls back to its Spotify user id, and if we have neither just
+// says it's connected — better than naming an account we can't actually name.
+function spotifyAccountLabel(m: ApiMeMembership): string {
+  const name = m.spotifyDisplayName ?? m.spotifyUserId;
+  return name ? `Connected as ${name} ✓` : "Connected ✓";
+}
 
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
@@ -247,8 +256,13 @@ export default function OrgSettingsPage() {
                     <InfoTooltip text="One shared church account that owns this org's set playlists. Once connected, a set's songs become a collaborative Spotify playlist when its Slack group chat is created — anyone with the link can add or fix songs. Connect the account the whole team should share, not your personal one." />
                   </div>
                   <p className="text-sm text-gray-500">
+                    {/* Name the account when we know it. The old fallback
+                        said "Connected as Spotify", which reads like the
+                        account is *named* Spotify — say nothing rather than
+                        something wrong. A blank name means the connect-time
+                        /me lookup came back empty; reconnecting refills it. */}
                     {slack?.orgSpotifyConnected
-                      ? `Connected as ${slack.spotifyDisplayName ?? "Spotify"} ✓`
+                      ? spotifyAccountLabel(slack)
                       : "Not connected — set playlists can't be created yet."}
                   </p>
 

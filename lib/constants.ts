@@ -6,11 +6,14 @@
 // all derive from it.
 export const SLOT_CAPACITIES = {
   WORSHIP_LEADER: 1,
-  VOCALS: 3, // vox
+  VOCALS: 2, // vox
   ACOUSTIC_GUITAR: 1,
   ELECTRIC_GUITAR: 2,
   KEYS: 1, // pianos
-  STRINGS: 1,
+  // Strings aren't part of the standard shape — a set that wants them raises
+  // this per-set in the capacity editor. 0 is a valid capacity everywhere
+  // (validateSlotCapacities floors at 0), so the role just renders no slots.
+  STRINGS: 0,
   DRUMS: 1,
   BASS: 1,
 } as const;
@@ -171,7 +174,7 @@ export const INSTRUMENT_LABELS: Record<Instrument, string> = {
   VOCALS: "Vox",
   ACOUSTIC_GUITAR: "Acoustic Guitar",
   ELECTRIC_GUITAR: "Electric Guitar",
-  KEYS: "Piano / Keys",
+  KEYS: "Keys",
   STRINGS: "Strings",
   DRUMS: "Drums",
   BASS: "Bass",
