@@ -17,7 +17,8 @@ export interface SetHistoryDescriptor {
 export function describeSetHistoryEvent(
   event: ApiSetHistoryEvent
 ): SetHistoryDescriptor {
-  const role = INSTRUMENT_LABELS[event.role];
+  // Every type except SETLIST_CHANGED has a role; that one returns early below.
+  const role = event.role ? INSTRUMENT_LABELS[event.role] : "";
   const target = event.targetUser?.name ?? "Someone";
   const previous = event.previousUser?.name ?? "someone";
   const actor = event.actor?.name ?? "An admin";
@@ -82,5 +83,12 @@ export function describeSetHistoryEvent(
       return { actor, tokens: ["approved the change for", role] };
     case "REJECTED":
       return { actor, tokens: ["rejected the change for", role] };
+    // Setlist edits: `detail` already reads as a sentence fragment ("added
+    // \"Who Else\" (E)"), so it's the whole of line 2.
+    case "SETLIST_CHANGED":
+      return {
+        actor: event.actor?.name ?? "Someone",
+        tokens: [event.detail ?? "changed the setlist"],
+      };
   }
 }

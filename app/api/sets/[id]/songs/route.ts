@@ -3,10 +3,15 @@
 // band member may manage the setlist). Send { songs: [{ title, key }] } — the
 // whole ordered list; it fully replaces what's there. `key` is one of SONG_KEYS
 // or null/omitted (unspecified). Returns the saved songs in order.
+//
+// A save that actually changes something also writes a SETLIST_CHANGED history
+// event and (inside the group-chat window) tells the set's Slack chat.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { notifySetChange } from "@/lib/slack";
+import { describeSetlistChange } from "@/lib/setlist";
 import {
   MAX_SONGS_PER_SET,
   MAX_SONG_TITLE_LENGTH,
@@ -67,6 +72,14 @@ export async function PUT(
     cleaned.push({ title, key: normalizeSongKey(raw.key), order: cleaned.length });
   }
 
+  // Snapshot the old list first — it's the only way to say WHAT changed, since
+  // the save below replaces every row.
+  const before = await prisma.song.findMany({
+    where: { setId: id },
+    orderBy: { order: "asc" },
+    select: { title: true, key: true },
+  });
+
   // Replace-all in one transaction: wipe the old list, insert the new one.
   await prisma.$transaction([
     prisma.song.deleteMany({ where: { setId: id } }),
@@ -74,6 +87,23 @@ export async function PUT(
       data: cleaned.map((s) => ({ ...s, setId: id })),
     }),
   ]);
+
+  // Log + announce only a real change. The editor auto-saves as you type, so a
+  // save that changed nothing is routine and must stay silent.
+  const change = describeSetlistChange(before, cleaned);
+  if (change) {
+    await prisma.setHistoryEvent.create({
+      data: {
+        setId: id,
+        type: "SETLIST_CHANGED",
+        actorId: user.id,
+        detail: change,
+      },
+    });
+    // session.name is optional — never let the chat read "null added ...".
+    const who = user.name ?? "Someone";
+    await notifySetChange(id, `\u{1F3B5} Setlist update — ${who} ${change}.`);
+  }
 
   const songs = await prisma.song.findMany({
     where: { setId: id },

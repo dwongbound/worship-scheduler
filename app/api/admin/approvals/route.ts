@@ -9,6 +9,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { notifySetChange } from "@/lib/slack";
+import { INSTRUMENT_LABELS } from "@/lib/constants";
 
 const setSelect = {
   select: {
@@ -112,7 +114,10 @@ async function handleCover(
 ) {
   const a = await prisma.assignment.findUnique({
     where: { id },
-    include: { set: { select: { orgId: true } } },
+    include: {
+      set: { select: { orgId: true } },
+      user: { select: { name: true } },
+    },
   });
   if (
     !a ||
@@ -141,6 +146,17 @@ async function handleCover(
         },
       }),
     ]);
+    // Only NOW is the handoff real (the take itself was pending approval), so
+    // this is the first and only time the group chat hears about it.
+    const previous = await prisma.user.findUnique({
+      where: { id: a.pendingCoverFromUserId },
+      select: { name: true },
+    });
+    await notifySetChange(
+      a.setId,
+      `\u{1F501} ${INSTRUMENT_LABELS[a.role]}: ${a.user.name} is now covering for ` +
+        `${previous?.name ?? "someone"}.`
+    );
   } else {
     // Reject: hand the slot back to the original owner and re-open the cover so
     // someone else can take it (keep the note).
@@ -198,6 +214,28 @@ async function handleSwap(
       historyFor(from.setId, from.role, type, adminId),
       historyFor(to.setId, to.role, type, adminId),
     ]);
+    // The trade is final now — tell each set's chat who ended up in the slot.
+    // (Same set on both sides just means two lines in one chat.)
+    const [fromUser, toUser] = await Promise.all([
+      prisma.assignment.findUnique({
+        where: { id: from.id },
+        select: { user: { select: { name: true } } },
+      }),
+      prisma.assignment.findUnique({
+        where: { id: to.id },
+        select: { user: { select: { name: true } } },
+      }),
+    ]);
+    await notifySetChange(
+      from.setId,
+      `\u{1F501} ${INSTRUMENT_LABELS[from.role]}: ${fromUser?.user.name ?? "Someone"} ` +
+        `is now on this set (approved swap).`
+    );
+    await notifySetChange(
+      to.setId,
+      `\u{1F501} ${INSTRUMENT_LABELS[to.role]}: ${toUser?.user.name ?? "Someone"} ` +
+        `is now on this set (approved swap).`
+    );
   } else {
     // Undo the exchange: put each set back with its original owner + status.
     await prisma.$transaction([

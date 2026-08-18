@@ -86,6 +86,10 @@ enum SetHistoryEventType {
   // Admin decision on a pending cover/swap.
   APPROVED
   REJECTED
+  // The setlist changed (song added/removed/renamed, or a key changed). Unlike
+  // every type above, this one isn't about a person in a slot, so it carries no
+  // `role` — the human summary lives in `detail`.
+  SETLIST_CHANGED
 }
 
 // An organization — the highest-level tenant boundary (e.g. one church).
@@ -483,7 +487,13 @@ model SetHistoryEvent {
   set    Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
   setId  String
   type   SetHistoryEventType
-  role   Instrument
+  // The slot this event is about. Null only for SETLIST_CHANGED, which concerns
+  // the set's songs rather than any one role.
+  role   Instrument?
+
+  // Human summary for events that type + people don't fully describe (currently
+  // SETLIST_CHANGED, e.g. 'Added "Who Else" (E)').
+  detail String?
 
   // Who performed the action; null = the auto-scheduler (no human actor).
   actor   User?   @relation("SetHistoryActor", fields: [actorId], references: [id], onDelete: SetNull)

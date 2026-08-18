@@ -6,7 +6,8 @@ import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { promoteMDIfEmpty } from "@/lib/setMd";
-import { ALL_INSTRUMENTS } from "@/lib/constants";
+import { notifySetChange } from "@/lib/slack";
+import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
 
 export async function POST(req: NextRequest) {
   const sessionUser = await getSessionUser();
@@ -38,7 +39,8 @@ export async function POST(req: NextRequest) {
   // The assignee must belong to the set's org.
   const membership = await prisma.orgMembership.findUnique({
     where: { userId_orgId: { userId, orgId: set.orgId } },
-    select: { id: true },
+    // The name comes along for the group-chat notice below.
+    select: { id: true, user: { select: { name: true } } },
   });
   if (!membership) {
     return NextResponse.json({ error: "Invalid assignment" }, { status: 400 });
@@ -54,6 +56,10 @@ export async function POST(req: NextRequest) {
     // If this set needs an MD, has none yet, and the person just added is an
     // eligible MD, make them the MD (parity with auto-schedule).
     await promoteMDIfEmpty(setId, userId);
+    await notifySetChange(
+      setId,
+      `\u{2795} ${membership.user.name} was added on ${INSTRUMENT_LABELS[role as Instrument]}.`
+    );
     return NextResponse.json(created, { status: 201 });
   } catch {
     // Unique [setId, userId, role] — the person already fills this role here.
