@@ -6,12 +6,13 @@
 // caller can't see are silently dropped.
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
-import { getSessionUser } from "@/lib/auth";
+import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { resolveOrgScope } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { buildIcs } from "@/lib/ics";
 import { buildScheduleGrid, type GridSet } from "@/lib/scheduleGrid";
 import { INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
+import { visibleSetsFilter } from "@/lib/sets";
 
 // Pastel fill cycled per service day (header shade + lighter body shade),
 // echoing the hand-kept spreadsheet this replaces.
@@ -51,11 +52,10 @@ export async function POST(req: Request) {
     where: {
       id: { in: setIds },
       orgId: { in: scope },
-      OR: [
-        { isPrivate: false },
-        { assignments: { some: { userId: user.id } } },
-        { org: { memberships: { some: { userId: user.id, isAdmin: true } } } },
-      ],
+      ...visibleSetsFilter({
+        userId: user.id,
+        isSuperAdmin: isSuperAdmin(user.email),
+      }),
     },
     orderBy: { startsAt: "asc" },
     include: {

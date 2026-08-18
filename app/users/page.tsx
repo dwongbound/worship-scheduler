@@ -160,6 +160,9 @@ function UsersPageInner() {
   const [switchingOrg, setSwitchingOrg] = useState(false);
 
   const myId = session?.user?.id;
+  // Super-admins are admins of every org through the env allowlist, so the
+  // membership flag can't lock them out — they may toggle their own.
+  const amSuperAdmin = !!session?.user?.isSuperAdmin;
   // This page shows exactly ONE org (the navbar switcher's admin selection) —
   // members, teams, and stats all scope to it, with zero cross-org leakage.
   const { adminOrgId, isAdminAny } = useOrgs();
@@ -744,7 +747,9 @@ function UsersPageInner() {
                           ))}
                         </Select>
                       </div>
-                      {/* Can't change your own admin flag (avoids lockout). */}
+                      {/* Can't change your own admin flag (avoids lockout) —
+                          unless you're a super-admin, who keeps org-admin
+                          rights either way and so can't lock themselves out. */}
                       <Checkbox
                         label={
                           user.id === myId
@@ -752,7 +757,7 @@ function UsersPageInner() {
                             : "Admin access"
                         }
                         checked={user.isAdmin}
-                        disabled={user.id === myId}
+                        disabled={user.id === myId && !amSuperAdmin}
                         onChange={(e) =>
                           patchUser(user.id, { isAdmin: e.target.checked })
                         }
