@@ -14,8 +14,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import type { Instrument, SlotCapacityMap } from "@/lib/constants";
-import { buildSchedule } from "@/lib/scheduler";
+import { CHOIR, type Instrument, type SlotCapacityMap } from "@/lib/constants";
+import { availableChoirMembers, buildSchedule } from "@/lib/scheduler";
 import { defaultMDId, isValidMD } from "@/lib/md";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -53,9 +53,12 @@ export async function POST(
       where: { memberships: { some: { orgId: set.orgId } } },
       select: {
         id: true,
-        instruments: true,
         isMD: true,
-        teams: { select: { id: true } },
+        // Per-team roles: only this org's teams are relevant to this set.
+        teamMembers: {
+          where: { team: { orgId: set.orgId } },
+          select: { teamId: true, roles: true },
+        },
       },
     }),
     // Unscoped on purpose: busy blocks are global to the person.
@@ -76,9 +79,10 @@ export async function POST(
 
   const eligible = users.map((u) => ({
     id: u.id,
-    instruments: u.instruments as Instrument[],
     isMD: u.isMD,
-    teamIds: u.teams.map((t) => t.id),
+    rolesByTeam: Object.fromEntries(
+      u.teamMembers.map((m) => [m.teamId, m.roles as Instrument[]])
+    ),
   }));
   const existingCounts = new Map(existing.map((e) => [e.userId, e._count]));
 
@@ -87,47 +91,69 @@ export async function POST(
     n.assignments.map((a) => ({ userId: a.userId, startsAt: n.startsAt }))
   );
 
+  // The scheduler only fills the capacity-bearing band roles, so choir
+  // assignments are NOT fed in as pre-assigned constraints (they'd wrongly block
+  // a choir singer from also being scheduled on their band role). Choir is
+  // seated separately, below.
+  const schedulerSet = {
+    id: set.id,
+    startsAt: set.startsAt,
+    durationMinutes: set.durationMinutes,
+    capacities: set.slotCapacities as SlotCapacityMap | null,
+    requiresMD: set.requiresMD,
+    // Only this set's team members are eligible for the fill.
+    teamId: set.teamId,
+    // The current BAND roster, verbatim — the fill works around it.
+    preAssigned: set.assignments
+      .filter((a) => a.role !== CHOIR)
+      .map((a) => ({
+        userId: a.userId,
+        role: a.role as Instrument,
+        isMD: a.user.isMD,
+      })),
+  };
+
   const proposals = buildSchedule(
-    [
-      {
-        id: set.id,
-        startsAt: set.startsAt,
-        durationMinutes: set.durationMinutes,
-        capacities: set.slotCapacities as SlotCapacityMap | null,
-        requiresMD: set.requiresMD,
-        // Only this set's team members are eligible for the fill.
-        teamId: set.teamId,
-        // The current roster, verbatim — the fill works around it.
-        preAssigned: set.assignments.map((a) => ({
-          userId: a.userId,
-          role: a.role as Instrument,
-          isMD: a.user.isMD,
-        })),
-      },
-    ],
+    [schedulerSet],
     eligible,
     rules,
     existingCounts,
     booked
   );
 
+  // Choir: seat everyone on the team who's free at this time and isn't already
+  // on this set's choir. Unbounded — no capacity, spacing, or load balancing.
+  // Only when the set has choir turned on (opt-in per set); otherwise skip it.
+  const alreadyOnChoir = new Set(
+    set.assignments.filter((a) => a.role === CHOIR).map((a) => a.userId)
+  );
+  const choirUserIds = set.choirEnabled
+    ? availableChoirMembers(schedulerSet, eligible, rules, alreadyOnChoir)
+    : [];
+
+  // Band picks + choir singers, all committed together.
+  const newAssignments = [
+    ...proposals.map((p) => ({ userId: p.userId, role: p.role })),
+    ...choirUserIds.map((userId) => ({ userId, role: CHOIR as Instrument })),
+  ];
+
   // Commit the new picks as PENDING (people still confirm) and log each as
   // auto-scheduled (actorId null → the history shows "Auto-scheduler").
   const { count } = await prisma.assignment.createMany({
-    data: proposals.map((p) => ({
+    data: newAssignments.map((a) => ({
       setId: set.id,
-      userId: p.userId,
-      role: p.role,
+      userId: a.userId,
+      role: a.role,
       status: "PENDING" as const,
     })),
     skipDuplicates: true,
   });
-  if (proposals.length > 0) {
+  if (newAssignments.length > 0) {
     await prisma.setHistoryEvent.createMany({
-      data: proposals.map((p) => ({
+      data: newAssignments.map((a) => ({
         setId: set.id,
-        role: p.role,
-        targetUserId: p.userId,
+        role: a.role,
+        targetUserId: a.userId,
         type: "ADDED" as const,
       })),
     });

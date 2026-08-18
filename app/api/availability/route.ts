@@ -2,6 +2,7 @@
 // POST /api/availability — add an entry (RECURRING or SPECIFIC).
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
+import { targetsUser } from "@/lib/availabilityTargets";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 
@@ -28,7 +29,11 @@ export async function GET() {
       orderBy: { createdAt: "asc" },
     }),
     prisma.availabilityRequest.findMany({
-      where: { orgId: { in: await getMyOrgIds(user.id) } },
+      where: {
+        orgId: { in: await getMyOrgIds(user.id) },
+        // Only requests aimed at a team I'm on (lib/availabilityTargets).
+        ...targetsUser(user.id),
+      },
       include: { org: { select: { id: true, name: true } } },
       orderBy: { createdAt: "desc" },
     }),

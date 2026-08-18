@@ -2,12 +2,20 @@
 // Custom-styled month calendar. One month at a time, ‹ › arrows to move
 // between months, and every set rendered as a clickable "slot" chip on its
 // day. Clicking a chip calls onSelectSet (the page opens SetDetailModal).
-// Days with more sets than fit show a "+N more" button that opens a small
-// day list. Fully Tailwind-styled; light + dark aware.
-import { useEffect, useMemo, useRef, useState } from "react";
+// A day with more sets than fit scrolls inside its own cell (scrollbar hidden),
+// with top/bottom fade + chevron cues marking that there's more out of view.
+// Fully Tailwind-styled; light + dark aware.
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import Modal from "./common/Modal";
 import StatusBadge from "./StatusBadge";
 import LoadingDots from "./common/LoadingDots";
 import { INSTRUMENT_LABELS, type AssignmentStatus } from "@/lib/constants";
@@ -16,8 +24,6 @@ import { setStatus } from "@/lib/setStatus";
 import type { ApiSet, ApiSwapRequest } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-// How many chips to show in a cell before collapsing into "+N more".
-const MAX_CHIPS = 3;
 
 // A set's overall confirmation state → dot color (see lib/setStatus). Red for
 // a cover request, amber if anyone's still pending, green once all confirmed,
@@ -82,9 +88,6 @@ export default function CalendarMonth({
   const [viewMonth, setViewMonth] = useState(
     () => new Date(today.getFullYear(), today.getMonth(), 1)
   );
-  // Day whose full set list is expanded in the "+N more" popup (or null).
-  const [openDay, setOpenDay] = useState<Date | null>(null);
-
   const year = viewMonth.getFullYear();
   const month = viewMonth.getMonth();
 
@@ -136,10 +139,6 @@ export default function CalendarMonth({
   const goToday = () =>
     setViewMonth(new Date(today.getFullYear(), today.getMonth(), 1));
 
-  const openDaySets = openDay
-    ? setsByDay.get(dayKey(openDay)) ?? []
-    : [];
-
   // Whole weeks (Sun–Sat) shown — drives the day grid's row template.
   const weekRows = cells.length / 7;
 
@@ -189,11 +188,14 @@ export default function CalendarMonth({
         ))}
       </div>
 
-      {/* Day grid — fills the remaining height, its rows sharing it evenly
-          (min 6rem each) and scrolling only when the viewport can't fit them. */}
+      {/* Day grid — fills the remaining height, its rows sharing it evenly so
+          the whole month always fits the page rather than forcing a scroll.
+          `minmax(0, 1fr)` lets the rows shrink to fit a short viewport (each
+          cell is overflow-hidden and collapses extra sets into "+N more");
+          overflow-y-auto stays only as a safety net for an extreme squeeze. */}
       <div
         className="grid min-h-0 flex-1 grid-cols-7 overflow-y-auto"
-        style={{ gridTemplateRows: `repeat(${weekRows}, minmax(6rem, 1fr))` }}
+        style={{ gridTemplateRows: `repeat(${weekRows}, minmax(0, 1fr))` }}
       >
         {cells.map((date, i) => {
           const inMonth = date.getMonth() === month;
@@ -201,13 +203,11 @@ export default function CalendarMonth({
           // Past days (and days outside this month) are dimmed.
           const muted = !inMonth || date < startOfToday;
           const daySets = setsByDay.get(dayKey(date)) ?? [];
-          const shown = daySets.slice(0, MAX_CHIPS);
-          const overflow = daySets.length - shown.length;
 
           return (
             <div
               key={date.toISOString()}
-              className={`group relative min-h-0 overflow-hidden border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
+              className={`group relative flex min-h-0 flex-col overflow-hidden border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
                 muted
                   ? "bg-gray-50 text-gray-400 dark:bg-gray-900/50"
                   : "bg-white dark:bg-gray-800"
@@ -227,7 +227,7 @@ export default function CalendarMonth({
               )}
 
               {/* Date number; today gets a filled indigo pill */}
-              <div className="mb-1 flex justify-end">
+              <div className="mb-1 flex shrink-0 justify-end">
                 <span
                   className={`flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-medium ${
                     isToday
@@ -241,74 +241,104 @@ export default function CalendarMonth({
                 </span>
               </div>
 
-              <div className="space-y-1">
-                {shown.map((set) => (
+              {/* All of the day's chips, scrollable within the cell (scrollbar
+                  hidden) with fade + chevron cues when there's more out of view.
+                  The fade blends to the cell's own bg, which differs when muted. */}
+              <DayChips
+                fadeFrom={
+                  muted
+                    ? "from-gray-50 dark:from-gray-900/50"
+                    : "from-white dark:from-gray-800"
+                }
+              >
+                {daySets.map((set) => (
                   <SlotChip
                     key={set.id}
                     set={set}
                     mine={isMine(set)}
                     myId={myId}
+                    past={new Date(set.startsAt) < today}
                     onClick={() => onSelectSet(set)}
                     onConfirm={onConfirm}
                     covers={takeableBySet.get(set.id) ?? []}
                   />
                 ))}
-                {overflow > 0 && (
-                  <button
-                    onClick={() => setOpenDay(date)}
-                    className="w-full rounded px-1.5 py-0.5 text-left text-xs font-medium text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700"
-                  >
-                    +{overflow} more
-                  </button>
-                )}
-              </div>
+              </DayChips>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
 
-      {/* "+N more" day popup: full list of that day's sets */}
-      <Modal
-        open={openDay !== null}
-        onClose={() => setOpenDay(null)}
-        title={
-          openDay
-            ? openDay.toLocaleDateString(undefined, {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-              })
-            : ""
-        }
+// A day cell's scrollable chip list. Fills the cell's remaining height and
+// scrolls internally with the scrollbar hidden; a top and/or bottom fade plus a
+// small chevron appear only when content is clipped in that direction, so it's
+// clear there are more sets above/below. `fadeFrom` carries the gradient's
+// start color (matching the cell bg) so the fade blends seamlessly.
+function DayChips({
+  children,
+  fadeFrom,
+}: {
+  children: ReactNode;
+  fadeFrom: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether content is hidden above / below the current scroll position.
+  const [more, setMore] = useState({ up: false, down: false });
+
+  const recompute = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    setMore({
+      up: scrollTop > 1,
+      // -1 guards against sub-pixel rounding that would otherwise leave the
+      // "more below" cue on when fully scrolled.
+      down: scrollTop + clientHeight < scrollHeight - 1,
+    });
+  }, []);
+
+  // Recompute after layout and whenever the cell (or its content) resizes — the
+  // grid rows flex with the viewport, so a cell's height isn't fixed.
+  useLayoutEffect(() => {
+    recompute();
+    const el = scrollRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(recompute);
+    ro.observe(el);
+    for (const child of Array.from(el.children)) ro.observe(child);
+    return () => ro.disconnect();
+  }, [recompute, children]);
+
+  return (
+    <div className="relative min-h-0 flex-1">
+      <div
+        ref={scrollRef}
+        onScroll={recompute}
+        // `[scrollbar-width:none]` (Firefox) + the webkit rule hide the bar.
+        className="h-full space-y-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
       >
-        <ul className="space-y-2">
-          {openDaySets.map((set) => (
-            <li key={set.id}>
-              <button
-                onClick={() => {
-                  setOpenDay(null);
-                  onSelectSet(set);
-                }}
-                className="flex w-full items-center justify-between gap-2 rounded-lg border border-gray-200 px-3 py-2 text-left text-sm hover:border-indigo-400 dark:border-gray-700"
-              >
-                <span>
-                  <span className="font-medium">
-                    {set.label ?? "Worship Set"}
-                  </span>
-                  <span className="ml-2 text-gray-500 dark:text-gray-400">
-                    {formatTime(set.startsAt)}
-                  </span>
-                </span>
-                {isMine(set) && (
-                  <span className="rounded-full bg-indigo-600 px-2 py-0.5 text-xs font-medium text-white">
-                    You
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </Modal>
+        {children}
+      </div>
+
+      {/* Top fade — shown when scrolled down past the first chip. */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-x-0 top-0 h-4 bg-gradient-to-b ${fadeFrom} to-transparent transition-opacity duration-150 ${
+          more.up ? "opacity-100" : "opacity-0"
+        }`}
+      />
+      {/* Bottom fade + a centered chevron nudging that there's more below. */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-x-0 bottom-0 flex h-5 items-end justify-center bg-gradient-to-t ${fadeFrom} to-transparent transition-opacity duration-150 ${
+          more.down ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <ChevronDown className="h-3 w-3 text-gray-400 dark:text-gray-500" />
+      </div>
     </div>
   );
 }
@@ -320,6 +350,7 @@ function SlotChip({
   set,
   mine,
   myId,
+  past,
   onClick,
   onConfirm,
   covers,
@@ -327,6 +358,8 @@ function SlotChip({
   set: ApiSet;
   mine: boolean;
   myId?: string;
+  // The set already happened — rendered dimmed (but still clickable).
+  past?: boolean;
   onClick: () => void;
   onConfirm?: (assignmentId: string) => Promise<void>;
   // Cover requests on this set the current user could take (may be empty).
@@ -419,10 +452,14 @@ function SlotChip({
       <button
         onClick={onClick}
         title={`${set.label ?? "Worship Set"} · ${formatTime(set.startsAt)}`}
-        className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-xs font-medium transition-colors ${
+        className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-xs font-medium transition ${
           mine
             ? "bg-indigo-600 text-white hover:bg-indigo-700"
             : "bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/40 dark:text-indigo-300 dark:hover:bg-indigo-900/70"
+        } ${
+          // Past sets read as done: dimmed + desaturated, but still a live
+          // button. Hovering restores full opacity so it's clearly clickable.
+          past ? "opacity-50 grayscale-[35%] hover:opacity-100" : ""
         }`}
       >
         {dot && (
@@ -487,6 +524,21 @@ function SlotChip({
                       Cover needed — you can take{" "}
                       {covers.map((c) => INSTRUMENT_LABELS[c.role]).join(", ")}.
                     </p>
+                    {/* The requesters' optional notes, if any. */}
+                    {covers.some((c) => c.reason) && (
+                      <ul className="mb-1 space-y-0.5">
+                        {covers
+                          .filter((c) => c.reason)
+                          .map((c) => (
+                            <li
+                              key={c.id}
+                              className="italic text-gray-500 dark:text-gray-400"
+                            >
+                              “{c.reason}” — {c.user.name}
+                            </li>
+                          ))}
+                      </ul>
+                    )}
                     <Link
                       href={`/swaps#cover-${covers[0].id}`}
                       className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
@@ -564,6 +616,21 @@ function ChevronRight() {
         d="M7.5 5l5 5-5 5"
         stroke="currentColor"
         strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// Small down-chevron cue at the bottom of a scrollable day cell.
+function ChevronDown({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M5 7.5l5 5 5-5"
+        stroke="currentColor"
+        strokeWidth="2"
         strokeLinecap="round"
         strokeLinejoin="round"
       />

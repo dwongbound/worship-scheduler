@@ -1,6 +1,7 @@
 // Unit tests for the auto-scheduling algorithm (lib/scheduler.ts).
 import { describe, expect, it } from "vitest";
 import {
+  availableChoirMembers,
   buildSchedule,
   isUserAvailable,
   type SchedulerSet,
@@ -16,12 +17,23 @@ const tuesdaySet: SchedulerSet = {
   durationMinutes: 60,
 };
 
+// Default team every fixture user is placed on unless a test overrides it.
+// Roles are per-team now, so a candidate must hold the role on SOME team to be
+// eligible (a team-less set draws on the union across the person's teams).
+const DEFAULT_TEAM = "team-default";
+
 function user(
   id: string,
-  instruments: SchedulerUser["instruments"],
-  isMD = false
+  roles: SchedulerUser["rolesByTeam"][string],
+  isMD = false,
+  teamIds: string | string[] = DEFAULT_TEAM
 ): SchedulerUser {
-  return { id, instruments, isMD };
+  const teams = Array.isArray(teamIds) ? teamIds : [teamIds];
+  return {
+    id,
+    isMD,
+    rolesByTeam: Object.fromEntries(teams.map((t) => [t, roles])),
+  };
 }
 
 describe("isUserAvailable", () => {
@@ -172,6 +184,40 @@ describe("buildSchedule", () => {
     expect(roles).toEqual(["ACOUSTIC_GUITAR", "VOCALS"]);
   });
 
+  it("leaves acoustic empty when no worship leader or vocalist plays it", () => {
+    // a1 plays ONLY acoustic (not WL/vox), so the acoustic slot must stay empty
+    // rather than seating a dedicated acoustic-only player. Drums fills as usual.
+    const players = [user("a1", ["ACOUSTIC_GUITAR"]), user("d1", ["DRUMS"])];
+    const result = buildSchedule([tuesdaySet], players, []);
+    expect(result.some((a) => a.role === "ACOUSTIC_GUITAR")).toBe(false);
+    expect(result).toContainEqual({ setId: "set-1", userId: "d1", role: "DRUMS" });
+  });
+
+  it("hands acoustic to a seated vocalist over an acoustic-only player", () => {
+    // v1 sings AND plays acoustic; a1 only plays acoustic. The acoustic slot
+    // goes to v1 (who is already a vocalist), and a1 is never seated.
+    const v1 = user("v1", ["VOCALS", "ACOUSTIC_GUITAR"]);
+    const a1 = user("a1", ["ACOUSTIC_GUITAR"]);
+    const result = buildSchedule([tuesdaySet], [v1, a1], []);
+    expect(result).toContainEqual({ setId: "set-1", userId: "v1", role: "VOCALS" });
+    expect(result).toContainEqual({
+      setId: "set-1",
+      userId: "v1",
+      role: "ACOUSTIC_GUITAR",
+    });
+    expect(result.some((a) => a.userId === "a1")).toBe(false);
+  });
+
+  it("leaves acoustic empty when the only vocalist doesn't play it", () => {
+    // v1 sings but can't play acoustic; a1 plays acoustic but doesn't sing/lead.
+    // Neither qualifies, so acoustic stays empty even though someone plays it.
+    const v1 = user("v1", ["VOCALS"]);
+    const a1 = user("a1", ["ACOUSTIC_GUITAR"]);
+    const result = buildSchedule([tuesdaySet], [v1, a1], []);
+    expect(result).toContainEqual({ setId: "set-1", userId: "v1", role: "VOCALS" });
+    expect(result.some((a) => a.role === "ACOUSTIC_GUITAR")).toBe(false);
+  });
+
   it("disallows a non-sanctioned overlap (keys + electric guitar)", () => {
     const player = user("p1", ["KEYS", "ELECTRIC_GUITAR"]);
     const result = buildSchedule([tuesdaySet], [player], []);
@@ -224,25 +270,25 @@ describe("buildSchedule", () => {
     expect(result[0].userId).toBe("d2");
   });
 
-  it("only schedules members of the set's team", () => {
+  it("only schedules people who play the role on the set's team", () => {
     const drummers = [
-      { ...user("d1", ["DRUMS"]), teamIds: ["team-b"] },
-      { ...user("d2", ["DRUMS"]), teamIds: ["team-a", "team-b"] },
+      user("d1", ["DRUMS"], false, "team-b"), // drums, but on team-b only
+      user("d2", ["DRUMS"], false, ["team-a", "team-b"]), // drums on team-a too
     ];
     const set: SchedulerSet = { ...tuesdaySet, teamId: "team-a" };
     const result = buildSchedule([set], drummers, []);
     expect(result).toEqual([{ setId: "set-1", userId: "d2", role: "DRUMS" }]);
   });
 
-  it("leaves a slot empty when no team member plays the role", () => {
-    const drummers = [{ ...user("d1", ["DRUMS"]), teamIds: ["team-b"] }];
+  it("leaves a slot empty when no one plays the role on the set's team", () => {
+    const drummers = [user("d1", ["DRUMS"], false, "team-b")];
     const set: SchedulerSet = { ...tuesdaySet, teamId: "team-a" };
     expect(buildSchedule([set], drummers, [])).toHaveLength(0);
   });
 
-  it("treats a team-less set as open to everyone (even non-members)", () => {
-    // No teamId on the set → users with and without teams are all eligible.
-    const drummers = [user("d1", ["DRUMS"])]; // no teamIds at all
+  it("treats a team-less set as open to anyone who plays the role on any team", () => {
+    // No teamId on the set → the union of the person's per-team roles is used.
+    const drummers = [user("d1", ["DRUMS"], false, "some-team")];
     const result = buildSchedule([tuesdaySet], drummers, []);
     expect(result).toHaveLength(1);
   });
@@ -517,5 +563,69 @@ describe("buildSchedule spacing", () => {
       new Map([["d2", 5]])
     );
     expect(who(result, "week-2")).toEqual(["d2"]);
+  });
+
+  it("never fills CHOIR (it isn't a capacity band role)", () => {
+    // A pure choir member is ignored by the greedy fill — choir is seated
+    // separately, via availableChoirMembers.
+    const singer = user("c1", ["CHOIR"]);
+    expect(buildSchedule([tuesdaySet], [singer], [])).toEqual([]);
+  });
+
+  it("ignores a pre-assigned CHOIR slot so the singer stays free for a band role", () => {
+    // p1 is already on the set's choir AND plays drums. The choir slot must not
+    // count as a constraint that blocks them from the open drums slot.
+    const player = user("p1", ["DRUMS", "CHOIR"]);
+    const result = buildSchedule(
+      [{ ...tuesdaySet, preAssigned: [{ userId: "p1", role: "CHOIR" }] }],
+      [player],
+      []
+    );
+    expect(result).toContainEqual({ setId: "set-1", userId: "p1", role: "DRUMS" });
+  });
+});
+
+describe("availableChoirMembers", () => {
+  it("returns every available singer who lists CHOIR", () => {
+    const users = [
+      user("c1", ["CHOIR"]),
+      user("c2", ["VOCALS", "CHOIR"]),
+      user("d1", ["DRUMS"]), // not a choir member
+    ];
+    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+  });
+
+  it("excludes people who are unavailable at the set's time", () => {
+    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
+    const rules: UnavailabilityRule[] = [
+      // c2 is blocked Tuesday evening.
+      { userId: "c2", type: "RECURRING", dayOfWeek: 2, startMinute: 1080, endMinute: 1260 },
+    ];
+    expect(availableChoirMembers(tuesdaySet, users, rules)).toEqual(["c1"]);
+  });
+
+  it("excludes people already on the set's choir", () => {
+    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
+    const already = new Set(["c1"]);
+    expect(availableChoirMembers(tuesdaySet, users, [], already)).toEqual(["c2"]);
+  });
+
+  it("is team-scoped: only choir members of the set's team are seated", () => {
+    // Choir is a per-team role now — a set's choir draws only on people who
+    // list CHOIR on THAT team, not singers from another team.
+    const teamSet: SchedulerSet = { ...tuesdaySet, teamId: "team-A" };
+    const users = [
+      user("c1", ["CHOIR"], false, "team-A"),
+      user("c2", ["CHOIR"], false, "team-B"), // other team → excluded
+    ];
+    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1"]);
+  });
+
+  it("a team-less set draws choir from anyone with CHOIR on any team", () => {
+    const users = [
+      user("c1", ["CHOIR"], false, "team-A"),
+      user("c2", ["CHOIR"], false, "team-B"),
+    ];
+    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
   });
 });

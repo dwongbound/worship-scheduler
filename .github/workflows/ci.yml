@@ -1,9 +1,13 @@
 name: CI
 
 # Unit and e2e run as SEPARATE jobs (in parallel) so a flaky e2e doesn't mask
-# unit results and either can be re-run on its own. Both use the same docker
-# compose "test" profile you run locally, so the environment (TZ, db, browsers)
-# matches exactly — just with the command overridden per job.
+# unit results and either can be re-run on its own. e2e is further split into
+# desktop (chromium) and mobile (mobile-ios, mobile-android) jobs — Playwright
+# projects that already exist in playwright.config.ts — so the two device
+# classes run concurrently and a failure in one doesn't block re-running the
+# other on its own. All jobs use the same docker compose "test" profile you
+# run locally, so the environment (TZ, db, browsers) matches exactly — just
+# with the command overridden per job.
 #
 # PRs are the gate for dev → staging → main; the push trigger covers only main
 # (a post-merge confirmation of what production deploys). No push trigger for
@@ -43,7 +47,7 @@ jobs:
           docker compose --profile test run --rm --no-deps worship-scheduler-test
           sh -c "npm install && npx prisma generate && npm run test:unit"
 
-  e2e:
+  e2e-desktop:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -64,15 +68,53 @@ jobs:
           SUPERADMIN_EMAILS=superadmin@example.com
           APP_TZ=America/Los_Angeles
           EOF
-      - name: E2e tests (playwright)
+      # Desktop layout only (chromium) — mobile.spec.ts is excluded from this
+      # project via testIgnore in playwright.config.ts.
+      - name: E2e tests — desktop (playwright)
         run: >
           docker compose --profile test run --rm worship-scheduler-test
-          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e"
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e -- --project=chromium"
       # Playwright traces/screenshots for debugging a red run.
       - name: Upload test artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-test-results
+          name: playwright-test-results-desktop
+          path: test-results/
+          if-no-files-found: ignore
+
+  e2e-mobile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create env/test.env
+        run: |
+          mkdir -p env
+          cat > env/test.env <<'EOF'
+          POSTGRES_USER=worship
+          POSTGRES_PASSWORD=worship
+          POSTGRES_DB=worship_test
+          DATABASE_URL=postgresql://worship:worship@localhost:5433/worship_test
+          NEXTAUTH_URL=http://localhost:3100
+          NEXTAUTH_SECRET=test-only-secret
+          SEED_ADMIN_USERNAME=admin
+          SEED_ADMIN_PASSWORD=password123
+          ORG_KEYS=Sunday Church:test-sunday-key,Youth Ministry:test-youth-key
+          SUPERADMIN_EMAILS=superadmin@example.com
+          APP_TZ=America/Los_Angeles
+          EOF
+      # Mobile layout only (mobile.spec.ts) — run under both device presets
+      # defined in playwright.config.ts (iPhone 16 Pro + Galaxy S24).
+      - name: E2e tests — mobile (playwright)
+        run: >
+          docker compose --profile test run --rm worship-scheduler-test
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e -- --project=mobile-ios --project=mobile-android"
+      # Playwright traces/screenshots for debugging a red run.
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results-mobile
           path: test-results/
           if-no-files-found: ignore

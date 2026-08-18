@@ -99,9 +99,13 @@ export async function POST(req: NextRequest) {
       where: { memberships: { some: { orgId: admin.orgId } } },
       select: {
         id: true,
-        instruments: true,
         isMD: true,
-        teams: { select: { id: true } },
+        // Per-team roles drive eligibility now (a person may play different
+        // roles on different teams). Only this org's teams matter here.
+        teamMembers: {
+          where: { team: { orgId: admin.orgId } },
+          select: { teamId: true, roles: true },
+        },
       },
     }),
     // Deliberately unscoped: busy blocks are global to the person, so a block
@@ -155,6 +159,7 @@ export async function POST(req: NextRequest) {
       durationMinutes: number;
       capacities: SlotCapacityMap | null;
       requiresMD: boolean;
+      groupChatLeadDays: number | null;
       teamId: string | null;
       existing: boolean;
     }
@@ -193,6 +198,7 @@ export async function POST(req: NextRequest) {
         durationMinutes: template.durationMinutes,
         capacities: template.slotCapacities as SlotCapacityMap | null,
         requiresMD: template.requiresMD,
+        groupChatLeadDays: template.groupChatLeadDays,
         teamId: template.teamId,
         existing: existingByKey.has(matchKey),
       });
@@ -214,9 +220,10 @@ export async function POST(req: NextRequest) {
     })),
     users.map((u) => ({
       id: u.id,
-      instruments: u.instruments as Instrument[],
       isMD: u.isMD,
-      teamIds: u.teams.map((t) => t.id),
+      rolesByTeam: Object.fromEntries(
+        u.teamMembers.map((m) => [m.teamId, m.roles as Instrument[]])
+      ),
     })),
     rules,
     existingCounts,
@@ -254,6 +261,7 @@ export async function POST(req: NextRequest) {
             )
           : null,
         slotCapacities: s.capacities,
+        groupChatLeadDays: s.groupChatLeadDays,
         teamId: s.teamId,
         existing: s.existing,
         assignments,

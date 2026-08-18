@@ -162,9 +162,10 @@ test("assignment dropdown flags people who are unavailable for the set", async (
     // are already filled, so Vox is the only role with an open slot she
     // qualifies for.
     await login(page, "admin");
-    await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
-    const modal = page.getByRole("dialog");
-    await expect(modal).toBeVisible();
+    // Deep-link to the set instead of clicking its calendar chip: near a
+    // month's end the seeded Wednesday set can land in the next month, which
+    // the calendar isn't showing, so the chip wouldn't be visible to click.
+    const modal = await openSetByLabel(page, "Wednesday Night");
 
     const voxRow = modal.getByRole("listitem").filter({ hasText: "Vox" });
     await voxRow.getByRole("button", { name: "None" }).first().click();
@@ -234,12 +235,12 @@ test("filters the calendar by my sets and by status", async ({ page }) => {
   const chip = page.getByText("Filter Fixture").filter({ visible: true });
   await expect(chip.first()).toBeVisible();
 
-  // Person filter → "My sets": admin isn't on it → hidden. Back to "Everyone"
+  // "Show sets for" → "My sets": admin isn't on it → hidden. Back to "All sets"
   // shows it again.
   const personFilter = page.getByLabel("Show sets for");
   await personFilter.selectOption({ label: "My sets" });
   await expect(chip).toHaveCount(0);
-  await personFilter.selectOption({ label: "Everyone" });
+  await personFilter.selectOption({ label: "All sets" });
   await expect(chip.first()).toBeVisible();
 
   // Status "Unconfirmed": an empty set has no pending assignment → hidden.

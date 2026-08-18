@@ -3,11 +3,18 @@
 // autocomplete input to add people, the team's Slack channel + weekly-summary
 // send button, and the team's delete button. Fully prop-driven so both the
 // Team tab and the Org settings page can drive it with their own state.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
-import type { ApiAdminUser, ApiTeam } from "@/lib/types";
+import Select from "@/components/common/Select";
+import { orgHeaders } from "@/lib/api";
+import { DAY_LABELS } from "@/lib/constants";
+import { minutesToTimeLabel, timeStringToMinutes } from "@/lib/dates";
+import type { ApiAdminUser, ApiTeam, ApiWeeklyReminder } from "@/lib/types";
+
+// Days ordered Monday→Sunday (DAY_LABELS is indexed 0=Sun) for the picker.
+const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 0];
 
 export default function TeamMembersModal({
   team,
@@ -59,7 +66,63 @@ export default function TeamMembersModal({
       .catch(() => setOrgSlackConnected(false));
   }, [team?.id, team?.slackChannelId, team?.orgId]);
 
+  // ── This team's weekly Slack reminders (moved here from Org settings) ──
+  // The modal owns them: it fetches on open and drives its own add/delete, so
+  // both pages that render this modal get the feature for free. Scoped to this
+  // team via the org header + a client-side filter on teamId.
+  const [reminders, setReminders] = useState<ApiWeeklyReminder[] | null>(null);
+  const [remDay, setRemDay] = useState(0);
+  const [remTime, setRemTime] = useState("09:00");
+  const [remBusy, setRemBusy] = useState(false);
+  const [remError, setRemError] = useState("");
+
+  const loadReminders = useCallback((t: ApiTeam) => {
+    if (!t.orgId) return;
+    fetch("/api/admin/reminders", { headers: orgHeaders(t.orgId) })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((all: ApiWeeklyReminder[]) =>
+        setReminders(all.filter((rem) => rem.teamId === t.id))
+      )
+      .catch(() => setReminders([]));
+  }, []);
+
+  useEffect(() => {
+    setReminders(null);
+    setRemError("");
+    if (team) loadReminders(team);
+  }, [team, loadReminders]);
+
   if (!team) return null;
+
+  async function addReminder(t: ApiTeam) {
+    if (!t.orgId) return;
+    setRemBusy(true);
+    setRemError("");
+    try {
+      const res = await fetch("/api/admin/reminders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...orgHeaders(t.orgId) },
+        body: JSON.stringify({
+          teamId: t.id,
+          dayOfWeek: remDay,
+          minute: timeStringToMinutes(remTime),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRemError(data.error ?? "Could not add the reminder.");
+        return;
+      }
+      loadReminders(t);
+    } finally {
+      setRemBusy(false);
+    }
+  }
+
+  async function deleteReminder(t: ApiTeam, id: string) {
+    await fetch(`/api/admin/reminders/${id}`, { method: "DELETE" });
+    loadReminders(t);
+  }
 
   async function saveChannel(t: ApiTeam) {
     setSlackBusy(true);
@@ -141,7 +204,7 @@ export default function TeamMembersModal({
       {members.length === 0 ? (
         <p className="text-sm text-gray-400">Nobody on this team yet.</p>
       ) : (
-        <ul className="max-h-56 space-y-1 overflow-y-auto">
+        <ul className="scrollbar-visible max-h-56 space-y-1 overflow-y-auto pr-1">
           {members.map((u) => (
             <li
               key={u.id}
@@ -248,6 +311,100 @@ export default function TeamMembersModal({
             </p>
           )}
         </div>
+      </div>
+
+      {/* Auto group chats are configured PER SET / template now (each set's
+          detail modal and the recurring-set form), not on the team — a set's
+          chat is its own private channel. The team's standing summary channel
+          below is a separate thing. */}
+
+      {/* Weekly Slack reminders for THIS team (moved here from Org settings). */}
+      <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
+        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          Weekly reminders
+        </p>
+        <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">
+          Automatically post this team&rsquo;s upcoming sets to its Slack channel
+          every week. Sent on a daily schedule, so the time is approximate.
+        </p>
+
+        {/* Existing reminders for this team, each with a delete. */}
+        {reminders && reminders.length > 0 && (
+          <ul className="mb-3 space-y-1">
+            {reminders.map((r) => (
+              <li
+                key={r.id}
+                className="flex items-center justify-between gap-2 rounded-md bg-gray-50 px-3 py-1.5 text-sm dark:bg-gray-800/60"
+              >
+                <span>
+                  {DAY_LABELS[r.dayOfWeek]} · {minutesToTimeLabel(r.minute)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => deleteReminder(team, r.id)}
+                  aria-label={`Delete the ${DAY_LABELS[r.dayOfWeek]} reminder`}
+                  className="rounded p-1 text-xs leading-none text-gray-400
+                    hover:bg-red-50 hover:text-red-600
+                    dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                >
+                  ✕
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* Add a reminder: day + time (the team is implicit here). */}
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="w-32">
+            <Select
+              label="Day"
+              value={remDay}
+              onChange={(e) => setRemDay(Number(e.target.value))}
+            >
+              {DAY_OPTIONS.map((d) => (
+                <option key={d} value={d}>
+                  {DAY_LABELS[d]}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Time
+            </label>
+            <input
+              type="time"
+              value={remTime}
+              onChange={(e) => setRemTime(e.target.value)}
+              className="rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-sm
+                dark:border-gray-600 dark:bg-gray-900"
+            />
+          </div>
+          <Button
+            size="sm"
+            onClick={() => addReminder(team)}
+            disabled={remBusy}
+          >
+            Add
+          </Button>
+        </div>
+        {!team.slackChannelId && (
+          <p className="mt-2 flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
+            <span
+              aria-hidden
+              className="flex h-4 w-4 items-center justify-center rounded-full bg-amber-100 text-[10px] font-bold text-amber-700 dark:bg-amber-900/50 dark:text-amber-300"
+            >
+              !
+            </span>
+            Add a Slack channel ID above for reminders to post.
+          </p>
+        )}
+        {remError && (
+          <p className="mt-2 text-sm font-medium text-red-600 dark:text-red-400">
+            {remError}
+          </p>
+        )}
       </div>
 
       {/* Delete confirmation: a separate stacked modal so it reads as a

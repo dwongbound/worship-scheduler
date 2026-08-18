@@ -33,7 +33,7 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { action } = await req.json();
+  const { action, reason } = await req.json();
   const status = ACTION_TO_STATUS[action];
   if (!status) {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
@@ -47,9 +47,16 @@ export async function PATCH(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  // Requesting cover records the (optional) reason; cancelling/confirming clears
+  // it, so a stale note never lingers on a set that's no longer up for cover.
+  const swapReason =
+    action === "requestSwap" && typeof reason === "string" && reason.trim()
+      ? reason.trim()
+      : null;
+
   const updated = await prisma.assignment.update({
     where: { id: assignment.id },
-    data: { status },
+    data: { status, swapReason },
   });
 
   await prisma.setHistoryEvent.create({

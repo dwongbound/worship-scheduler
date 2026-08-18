@@ -4,29 +4,26 @@
 // per-org Slack workspace connection, which only an org admin can change.
 // Reached from the navbar org switcher's "Org settings" item. This replaces the
 // old cramped per-org settings modal that used to live in OrgSwitcher.
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
+import { useMe } from "@/components/MeProvider";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
-
-// Just the per-org fields /api/me exposes that this page cares about.
-type MeMembership = {
-  orgId: string;
-  isAdmin: boolean;
-  orgSlackConnected: boolean;
-  slackTeamName: string | null;
-};
 
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
   const { update } = useSession();
+  // Per-org Slack status lives on /api/me's memberships (fetched once by
+  // AuthGate and shared via MeProvider), not /api/orgs. refreshMe() re-pulls it
+  // after a connect so this page's status updates without its own /api/me.
+  const { me, refreshMe } = useMe();
+  const memberships = me?.memberships ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [memberships, setMemberships] = useState<MeMembership[] | null>(null);
   // Add-an-org modal (same join-by-key flow as the navbar switcher).
   const [addOpen, setAddOpen] = useState(false);
   const [orgKey, setOrgKey] = useState("");
@@ -38,17 +35,6 @@ export default function OrgSettingsPage() {
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyError, setKeyError] = useState("");
   const [keyCopied, setKeyCopied] = useState(false);
-
-  // Per-org Slack status lives on /api/me's memberships, not /api/orgs.
-  const loadMe = useCallback(async () => {
-    const me = await fetch("/api/me")
-      .then((r) => r.json())
-      .catch(() => null);
-    setMemberships(me?.memberships ?? []);
-  }, []);
-  useEffect(() => {
-    loadMe();
-  }, [loadMe]);
 
   // Default the selection to the "current" org — whatever the switcher points
   // at — falling back to the first org. Only runs until a valid pick is set so
@@ -131,7 +117,7 @@ export default function OrgSettingsPage() {
       setOrgKey("");
       await update(); // refresh membership hints in the JWT
       window.dispatchEvent(new Event(ORGS_CHANGED_EVENT));
-      await loadMe();
+      await refreshMe();
     } finally {
       setAddBusy(false);
     }
@@ -233,7 +219,7 @@ export default function OrgSettingsPage() {
                               `/api/slack/install?orgId=${selected.id}`,
                               { method: "DELETE" }
                             );
-                            await loadMe();
+                            await refreshMe();
                           }}
                         >
                           Disconnect
@@ -243,6 +229,51 @@ export default function OrgSettingsPage() {
                   ) : (
                     <p className="pt-1 text-xs text-gray-400">
                       Only an admin of this org can change its Slack connection.
+                    </p>
+                  )}
+                </div>
+
+                {/* Spotify — the shared church account this org's set playlists
+                    are created under. Same connect/disconnect shape as Slack. */}
+                <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                  <p className="text-sm font-medium">Spotify account</p>
+                  <p className="text-sm text-gray-500">
+                    {slack === null
+                      ? "Checking…"
+                      : slack.orgSpotifyConnected
+                        ? `Connected as ${slack.spotifyDisplayName ?? "Spotify"} ✓`
+                        : "Not connected — set playlists can't be created yet."}
+                  </p>
+
+                  {selected.isAdmin ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <Button
+                        onClick={() => {
+                          window.location.href = `/api/spotify/connect?orgId=${selected.id}`;
+                        }}
+                      >
+                        {slack?.orgSpotifyConnected
+                          ? "Reconnect Spotify"
+                          : "Connect to Spotify"}
+                      </Button>
+                      {slack?.orgSpotifyConnected && (
+                        <Button
+                          variant="secondary"
+                          onClick={async () => {
+                            await fetch(
+                              `/api/spotify/connect?orgId=${selected.id}`,
+                              { method: "DELETE" }
+                            );
+                            await refreshMe();
+                          }}
+                        >
+                          Disconnect
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="pt-1 text-xs text-gray-400">
+                      Only an admin of this org can change its Spotify connection.
                     </p>
                   )}
                 </div>

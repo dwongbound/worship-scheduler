@@ -9,7 +9,6 @@
 // A master date-range selector at the top drives a per-person count of how
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
@@ -18,32 +17,46 @@ import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Dropdown from "@/components/common/Dropdown";
+import InfoTooltip from "@/components/common/InfoTooltip";
+import TeamActivityModal from "@/components/TeamActivityModal";
 import LoadingDots from "@/components/common/LoadingDots";
 import Select from "@/components/common/Select";
+import SlackIcon from "@/components/common/SlackIcon";
 import { usePageLoading } from "@/components/LoadingProvider";
+import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import {
+  ALL_INSTRUMENTS,
   INSTRUMENT_LABELS,
-  ROLE_ORDER,
   type Instrument,
 } from "@/lib/constants";
 import { STAT_RANGES, rangeForDays } from "@/lib/stats";
-import type { UserSetBreakdown } from "@/app/api/admin/users/stats/route";
+import type { UserStats } from "@/app/api/admin/users/stats/route";
 import type { ApiAdminUser, ApiTeam } from "@/lib/types";
 
 // Fixed-width right column of a user card: how many sets they're on in the
 // selected range, broken down by set type (e.g. "Sunday Worship (3)").
 // Hidden on phones (along with the range selector) — the metrics don't fit.
 function SetBreakdown({
-  breakdown,
+  stats,
   loading,
 }: {
-  breakdown: UserSetBreakdown[] | undefined;
+  stats: UserStats | undefined;
   loading: boolean;
 }) {
-  const total = breakdown?.reduce((sum, b) => sum + b.count, 0) ?? 0;
+  const teams = stats?.teams ?? [];
+  const total = teams.reduce((sum, b) => sum + b.count, 0);
+  // Cover/swap activity lines — only shown when non-zero.
+  const activity: { label: string; count: number }[] = stats
+    ? [
+        { label: "Covers requested", count: stats.coversRequested },
+        { label: "Covers taken", count: stats.coversTaken },
+        { label: "Swaps requested", count: stats.swapsRequested },
+        { label: "Swaps taken", count: stats.swapsTaken },
+      ].filter((a) => a.count > 0)
+    : [];
   return (
     <div className="hidden sm:block sm:w-52 sm:flex-shrink-0 sm:border-l sm:border-gray-200 sm:pl-4 dark:sm:border-gray-700">
       <p className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -51,15 +64,16 @@ function SetBreakdown({
         {!loading && <Badge tone="blue">{total}</Badge>}
       </p>
       {/* Fixed height + independent scroll so every card is the same height
-          no matter how many set types a person has. */}
+          no matter how many teams / activity lines a person has. */}
       <div className="h-24 overflow-y-auto pr-1">
         {loading ? (
           <p className="text-sm text-gray-400">…</p>
-        ) : total === 0 ? (
+        ) : total === 0 && activity.length === 0 ? (
           <p className="text-sm text-gray-400">None in range</p>
         ) : (
           <ul className="space-y-1 text-sm">
-            {breakdown!.map((b) => (
+            {/* Sets grouped by team. */}
+            {teams.map((b) => (
               <li key={b.label} className="flex justify-between gap-2">
                 <span className="text-gray-700 dark:text-gray-300">
                   {b.label}
@@ -67,6 +81,16 @@ function SetBreakdown({
                 <span className="tabular-nums text-gray-500 dark:text-gray-400">
                   {b.count}
                 </span>
+              </li>
+            ))}
+            {/* Cover / swap activity (only the non-zero ones). */}
+            {activity.map((a) => (
+              <li
+                key={a.label}
+                className="flex justify-between gap-2 text-xs text-gray-500 dark:text-gray-400"
+              >
+                <span>{a.label}</span>
+                <span className="tabular-nums">{a.count}</span>
               </li>
             ))}
           </ul>
@@ -89,6 +113,32 @@ function UsersPageInner() {
     Record<string, { ok: boolean; text: string }>
   >({});
 
+  // Team management modal (same one Org settings uses): which team is open, the
+  // "add member" query, the delete-confirm target, and a busy flag while a
+  // delete request is in flight.
+  const [openTeamId, setOpenTeamId] = useState<string | null>(null);
+  // The team whose roster + per-team roles the page is focused on ("all" = show
+  // everyone, with role editing off since roles are per-team).
+  const [teamFilter, setTeamFilter] = useState("all");
+  // Per-person team selection: which team's roles each member card is showing
+  // (userId → teamId). The top "Set all to" dropdown bulk-fills this for every
+  // member on the chosen team; each card can then diverge on its own.
+  const [teamByUser, setTeamByUser] = useState<Record<string, string>>({});
+  // Team Activity log modal.
+  const [activityOpen, setActivityOpen] = useState(false);
+  // Inline Slack-member-id editor: which user's is open, its draft, and errors.
+  const [editingSlackFor, setEditingSlackFor] = useState<string | null>(null);
+  const [slackDraft, setSlackDraft] = useState("");
+  const [slackSaving, setSlackSaving] = useState(false);
+  const [slackError, setSlackError] = useState<string | null>(null);
+  // Whether THIS org's Slack bot is installed. Manual member-id entry only makes
+  // sense once it is (the id belongs to that workspace, and it's what we'd DM
+  // through) — until then we hide the "Set Slack ID" affordance entirely.
+  const [orgSlackConnected, setOrgSlackConnected] = useState(false);
+  const [memberQuery, setMemberQuery] = useState("");
+  const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
+  const [teamBusy, setTeamBusy] = useState(false);
+
   // Team stats: which range is picked, the custom range's dates, and the
   // userId → set-count map fetched for the active range (null while loading).
   // Default to "Next 4 weeks" (fall back to the first preset if it's renamed).
@@ -101,9 +151,7 @@ function UsersPageInner() {
     toYmd(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
   );
   // userId → per-set-type breakdown for the active range (null while loading).
-  const [stats, setStats] = useState<Record<string, UserSetBreakdown[]> | null>(
-    null
-  );
+  const [stats, setStats] = useState<Record<string, UserStats> | null>(null);
   // True from the moment the admin org changes until users, teams AND stats
   // have all reloaded — keeps the full-page loader up so the switch happens as
   // one atomic swap instead of each section updating piecewise.
@@ -150,6 +198,16 @@ function UsersPageInner() {
   useEffect(() => {
     if (switchingOrg && users && teams && stats) setSwitchingOrg(false);
   }, [switchingOrg, users, teams, stats]);
+
+  // Track whether the selected org has Slack connected, to gate manual id entry.
+  useEffect(() => {
+    if (!adminOrgId) return;
+    setOrgSlackConnected(false);
+    fetch(`/api/slack/status?orgId=${adminOrgId}`)
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((d) => setOrgSlackConnected(!!d.enabled))
+      .catch(() => setOrgSlackConnected(false));
+  }, [adminOrgId]);
 
   // Post one team's "this week's sets" to its Slack channel on demand. Full
   // team management (create/delete, members, channel id) lives on the Org page.
@@ -240,9 +298,7 @@ function UsersPageInner() {
   const patchUser = useCallback(
     async (
       id: string,
-      patch: Partial<
-        Pick<ApiAdminUser, "isAdmin" | "isMD" | "instruments" | "teams">
-      >
+      patch: Partial<Pick<ApiAdminUser, "isAdmin" | "isMD" | "teams">>
     ) => {
       setUsers(
         (prev) => prev?.map((u) => (u.id === id ? { ...u, ...patch } : u)) ?? prev
@@ -267,18 +323,110 @@ function UsersPageInner() {
     [load, adminOrgId]
   );
 
-  function toggleInstrument(user: ApiAdminUser, inst: Instrument) {
-    const next = user.instruments.includes(inst)
-      ? user.instruments.filter((i) => i !== inst)
-      : [...user.instruments, inst];
-    patchUser(user.id, { instruments: next });
+  // Set a member's roles ON A SPECIFIC TEAM (roles are per-team). Optimistic
+  // local update, then PATCH teamRoles; reload on failure.
+  const setTeamRoles = useCallback(
+    async (user: ApiAdminUser, teamId: string, roles: Instrument[]) => {
+      setUsers(
+        (prev) =>
+          prev?.map((u) =>
+            u.id === user.id
+              ? {
+                  ...u,
+                  teams: u.teams.map((t) =>
+                    t.id === teamId ? { ...t, roles } : t
+                  ),
+                }
+              : u
+          ) ?? prev
+      );
+      const res = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
+        body: JSON.stringify({ teamRoles: [{ teamId, roles }] }),
+      });
+      if (!res.ok) load();
+      // Picking a first role (un)covers the "needs roles" nudge for this person.
+      window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
+    },
+    [load, adminOrgId]
+  );
+
+  function toggleTeamRole(user: ApiAdminUser, teamId: string, role: Instrument) {
+    const current = user.teams.find((t) => t.id === teamId)?.roles ?? [];
+    const next = current.includes(role)
+      ? current.filter((r) => r !== role)
+      : [...current, role];
+    setTeamRoles(user, teamId, next);
+  }
+
+  // Open the inline Slack-id editor for a person, prefilled with their current
+  // id (admins can set it for someone who won't run the Connect flow).
+  function startSlackEdit(user: ApiAdminUser) {
+    setEditingSlackFor(user.id);
+    setSlackDraft(user.slackUserId ?? "");
+    setSlackError(null);
+  }
+
+  // Save (or clear, when blank) a person's Slack member id for this org.
+  async function saveSlackId(user: ApiAdminUser) {
+    setSlackSaving(true);
+    setSlackError(null);
+    const value = slackDraft.trim() || null;
+    const res = await fetch(`/api/admin/users/${user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
+      body: JSON.stringify({ slackUserId: value }),
+    });
+    if (res.ok) {
+      setUsers(
+        (prev) =>
+          prev?.map((u) =>
+            u.id === user.id
+              ? { ...u, slackUserId: value, slackConnected: value != null }
+              : u
+          ) ?? prev
+      );
+      setEditingSlackFor(null);
+    } else {
+      const data = await res.json().catch(() => ({}));
+      setSlackError(data.error ?? "Could not save Slack ID");
+    }
+    setSlackSaving(false);
   }
 
   // Add this person to a team from their card's "+ Add to team" chip. Goes
-  // through patchUser so the card's chips update optimistically.
+  // through patchUser so the card's chips update optimistically. New members
+  // start with no roles on the team.
   function addToTeam(user: ApiAdminUser, team: ApiTeam) {
     if (user.teams.some((t) => t.id === team.id)) return;
-    patchUser(user.id, { teams: [...user.teams, team] });
+    patchUser(user.id, {
+      teams: [...user.teams, { id: team.id, name: team.name, roles: [] }],
+    });
+  }
+
+  // Remove this person from a team via the "x" on their membership chip. Same
+  // optimistic patchUser path as addToTeam, just the inverse team set.
+  function removeFromTeam(user: ApiAdminUser, team: ApiTeam) {
+    patchUser(user.id, {
+      teams: user.teams.filter((t) => t.id !== team.id),
+    });
+  }
+
+  // Delete a team from the management modal (the route derives the org from the
+  // team resource, so no org header is needed). Refetch users + teams so the
+  // cards and Teams list reflect the removed memberships, then close.
+  async function deleteTeam(teamId: string) {
+    setTeamBusy(true);
+    try {
+      await fetch(`/api/teams/${teamId}`, { method: "DELETE" });
+      load();
+      window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
+      setConfirmingTeamId(null);
+      setOpenTeamId(null);
+    } finally {
+      setTeamBusy(false);
+    }
   }
 
   usePageLoading(
@@ -305,8 +453,9 @@ function UsersPageInner() {
         <div>
           <h1 className="text-2xl font-bold">Team</h1>
           <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Grant or revoke admin access and set which instruments each person
-            can be scheduled for. Changes save automatically.
+            Pick a team to see its members and set the roles each person plays on
+            it (roles are per-team). Grant or revoke admin access here too.
+            Changes save automatically.
           </p>
         </div>
 
@@ -343,23 +492,60 @@ function UsersPageInner() {
         </div>
       </div>
 
-      {/* ── Teams: read-only list here; managed on the Org settings page ── */}
+      {/* Teams panel: the header's team picker drives which members show below
+          (and whose per-team roles are editable — "All members" turns role
+          editing off, since a role only means something on a specific team). The
+          list below manages each team (click → members/Slack/delete modal). */}
       <Card>
-        {/* Styled as a heading but rendered as <p>: the e2e specs target the
-            page's "Team" <h1> with a non-exact heading query, and any real
-            heading containing "Team" would collide with it. */}
-        <p className="mb-1 font-semibold">Teams</p>
-        <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
-          Every set belongs to a team, and only that team&rsquo;s members are
-          scheduled on it. Team settings can only be modified on the{" "}
-          <Link
-            href="/orgs"
-            className="font-medium text-indigo-600 underline dark:text-indigo-400"
-          >
-            Org settings page
-          </Link>{" "}
-          (desktop only).
-        </p>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {/* Styled as a heading but rendered as <p>: the e2e specs target the
+                page's "Team" <h1> with a non-exact heading query, and any real
+                heading containing "Team" would collide with it. */}
+            <p className="font-semibold">Teams</p>
+            <InfoTooltip
+              text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page (desktop only)."
+            />
+            {/* All cover/swap/approval activity across the org, filterable. */}
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setActivityOpen(true)}
+            >
+              Team Activity
+            </Button>
+          </div>
+          <div className="w-full sm:w-64">
+            <Select
+              label="Set all to team"
+              hideLabel
+              data-testid="team-filter"
+              value={teamFilter}
+              onChange={(e) => {
+                const v = e.target.value;
+                setTeamFilter(v);
+                // Bulk-set every member on the chosen team to it; "all" clears
+                // each card's selection so nobody's roles are shown.
+                if (v === "all") {
+                  setTeamByUser({});
+                } else {
+                  const next: Record<string, string> = {};
+                  for (const u of users ?? []) {
+                    if (u.teams.some((t) => t.id === v)) next[u.id] = v;
+                  }
+                  setTeamByUser(next);
+                }
+              }}
+            >
+              <option value="all">Set all to a team…</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
         {teams.length === 0 ? (
           <p className="text-sm text-gray-400">No teams yet.</p>
         ) : (
@@ -371,13 +557,25 @@ function UsersPageInner() {
                   key={team.id}
                   className="flex flex-wrap items-center justify-between gap-2 py-2"
                 >
-                  <div>
-                    <p className="text-sm font-medium">{team.name}</p>
+                  {/* Clickable: opens the same team-management modal the Org
+                      settings page uses (members + Slack + delete). */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenTeamId(team.id);
+                      setMemberQuery("");
+                      setConfirmingTeamId(null);
+                    }}
+                    className="-mx-1 rounded px-1 text-left transition-colors hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                  >
+                    <p className="text-sm font-medium text-indigo-700 hover:underline dark:text-indigo-300">
+                      {team.name}
+                    </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
                       {memberCount(team.id)}{" "}
                       {memberCount(team.id) === 1 ? "member" : "members"}
                     </p>
-                  </div>
+                  </button>
                   <div className="flex items-center gap-2">
                     {result && (
                       <span
@@ -429,20 +627,97 @@ function UsersPageInner() {
               <div className="flex flex-col gap-4 sm:flex-row">
                 <div className="flex-1 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold">{user.name}</span>
+                      {/* Slack member id for THIS org — click to set/edit it by
+                          hand (the fallback to the person's own Connect flow). */}
+                      {editingSlackFor === user.id ? (
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            value={slackDraft}
+                            onChange={(e) => setSlackDraft(e.target.value)}
+                            placeholder="Slack member ID (U…)"
+                            aria-label={`Slack member ID for ${user.name}`}
+                            autoFocus
+                            className="w-44 rounded border border-gray-300 px-2 py-0.5 text-xs focus:border-indigo-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800"
+                          />
+                          <Button size="sm" onClick={() => saveSlackId(user)} disabled={slackSaving}>
+                            {slackSaving ? <LoadingDots size="sm" /> : "Save"}
+                          </Button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingSlackFor(null)}
+                            className="text-xs text-gray-500 hover:underline dark:text-gray-400"
+                          >
+                            Cancel
+                          </button>
+                          {slackError && (
+                            <span className="text-xs text-red-600">{slackError}</span>
+                          )}
+                        </span>
+                      ) : user.slackConnected ? (
+                        // Editable only while the org's bot is installed;
+                        // otherwise show the id as a plain read-only badge.
+                        orgSlackConnected ? (
+                          <button
+                            type="button"
+                            onClick={() => startSlackEdit(user)}
+                            title="Edit Slack member ID"
+                            className="inline-flex items-center gap-0.5 text-green-600 hover:opacity-80 dark:text-green-400"
+                          >
+                            <SlackIcon className="h-4 w-4 shrink-0" />
+                            <span aria-hidden className="text-xs font-semibold">✓</span>
+                          </button>
+                        ) : (
+                          <span
+                            title="Slack member ID"
+                            className="inline-flex items-center gap-0.5 text-green-600 dark:text-green-400"
+                          >
+                            <SlackIcon className="h-4 w-4 shrink-0" />
+                            <span aria-hidden className="text-xs font-semibold">✓</span>
+                          </span>
+                        )
+                      ) : orgSlackConnected ? (
+                        <button
+                          type="button"
+                          onClick={() => startSlackEdit(user)}
+                          className="inline-flex items-center gap-1 rounded-full border border-dashed border-gray-300 px-2 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
+                        >
+                          <SlackIcon className="h-3.5 w-3.5" /> Set Slack ID
+                        </button>
+                      ) : (
+                        // Org hasn't connected Slack yet — nothing to link to,
+                        // so no manual-entry affordance is shown.
+                        <></>
+                      )}
                       {user.isAdmin && <Badge tone="amber">Admin</Badge>}
                       {user.isMD && <Badge tone="blue">MD</Badge>}
                     </div>
-                    <div className="flex items-center gap-4">
-                      {/* Musical director: eligible to be a required-MD set's MD. */}
-                      <Checkbox
-                        label="MD"
-                        checked={user.isMD}
-                        onChange={(e) =>
-                          patchUser(user.id, { isMD: e.target.checked })
-                        }
-                      />
+                    <div className="flex items-center gap-3">
+                      {/* Which team's roles this card is editing — on the header
+                          row so it's the first choice you make per person. It
+                          drives the role checkboxes below; the top "Set all to"
+                          dropdown fills these in bulk. */}
+                      <div className="w-44">
+                        <Select
+                          label={`Team for ${user.name}`}
+                          hideLabel
+                          value={teamByUser[user.id] ?? ""}
+                          onChange={(e) =>
+                            setTeamByUser((prev) => ({
+                              ...prev,
+                              [user.id]: e.target.value,
+                            }))
+                          }
+                        >
+                          <option value="">Select a team…</option>
+                          {user.teams.map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                       {/* Can't change your own admin flag (avoids lockout). */}
                       <Checkbox
                         label={
@@ -459,21 +734,53 @@ function UsersPageInner() {
                     </div>
                   </div>
 
-                  <div>
-                    <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                      Instruments / roles
-                    </p>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {ROLE_ORDER.map((inst) => (
-                        <Checkbox
-                          key={inst}
-                          label={INSTRUMENT_LABELS[inst]}
-                          checked={user.instruments.includes(inst)}
-                          onChange={() => toggleInstrument(user, inst)}
-                        />
-                      ))}
-                    </div>
-                  </div>
+                  {/* Roles are per-team; the header's team dropdown picks which
+                      team this shows. The top "Set all to" dropdown fills these
+                      in bulk. MD sits here (not the header) since it's a
+                      scheduling attribute, alongside the roles. */}
+                  {(() => {
+                    const selTeam = teamByUser[user.id] ?? "";
+                    const roles =
+                      user.teams.find((t) => t.id === selTeam)?.roles ?? [];
+                    return (
+                      <div>
+                        <div className="mb-2 flex flex-wrap items-center gap-3">
+                          <p className="text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                            Team roles
+                          </p>
+                          {/* Musical director: eligible to be a required-MD
+                              set's MD. */}
+                          <Checkbox
+                            label="MD"
+                            checked={user.isMD}
+                            onChange={(e) =>
+                              patchUser(user.id, { isMD: e.target.checked })
+                            }
+                          />
+                        </div>
+                        {selTeam ? (
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                            {ALL_INSTRUMENTS.map((inst) => (
+                              <Checkbox
+                                key={inst}
+                                label={INSTRUMENT_LABELS[inst]}
+                                checked={roles.includes(inst)}
+                                onChange={() =>
+                                  toggleTeamRole(user, selTeam, inst)
+                                }
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {user.teams.length === 0
+                              ? `Add ${user.name.split(" ")[0]} to a team first.`
+                              : `Pick a team to set ${user.name.split(" ")[0]}’s roles.`}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Membership chips, plus an inline "+ Add to team" chip in
                       the first free slot so an admin can add this person to any
@@ -491,6 +798,27 @@ function UsersPageInner() {
                           {user.teams.map((team) => (
                             <Badge key={team.id} tone="indigo">
                               {team.name}
+                              {/* Inline remove: takes this person off the team,
+                                  optimistically (see removeFromTeam). */}
+                              <button
+                                type="button"
+                                onClick={() => removeFromTeam(user, team)}
+                                aria-label={`Remove ${user.name} from ${team.name}`}
+                                title={`Remove from ${team.name}`}
+                                className="-mr-1 ml-1 flex h-3.5 w-3.5 items-center justify-center rounded-full text-indigo-500 transition-colors hover:bg-indigo-200 hover:text-indigo-900 dark:text-indigo-400 dark:hover:bg-indigo-800 dark:hover:text-indigo-100"
+                              >
+                                <svg
+                                  viewBox="0 0 14 14"
+                                  className="h-2.5 w-2.5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  aria-hidden="true"
+                                >
+                                  <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                                </svg>
+                              </button>
                             </Badge>
                           ))}
                           {available.length > 0 && (
@@ -519,12 +847,49 @@ function UsersPageInner() {
                   })()}
                 </div>
 
-                <SetBreakdown breakdown={stats?.[user.id]} loading={stats === null} />
+                <SetBreakdown stats={stats?.[user.id]} loading={stats === null} />
               </div>
             </Card>
           </li>
         ))}
       </ul>
+
+      {/* Team-management modal — the same shared component the Org settings
+          page drives. Add/remove members go through patchUser so the user
+          cards + member counts update optimistically. */}
+      <TeamMembersModal
+        team={teams.find((t) => t.id === openTeamId) ?? null}
+        users={users}
+        query={memberQuery}
+        onQueryChange={setMemberQuery}
+        busy={teamBusy}
+        confirmingDelete={confirmingTeamId === openTeamId}
+        onConfirmDelete={(confirming) =>
+          setConfirmingTeamId(confirming ? openTeamId : null)
+        }
+        onDelete={deleteTeam}
+        onAdd={(user, team) => {
+          if (user.teams.some((t) => t.id === team.id)) return;
+          patchUser(user.id, {
+            teams: [...user.teams, { id: team.id, name: team.name, roles: [] }],
+          });
+          setMemberQuery(""); // clear so they can type the next name
+        }}
+        onRemove={(user, team) =>
+          patchUser(user.id, {
+            teams: user.teams.filter((t) => t.id !== team.id),
+          })
+        }
+        onSaved={load}
+        onClose={() => setOpenTeamId(null)}
+      />
+
+      <TeamActivityModal
+        open={activityOpen}
+        onClose={() => setActivityOpen(false)}
+        orgId={adminOrgId}
+        teams={teams}
+      />
     </div>
   );
 }

@@ -30,6 +30,11 @@ enum Instrument {
   STRINGS
   DRUMS
   BASS
+  // Choir is a special role: unlike the band roles above it has no fixed slot
+  // count in the team shape (SLOT_CAPACITIES / ROLE_ORDER omit it). It's an
+  // unbounded, admin-managed list on a set — the set-detail modal's "Auto
+  // schedule" seats everyone on the team who's free, and admins add more by hand.
+  CHOIR
 }
 
 // Lifecycle of an assignment:
@@ -39,10 +44,17 @@ enum Instrument {
 //   SWAP_REQUESTED — user wants out; visible to others with the same
 //                    instrument until someone takes it (back to PENDING
 //                    under the new user).
+//   PENDING_SWAP   — part of a proposed targeted trade (see SwapProposal);
+//                    frozen until the recipient accepts (both CONFIRMED) or
+//                    rejects (both restored to their captured prior status).
 enum AssignmentStatus {
   PENDING
   CONFIRMED
   SWAP_REQUESTED
+  PENDING_SWAP
+  // A cover/swap the recipient accepted or took — the slot already shows the
+  // new person, but it's awaiting an admin's approval before it's final.
+  PENDING_APPROVAL
 }
 
 enum UnavailabilityType {
@@ -68,6 +80,12 @@ enum SetHistoryEventType {
   SWAP_REQUESTED
   SWAP_CANCELED
   SWAP_TAKEN
+  // A targeted swap proposed, and (once the recipient accepts) awaiting approval.
+  SWAP_PROPOSED
+  SWAP_ACCEPTED
+  // Admin decision on a pending cover/swap.
+  APPROVED
+  REJECTED
 }
 
 // An organization — the highest-level tenant boundary (e.g. one church).
@@ -91,6 +109,15 @@ model Org {
   slackTeamName  String?
   slackBotToken  String?
   slackBotUserId String?
+
+  // Per-org Spotify connection: ONE shared church account authorizes the app,
+  // and every playlist this org creates lives under it. The long-lived OAuth
+  // refresh token is encrypted at rest (lib/crypto) exactly like slackBotToken
+  // — never plaintext. Null = Spotify not connected (lib/spotify no-ops). The
+  // user id/display name are cosmetic (shown on the admin "connected as" row).
+  spotifyRefreshToken String?
+  spotifyUserId       String?
+  spotifyDisplayName  String?
 
   memberships          OrgMembership[]
   teams                Team[]
@@ -119,6 +146,11 @@ model OrgMembership {
   // it lives here, per membership, rather than once on User.
   slackUserId String?
 
+  // When true, this person is added to EVERY Slack group chat created for this
+  // org's sets — even sets they aren't assigned to (e.g. a ministry lead who
+  // wants to be in every set's chat). Best-effort: needs a linked slackUserId.
+  alwaysInGroupChats Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   @@unique([userId, orgId])
@@ -139,18 +171,44 @@ model Team {
 
   // Slack channel (C...) the bot posts this team's set summaries to. The bot
   // must be invited to the channel; null = Slack summaries off for this team.
+  // (Per-set auto group chats are configured on the Set/SetTemplate, not here.)
   slackChannelId String?
 
+  members   TeamMember[]
+  // DEPRECATED: old role-less membership — see User.teams. Dropped after backfill.
   users     User[]           @relation("TeamMembers")
   sets      Set[]
   templates SetTemplate[]
   reminders WeeklyReminder[]
+  // Availability requests aimed at this team (see AvailabilityRequest.teams).
+  availabilityRequests AvailabilityRequest[] @relation("AvailabilityRequestTeams")
 
   createdAt DateTime @default(now())
 
   // Team names only need to be unique within their org.
   @@unique([orgId, name])
   @@map("teams")
+}
+
+// A person's membership on one team, carrying the roles they can fill ON THAT
+// team. Replaces the old implicit User↔Team m-n so roles can differ per team
+// (someone may play keys on Sunday but only sing on the Youth team). An empty
+// `roles` list = on the team but not yet schedulable for anything.
+model TeamMember {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  roles Instrument[] // roles this person can fill on this team (may be empty)
+
+  createdAt DateTime @default(now())
+
+  // One membership row per person per team.
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@map("team_members")
 }
 
 // A scheduled weekly Slack reminder: post one team's "this week's sets" summary
@@ -185,12 +243,19 @@ model User {
   email        String? @unique
 
   // Musical director: can be the designated MD on a set that requires one.
-  // Note: isMD and instruments are global to the person, not per-org.
+  // Note: isMD is global to the person, not per-org.
   isMD        Boolean      @default(false)
-  instruments Instrument[] // which slots this user can fill
+  // DEPRECATED: roles are now per-team (see TeamMember.roles). Kept only so the
+  // backfill (prisma/backfillTeamRoles.ts) can copy each person's old global
+  // roles onto their teams; a follow-up migration drops this column.
+  instruments Instrument[]
   // Orgs this person belongs to (admin is per-org — see OrgMembership).
   memberships OrgMembership[]
-  // Teams this person serves on — only sets of these teams schedule them.
+  // Teams this person serves on, with the roles they play ON EACH team — only
+  // sets of these teams schedule them, and only for roles listed here.
+  teamMembers TeamMember[]
+  // DEPRECATED: the old role-less team membership. Kept alongside teamMembers
+  // only so the backfill can read existing edges; a follow-up migration drops it.
   teams       Team[]       @relation("TeamMembers")
 
   assignments           Assignment[]
@@ -203,6 +268,9 @@ model User {
   historyActed    SetHistoryEvent[] @relation("SetHistoryActor")
   historyTargeted SetHistoryEvent[] @relation("SetHistoryTarget")
   historyPrevious SetHistoryEvent[] @relation("SetHistoryPrevious")
+  // Targeted swaps this person initiated / was offered (see SwapProposal).
+  swapsRequested  SwapProposal[]    @relation("SwapRequestedBy")
+  swapsReceived   SwapProposal[]    @relation("SwapRecipient")
   // Sets where this person is the designated musical director.
   mdSets          Set[]             @relation("SetMD")
 
@@ -229,6 +297,29 @@ model Set {
   // Default false = a normal set visible to the whole org.
   isPrivate Boolean @default(false)
 
+  // Choir is opt-in PER SET: an admin flips this on before anyone can be added
+  // to the set's choir or auto-scheduled into it. Default false = no choir on
+  // this set (the choir section is off and "Auto schedule" skips choir).
+  choirEnabled Boolean @default(false)
+
+  // Auto-create this set's private Slack channel this many days before it
+  // starts (the daily cron does it). Null = off. Copied from the SetTemplate at
+  // generate time; editable per set. Distinct from Team.slackChannelId (the
+  // team's standing channel for weekly summaries) — this is a per-set chat.
+  groupChatLeadDays Int?
+
+  // When the cron created this set's Slack channel, so it's only made once.
+  // Null = not created yet (or the feature is off for this set).
+  groupChatCreatedAt DateTime?
+
+  // The private Slack channel (C…) created for this set, so the archive cron can
+  // find it after the event. Null until the channel is created.
+  groupChatChannelId String?
+
+  // When the cron archived this set's channel (once the event date passed), so
+  // it's only archived once. Null = still open (or never had a channel).
+  groupChatArchivedAt DateTime?
+
   // The one designated MD for this set. Always someone assigned in an
   // MD-capable role (keys/electric/bass) and never the worship leader — see
   // lib/md.ts for the eligibility rule. Null = no MD chosen yet. SetNull so
@@ -251,12 +342,43 @@ model Set {
   team   Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
   teamId String?
 
+  // The worship leader's setlist for this set — ordered list of songs (title +
+  // key). Cascade-deletes with the set. Drives the Spotify playlist and (later)
+  // the per-set Drive chart folder.
+  songs Song[]
+
+  // The collaborative Spotify playlist created for this set (under the org's
+  // shared account), so a re-sync updates the SAME playlist instead of making a
+  // duplicate. Both null until a playlist is first created. The url is the
+  // shareable link posted into the set's Slack group chat.
+  spotifyPlaylistId  String?
+  spotifyPlaylistUrl String?
+
   assignments Assignment[]
   history     SetHistoryEvent[]
 
   createdAt DateTime @default(now())
 
   @@map("sets")
+}
+
+// One song in a set's setlist. The worship leader enters a title and (optional)
+// musical key; `order` is the 0-based position in the list. Title feeds the
+// Spotify search (first result) and — later — the Drive chart lookup, which
+// matches files named "<title> (<key>).pdf".
+model Song {
+  id    String @id @default(cuid())
+  set   Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId String
+
+  title String
+  key   String? // musical key, e.g. "C", "Bb" (see SONG_KEYS); null = unspecified
+  order Int // 0-based position in the setlist
+
+  createdAt DateTime @default(now())
+
+  @@index([setId])
+  @@map("songs")
 }
 
 // One user filling one role slot on one set.
@@ -269,13 +391,78 @@ model Assignment {
   role   Instrument
   status AssignmentStatus @default(PENDING)
 
+  // Optional note the owner leaves when requesting cover (status
+  // SWAP_REQUESTED) — shown to people who could take the set. Cleared when the
+  // request is cancelled/confirmed/taken.
+  swapReason String?
+
+  // While a cover-take is PENDING_APPROVAL, the slot already shows the taker;
+  // this holds the original owner so an admin REJECT can re-open the cover to
+  // them. Null except during that window. (No FK — it's a transient pointer.)
+  pendingCoverFromUserId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Targeted swaps this assignment is either side of (see SwapProposal).
+  swapFrom SwapProposal[] @relation("SwapFrom")
+  swapTo   SwapProposal[] @relation("SwapTo")
 
   // A person can hold several roles on one set (e.g. worship leader + acoustic
   // guitar) but never the same role twice.
   @@unique([setId, userId, role])
   @@map("assignments")
+}
+
+// A targeted swap ("trade") between two assignments in the SAME role: the
+// requester offers their slot (fromAssignment) for someone else's
+// (toAssignment). While PENDING both assignments sit at PENDING_SWAP;
+// accepting exchanges their users (both CONFIRMED), rejecting restores the
+// captured prior statuses. Only one PENDING proposal may touch a given
+// assignment at a time (enforced in the API, not the schema).
+model SwapProposal {
+  id String @id @default(cuid())
+
+  fromAssignment   Assignment @relation("SwapFrom", fields: [fromAssignmentId], references: [id], onDelete: Cascade)
+  fromAssignmentId String
+  toAssignment     Assignment @relation("SwapTo", fields: [toAssignmentId], references: [id], onDelete: Cascade)
+  toAssignmentId   String
+
+  // Who initiated the trade (owns fromAssignment); the recipient (owner of
+  // toAssignment) is who accepts or rejects it. recipientId is captured
+  // explicitly because toAssignment.userId flips to the requester on accept —
+  // so it's the only durable record of who received (and possibly accepted) it.
+  requestedBy   User   @relation("SwapRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  requestedById String
+  recipient     User   @relation("SwapRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  recipientId   String
+
+  // Optional note the proposer leaves — shown to the recipient with the trade.
+  reason String?
+
+  status SwapProposalStatus @default(PENDING)
+
+  // Captured at propose-time so a reject restores each side exactly.
+  fromPrevStatus AssignmentStatus
+  toPrevStatus   AssignmentStatus
+
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+
+  @@index([toAssignmentId, status])
+  @@index([fromAssignmentId, status])
+  @@index([requestedById])
+  @@index([recipientId, status])
+  @@map("swap_proposals")
+}
+
+enum SwapProposalStatus {
+  PENDING
+  // The recipient accepted; now awaiting an admin's approval before it's final.
+  PENDING_APPROVAL
+  ACCEPTED
+  REJECTED
+  CANCELED
 }
 
 // One line in a set's activity log — see SetHistoryEventType for what each
@@ -353,6 +540,10 @@ model SetTemplate {
   // Null = use the global SLOT_CAPACITIES default.
   slotCapacities Json?
 
+  // Sets expanded from this template inherit this per-set auto group-chat lead
+  // time (see Set.groupChatLeadDays). Null = off for the generated sets.
+  groupChatLeadDays Int?
+
   // The org this template (and its expanded sets) belongs to.
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
@@ -367,8 +558,8 @@ model SetTemplate {
 }
 
 // An admin's request for the team to enter their availability over a date
-// range. The most recent row PER ORG is that org's "active" request; a user
-// owes a response for each of their orgs' active requests. Drives the
+// range. The most recent row PER ORG **that targets you** is your "active"
+// request for that org; you owe a response for each of them. Drives the
 // Availabilities red dot + banner, and the Create tab's status panel.
 model AvailabilityRequest {
   id        String   @id @default(cuid())
@@ -381,6 +572,13 @@ model AvailabilityRequest {
 
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
+
+  // The teams this request is aimed at — only their members are asked to fill
+  // it in (see lib/availabilityTargets.ts). The admin picks them at creation time,
+  // defaulting to every team in the org. EMPTY means "the whole org": that's
+  // how rows created before team targeting behave, and the fallback for an org
+  // with no teams yet.
+  teams Team[] @relation("AvailabilityRequestTeams")
 
   // Specific blocks entered against this request + who has marked it complete.
   unavailability Unavailability[]

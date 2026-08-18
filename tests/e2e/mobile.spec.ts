@@ -69,7 +69,13 @@ test("phone calendar lists all upcoming sets by default, filterable to mine", as
   // "My sets" narrows to the ones she holds a slot on. Scope to visible: the
   // desktop month grid is also in the DOM here (hidden) and keeps Saturday
   // Prayer's chip, so an unscoped count would still see that hidden copy.
-  await page.getByLabel("Show sets").selectOption("mine");
+  // The desktop calendar's "Show sets for" control is also in the DOM (hidden
+  // at phone widths) and substring-matches "Show sets"; scope to the visible
+  // one, which is the mobile panel's select.
+  await page
+    .getByLabel("Show sets")
+    .filter({ visible: true })
+    .selectOption("mine");
   await expect(
     page.getByText("Saturday Prayer").filter({ visible: true })
   ).toHaveCount(0);

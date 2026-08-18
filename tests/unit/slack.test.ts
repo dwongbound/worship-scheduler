@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   postDirectMessage,
   postToChannel,
-  openGroupConversation,
+  createPrivateChannel,
+  inviteToChannel,
+  archiveChannel,
   setConversationTopic,
   teamRosterText,
   weeklySummaryText,
@@ -46,10 +48,10 @@ describe("when Slack is not configured", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("openGroupConversation returns null without calling fetch", async () => {
+  it("createPrivateChannel returns null without calling fetch", async () => {
     delete process.env.SLACK_BOT_TOKEN;
     const fetchMock = mockFetchSequence();
-    const channel = await openGroupConversation(null, ["U1", "U2"]);
+    const channel = await createPrivateChannel(null, "jul-12-sunday");
     expect(channel).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -63,7 +65,7 @@ describe("dry-run mode (SLACK_DRY_RUN=1)", () => {
 
     // Full DM path: conversations.open (fake channel id) → chat.postMessage.
     expect(await postDirectMessage(null, "U123", "hi")).toBe(true);
-    expect(await openGroupConversation(null, ["U1", "U2"])).toBe("C_DRY_RUN");
+    expect(await createPrivateChannel(null, "jul-12-sunday")).toBe("C_DRY_RUN");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
@@ -103,21 +105,80 @@ describe("postDirectMessage", () => {
   });
 });
 
-describe("openGroupConversation", () => {
-  it("opens an MPIM with the comma-joined ids and returns its channel id", async () => {
-    const fetchMock = mockFetchSequence({ ok: true, channel: { id: "G42" } });
-    const channel = await openGroupConversation("xoxb-test-token", ["U1", "U2", "U3"]);
-    expect(channel).toBe("G42");
-    const [, init] = fetchMock.mock.calls[0];
+describe("createPrivateChannel", () => {
+  it("creates a private channel and returns its id", async () => {
+    const fetchMock = mockFetchSequence({ ok: true, channel: { id: "C42" } });
+    const channel = await createPrivateChannel("xoxb-test-token", "jul-12-sunday");
+    expect(channel).toBe("C42");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("conversations.create");
     expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      name: "jul-12-sunday",
+      is_private: true,
+    });
+  });
+
+  it("retries once with a suffix when the name is taken", async () => {
+    const fetchMock = mockFetchSequence(
+      { ok: false, error: "name_taken" }, // first candidate clashes
+      { ok: true, channel: { id: "C99" } } // suffixed candidate succeeds
+    );
+    const channel = await createPrivateChannel("xoxb-test-token", "jul-12-sunday");
+    expect(channel).toBe("C99");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // The retry uses a different (suffixed) name.
+    const firstName = JSON.parse(
+      (fetchMock.mock.calls[0][1] as RequestInit).body as string
+    ).name;
+    const secondName = JSON.parse(
+      (fetchMock.mock.calls[1][1] as RequestInit).body as string
+    ).name;
+    expect(secondName).not.toBe(firstName);
+    expect(secondName.startsWith("jul-12-sunday-")).toBe(true);
+  });
+
+  it("returns null when both attempts fail", async () => {
+    mockFetchSequence(
+      { ok: false, error: "name_taken" },
+      { ok: false, error: "name_taken" }
+    );
+    expect(await createPrivateChannel("xoxb-test-token", "x")).toBeNull();
+  });
+});
+
+describe("inviteToChannel", () => {
+  it("invites the comma-joined ids to the channel", async () => {
+    const fetchMock = mockFetchSequence({ ok: true });
+    await inviteToChannel("xoxb-test-token", "C1", ["U1", "U2", "U3"]);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("conversations.invite");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      channel: "C1",
       users: "U1,U2,U3",
     });
   });
 
-  it("returns null for an empty user list without calling fetch", async () => {
+  it("does nothing (no fetch) for an empty id list", async () => {
     const fetchMock = mockFetchSequence();
-    expect(await openGroupConversation("xoxb-test-token", [])).toBeNull();
+    await inviteToChannel("xoxb-test-token", "C1", []);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("archiveChannel", () => {
+  it("archives the channel and returns true on success", async () => {
+    const fetchMock = mockFetchSequence({ ok: true });
+    expect(await archiveChannel("xoxb-test-token", "C1")).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain("conversations.archive");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      channel: "C1",
+    });
+  });
+
+  it("returns false when Slack reports not-ok", async () => {
+    mockFetchSequence({ ok: false, error: "channel_not_found" });
+    expect(await archiveChannel("xoxb-test-token", "C1")).toBe(false);
   });
 });
 

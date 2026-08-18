@@ -7,7 +7,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { resolveOrgScope, requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { validateSlotCapacities } from "@/lib/constants";
+import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -26,8 +26,11 @@ export async function GET(req: NextRequest) {
   const sets = await prisma.set.findMany({
     where: {
       orgId: { in: scope },
+      // A rolling ~3-month window both directions. Past sets are kept (not
+      // hidden) so the calendar can show recent history — the client renders
+      // anything before "now" dimmed (see CalendarMonth's SlotChip `past`).
       startsAt: {
-        gte: new Date(now - 7 * MS_PER_DAY),
+        gte: new Date(now - 92 * MS_PER_DAY),
         lte: new Date(now + 92 * MS_PER_DAY),
       },
       // Private sets are visible only to the people assigned to them and to
@@ -46,6 +49,7 @@ export async function GET(req: NextRequest) {
       assignments: {
         include: { user: { select: { id: true, name: true, isMD: true } } },
       },
+      songs: { orderBy: { order: "asc" } },
     },
   });
 
@@ -60,6 +64,7 @@ export async function POST(req: NextRequest) {
     slotCapacities,
     requiresMD,
     isPrivate,
+    groupChatLeadDays,
     teamId,
   } = await req.json();
 
@@ -107,6 +112,7 @@ export async function POST(req: NextRequest) {
       durationMinutes,
       requiresMD: Boolean(requiresMD),
       isPrivate: Boolean(isPrivate),
+      groupChatLeadDays: parseGroupChatLeadDays(groupChatLeadDays),
       slotCapacities: capacities ?? undefined,
       teamId,
       orgId: team.orgId,

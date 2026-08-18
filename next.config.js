@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
-const { execSync } = require("node:child_process");
-const pkg = require("./package.json");
+import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
+
+// package.json isn't importable as ESM without a JSON import assertion (and
+// tooling support varies), so read it through a CJS require bridge instead.
+const pkg = createRequire(import.meta.url)("./package.json");
 
 // Resolve the current commit sha at build time. Vercel exposes it as an env
 // var (git isn't in the build sandbox); locally we shell out to git. Falls
@@ -49,4 +53,4 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+export default nextConfig;

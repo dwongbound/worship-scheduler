@@ -1,6 +1,14 @@
 // Shared e2e helpers.
 import { Locator, Page, expect } from "@playwright/test";
 
+// Local YYYY-MM-DD, matching lib/dates.toYmd (the format the picker's cells use
+// in their data-date). Inlined so this test helper needs no app import.
+function ymd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
+}
+
 /**
  * The <section> whose own <h2> is `heading`.
  *
@@ -43,11 +51,11 @@ export function orgKey(index: number): string {
  */
 export async function pickSingleDay(page: Page) {
   const dialog = page.getByRole("dialog");
-  // Today's grid cell — the enabled button carrying today's day number (the
-  // same number in a padding month is rendered disabled, so exclude those).
-  const todayCell = dialog
-    .getByRole("button", { name: String(new Date().getDate()), exact: true })
-    .and(page.locator("button:not([disabled])"));
+  // Today's grid cell, keyed by its `data-date` (YYYY-MM-DD) so it's the ONE
+  // current-month cell — matching by day number alone is ambiguous when a
+  // padding cell from an adjacent month shows the same number enabled (e.g. on
+  // the 2nd, next month's "2" is a trailing padding day).
+  const todayCell = dialog.locator(`[data-date="${ymd(new Date())}"]`);
 
   // One click sets the range start, which both availability forms accept as a
   // single-day block (they require only the start; endDate is optional). We
@@ -94,19 +102,23 @@ export async function login(
   await page.goto("/login");
   const userField = page.getByLabel("Username / Email");
   const passField = page.getByLabel("Password");
-  // Fill and confirm both values stick before submitting. On WebKit (the
-  // iPhone project) two things can silently wipe a just-filled field: React
-  // hydration resetting a controlled input typed into before it's interactive,
-  // and Safari credential-autofill clearing the username once the password is
-  // populated. Filling password first / username last dodges the autofill, and
-  // the toPass retry rides out the hydration race — a plain fill() left the
-  // username empty and every login failed. Chromium is unaffected either way.
+  // Fill and confirm both values stick before submitting. On WebKit (the iPhone
+  // project) filling one field can silently wipe the other — Safari
+  // credential-autofill clears the counterpart once one is populated, and React
+  // hydration can flush a controlled input typed into before it's interactive.
+  // Re-fill only the field that actually lost its value each pass, so the fill
+  // that finally makes one stick can't clobber the other; the retry also rides
+  // out the hydration race. (The old code re-filled password FIRST every pass,
+  // so the following username fill wiped it and every WebKit login failed.)
+  // Chromium satisfies this on the first pass.
   await expect(async () => {
-    await passField.fill(password);
-    await userField.fill(usernameOrEmail);
+    if ((await passField.inputValue()) !== password) await passField.fill(password);
+    if ((await userField.inputValue()) !== usernameOrEmail) {
+      await userField.fill(usernameOrEmail);
+    }
     await expect(passField).toHaveValue(password);
     await expect(userField).toHaveValue(usernameOrEmail);
-  }).toPass({ timeout: 10_000 });
+  }).toPass({ timeout: 15_000 });
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/calendar/);
 }

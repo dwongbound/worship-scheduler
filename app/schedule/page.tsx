@@ -22,7 +22,12 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { AVAILABILITY_CHANGED_EVENT } from "@/components/Navbar";
-import { blockedDaysInRange, dayBlockLevel } from "@/lib/availability";
+import {
+  applyDayEdit,
+  blockedDaysInRange,
+  dayBlockLevel,
+  isOptimisticId,
+} from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   dateRangeLabel,
@@ -235,18 +240,27 @@ export default function SchedulePage() {
   // Edit a run of whole days straight from the calendar. `blocked` true paints
   // an all-day block over them (merging, never duplicating); false clears them
   // (splitting a covering range as needed). Handled server-side so it's atomic.
+  //
+  // Optimistic: apply the same merge/split locally so the calendar updates the
+  // instant you release the drag (no request-latency lag, and the calendar stays
+  // interactive for the next edit). The reload reconciles with the server's
+  // canonical rows; on failure we roll back to what we had.
   async function editDays(startYmd: string, endYmd: string, blocked: boolean) {
-    setBusyAction("specific");
+    const previous = entries;
+    setEntries((cur) =>
+      cur ? applyDayEdit(cur, startYmd, endYmd, blocked) : cur
+    );
     try {
-      await fetch("/api/availability/block-days", {
+      const res = await fetch("/api/availability/block-days", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start: startYmd, end: endYmd, blocked }),
       });
+      if (!res.ok) throw new Error("block-days failed");
       await reload();
       window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
-    } finally {
-      setBusyAction(null);
+    } catch {
+      setEntries(previous); // roll back the optimistic change
     }
   }
 
@@ -318,10 +332,21 @@ export default function SchedulePage() {
         </>
       );
     }
+    // Legacy DATE_RANGE: show both endpoints for a real range, but just the one
+    // date when it's a single day (start === end, or no endDate).
+    const rangeStart = new Date(entry.startDate!);
+    const rangeEnd = entry.endDate ? new Date(entry.endDate) : null;
+    const singleDay =
+      !rangeEnd || rangeEnd.toDateString() === rangeStart.toDateString();
     return (
       <>
-        <strong>{new Date(entry.startDate!).toLocaleDateString()}</strong> to{" "}
-        <strong>{new Date(entry.endDate!).toLocaleDateString()}</strong>
+        <strong>{rangeStart.toLocaleDateString()}</strong>
+        {!singleDay && (
+          <>
+            {" to "}
+            <strong>{rangeEnd!.toLocaleDateString()}</strong>
+          </>
+        )}
         {entry.note && <span className="text-gray-500"> — {entry.note}</span>}
       </>
     );
@@ -697,8 +722,8 @@ export default function SchedulePage() {
                       className="flex items-center justify-between gap-2"
                     >
                       <span className="flex min-w-0 items-baseline gap-2">
-                        <Badge tone={entry.type === "SPECIFIC" ? "blue" : "gray"}>
-                          {entry.type === "SPECIFIC" ? "Specific" : "Recurring"}
+                        <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
+                          {entry.type === "RECURRING" ? "Recurring" : "Specific"}
                         </Badge>
                         <span>
                           {entryText(entry)}
@@ -715,7 +740,13 @@ export default function SchedulePage() {
                         variant="danger"
                         className="shrink-0"
                         onClick={() => remove(entry.id)}
-                        disabled={busyEntryId === entry.id}
+                        // An optimistic (not-yet-saved) block has no real DB row
+                        // to delete — disable until the reload swaps in its real
+                        // id (a fraction of a second), so a fast click can't fire
+                        // a no-op delete that leaves the block stranded.
+                        disabled={
+                          busyEntryId === entry.id || isOptimisticId(entry.id)
+                        }
                       >
                         {busyEntryId === entry.id ? (
                           <LoadingDots size="sm" />

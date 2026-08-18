@@ -1,7 +1,8 @@
 // PATCH /api/sets/:id — edit a set's notes (org admins + the set's worship
-// leader, who runs it), its designated MD (org admins only), or its private
-// flag (org admins only). Send { notes }, { mdUserId } (null clears the MD),
-// or { isPrivate }.
+// leader, who runs it), its designated MD (org admins only), its private flag
+// (org admins only), its choir opt-in flag (org admins only), or whether it
+// requires an MD (org admins only). Send { notes }, { mdUserId } (null clears
+// the MD), { isPrivate }, { choirEnabled }, or { requiresMD }.
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
@@ -9,6 +10,7 @@ import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { isValidMD } from "@/lib/md";
+import { parseGroupChatLeadDays } from "@/lib/constants";
 
 export async function PATCH(
   req: NextRequest,
@@ -23,8 +25,19 @@ export async function PATCH(
   const body = await req.json();
   const editingMD = "mdUserId" in body;
   const editingPrivate = "isPrivate" in body;
-  // Only a plain notes edit (neither MD nor privacy) requires a notes string.
-  if (!editingMD && !editingPrivate && typeof body.notes !== "string") {
+  const editingChoir = "choirEnabled" in body;
+  const editingRequiresMD = "requiresMD" in body;
+  const editingGroupChatLead = "groupChatLeadDays" in body;
+  // Only a plain notes edit (not MD/privacy/choir/requiresMD/group-chat) needs a
+  // notes string.
+  if (
+    !editingMD &&
+    !editingPrivate &&
+    !editingChoir &&
+    !editingRequiresMD &&
+    !editingGroupChatLead &&
+    typeof body.notes !== "string"
+  ) {
     return NextResponse.json({ error: "notes is required" }, { status: 400 });
   }
 
@@ -40,7 +53,14 @@ export async function PATCH(
   // by the set's assigned worship leader.
   const admin = await requireOrgAdminFor(set.orgId);
   let allowed = !!admin;
-  if (!allowed && !editingMD && !editingPrivate) {
+  if (
+    !allowed &&
+    !editingMD &&
+    !editingPrivate &&
+    !editingChoir &&
+    !editingRequiresMD &&
+    !editingGroupChatLead
+  ) {
     const leaderSlot = await prisma.assignment.findFirst({
       where: { setId: id, userId: user.id, role: "WORSHIP_LEADER" },
     });
@@ -48,6 +68,50 @@ export async function PATCH(
   }
   if (!allowed) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  if (editingRequiresMD) {
+    if (typeof body.requiresMD !== "boolean") {
+      return NextResponse.json(
+        { error: "requiresMD must be a boolean" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { requiresMD: body.requiresMD },
+    });
+    return NextResponse.json(updated);
+  }
+
+  if (editingGroupChatLead) {
+    // null = off; a number is normalized to a valid 1–30 day count (out-of-range
+    // → off). Admin-only, guarded above.
+    if (body.groupChatLeadDays !== null && typeof body.groupChatLeadDays !== "number") {
+      return NextResponse.json(
+        { error: "groupChatLeadDays must be a number or null" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { groupChatLeadDays: parseGroupChatLeadDays(body.groupChatLeadDays) },
+    });
+    return NextResponse.json(updated);
+  }
+
+  if (editingChoir) {
+    if (typeof body.choirEnabled !== "boolean") {
+      return NextResponse.json(
+        { error: "choirEnabled must be a boolean" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { choirEnabled: body.choirEnabled },
+    });
+    return NextResponse.json(updated);
   }
 
   if (editingPrivate) {

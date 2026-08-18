@@ -46,11 +46,11 @@ const USERS: {
 }[] = [
   { username: ADMIN_USERNAME, name: "Alice Admin", instruments: ["WORSHIP_LEADER", "VOCALS"], isAdmin: true, completed: true },
   { username: "bob", name: "Bob Baker", instruments: ["DRUMS"], completed: true },
-  { username: "carol", name: "Carol Chen", instruments: ["KEYS", "VOCALS"] },
+  { username: "carol", name: "Carol Chen", instruments: ["KEYS", "VOCALS", "CHOIR"] },
   { username: "dave", name: "Dave Diaz", instruments: ["BASS"], completed: true },
   { username: "erin", name: "Erin Evans", instruments: ["ELECTRIC_GUITAR"] },
   { username: "frank", name: "Frank Ford", instruments: ["ACOUSTIC_GUITAR", "ELECTRIC_GUITAR"] },
-  { username: "grace", name: "Grace Gao", instruments: ["VOCALS"], completed: true, prayer: true, college: true },
+  { username: "grace", name: "Grace Gao", instruments: ["VOCALS", "CHOIR"], completed: true, prayer: true, college: true },
   { username: "henry", name: "Henry Hill", instruments: ["STRINGS"], prayer: true },
   { username: "ivy", name: "Ivy Ito", instruments: ["KEYS"], prayer: true },
   // MDs — they lead from an MD-eligible role (keys), which is the only kind of
@@ -60,7 +60,7 @@ const USERS: {
   { username: "nina", name: "Nina Nguyen", instruments: ["VOCALS", "KEYS"], completed: true },
   { username: "omar", name: "Omar Osei", instruments: ["ELECTRIC_GUITAR", "BASS"] },
   { username: "paul", name: "Paul Park", instruments: ["WORSHIP_LEADER", "ACOUSTIC_GUITAR", "VOCALS", "KEYS"], isAdmin: true, isMD: true, completed: true, prayer: true, college: true },
-  { username: "quinn", name: "Quinn Quezada", instruments: ["STRINGS", "VOCALS"] },
+  { username: "quinn", name: "Quinn Quezada", instruments: ["STRINGS", "VOCALS", "CHOIR"] },
   { username: "ruth", name: "Ruth Rivera", instruments: ["DRUMS", "BASS"], prayer: true, college: true },
   // A brand-new member who has joined an org but not yet finished their
   // profile: no instruments/roles picked. Drives the "finish setup" reminder
@@ -148,11 +148,15 @@ async function main() {
               : []),
           ],
         },
-        teams: {
-          connect: [
-            { id: sundayTeam.id },
-            ...(u.prayer ? [{ id: prayerTeam.id }] : []),
-            ...(u.college ? [{ id: collegeTeam.id }] : []),
+        // Roles are per-team now (TeamMember.roles). Everyone plays the same
+        // set of roles on each team they serve — their old global list — which
+        // is enough for the demo/tests. `newbie` joins Sunday with no roles yet
+        // (drives the "finish your profile" reminder).
+        teamMembers: {
+          create: [
+            { teamId: sundayTeam.id, roles: u.instruments },
+            ...(u.prayer ? [{ teamId: prayerTeam.id, roles: u.instruments }] : []),
+            ...(u.college ? [{ teamId: collegeTeam.id, roles: u.instruments }] : []),
           ],
         },
       },
@@ -303,8 +307,10 @@ async function main() {
       { setId: sunday.id, userId: id.erin, role: "ELECTRIC_GUITAR", status: "PENDING" },
       { setId: sunday.id, userId: id.henry, role: "STRINGS", status: "PENDING" },
 
-      // Wednesday Night.
-      { setId: wednesday.id, userId: id.kate, role: "DRUMS", status: "CONFIRMED" },
+      // Wednesday Night. Kate's drums slot is left PENDING so she always has a
+      // set to confirm — backs the swaps e2e "confirm all pending" test, which
+      // otherwise had nothing to act on once taking a cover auto-confirms it.
+      { setId: wednesday.id, userId: id.kate, role: "DRUMS", status: "PENDING" },
       { setId: wednesday.id, userId: id.ivy, role: "KEYS", status: "PENDING" },
       { setId: wednesday.id, userId: id.jack, role: "WORSHIP_LEADER", status: "PENDING" },
       { setId: wednesday.id, userId: id.omar, role: "BASS", status: "PENDING" },

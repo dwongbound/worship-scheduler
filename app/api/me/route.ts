@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { SLOT_CAPACITIES } from "@/lib/constants";
+import { ALL_INSTRUMENTS } from "@/lib/constants";
 import { resolveProfileEmail } from "@/lib/profile";
 
 export async function GET() {
@@ -19,7 +19,6 @@ export async function GET() {
       username: true,
       name: true,
       email: true,
-      instruments: true,
       // OAuth-only accounts (Google) are created with an empty passwordHash;
       // the profile page hides "Change password" when there's no usable one.
       passwordHash: true,
@@ -31,16 +30,27 @@ export async function GET() {
           isAdmin: true,
           slackUserId: true,
           org: {
-            select: { name: true, slackTeamName: true, slackBotToken: true },
+            select: {
+              name: true,
+              slackTeamName: true,
+              slackBotToken: true,
+              spotifyRefreshToken: true,
+              spotifyDisplayName: true,
+            },
           },
         },
+      },
+      // Roles are per-team: the profile page shows a team dropdown + the roles
+      // the user has picked on each team they're on.
+      teamMembers: {
+        select: { roles: true, team: { select: { id: true, name: true, orgId: true } } },
       },
     },
   });
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Never leak the hash itself — just whether one exists.
-  const { memberships, passwordHash, ...fields } = me;
+  const { memberships, teamMembers, passwordHash, ...fields } = me;
   return NextResponse.json({
     ...fields,
     hasPassword: !!passwordHash,
@@ -53,6 +63,15 @@ export async function GET() {
       // helps once an admin has installed the bot for that workspace.
       orgSlackConnected: !!m.org.slackBotToken,
       slackTeamName: m.org.slackTeamName,
+      // Whether the ORG has connected its shared Spotify account, + who as.
+      orgSpotifyConnected: !!m.org.spotifyRefreshToken,
+      spotifyDisplayName: m.org.spotifyDisplayName,
+    })),
+    teams: teamMembers.map((tm) => ({
+      id: tm.team.id,
+      name: tm.team.name,
+      orgId: tm.team.orgId,
+      roles: tm.roles,
     })),
   });
 }
@@ -69,11 +88,7 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Name is required" }, { status: 400 });
   }
 
-  // Only accept known instrument values.
-  const validInstruments = Object.keys(SLOT_CAPACITIES);
-  const instruments = Array.isArray(body.instruments)
-    ? body.instruments.filter((i: string) => validInstruments.includes(i))
-    : [];
+  // Roles are per-team now — set them via PUT /api/me/teams/:teamId, not here.
 
   // Google (OAuth-only) accounts sign in with their Google email, so it's not
   // editable — ignore any email in the body and keep the existing value. The
@@ -93,7 +108,6 @@ export async function PUT(req: NextRequest) {
   const data: Record<string, unknown> = {
     name: body.name.trim(),
     email,
-    instruments,
   };
   if (typeof body.password === "string" && body.password.length > 0) {
     if (body.password.length < 8) {
@@ -109,7 +123,7 @@ export async function PUT(req: NextRequest) {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data,
-      select: { name: true, email: true, instruments: true },
+      select: { name: true, email: true },
     });
     return NextResponse.json(updated);
   } catch {

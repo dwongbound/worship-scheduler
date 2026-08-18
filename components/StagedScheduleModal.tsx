@@ -31,9 +31,9 @@ import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
 import {
   conflictedUserIds,
   countAssignments,
-  isOnTeam,
   loadRows,
   maxLoad,
+  playsRoleForSet,
   totalConflicts,
   totalUnfillable,
   unfillableRoles,
@@ -204,9 +204,9 @@ export default function StagedScheduleModal({
       durationMinutes: set.durationMinutes,
     };
     return users
-      // Only the set's team members are offered (no team = open to everyone).
-      .filter((u) => isOnTeam(u, set.teamId))
-      .filter((u) => u.instruments.includes(role) && !onSet.has(u.id))
+      // Only people who play THIS role on the set's team (roles are per-team;
+      // no team = open to anyone who plays it on any team).
+      .filter((u) => playsRoleForSet(u, role, set.teamId) && !onSet.has(u.id))
       .map((u) => ({
         id: u.id,
         name: u.name,

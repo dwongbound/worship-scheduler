@@ -15,6 +15,7 @@ import CalendarMonth from "@/components/CalendarMonth";
 import SetDetailModal from "@/components/SetDetailModal";
 import CreateSetModal from "@/components/CreateSetModal";
 import MySetsPanel from "@/components/MySetsPanel";
+import ExportModal from "@/components/ExportModal";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
@@ -56,6 +57,8 @@ function CalendarView() {
   // Day whose inline "+" (admin) create form is open, or null.
   const [createDate, setCreateDate] = useState<Date | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  // Whether the export dialog (range picker + .ics/Excel) is open.
+  const [exportOpen, setExportOpen] = useState(false);
   // Sidebar width; defaults to ~30% of the screen once mounted.
   const [panelWidth, setPanelWidth] = useState(420);
   // Per-org admin user lists (assignment dropdowns are scoped to the open
@@ -63,10 +66,11 @@ function CalendarView() {
   const [adminUsersByOrg, setAdminUsersByOrg] = useState<
     Record<string, ApiAdminUser[]>
   >({});
-  // Calendar filters, both dropdowns. personFilter: "" = everyone, otherwise a
-  // userId — admins can pick anyone, non-admins get just "My sets" (their own
-  // id). statusFilter: "all" or one SetStatus.
-  const [personFilter, setPersonFilter] = useState("");
+  // Calendar filters, both dropdowns. `filter` ("Show sets for"): "" = all
+  // sets; "team:<teamId>" = one team's sets (anyone can pick these); otherwise
+  // a userId — "My sets" for everyone, and admins can also pick any person.
+  // statusFilter: "all" or one SetStatus.
+  const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<SetStatus | "all">("all");
 
   // Org context: the navbar switcher's view filter ("all" or one org), and
@@ -80,6 +84,11 @@ function CalendarView() {
   // clobber) a newer per-org one, leaving the wrong org's sets on screen.
   const setsReqId = useRef(0);
   const refetchSets = useCallback(async () => {
+    // Wait until the org context has loaded before fetching. viewOrgId starts
+    // at its "all" default and only settles to the persisted org once /api/orgs
+    // resolves; fetching before then would fire once with the wrong scope and
+    // again after it settles. `orgs` in the deps re-runs this the moment it does.
+    if (!orgs) return;
     const reqId = ++setsReqId.current;
     const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
     const [fresh, swaps] = await Promise.all([
@@ -89,7 +98,7 @@ function CalendarView() {
     if (reqId !== setsReqId.current) return; // superseded by a newer refetch
     setSets(fresh);
     setTakeableSwaps(swaps);
-  }, [viewOrgId]);
+  }, [orgs, viewOrgId]);
 
   // Confirm one of my assignments straight from its calendar hover popover
   // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot
@@ -179,14 +188,33 @@ function CalendarView() {
   usePageLoading(!sets);
   if (!sets) return null;
 
-  // Apply the filters: sets the chosen person is on (personFilter = "" is
-  // everyone) AND a status match (statusFilter = "all" matches every status).
+  // Apply the "Show sets for" filter (by team or by person) AND a status match
+  // (statusFilter = "all" matches every status). filter = "" shows everything.
   const visibleSets = sets.filter((s) => {
-    if (personFilter && !s.assignments.some((a) => a.user.id === personFilter))
-      return false;
+    if (filter.startsWith("team:")) {
+      // Team filter: only sets belonging to the chosen team.
+      if ((s.teamId ?? s.team?.id) !== filter.slice("team:".length))
+        return false;
+    } else if (filter) {
+      // Person filter: only sets the chosen user is assigned to.
+      if (!s.assignments.some((a) => a.user.id === filter)) return false;
+    }
     if (statusFilter !== "all" && setStatus(s) !== statusFilter) return false;
     return true;
   });
+
+  // Teams to offer in the "Show sets for" dropdown — every distinct team that
+  // has a set in view (derived from the loaded sets, so it naturally follows
+  // the org view without a separate fetch). Sorted by name.
+  const teamSeen = new Set<string>();
+  const filterTeams = sets
+    .flatMap((s) => (s.team ? [s.team] : []))
+    .filter((t) => {
+      if (teamSeen.has(t.id)) return false;
+      teamSeen.add(t.id);
+      return true;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   // People the admin person-filter can pick — every member across my admin
   // orgs (deduped), except the current user (covered by "My sets").
@@ -211,18 +239,33 @@ function CalendarView() {
       <div className="flex flex-wrap items-end gap-3">
         <div className="w-52">
           <Select
-            label={isAdmin ? "Show sets for" : "Show"}
-            value={personFilter}
-            onChange={(e) => setPersonFilter(e.target.value)}
+            label="Show sets for"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
           >
-            <option value="">{isAdmin ? "Everyone" : "All sets"}</option>
+            <option value="">All sets</option>
             {myId && <option value={myId}>My sets</option>}
-            {isAdmin &&
-              otherPeople.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
+            {/* Team filters first, grouped so they read as a distinct block.
+                Anyone can filter by team — teams no longer gate visibility. */}
+            {filterTeams.length > 0 && (
+              <optgroup label="Teams">
+                {filterTeams.map((t) => (
+                  <option key={t.id} value={`team:${t.id}`}>
+                    {t.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {/* Per-person filter stays admin-only. */}
+            {isAdmin && otherPeople.length > 0 && (
+              <optgroup label="People">
+                {otherPeople.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </Select>
         </div>
         <div className="w-52">
@@ -242,10 +285,16 @@ function CalendarView() {
 
         {/* Actions: right-aligned, bottom-aligned with the dropdown controls. */}
         <div className="ml-auto flex items-center gap-2">
-          {/* Plain link download: the browser sends session cookies along. */}
-          <a href="/api/export" download>
-            <Button variant="secondary">Export my sets (.ics)</Button>
-          </a>
+          {/* Opens the export dialog (range picker + .ics/Excel). The chevron
+              bounces on hover to signal it opens a menu, not a direct download. */}
+          <Button
+            variant="secondary"
+            className="group"
+            onClick={() => setExportOpen(true)}
+          >
+            Export
+            <ExportChevron />
+          </Button>
           {/* Rightmost: expands the "My sets" sidebar. */}
           <Button
             onClick={() => setPanelOpen((open) => !open)}
@@ -337,7 +386,36 @@ function CalendarView() {
         onClose={() => setCreateDate(null)}
         onCreated={refetchSets}
       />
+
+      {/* Export dialog. It receives the on-screen (already filtered) sets and
+          layers a look-ahead range on top before building the .ics/.xlsx. */}
+      <ExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        sets={visibleSets}
+      />
     </>
+  );
+}
+
+// Down-chevron on the Export button; bounces on button hover to hint that it
+// opens a chooser rather than downloading straight away.
+function ExportChevron() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      className="h-4 w-4 transition-transform group-hover:animate-bounce"
+    >
+      <path
+        d="M6 8l4 4 4-4"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

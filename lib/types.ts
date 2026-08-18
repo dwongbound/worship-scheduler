@@ -22,6 +22,8 @@ export interface ApiTeam {
   name: string;
   // Only present on GET /api/teams (other endpoints embed just {id, name}).
   orgId?: string;
+  // The team's standing Slack channel for weekly summaries (per-set auto group
+  // chats are configured on the set/template, not here).
   slackChannelId?: string | null;
 }
 
@@ -31,11 +33,31 @@ export interface ApiUserRef {
   isMD?: boolean; // musical director (drives the "* (MD)" marker)
 }
 
+// One team a person serves on plus the roles they play ON THAT team (roles are
+// per-team now). Embedded in ApiMe (their own) and ApiAdminUser (as an admin
+// sees each member). `orgId` is present on ApiMe's copy so the profile page can
+// group a person's teams by org.
+export interface ApiTeamRole {
+  id: string;
+  name: string;
+  orgId?: string;
+  roles: Instrument[];
+}
+
 export interface ApiAssignment {
   id: string;
   role: Instrument;
   status: AssignmentStatus;
   user: ApiUserRef;
+}
+
+// One song in a set's setlist (see the Song model). `key` is one of SONG_KEYS
+// or null (unspecified); `order` is the 0-based position in the list.
+export interface ApiSong {
+  id: string;
+  title: string;
+  key: string | null;
+  order: number;
 }
 
 export interface ApiSet {
@@ -49,10 +71,16 @@ export interface ApiSet {
   // server never returns private sets to anyone else, so this is effectively
   // always visible-to-you when present.
   isPrivate: boolean;
+  // Choir opt-in: false = the set has no choir (section off, "Auto schedule"
+  // skips choir); an admin toggles it on to manage/auto-schedule a choir.
+  choirEnabled: boolean;
   // The designated MD's userId, or null (none chosen / doesn't require one).
   // Must be an eligible assignee — see lib/md.ts.
   mdUserId: string | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
+  // Auto-create the set's private Slack channel this many days before it starts
+  // (null = off). See Set.groupChatLeadDays.
+  groupChatLeadDays?: number | null;
   // The team this set is for (null = open to the whole org, e.g. its team
   // was deleted). Optional because some endpoints return sets without it.
   teamId?: string | null;
@@ -61,6 +89,11 @@ export interface ApiSet {
   // drives the org chip when viewing "All orgs").
   org?: { id: string; name: string };
   assignments: ApiAssignment[];
+  // The worship leader's setlist, ordered. Present on GET /api/sets; may be
+  // absent (undefined) on endpoints that don't include it.
+  songs?: ApiSong[];
+  // The set's collaborative Spotify playlist, once created (null before then).
+  spotifyPlaylistUrl?: string | null;
 }
 
 // My assignment with its set attached (Swaps tab).
@@ -69,6 +102,44 @@ export interface ApiMyAssignment {
   role: Instrument;
   status: AssignmentStatus;
   set: Omit<ApiSet, "assignments">;
+  // Present only for PENDING_SWAP rows: the open proposal + whether I started
+  // it (so the row can offer Cancel vs. pointing me at my Cover Requests).
+  pendingSwap: { proposalId: string; isRequester: boolean } | null;
+}
+
+// One set I could trade my assignment into (GET /api/swaps/candidates). Same
+// role + team as my slot, currently held by `counterparty`.
+export interface ApiSwapCandidate {
+  toAssignmentId: string;
+  role: Instrument;
+  status: AssignmentStatus; // the counterparty's current status
+  counterparty: ApiUserRef;
+  set: {
+    id: string;
+    label: string | null;
+    startsAt: string;
+    durationMinutes: number;
+    team: { id: string; name: string } | null;
+  };
+  youAvailable: boolean; // I'm free for their set's date
+  theyAvailable: boolean; // they're free for my set's date
+  theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
+}
+
+// A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).
+export interface ApiIncomingSwap {
+  id: string;
+  role: Instrument;
+  requestedBy: ApiUserRef;
+  reason: string | null; // the proposer's optional note
+  giveUp: SwapSetRef; // my current set (I'd give this up)
+  receive: SwapSetRef; // their set (I'd take this)
+}
+export interface SwapSetRef {
+  id: string;
+  label: string | null;
+  startsAt: string;
+  org: { id: string; name: string };
 }
 
 // Someone else's swap request I could take.
@@ -76,6 +147,7 @@ export interface ApiSwapRequest {
   id: string;
   role: Instrument;
   user: ApiUserRef;
+  reason: string | null; // the owner's optional cover note
   set: Omit<ApiSet, "assignments">;
 }
 
@@ -88,6 +160,13 @@ export interface ApiSetHistoryEvent {
   targetUser: ApiUserRef | null; // null if that user was later deleted
   previousUser: ApiUserRef | null;
   createdAt: string;
+}
+
+// One row of the org-wide Team Activity log (GET /api/admin/activity): a set
+// history event plus which set/team it happened on.
+export interface ApiActivityEvent extends ApiSetHistoryEvent {
+  set: { id: string; label: string | null; startsAt: string };
+  teamName: string | null;
 }
 
 export interface ApiUnavailability {
@@ -125,6 +204,10 @@ export interface ApiAvailabilityRequest {
   // Present on member-facing endpoints (availability, availability-request)
   // where requests from several orgs mix and need an org chip.
   org?: { id: string; name: string };
+  // Present on the admin endpoint: the teams this request was aimed at — only
+  // their members are asked to fill it in. Empty = the whole org (older
+  // requests, and orgs with no teams). See lib/availabilityTargets.ts.
+  teams?: { id: string; name: string }[];
 }
 
 // GET /api/availability-request: each of my orgs' active request + whether I
@@ -133,6 +216,43 @@ export interface ApiAvailabilityStatus {
   items: { request: ApiAvailabilityRequest; needsResponse: boolean }[];
   needsResponse: boolean;
 }
+
+// GET /api/notifications: everything the navbar's reminder dots + banners need,
+// in one request. Replaces four parallel badge fetches (swaps, availability,
+// profile, teamless). `teamless` is populated only when the query names an org
+// the caller administers; otherwise it's an empty list.
+export interface ApiNotifications {
+  swapCount: number; // open covers + trades awaiting me → the swap dot
+  availability: ApiAvailabilityStatus; // the Availabilities dot + banner
+  needsRoles: boolean; // no roles on any team yet → the "finish setup" dot
+  teamless: { id: string; name: string; username: string }[];
+  approvalCount: number; // pending cover/swap approvals in the admin org → dot
+}
+
+// One item on the admin Approvals tab (GET /api/admin/approvals). A cover-take
+// or a targeted swap that's been accepted/taken and now needs admin sign-off.
+export interface ApiApprovalSwap {
+  kind: "swap";
+  id: string; // proposal id
+  role: Instrument;
+  reason: string | null;
+  createdAt: string;
+  requester: ApiUserRef;
+  recipient: ApiUserRef;
+  receive: SwapSetRef; // requester's set, now the recipient's
+  giveUp: SwapSetRef; // recipient's set, now the requester's
+}
+export interface ApiApprovalCover {
+  kind: "cover";
+  id: string; // assignment id
+  role: Instrument;
+  reason: string | null;
+  createdAt: string;
+  taker: ApiUserRef;
+  originalOwner: ApiUserRef | null;
+  set: SwapSetRef;
+}
+export type ApiApproval = ApiApprovalSwap | ApiApprovalCover;
 
 // A scheduled weekly Slack reminder for one team (Org settings page). Carries
 // the team's name + Slack channel so the table can flag teams with no channel.
@@ -154,9 +274,18 @@ export interface ApiAdminUser {
   username: string; // stable, human-readable deep-link key (?user=<username>)
   isAdmin: boolean;
   isMD: boolean; // can be a set's musical director
-  instruments: Instrument[];
-  // Teams this person belongs to — gates which sets they can be scheduled on.
-  teams: ApiTeam[];
+  // Whether this person has linked their Slack account in THIS org (drives the
+  // Team page's Slack-connected badge). Per-org: they may be linked elsewhere.
+  slackConnected: boolean;
+  // The actual Slack member id for THIS org (null = unset). Admins can edit it
+  // from the Team page; used to prefill that inline editor.
+  slackUserId: string | null;
+  // When true, this person is added to every Slack group chat this org creates,
+  // even for sets they aren't on (per-org membership flag).
+  alwaysInGroupChats: boolean;
+  // Teams this person belongs to, each with the roles they play there — gates
+  // which sets/roles they can be scheduled on. Roles are per-team now.
+  teams: ApiTeamRole[];
   // Which availability requests this person has marked complete (one row per
   // request). Drives the Availability status panel's per-TimeRange dropdown.
   // completedAt = null → a row that's currently marked "not submitted".
@@ -204,6 +333,9 @@ export interface StagedSet {
   // The proposed MD's userId (from lib/md.ts defaultMDId), or null if none.
   mdUserId: string | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
+  // Per-set auto group-chat lead time inherited from the template (days before
+  // start; null = off). Baked onto the created set at apply time.
+  groupChatLeadDays?: number | null;
   // Team the set belongs to (see ApiSet.teamId). Optional so older plans and
   // test fixtures without a team keep working (= open to everyone).
   teamId?: string | null;
@@ -218,4 +350,35 @@ export interface StagedPlan {
   sets: StagedSet[];
   // Sets in the window we left untouched because they're already staffed.
   skipped: number;
+}
+
+// One membership row as GET /api/me returns it — the per-org fields the
+// profile/org-settings pages read (Slack link status, admin flag). Distinct
+// from ApiOrg: this is the shape hung off the current user, not the org list.
+export interface ApiMeMembership {
+  orgId: string;
+  orgName: string;
+  isAdmin: boolean;
+  slackUserId: string | null;
+  // Whether the ORG has connected Slack (bot installed).
+  orgSlackConnected: boolean;
+  slackTeamName: string | null;
+  // Whether the ORG has connected its shared Spotify account, + the account's
+  // display name (cosmetic, shown on the org settings page).
+  orgSpotifyConnected: boolean;
+  spotifyDisplayName: string | null;
+}
+
+// The current user's own profile — GET /api/me. Fetched once by AuthGate and
+// shared via MeProvider so the profile/org-settings pages don't refetch it.
+export interface ApiMe {
+  username: string;
+  name: string;
+  email: string | null;
+  // Whether a usable password hash exists (OAuth-only accounts have none).
+  hasPassword: boolean;
+  memberships: ApiMeMembership[];
+  // Teams this person serves on, each with the roles they've picked there and
+  // the owning org (roles are per-team; the profile page edits them).
+  teams: ApiTeamRole[];
 }

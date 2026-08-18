@@ -18,6 +18,12 @@ export default defineConfig({
   // fail the whole suite on a transient miss; a genuinely broken test still
   // fails all its attempts.
   retries: 2,
+  // The e2e server is `next dev` (JIT), so the FIRST request to a route compiles
+  // it on demand — occasionally pushing a first-touch content assertion past the
+  // 5s default even on a healthy run. Give assertions more headroom so a cold
+  // compile doesn't read as a failure (a genuinely-missing element still fails
+  // after the timeout).
+  expect: { timeout: 10_000 },
   use: {
     baseURL: "http://localhost:3100",
     trace: "retain-on-failure",

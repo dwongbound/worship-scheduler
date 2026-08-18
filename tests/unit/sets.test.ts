@@ -32,6 +32,7 @@ function set(id: string, startsAt: string, assignments: ApiAssignment[]): ApiSet
     notes: null,
     requiresMD: false,
     isPrivate: false,
+    choirEnabled: false,
     mdUserId: null,
     slotCapacities: null,
     assignments,
@@ -133,7 +134,7 @@ describe("coverEligibility", () => {
     viewerId: "kate",
     ownerId: "bob",
     assignmentStatus: "SWAP_REQUESTED",
-    viewerInstruments: ["DRUMS"] as Instrument[],
+    viewerRolesForSet: ["DRUMS"] as Instrument[],
     role: "DRUMS",
     viewerOrgIds: ["org1"],
     setOrgId: "org1",
@@ -183,7 +184,7 @@ describe("coverEligibility", () => {
 
   it("400s covering an instrument you don't play", () => {
     expect(
-      coverEligibility({ ...base, viewerInstruments: ["VOCALS"] as Instrument[] })
+      coverEligibility({ ...base, viewerRolesForSet: ["VOCALS"] as Instrument[] })
     ).toMatchObject({ status: 400, error: "You don't play this instrument" });
   });
 

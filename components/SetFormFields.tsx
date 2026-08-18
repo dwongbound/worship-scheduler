@@ -9,7 +9,7 @@ import Input from "./common/Input";
 import Select from "./common/Select";
 import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
-import { resolveCapacities, type Instrument } from "@/lib/constants";
+import { resolveCapacities, type BandRole } from "@/lib/constants";
 import type { ApiTeam } from "@/lib/types";
 
 // Set durations, offered in half-hour steps (0.5h–8h) but stored as minutes.
@@ -28,7 +28,10 @@ export interface SetFormState {
   duration: number; // minutes
   requiresMD: boolean; // set needs a musical director on its team
   isPrivate: boolean; // only admins + assigned people can see this set
-  capacities: Record<Instrument, number> | null;
+  // Auto-create the set's private Slack channel this many days before it starts;
+  // null = off. (Distinct from the team's standing summary channel.)
+  groupChatLeadDays: number | null;
+  capacities: Record<BandRole, number> | null;
   // Which team the set is for. "" until the teams list loads; callers default
   // it to the first team and block submit while it's empty.
   teamId: string;
@@ -42,6 +45,7 @@ export function emptySetForm(): SetFormState {
     duration: 90,
     requiresMD: false,
     isPrivate: false,
+    groupChatLeadDays: null,
     capacities: null,
     teamId: "",
   };
@@ -124,6 +128,25 @@ export default function SetFormFields({
           ))}
         </Select>
       </div>
+
+      {/* Auto-create the set's private Slack channel this many days before it
+          starts. Blank = off (an admin can still make one by hand with the
+          set's "Slack Team" button). The org must have Slack connected. */}
+      <Input
+        label="Auto-create group chat (days before, blank = off)"
+        type="number"
+        min={1}
+        value={state.groupChatLeadDays ?? ""}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          patch({
+            groupChatLeadDays:
+              e.target.value === "" || Number.isNaN(n) ? null : n,
+          });
+        }}
+        placeholder="Off"
+        disabled={disabled}
+      />
 
       {/* On: this set wants a musical director — the auto-scheduler seats one
           and the set detail modal shows the MD picker. Off: no MD is tracked

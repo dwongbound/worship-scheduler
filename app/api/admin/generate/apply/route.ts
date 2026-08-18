@@ -15,6 +15,7 @@ import { prisma } from "@/lib/prisma";
 import {
   SLOT_CAPACITIES,
   validateSlotCapacities,
+  parseGroupChatLeadDays,
   type Instrument,
 } from "@/lib/constants";
 import type { StagedPlan, StagedSet } from "@/lib/types";
@@ -57,6 +58,7 @@ function parseStagedSet(raw: unknown): StagedSet | null {
     requiresMD: Boolean(s.requiresMD),
     mdUserId: typeof s.mdUserId === "string" ? s.mdUserId : null,
     slotCapacities,
+    groupChatLeadDays: parseGroupChatLeadDays(s.groupChatLeadDays),
     teamId: typeof s.teamId === "string" ? s.teamId : null,
     existing: Boolean(s.existing),
     assignments,
@@ -134,6 +136,7 @@ export async function POST(req: NextRequest) {
           requiresMD: s.requiresMD,
           mdUserId,
           slotCapacities: s.slotCapacities ?? undefined,
+          groupChatLeadDays: s.groupChatLeadDays ?? undefined,
           teamId: teamIdOf(s),
           orgId: admin.orgId,
         },
@@ -149,6 +152,7 @@ export async function POST(req: NextRequest) {
           requiresMD: s.requiresMD,
           mdUserId,
           slotCapacities: s.slotCapacities ?? undefined,
+          groupChatLeadDays: s.groupChatLeadDays ?? undefined,
           teamId: teamIdOf(s),
         },
       });

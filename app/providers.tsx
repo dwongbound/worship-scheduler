@@ -8,6 +8,7 @@ import { SessionProvider } from "next-auth/react";
 import { ReactNode } from "react";
 import AuthGate from "@/components/AuthGate";
 import LoadingProvider from "@/components/LoadingProvider";
+import MeProvider from "@/components/MeProvider";
 import OrgProvider from "@/components/OrgProvider";
 
 export default function Providers({ children }: { children: ReactNode }) {
@@ -15,7 +16,12 @@ export default function Providers({ children }: { children: ReactNode }) {
     <SessionProvider>
       <LoadingProvider>
         <OrgProvider>
-          <AuthGate>{children}</AuthGate>
+          {/* MeProvider wraps AuthGate: AuthGate's /api/me probe populates the
+              shared profile so the profile/org-settings pages read it instead
+              of refetching. */}
+          <MeProvider>
+            <AuthGate>{children}</AuthGate>
+          </MeProvider>
         </OrgProvider>
       </LoadingProvider>
     </SessionProvider>

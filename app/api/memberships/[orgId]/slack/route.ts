@@ -4,6 +4,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { getMyOrgIds } from "@/lib/org";
+import { isOrgSlackConnected } from "@/lib/slack";
 import { prisma } from "@/lib/prisma";
 
 export async function PUT(
@@ -23,6 +24,16 @@ export async function PUT(
   const raw = body.slackUserId;
   const slackUserId =
     typeof raw === "string" && raw.trim() ? raw.trim() : null;
+
+  // A member id only points somewhere once the org's bot is installed, so
+  // there's nothing to link to before then — block SETTING one (clearing is
+  // always fine). The profile UI already hides the field; this backs it up.
+  if (slackUserId && !(await isOrgSlackConnected(orgId))) {
+    return NextResponse.json(
+      { error: "Connect Slack for this org before adding a member ID." },
+      { status: 400 }
+    );
+  }
 
   try {
     await prisma.orgMembership.update({

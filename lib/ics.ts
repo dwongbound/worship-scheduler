@@ -2,21 +2,21 @@
 // tests/unit/ics.test.ts. Hand-rolled instead of a dependency because we
 // only need simple VEVENTs; RFC 5545 is easy to satisfy for this subset.
 
-import { INSTRUMENT_LABELS, ROLE_ORDER, type Instrument } from "./constants";
+import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "./constants";
 
 /**
  * The calendar title for a set: its name followed by one "(Role)" per role
  * the person plays on it, e.g. "Thursday Night Set (Acoustic Guitar)". Roles
- * are de-duplicated and shown in ROLE_ORDER so the title is stable. Every
- * .ics export routes through this so titles are identical no matter the
- * trigger (whole-calendar export or a single-set export).
+ * are de-duplicated and shown in display order (band roles then choir) so the
+ * title is stable. Every .ics export routes through this so titles are
+ * identical no matter the trigger (whole-calendar export or a single-set export).
  */
 export function setEventTitle(
   label: string | null | undefined,
   roles: Instrument[]
 ): string {
   const base = label?.trim() || "Worship Set";
-  const parens = ROLE_ORDER.filter((r) => roles.includes(r))
+  const parens = ALL_INSTRUMENTS.filter((r) => roles.includes(r))
     .map((r) => `(${INSTRUMENT_LABELS[r]})`)
     .join(" ");
   return parens ? `${base} ${parens}` : base;
