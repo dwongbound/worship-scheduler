@@ -34,6 +34,7 @@ import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
   CHOIR,
+  GROUP_CHAT_LEAD_OPTIONS,
   INSTRUMENT_LABELS,
   MD_ROLES,
   ROLE_ORDER,
@@ -93,9 +94,6 @@ export default function SetDetailModal({
   // team can start the group chat); it's disabled until this org connects Slack.
   const [slackConfigured, setSlackConfigured] = useState(false);
   const [slackMsg, setSlackMsg] = useState("");
-  // Draft for the auto-create-group-chat lead time (days). Kept local so typing
-  // doesn't PATCH per keystroke — it saves on blur. Synced from the set below.
-  const [leadDraft, setLeadDraft] = useState("");
 
   // The worship leader's setlist, edited as local draft rows ({ title, key })
   // and saved as a whole list (PUT replaces). key "" = unspecified. Synced from
@@ -115,11 +113,6 @@ export default function SetDetailModal({
   useEffect(() => {
     setNotesDraft(set?.notes ?? "");
   }, [set?.id, set?.notes]);
-
-  // Keep the lead-time input in sync with the set (incl. after a save refetch).
-  useEffect(() => {
-    setLeadDraft(set?.groupChatLeadDays != null ? String(set.groupChatLeadDays) : "");
-  }, [set?.id, set?.groupChatLeadDays]);
 
   // Load the songs editor whenever a (different) set opens. Keyed on the set id
   // ONLY — not set.songs — so the auto-save refetch below (same set, new object)
@@ -609,6 +602,10 @@ export default function SetDetailModal({
           <Dropdown
             align="right"
             hover
+            // Wide enough for "Auto GC 1 week before ›" to stay on one line,
+            // and overflow-visible so that row's submenu can escape the panel.
+            widthClassName="w-56"
+            menuClassName="overflow-visible"
             trigger={(menuOpen) => (
               <span
                 aria-label="More actions"
@@ -673,45 +670,15 @@ export default function SetDetailModal({
               </>
             )}
             {/* Admin-only: when to auto-create this set's private Slack group
-                chat. The daily cron makes it once inside the window; "Slack
-                Team" still creates it on demand. Only meaningful once the org
-                has Slack. `stopPropagation` keeps clicks in the input from
-                closing the menu. */}
+                chat ("Auto GC"). The daily cron makes it once inside the
+                window; "Slack Team" still creates it on demand. Only
+                meaningful once the org has Slack. */}
             {canEditTeam && slackConfigured && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="border-t border-gray-200 px-3 py-2 dark:border-gray-700"
-              >
-                <span className="block text-xs font-medium text-gray-600 dark:text-gray-300">
-                  Auto-create group chat
-                </span>
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <input
-                    type="number"
-                    min={1}
-                    value={leadDraft}
-                    onChange={(e) => setLeadDraft(e.target.value)}
-                    onBlur={() => {
-                      const n = Number(leadDraft);
-                      const next =
-                        leadDraft === "" || Number.isNaN(n) ? null : n;
-                      if (next !== (set.groupChatLeadDays ?? null)) {
-                        setGroupChatLead(next);
-                      }
-                    }}
-                    disabled={busy}
-                    placeholder="Off"
-                    aria-label="Auto-create group chat, days before the set"
-                    className="w-14 rounded border border-gray-300 bg-white px-2 py-1 text-sm focus:border-indigo-500 focus:outline-none disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800"
-                  />
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
-                    days before
-                  </span>
-                </div>
-                <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500">
-                  Blank = off
-                </p>
-              </div>
+              <GroupChatLeadMenu
+                value={set.groupChatLeadDays ?? null}
+                disabled={busy}
+                onSelect={setGroupChatLead}
+              />
             )}
             <a
               href={`/api/export/${set.id}`}
@@ -792,15 +759,20 @@ export default function SetDetailModal({
                       <StatusBadge status={a.status} />
                     </li>
                   ) : (
+                    // Read-only view: the name sits in a box that mirrors
+                    // PlayerSelect's trigger (same w-48, border, padding and
+                    // radius) so admin and non-admin rosters line up visually.
+                    // No chevron and no button element — it isn't interactive,
+                    // and a chevron would advertise a menu that doesn't exist.
                     <li key={a.id} className="flex items-center gap-2">
-                      <span>
-                        {a.user.name}
+                      <div className="flex w-48 items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                        <span className="truncate">{a.user.name}</span>
                         {a.user.id === mdUserId && (
-                          <span className="ml-1 font-medium text-indigo-600 dark:text-indigo-400">
+                          <span className="shrink-0 font-medium text-indigo-600 dark:text-indigo-400">
                             * (MD)
                           </span>
                         )}
-                      </span>
+                      </div>
                       <StatusBadge status={a.status} />
                     </li>
                   )
@@ -829,8 +801,14 @@ export default function SetDetailModal({
                       />
                     </li>
                   ) : (
-                    <li key={`empty-${i}`} className="text-gray-400">
-                      —
+                    // Matching dashed box for an unfilled slot, so a read-only
+                    // roster is a clean column of boxes rather than boxes
+                    // interrupted by bare dashes. Mirrors PlayerSelect's
+                    // `dashed` empty state.
+                    <li key={`empty-${i}`}>
+                      <div className="w-48 rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+                        Unfilled
+                      </div>
                     </li>
                   )
                 )}
@@ -919,8 +897,12 @@ export default function SetDetailModal({
                     <StatusBadge status={a.status} />
                   </li>
                 ) : (
+                  // Same read-only box as the band roles above, so the choir
+                  // list matches the rest of the roster.
                   <li key={a.id} className="flex items-center gap-2">
-                    <span>{a.user.name}</span>
+                    <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                      <span className="truncate">{a.user.name}</span>
+                    </div>
                     <StatusBadge status={a.status} />
                   </li>
                 )
@@ -1250,6 +1232,95 @@ function MenuToggle({
       </span>
       {label}
     </button>
+  );
+}
+
+// The "Auto GC …" row inside the overflow (⋮) menu: shows the set's current
+// group-chat lead time on one line and flies out a list of choices on hover.
+// The flyout opens to the LEFT (the menu itself is pinned to the right edge of
+// the modal, so opening right would run off screen).
+function GroupChatLeadMenu({
+  value,
+  disabled,
+  onSelect,
+}: {
+  value: number | null;
+  disabled: boolean;
+  onSelect: (days: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  // "No Auto GC" when off, otherwise "Auto GC " + the matching option label
+  // ("3 days before" / "1 week before"). A lead time set outside this menu
+  // (e.g. from a template) still reads correctly via the fallback.
+  const selected = GROUP_CHAT_LEAD_OPTIONS.find((o) => o.days === value);
+  let rowLabel = "No Auto GC";
+  if (value != null) {
+    rowLabel = `Auto GC ${selected?.label ?? `${value} days before`}`;
+  }
+
+  return (
+    <div
+      className="relative border-t border-gray-200 dark:border-gray-700"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        disabled={disabled}
+        // Touch devices have no hover, so a tap opens the flyout. The
+        // stopPropagation keeps that tap from closing the whole (⋮) menu,
+        // which closes on any click inside it.
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
+          text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50
+          dark:text-gray-200 dark:hover:bg-gray-700"
+      >
+        <span aria-hidden className="w-4" />
+        <span className="flex-1">{rowLabel}</span>
+        <span aria-hidden className="text-gray-400">
+          ›
+        </span>
+      </button>
+
+      {open && (
+        // Phones: drop the list below the row (a flyout to the left of an
+        // already right-pinned menu would run off a narrow screen). Wider
+        // screens: fly out to the left, where `pr-1` keeps the gap between
+        // flyout and row hoverable so the pointer can cross it without the
+        // flyout closing.
+        <div className="absolute right-0 top-full z-50 pt-1 sm:right-full sm:top-0 sm:pt-0 sm:pr-1">
+          <div className="w-40 overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+            {GROUP_CHAT_LEAD_OPTIONS.map((option) => (
+              <button
+                key={option.label}
+                type="button"
+                disabled={disabled}
+                // No stopPropagation here: letting the click bubble closes the
+                // (⋮) menu, which is what you want after picking.
+                onClick={() => {
+                  if (option.days !== value) onSelect(option.days);
+                }}
+                className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
+                  text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50
+                  dark:text-gray-200 dark:hover:bg-gray-700"
+              >
+                <span
+                  aria-hidden
+                  className="w-3 text-center text-indigo-600 dark:text-indigo-400"
+                >
+                  {option.days === value ? "✓" : ""}
+                </span>
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 

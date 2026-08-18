@@ -9,6 +9,7 @@ import { useSession } from "next-auth/react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
@@ -191,13 +192,18 @@ export default function OrgSettingsPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <p className="text-sm font-medium">Slack workspace</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">Slack workspace</p>
+                    <InfoTooltip text="Connects this org to your church's Slack. The bot DMs people about swap requests and availability requests, sends each team its weekly set summary, and spins up a group chat for a set from its detail modal. Everything Slack-related is off until an admin connects it here." />
+                  </div>
+                  {/* The connection flags ride along on /api/me, which AuthGate
+                      resolves before this page renders — so anything that isn't
+                      a live connection is genuinely "not connected", never a
+                      pending check. */}
                   <p className="text-sm text-gray-500">
-                    {slack === null
-                      ? "Checking…"
-                      : slack.orgSlackConnected
-                        ? `Connected to ${slack.slackTeamName ?? "Slack"} ✓`
-                        : "Not connected — the bot can't message this org yet."}
+                    {slack?.orgSlackConnected
+                      ? `Connected to ${slack.slackTeamName ?? "Slack"} ✓`
+                      : "Not connected — the bot can't message this org yet."}
                   </p>
 
                   {selected.isAdmin ? (
@@ -236,13 +242,14 @@ export default function OrgSettingsPage() {
                 {/* Spotify — the shared church account this org's set playlists
                     are created under. Same connect/disconnect shape as Slack. */}
                 <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-                  <p className="text-sm font-medium">Spotify account</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">Spotify account</p>
+                    <InfoTooltip text="One shared church account that owns this org's set playlists. Once connected, a set's songs become a collaborative Spotify playlist when its Slack group chat is created — anyone with the link can add or fix songs. Connect the account the whole team should share, not your personal one." />
+                  </div>
                   <p className="text-sm text-gray-500">
-                    {slack === null
-                      ? "Checking…"
-                      : slack.orgSpotifyConnected
-                        ? `Connected as ${slack.spotifyDisplayName ?? "Spotify"} ✓`
-                        : "Not connected — set playlists can't be created yet."}
+                    {slack?.orgSpotifyConnected
+                      ? `Connected as ${slack.spotifyDisplayName ?? "Spotify"} ✓`
+                      : "Not connected — set playlists can't be created yet."}
                   </p>
 
                   {selected.isAdmin ? (

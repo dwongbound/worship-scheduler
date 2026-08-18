@@ -8,6 +8,25 @@ const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
+      fontFamily: {
+        // Figtree, loaded by next/font in app/layout.tsx, which puts the family
+        // name in `--font-figtree` on <html>. Prepending it to the default sans
+        // stack means every existing `font-sans`/unstyled element switches over
+        // with no class changes. The rest of the list is Tailwind's own default
+        // sans stack, spelled out rather than imported from
+        // `tailwindcss/defaultTheme` so there's no dependency on that path
+        // surviving; it's the fallback for the moment before the webfont lands.
+        sans: [
+          "var(--font-figtree)",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+          '"Apple Color Emoji"',
+          '"Segoe UI Emoji"',
+          '"Segoe UI Symbol"',
+          '"Noto Color Emoji"',
+        ],
+      },
       colors: {
         // Brand accent. The app is written entirely in `indigo-*` utility
         // classes; we remap that whole palette to the favicon's teal

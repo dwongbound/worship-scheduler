@@ -236,3 +236,101 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
   // Clean up the block so it doesn't leak into later specs.
   await page.getByRole("button", { name: "Delete" }).first().click();
 });
+
+// ── Cover Requests: accepting / rejecting a targeted swap by TAP. ───────────
+// Reported symptom: on a phone, tapping "Accept" appeared to freeze the page.
+// These use page.tap() rather than .click() on purpose — a tap dispatches real
+// touch events, which is the only way SwipePager's window-level touchstart /
+// touchmove / touchend handlers (components/SwipePager.tsx) get exercised. A
+// mouse click would sail straight past the very code most likely to eat the
+// gesture, so it could never reproduce the bug.
+
+/**
+ * Sets up a targeted swap proposed TO `toName` by `fromUsername`, entirely over
+ * the API so it doesn't depend on which sets earlier specs have already traded.
+ * Returns the accepting user's username.
+ */
+async function proposeSwapTo(
+  page: import("@playwright/test").Page,
+  fromUsername: string,
+  toName: string
+) {
+  await login(page, fromUsername);
+
+  // Every assignment of mine, newest API shape: { id, role, set: {...} }.
+  const mine = (await (await page.request.get("/api/assignments")).json()) as {
+    id: string;
+    role: string;
+    set: { startsAt: string };
+  }[];
+  expect(mine.length, `${fromUsername} has no assignments`).toBeGreaterThan(0);
+
+  // Find the first of my slots that has `toName` as a swap candidate.
+  let fromAssignmentId: string | undefined;
+  let toAssignmentId: string | undefined;
+  for (const a of mine) {
+    const res = await page.request.get(
+      `/api/swaps/candidates?assignmentId=${a.id}`
+    );
+    if (!res.ok()) continue;
+    // GET /api/swaps/candidates → { items: [{ toAssignmentId, counterparty }] }
+    const body = (await res.json()) as {
+      items: { toAssignmentId: string; counterparty: { name: string } }[];
+    };
+    const hit = (body.items ?? []).find((c) => c.counterparty.name === toName);
+    if (hit) {
+      fromAssignmentId = a.id;
+      toAssignmentId = hit.toAssignmentId;
+      break;
+    }
+  }
+  expect(
+    fromAssignmentId,
+    `no swap candidate named "${toName}" for ${fromUsername}`
+  ).toBeTruthy();
+
+  const proposed = await page.request.post("/api/swaps/propose", {
+    data: { fromAssignmentId, toAssignmentId },
+  });
+  expect(proposed.ok(), `propose failed: ${proposed.status()}`).toBeTruthy();
+}
+
+test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async ({
+  page,
+}) => {
+  await proposeSwapTo(page, "erin", "Omar Osei");
+
+  await login(page, "omar");
+  await page.goto("/swaps");
+
+  const card = page.locator("li").filter({ hasText: "Erin Evans" }).first();
+  await expect(card).toBeVisible();
+
+  const accept = card.getByRole("button", { name: "Accept" });
+  await expect(accept).toBeVisible();
+  await accept.tap();
+
+  // The whole point of the test: the tap must actually resolve. If the page
+  // "freezes" (the busy spinner never clears, a stray swipe navigates away, or
+  // the full-screen loader latches on) this is what fails.
+  await expect(card).toHaveCount(0, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/swaps/);
+  // The accepted slot is now omar's, awaiting an admin's sign-off.
+  await expect(page.getByText("Pending approval").first()).toBeVisible();
+});
+
+test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async ({
+  page,
+}) => {
+  await proposeSwapTo(page, "erin", "Omar Osei");
+
+  await login(page, "omar");
+  await page.goto("/swaps");
+
+  const card = page.locator("li").filter({ hasText: "Erin Evans" }).first();
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "Reject" }).tap();
+
+  await expect(card).toHaveCount(0, { timeout: 15_000 });
+  await expect(page).toHaveURL(/\/swaps/);
+});

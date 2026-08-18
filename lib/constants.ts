@@ -243,6 +243,21 @@ export const DAY_LABELS = [
 // upper bound so a typo can't schedule a channel absurdly far out.
 export const MAX_GROUP_CHAT_LEAD_DAYS = 365;
 
+// The lead times offered in the set menu's "Auto GC" picker. Free-form day
+// counts are still accepted by the API (the template/create forms use a plain
+// number field); this is just the short list of common choices. `days: null`
+// = never auto-create.
+export const GROUP_CHAT_LEAD_OPTIONS: { days: number | null; label: string }[] =
+  [
+    { days: null, label: "No Auto GC" },
+    { days: 1, label: "1 day before" },
+    { days: 2, label: "2 days before" },
+    { days: 3, label: "3 days before" },
+    { days: 4, label: "4 days before" },
+    { days: 5, label: "5 days before" },
+    { days: 7, label: "1 week before" },
+  ];
+
 // Normalize a client-supplied group-chat lead time to a valid day count or null
 // (off). Empty/non-integer/< 1 → null (off); anything larger is clamped to MAX
 // (so a big number caps rather than silently turning the feature off).
@@ -251,3 +266,37 @@ export function parseGroupChatLeadDays(raw: unknown): number | null {
   if (!Number.isInteger(n) || n < 1) return null;
   return Math.min(n, MAX_GROUP_CHAT_LEAD_DAYS);
 }
+
+// ── Daily digest ───────────────────────────────────────────────────────────
+
+// When the daily "here's what needs you" Slack DM goes out, as minutes from
+// midnight in the server's TZ. Fixed at 8:00 AM and deliberately NOT
+// user-configurable — the only per-person setting is User.dailyDigest (on/off).
+// The cron still compares against this rather than assuming, so the send stays
+// correct if the cron ever fires more than once a day (see lib/digest.ts).
+export const DIGEST_SEND_MINUTE = 8 * 60;
+
+// How far ahead the digest's admin "sets still awaiting confirmations" line
+// looks.
+export const DIGEST_UPCOMING_DAYS = 7;
+
+// ── Sets window (GET /api/sets) ────────────────────────────────────────────
+
+// How far either side of today GET /api/sets reaches when the caller doesn't
+// ask for a window. Every existing caller relies on this default, so changing
+// it changes what an unparameterized fetch returns.
+export const SETS_WINDOW_DEFAULT_DAYS = 92;
+
+// The widest span a caller may request, so a hand-rolled `?from=1900-01-01`
+// can't ask for the whole table. Comfortably covers the year-long option in
+// the Set Manager plus a month of calendar spillover.
+export const SETS_WINDOW_MAX_DAYS = 400;
+
+// How far ahead the Set Manager lists your sets. The first entry is the
+// default; each drives both the visible list and the /api/sets window it
+// fetches, so anything shown can always open its detail modal.
+export const SET_MANAGER_HORIZONS: { months: number; label: string }[] = [
+  { months: 3, label: "Next 3 months" },
+  { months: 6, label: "Next 6 months" },
+  { months: 12, label: "Next year" },
+];

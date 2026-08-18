@@ -151,6 +151,11 @@ model OrgMembership {
   // wants to be in every set's chat). Best-effort: needs a linked slackUserId.
   alwaysInGroupChats Boolean @default(false)
 
+  // When this membership's daily digest DM last went out — the cron's
+  // once-per-day guard. Per membership, not per user: each org DMs from its own
+  // workspace, so a person in two orgs gets (and we track) one digest per org.
+  digestSentAt DateTime?
+
   createdAt DateTime @default(now())
 
   @@unique([userId, orgId])
@@ -273,6 +278,11 @@ model User {
   swapsReceived   SwapProposal[]    @relation("SwapRecipient")
   // Sets where this person is the designated musical director.
   mdSets          Set[]             @relation("SetMD")
+
+  // Daily Slack summary of what needs this person's attention (lib/digest.ts).
+  // Opt-out only: the send time is fixed at DIGEST_SEND_MINUTE, so on/off is
+  // the whole setting. Global to the person, like isMD.
+  dailyDigest Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

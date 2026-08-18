@@ -1,6 +1,12 @@
-// GET /api/sets — sets from the last week through +3 months, with full
-// team rosters, across the caller's orgs (?orgId= narrows to one). Powers
-// the Calendar tab.
+// GET /api/sets — sets in a date window, with full team rosters, across the
+// caller's orgs (?orgId= narrows to one). Powers the Calendar tab and the Set
+// Manager's detail modals.
+//
+// ?from=YYYY-MM-DD&to=YYYY-MM-DD pick the window; each side defaults to today ±
+// SETS_WINDOW_DEFAULT_DAYS, so callers that pass nothing behave exactly as this
+// endpoint always did. The calendar widens `to` as you page into later months
+// and the Set Manager passes its horizon, so nothing is ever created outside
+// what some view can reach (see lib/sets.ts resolveSetsWindow).
 // POST /api/sets — an org admin creates a one-off ("ad-hoc") set from the
 // calendar's inline "+" button. Org comes from the set's team.
 import { NextRequest, NextResponse } from "next/server";
@@ -8,8 +14,7 @@ import { getSessionUser } from "@/lib/auth";
 import { resolveOrgScope, requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
+import { resolveSetsWindow } from "@/lib/sets";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -22,17 +27,17 @@ export async function GET(req: NextRequest) {
     req.nextUrl.searchParams.get("orgId")
   );
 
-  const now = Date.now();
+  // Past sets are kept (not hidden) so the calendar can show recent history —
+  // the client renders anything before "now" dimmed (see CalendarMonth's
+  // SlotChip `past`).
+  const { start, end } = resolveSetsWindow(
+    req.nextUrl.searchParams.get("from"),
+    req.nextUrl.searchParams.get("to")
+  );
   const sets = await prisma.set.findMany({
     where: {
       orgId: { in: scope },
-      // A rolling ~3-month window both directions. Past sets are kept (not
-      // hidden) so the calendar can show recent history — the client renders
-      // anything before "now" dimmed (see CalendarMonth's SlotChip `past`).
-      startsAt: {
-        gte: new Date(now - 92 * MS_PER_DAY),
-        lte: new Date(now + 92 * MS_PER_DAY),
-      },
+      startsAt: { gte: start, lte: end },
       // Private sets are visible only to the people assigned to them and to
       // admins of their org; everyone else never sees them. Normal (public)
       // sets are unaffected.

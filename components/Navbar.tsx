@@ -37,7 +37,8 @@ export default function Navbar() {
   // Published as the `--app-header-h` CSS var so full-height pages (e.g. the
   // calendar) can size themselves to the space below the nav — which grows and
   // shrinks as reminder banners appear/dismiss.
-  const navRef = useRef<HTMLElement>(null);
+  // Wraps the in-flow spacer + banners (not the fixed bar) — see the render.
+  const navRef = useRef<HTMLDivElement>(null);
   // Per-org active requests + whether ANY still needs my response.
   const [availStatus, setAvailStatus] = useState<ApiAvailabilityStatus | null>(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
@@ -307,8 +308,17 @@ export default function Navbar() {
 
   return (
     <>
-    <nav ref={navRef} className="sticky top-0 z-30 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 py-3">
+    {/* The bar is `fixed`, not `sticky`: a sticky element still lives in the
+        document flow, so the browser's rubber-band overscroll drags it along
+        with the page and exposes the background above it. Fixed is anchored to
+        the viewport and rides out the bounce.
+        `h-16` is load-bearing — it must match the in-flow spacer below, which
+        is what actually reserves the bar's space. Height is pinned rather than
+        derived from the content so the two can't drift apart. */}
+    <nav className="fixed inset-x-0 top-0 z-30 h-16 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+      {/* h-full (rather than py-3) centers the row inside the bar's fixed
+          h-16 — the padding alone would leave it a few px off-centre. */}
+      <div className="mx-auto flex h-full max-w-5xl items-center justify-between gap-2 px-4">
         <div className="flex min-w-0 items-center gap-4">
           {/* Page logo, far left */}
           <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
@@ -486,6 +496,19 @@ export default function Navbar() {
           )}
         </div>
       </div>
+    </nav>
+
+    {/* Everything below the bar lives in NORMAL FLOW. This is deliberate: the
+        page content is pushed down by the browser's own layout, so it can never
+        be covered by the header — not on first paint, not while a banner is
+        still being fetched, not if JS is slow. The previous version padded
+        <main> from a JS-measured variable, which left a window where the
+        padding was stale and the nav sat on top of the content.
+        The spacer reserves exactly the fixed bar's height; the banners then
+        stack under it normally. navRef wraps both so `--app-header-h` still
+        reports the full visual header height for the calendar's sizing. */}
+    <div ref={navRef}>
+      <div className="h-16" aria-hidden />
 
       {/* Onboarding banner: shown until a new user picks the instruments/roles
           they play, so the scheduler can actually assign them. */}
@@ -560,7 +583,7 @@ export default function Navbar() {
           . Add them to a team so they can be scheduled.
         </Banner>
       )}
-    </nav>
+    </div>
 
     {/* Phone-only bottom bar: an app-style floating pill fixed above the
         bottom edge (respecting the iOS home-indicator safe area). Same tabs

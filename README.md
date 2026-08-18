@@ -122,6 +122,8 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SLACK_DRY_RUN` | `1` (log, never send) | `1` (optional) | unset (send for real) |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² |
 | `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
+| `SPOTIFY_CLIENT_ID` / `_SECRET` | optional⁵ | optional⁵ | set to enable playlists⁵ |
+| `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
 | `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
@@ -137,6 +139,11 @@ There's no global `SLACK_BOT_TOKEN` for sending anymore. `SLACK_DRY_RUN=1` still
 logs instead of sending. Redirect URLs: `…/api/slack/{install,connect}/callback`.
 ⁴ Comma-separated allowlist of platform super-admins (see the "Platform admin"
 menu → `/platform`). Env-only (bootstrap); everything else is managed in-app.
+⁵ Spotify is a **per-org integration** too — see [Spotify playlists](#spotify-playlists).
+`CLIENT_ID/SECRET` identify one Spotify app; each org connects one shared church
+account, whose refresh token is stored encrypted on the `Org` row. Redirect URI:
+`…/api/spotify/callback` (override with `SPOTIFY_REDIRECT_URI`). `SPOTIFY_DRY_RUN=1`
+stamps placeholder playlists instead of calling the API.
 
 ### Deploying (Vercel + Neon, free tier)
 
@@ -217,6 +224,81 @@ non-commercial/single-developer (Pro at $20/mo removes the ambiguity).
 profile page. When you wire up Slack: match accounts by email or store
 the Slack member ID directly, then DM users on PENDING assignments and
 open swap requests. No schema changes should be needed.
+
+## Spotify playlists
+
+Each set can have a **setlist** (songs saved on the set), which becomes a
+**collaborative Spotify playlist** — built automatically when the set's Slack
+group chat is created (see step 6). Like Slack it's a per-org integration: one
+Spotify app serves every org, and each org connects **one shared church
+account** that owns all of its playlists, so making them collaborative lets the
+whole team edit from a link. Code: `lib/spotify.ts`, routes under
+`app/api/spotify/**` and `app/api/sets/[id]/spotify-playlist`.
+
+**1. Create the Spotify app** — <https://developer.spotify.com/dashboard> →
+*Create app*. Tick the **Web API** box. Copy the **Client ID** and **Client
+secret**.
+
+**2. Register the redirect URI** (must match byte-for-byte what the app sends):
+
+| Where | Redirect URI |
+| --- | --- |
+| staging / prod | `https://<your-host>/api/spotify/callback` |
+| local `npm run dev` | `http://127.0.0.1:3000/api/spotify/callback` |
+
+Spotify no longer accepts `http://localhost` redirect URIs — only HTTPS or the
+explicit loopback IP. So for local work set `SPOTIFY_REDIRECT_URI` to the
+`127.0.0.1` form above (otherwise the app derives the URI from `NEXTAUTH_URL`,
+which is `localhost`, and Spotify rejects it) and visit the app on
+`http://127.0.0.1:3000` too.
+
+**3. Allow the accounts that will connect** — a new app starts in
+*Development mode*, which only lets **25 manually allowlisted users** authorize
+it. Add each church account's Spotify email under the dashboard's *User
+Management*, or request extended quota once you have more orgs than that.
+
+**4. Set the env vars** (`env/*.env` locally, the Vercel dashboard for
+staging/prod — see [Environment variables](#environment-variables)):
+
+```
+SPOTIFY_CLIENT_ID=…
+SPOTIFY_CLIENT_SECRET=…
+SPOTIFY_REDIRECT_URI=…   # only if it isn't <NEXTAUTH_URL>/api/spotify/callback
+SPOTIFY_DRY_RUN=1        # dev/test only: fake the API, never in prod
+```
+
+Leave the id/secret unset to keep Spotify off entirely — nothing throws, the
+connect route just reports "not configured" and the playlist actions stay
+hidden.
+
+**5. Connect an org** — as an admin of that org, go to **Org settings**
+(`/orgs`) → *Connect to Spotify*, sign in as the shared church account, approve
+the `playlist-modify-private` / `playlist-modify-public` scopes. The callback
+stores that account's **refresh token, encrypted** on the `Org` row (plus its
+display name, shown on the page) and short-lived access tokens are minted from
+it per request. *Disconnect* clears all three.
+
+**6. Use it** — open a set, add songs to its setlist, then hit **Slack Team**.
+There's no separate playlist button: building the playlist rides along with
+creating the set's Slack group chat (`lib/slack.ts`), which then posts the link
+into that chat. Once it exists, the set modal shows *Open Spotify playlist ↗*.
+`POST /api/sets/:id/spotify-playlist` re-syncs it on demand (any member of the
+set's org) if you want to wire up your own trigger.
+
+Each song is matched to the first Spotify search result for its title, and the
+playlist is created **private + collaborative** (Spotify requires private for
+collaborative) under the org's account. Re-syncing overwrites that same
+playlist in place rather than making a new one, and its url is saved on the set.
+
+Because the playlist follows the group chat, an org needs **both** Slack and
+Spotify connected for the automatic path — Spotify alone still works through
+the API route, and a Spotify failure never breaks the group chat.
+
+Gotchas: the refresh token is encrypted with a key derived from
+`NEXTAUTH_SECRET` (`lib/crypto.ts`), so **rotating that secret means every org
+must reconnect**. First-search-result matching is approximate for worship songs
+with many versions — the playlist is collaborative precisely so the worship
+leader can fix it by hand.
 
 ## Timezones
 
