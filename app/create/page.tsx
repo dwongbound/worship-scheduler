@@ -71,6 +71,11 @@ export default function CreatePage() {
   const [remindOpen, setRemindOpen] = useState(false);
   const [remindBusy, setRemindBusy] = useState(false);
   const [remindResult, setRemindResult] = useState("");
+  // "Delete this request" confirm flow on the same card. Destructive — the
+  // delete cascades to everyone's answers — so it never fires from the button.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteResult, setDeleteResult] = useState("");
   // Which control is mid-update (inline dots) — never a full-page loader.
   const [busyAction, setBusyAction] = useState<
     "generate" | "apply" | "request" | null
@@ -176,6 +181,33 @@ export default function CreatePage() {
       await reload();
     } finally {
       setBusyTemplateId(null);
+    }
+  }
+
+  // Delete the request the status card is showing. Fired from the confirm
+  // modal, never straight from the button: the row cascades to its responses
+  // and to every SPECIFIC unavailability block entered against it.
+  // reload() re-points the status filter at the newest remaining request, so
+  // there's no stale id to clean up here.
+  async function deleteRequest() {
+    if (!selectedRequestId) return;
+    setDeleteBusy(true);
+    setDeleteResult("");
+    try {
+      const res = await fetch(
+        `/api/admin/availability-request/${selectedRequestId}`,
+        { method: "DELETE", headers: orgHeaders(adminOrgId) }
+      );
+      if (res.ok) {
+        setDeleteOpen(false);
+        await reload();
+      } else {
+        setDeleteResult("Could not delete this request.");
+      }
+    } catch {
+      setDeleteResult("Could not delete this request.");
+    } finally {
+      setDeleteBusy(false);
     }
   }
 
@@ -586,27 +618,46 @@ export default function CreatePage() {
           <div className="mb-3 flex items-center justify-between gap-3">
             <h2 className="font-semibold">Availability status</h2>
             {selectedRequest && (
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={!orgSlackConnected}
-                title={
-                  orgSlackConnected
-                    ? undefined
-                    : "Connect Slack for this organization to send reminders."
-                }
-                onClick={() => {
-                  setRemindResult("");
-                  setRemindOpen(true);
-                }}
-              >
-                Remind on Slack
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!orgSlackConnected}
+                  title={
+                    orgSlackConnected
+                      ? undefined
+                      : "Connect Slack for this organization to send reminders."
+                  }
+                  onClick={() => {
+                    setRemindResult("");
+                    setRemindOpen(true);
+                  }}
+                >
+                  Remind on Slack
+                </Button>
+                {/* Deletes whichever request the dropdown below is showing. */}
+                <Button
+                  size="sm"
+                  variant="danger"
+                  title="Delete this availability request"
+                  onClick={() => {
+                    setDeleteResult("");
+                    setDeleteOpen(true);
+                  }}
+                >
+                  Delete
+                </Button>
+              </div>
             )}
           </div>
           {remindResult && (
             <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
               {remindResult}
+            </p>
+          )}
+          {deleteResult && (
+            <p className="mb-3 text-sm text-red-600 dark:text-red-400">
+              {deleteResult}
             </p>
           )}
           {requests.length > 0 && (
@@ -875,6 +926,46 @@ export default function CreatePage() {
               : "this request"}
           </strong>
           .
+        </p>
+      </Modal>
+
+      <Modal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        title="Delete availability request"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="secondary"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleteBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={deleteRequest}
+              disabled={deleteBusy}
+            >
+              {deleteBusy ? <LoadingDots size="sm" /> : "Delete request"}
+            </Button>
+          </div>
+        }
+      >
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          This permanently deletes{" "}
+          <strong>
+            {selectedRequest
+              ? `${selectedRequest.name || "Availability"} (${shortRangeLabel(
+                  selectedRequest.startDate,
+                  selectedRequest.endDate
+                )})`
+              : "this request"}
+          </strong>
+          , along with everything people entered against it &mdash; their
+          unavailable dates for this range and their &ldquo;done&rdquo; status.
+          Recurring weekly unavailability is not affected. This cannot be
+          undone.
         </p>
       </Modal>
 
