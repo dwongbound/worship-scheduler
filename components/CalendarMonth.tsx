@@ -64,6 +64,7 @@ export default function CalendarMonth({
   takeableSwaps = [],
   isAdmin = false,
   onCreateOnDay,
+  onViewMonthChange,
 }: {
   sets: ApiSet[];
   myId?: string;
@@ -76,6 +77,10 @@ export default function CalendarMonth({
   isAdmin?: boolean;
   // Admin only: clicking a day cell's hover "+" opens the create form there.
   onCreateOnDay?: (date: Date) => void;
+  // Fired with the 1st of whichever month is now in view. The calendar page
+  // uses it to widen its /api/sets window, so paging into a month outside the
+  // default ±3 months loads that month's sets instead of showing it empty.
+  onViewMonthChange?: (firstOfMonth: Date) => void;
 }) {
   const today = new Date();
   // Midnight today — anything strictly before this is a past day.
@@ -134,10 +139,15 @@ export default function CalendarMonth({
     year: "numeric",
   });
 
-  const goToMonth = (delta: number) =>
-    setViewMonth(new Date(year, month + delta, 1));
+  // Both nav paths go through this so the parent is always told — a second
+  // setViewMonth call added later can't silently skip the notification.
+  const showMonth = (firstOfMonth: Date) => {
+    setViewMonth(firstOfMonth);
+    onViewMonthChange?.(firstOfMonth);
+  };
+  const goToMonth = (delta: number) => showMonth(new Date(year, month + delta, 1));
   const goToday = () =>
-    setViewMonth(new Date(today.getFullYear(), today.getMonth(), 1));
+    showMonth(new Date(today.getFullYear(), today.getMonth(), 1));
 
   // Whole weeks (Sun–Sat) shown — drives the day grid's row template.
   const weekRows = cells.length / 7;

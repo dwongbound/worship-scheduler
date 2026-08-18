@@ -19,8 +19,15 @@ import ExportModal from "@/components/ExportModal";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import {
+  SETS_WINDOW_DEFAULT_DAYS,
+  SETS_WINDOW_MAX_DAYS,
+} from "@/lib/constants";
+import { toYmd } from "@/lib/dates";
 import { setStatus, type SetStatus } from "@/lib/setStatus";
 import type { ApiAdminUser, ApiSet, ApiSwapRequest } from "@/lib/types";
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 // Sidebar resize bounds. Dragging the divider so the panel would be narrower
 // than MIN_PANEL_WIDTH closes it (drag all the way right to dismiss).
@@ -70,6 +77,17 @@ function CalendarView() {
   // sets; "team:<teamId>" = one team's sets (anyone can pick these); otherwise
   // a userId — "My sets" for everyone, and admins can also pick any person.
   // statusFilter: "all" or one SetStatus.
+  // The date window /api/sets is fetched with. It starts at the endpoint's own
+  // default (today ± SETS_WINDOW_DEFAULT_DAYS) so the first fetch is identical
+  // to what this page always sent, and only WIDENS as you page into months
+  // outside it — paging back and forth inside the loaded range refetches
+  // nothing. Kept in ms so the comparisons below are plain numbers.
+  const [setsWindow, setSetsWindow] = useState(() => {
+    const now = Date.now();
+    const span = SETS_WINDOW_DEFAULT_DAYS * MS_PER_DAY;
+    return { start: now - span, end: now + span };
+  });
+
   const [filter, setFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState<SetStatus | "all">("all");
 
@@ -90,15 +108,22 @@ function CalendarView() {
     // again after it settles. `orgs` in the deps re-runs this the moment it does.
     if (!orgs) return;
     const reqId = ++setsReqId.current;
-    const orgParam = viewOrgId === "all" ? "" : `?orgId=${viewOrgId}`;
+    const orgParam = viewOrgId === "all" ? `?` : `?orgId=${viewOrgId}&`;
+    const range = `from=${toYmd(new Date(setsWindow.start))}&to=${toYmd(
+      new Date(setsWindow.end)
+    )}`;
     const [fresh, swaps] = await Promise.all([
-      fetchJsonArray<ApiSet>(`/api/sets${orgParam}`),
-      fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
+      fetchJsonArray<ApiSet>(`/api/sets${orgParam}${range}`),
+      // /api/swaps has no window — open covers are always "upcoming" and the
+      // list is small, so it's fetched whole regardless of the month in view.
+      fetchJsonArray<ApiSwapRequest>(
+        viewOrgId === "all" ? "/api/swaps" : `/api/swaps?orgId=${viewOrgId}`
+      ),
     ]);
     if (reqId !== setsReqId.current) return; // superseded by a newer refetch
     setSets(fresh);
     setTakeableSwaps(swaps);
-  }, [orgs, viewOrgId]);
+  }, [orgs, viewOrgId, setsWindow]);
 
   // Confirm one of my assignments straight from its calendar hover popover
   // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot
@@ -123,6 +148,29 @@ function CalendarView() {
     },
     [router, pathname]
   );
+
+  // Paging the month grid: widen the fetch window to cover the new month if it
+  // isn't already loaded. Returning the SAME object when it's already covered
+  // keeps refetchSets stable, so arrowing around inside the loaded range costs
+  // no requests. When the union would exceed what the endpoint will serve, the
+  // start slides forward — dropping old history rather than the month you're
+  // looking at, which is what would otherwise re-create the empty-month wall.
+  const handleViewMonthChange = useCallback((firstOfMonth: Date) => {
+    const y = firstOfMonth.getFullYear();
+    const m = firstOfMonth.getMonth();
+    // The grid draws spillover days from the neighbouring months — pad a week
+    // each side so those chips aren't missing.
+    const gridStart = new Date(y, m, -7).getTime();
+    const gridEnd = new Date(y, m + 1, 7).getTime();
+    setSetsWindow((w) => {
+      let start = Math.min(w.start, gridStart);
+      const end = Math.max(w.end, gridEnd);
+      if (start === w.start && end === w.end) return w; // already covered
+      const maxSpan = SETS_WINDOW_MAX_DAYS * MS_PER_DAY;
+      if (end - start > maxSpan) start = end - maxSpan;
+      return { start, end };
+    });
+  }, []);
 
   // Close the modal by dropping ?set from the URL.
   const closeSet = useCallback(() => {
@@ -317,6 +365,7 @@ function CalendarView() {
           takeableSwaps={takeableSwaps}
           isAdmin={isAdmin}
           onCreateOnDay={setCreateDate}
+          onViewMonthChange={handleViewMonthChange}
         />
       </div>
     </div>
@@ -362,7 +411,7 @@ function CalendarView() {
             </div>
           </div>
         ) : (
-          <div className="flex h-[calc(100dvh-var(--app-header-h)-3em)] min-h-0">{mainColumn}</div>
+          <div className="flex h-[calc(100dvh-var(--app-header-h)-3rem)] min-h-0">{mainColumn}</div>
         )}
       </div>
 

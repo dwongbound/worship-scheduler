@@ -31,7 +31,9 @@
      any horizontal page overflow and disable horizontal overscroll so a swipe
      can't drag the whole page — and with it the sticky navbar — sideways.
      `clip` (not `hidden`) doesn't turn the body into a scroll container, so the
-     viewport still scrolls vertically and `position: sticky` keeps working. */
+     viewport still scrolls vertically and `position: sticky` keeps working.
+     The y axis is deliberately left alone so the page keeps its rubber-band
+     bounce; the navbar is `fixed` (not `sticky`) so it stays put through it. */
   html {
     overscroll-behavior-x: none;
   }

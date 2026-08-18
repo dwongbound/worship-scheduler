@@ -1,7 +1,8 @@
 "use client";
-// Users tab (admins only): manage the ministry teams (add/delete a team, and
-// manage its members through each team button's modal), grant or revoke admin
-// access, and set which instruments each person can be scheduled for. Each
+// Users tab (admins only): manage the ministry teams (each team button opens a
+// modal for its members/Slack/delete; creating a team lives on the Org
+// settings page, which this panel links out to), grant or revoke admin access,
+// and set which instruments each person can be scheduled for. Each
 // user card shows their team memberships as read-only chips. Edits save
 // automatically (optimistic update + PATCH; revert to server state on
 // failure).
@@ -9,6 +10,7 @@
 // A master date-range selector at the top drives a per-person count of how
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
@@ -441,6 +443,11 @@ function UsersPageInner() {
   }
   if (!users || !teams) return null;
 
+  // Which team a member card is showing roles for: their explicit pick, else
+  // their first team so a card always opens on something.
+  const teamForUser = (user: ApiAdminUser) =>
+    teamByUser[user.id] ?? user.teams[0]?.id ?? "";
+
   // Member count per team, for the pills in the Teams card.
   const memberCount = (teamId: string) =>
     users.filter((u) => u.teams.some((t) => t.id === teamId)).length;
@@ -514,6 +521,16 @@ function UsersPageInner() {
             >
               Team Activity
             </Button>
+            {/* Creating a team lives on the Org settings page
+                (OrgTeamsManager); this panel only manages teams that already
+                exist, so link out rather than duplicating that form here. */}
+            <Link
+              href="/orgs"
+              className="text-sm font-medium text-indigo-700 hover:underline
+                dark:text-indigo-300"
+            >
+              + Add team
+            </Link>
           </div>
           <div className="w-full sm:w-64">
             <Select
@@ -547,7 +564,17 @@ function UsersPageInner() {
           </div>
         </div>
         {teams.length === 0 ? (
-          <p className="text-sm text-gray-400">No teams yet.</p>
+          <p className="text-sm text-gray-400">
+            No teams yet. Add one on the{" "}
+            <Link
+              href="/orgs"
+              className="font-medium text-indigo-700 hover:underline
+                dark:text-indigo-300"
+            >
+              Org settings
+            </Link>{" "}
+            page.
+          </p>
         ) : (
           <ul className="divide-y divide-gray-100 dark:divide-gray-700/50">
             {teams.map((team) => {
@@ -702,7 +729,7 @@ function UsersPageInner() {
                         <Select
                           label={`Team for ${user.name}`}
                           hideLabel
-                          value={teamByUser[user.id] ?? ""}
+                          value={teamForUser(user)}
                           onChange={(e) =>
                             setTeamByUser((prev) => ({
                               ...prev,
@@ -710,7 +737,6 @@ function UsersPageInner() {
                             }))
                           }
                         >
-                          <option value="">Select a team…</option>
                           {user.teams.map((t) => (
                             <option key={t.id} value={t.id}>
                               {t.name}
@@ -739,7 +765,7 @@ function UsersPageInner() {
                       in bulk. MD sits here (not the header) since it's a
                       scheduling attribute, alongside the roles. */}
                   {(() => {
-                    const selTeam = teamByUser[user.id] ?? "";
+                    const selTeam = teamForUser(user);
                     const roles =
                       user.teams.find((t) => t.id === selTeam)?.roles ?? [];
                     return (

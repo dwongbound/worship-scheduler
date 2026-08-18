@@ -2,15 +2,21 @@
 //   • selectUpcomingSets — the calendar "Upcoming sets" drawer.
 //   • canViewSet         — private-set visibility.
 //   • coverEligibility   — who may take a swap-requested slot.
+//   • resolveSetsWindow  — the GET /api/sets date window.
 import { describe, expect, it } from "vitest";
 import {
   canViewSet,
   coverEligibility,
+  resolveSetsWindow,
   selectUpcomingSets,
   type CoverEligibilityInput,
 } from "@/lib/sets";
 import type { ApiAssignment, ApiSet } from "@/lib/types";
-import type { Instrument } from "@/lib/constants";
+import {
+  SETS_WINDOW_DEFAULT_DAYS,
+  SETS_WINDOW_MAX_DAYS,
+  type Instrument,
+} from "@/lib/constants";
 
 // ── selectUpcomingSets ─────────────────────────────────────────────────────
 
@@ -199,5 +205,55 @@ describe("coverEligibility", () => {
     expect(
       coverEligibility({ ...base, setOrgId: "other-org", viewerOnTeam: false })
     ).toMatchObject({ status: 404 });
+  });
+});
+
+describe("resolveSetsWindow", () => {
+  const NOW = new Date(2026, 7, 18, 12, 0); // Aug 18 2026, noon
+  const DAY = 24 * 60 * 60 * 1000;
+  const days = (a: Date, b: Date) => Math.round((b.getTime() - a.getTime()) / DAY);
+
+  it("falls back to the default window when nothing is passed", () => {
+    // This is what every existing caller (and the e2e suite) relies on.
+    const { start, end } = resolveSetsWindow(null, null, NOW);
+    expect(days(start, NOW)).toBe(SETS_WINDOW_DEFAULT_DAYS);
+    expect(days(NOW, end)).toBe(SETS_WINDOW_DEFAULT_DAYS);
+  });
+
+  it("defaults each side independently", () => {
+    const { start, end } = resolveSetsWindow(null, "2026-12-31", NOW);
+    expect(days(start, NOW)).toBe(SETS_WINDOW_DEFAULT_DAYS);
+    expect(end.getMonth()).toBe(11);
+    expect(end.getDate()).toBe(31);
+  });
+
+  it("reads the dates as LOCAL days, not UTC", () => {
+    // new Date("2026-09-01") is UTC midnight — Aug 31 in a negative-offset TZ.
+    // Getting this wrong drops the last day of any requested month.
+    const { start, end } = resolveSetsWindow("2026-09-01", "2026-09-30", NOW);
+    expect([start.getMonth(), start.getDate()]).toEqual([8, 1]);
+    expect([end.getMonth(), end.getDate()]).toEqual([8, 30]);
+  });
+
+  it("covers the whole of the `to` day", () => {
+    const { end } = resolveSetsWindow("2026-09-01", "2026-09-30", NOW);
+    expect(end.getHours()).toBe(23);
+    expect(end.getMinutes()).toBe(59);
+  });
+
+  it("ignores an unparseable date in favour of that side's default", () => {
+    const { start, end } = resolveSetsWindow("not-a-date", "2026-09-30", NOW);
+    expect(days(start, NOW)).toBe(SETS_WINDOW_DEFAULT_DAYS);
+    expect(end.getMonth()).toBe(8);
+  });
+
+  it("clamps an over-wide span from the start", () => {
+    const { start, end } = resolveSetsWindow("2026-01-01", "2099-01-01", NOW);
+    expect(days(start, end)).toBe(SETS_WINDOW_MAX_DAYS);
+  });
+
+  it("recovers from a backwards range instead of returning nothing", () => {
+    const { start, end } = resolveSetsWindow("2026-09-30", "2026-09-01", NOW);
+    expect(end.getTime()).toBeGreaterThan(start.getTime());
   });
 });

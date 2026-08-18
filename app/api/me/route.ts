@@ -19,6 +19,7 @@ export async function GET() {
       username: true,
       name: true,
       email: true,
+      dailyDigest: true,
       // OAuth-only accounts (Google) are created with an empty passwordHash;
       // the profile page hides "Change password" when there's no usable one.
       passwordHash: true,
@@ -109,6 +110,11 @@ export async function PUT(req: NextRequest) {
     name: body.name.trim(),
     email,
   };
+  // Daily digest on/off. Only written when the client actually sends it, so a
+  // plain name/email save can't silently reset the preference.
+  if (typeof body.dailyDigest === "boolean") {
+    data.dailyDigest = body.dailyDigest;
+  }
   if (typeof body.password === "string" && body.password.length > 0) {
     if (body.password.length < 8) {
       return NextResponse.json(
@@ -123,7 +129,7 @@ export async function PUT(req: NextRequest) {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data,
-      select: { name: true, email: true },
+      select: { name: true, email: true, dailyDigest: true },
     });
     return NextResponse.json(updated);
   } catch {
