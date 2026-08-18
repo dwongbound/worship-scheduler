@@ -1,11 +1,25 @@
 import type { Metadata, Viewport } from "next";
 import Script from "next/script";
+import { Figtree } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import Providers from "./providers";
 import Navbar from "@/components/Navbar";
 import SwipePager from "@/components/SwipePager";
 import { SwipeProvider } from "@/components/SwipeProvider";
 import ScrollToTopButton from "@/components/ScrollToTopButton";
+
+// Figtree is the app's UI typeface — a humanist geometric sans with a tall
+// x-height, picked so dense schedule views stay legible at 14px. Loaded as a
+// variable font and exposed as a CSS var that tailwind.config.ts wires into
+// `font-sans`, so every existing utility class picks it up automatically.
+// next/font self-hosts the files at build time (no request to Google at
+// runtime) and `display: swap` avoids a blank flash while it loads.
+const figtree = Figtree({
+  subsets: ["latin"],
+  variable: "--font-figtree",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Worship Scheduler",
@@ -43,6 +57,15 @@ try {
 } catch (e) {}
 `;
 
+// Vercel Web Analytics is only wanted on the two deployed branches: `main`
+// (which is the Vercel production env) and `staging` (a preview deployment —
+// see vercel.json, which disables previews for every other branch). Off
+// everywhere else, so local dev and Playwright runs don't report page views.
+// Both vars are Vercel system env vars, unset outside Vercel.
+const analyticsEnabled =
+  process.env.VERCEL_ENV === "production" ||
+  process.env.VERCEL_GIT_COMMIT_REF === "staging";
+
 export default function RootLayout({
   children,
 }: {
@@ -51,7 +74,7 @@ export default function RootLayout({
   return (
     // suppressHydrationWarning: the theme script may add `dark` to <html>
     // before react hydrates, which is expected.
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={figtree.variable} suppressHydrationWarning>
       <head>
         {/* Tell the Dark Reader browser extension to keep its hands off: the
             app ships its own dark theme, and letting Dark Reader invert an
@@ -60,20 +83,28 @@ export default function RootLayout({
         <meta name="darkreader-lock" />
         <Script id="theme-script" dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body className="min-h-screen bg-gray-50 text-gray-900 antialiased dark:bg-gray-900 dark:text-gray-100">
+      {/* `font-sans` is explicit rather than left to preflight: this project
+          feeds tailwind its JS config through `@config`, and relying on that to
+          reach v4's default-font plumbing is fragile. One class removes the
+          guesswork. */}
+      <body className="min-h-screen bg-gray-50 font-sans text-gray-900 antialiased dark:bg-gray-900 dark:text-gray-100">
         <Providers>
           {/* SwipeProvider wraps the navbar (which registers the tab list) and
               the pager (which runs the swipe gesture) so they share drag state. */}
           <SwipeProvider>
             <Navbar />
-            {/* Extra bottom padding on phones so content can scroll clear of the
-                floating bottom nav bar (see Navbar.tsx). */}
+            {/* Plain `pt-6`: Navbar renders an in-flow spacer + banners above
+                this, so the header's space is already reserved by layout. No
+                padding math here, and nothing that can go stale.
+                Extra bottom padding on phones so content can scroll clear of
+                the floating bottom nav bar (see Navbar.tsx). */}
             <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-6">
               <SwipePager>{children}</SwipePager>
             </main>
           </SwipeProvider>
           <ScrollToTopButton />
         </Providers>
+        {analyticsEnabled && <Analytics />}
       </body>
     </html>
   );

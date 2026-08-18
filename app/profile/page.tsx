@@ -44,8 +44,8 @@ export default function ProfilePage() {
   const [memberships, setMemberships] = useState<Membership[]>([]);
   // Teams I'm on, each with the roles I play there (roles are per-team now).
   const [teams, setTeams] = useState<ApiTeamRole[]>([]);
-  // The team whose roles the editor is showing ("" = none picked yet; the
-  // JOIN_OPTION sentinel = the "join a team" picker is open).
+  // The team whose roles the editor is showing. Defaults to the first team
+  // once they load ("" only while I'm on no teams at all).
   const [selectedTeamId, setSelectedTeamId] = useState("");
   // Every team across my orgs (for the "join a team" picker); fetched on mount.
   const [allTeams, setAllTeams] = useState<ApiTeam[]>([]);
@@ -56,6 +56,9 @@ export default function ProfilePage() {
   const [addSelection, setAddSelection] = useState<Set<string>>(new Set());
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
+  // Daily 8 AM Slack digest, on by default. The send time is fixed, so this
+  // on/off switch is the whole setting (see lib/digest.ts).
+  const [dailyDigest, setDailyDigest] = useState(true);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   // Briefly true right after a successful save so the status line can flash a
@@ -99,6 +102,7 @@ export default function ProfilePage() {
     setMemberships(me.memberships ?? []);
     setTeams(me.teams ?? []);
     setHasPassword(me.hasPassword);
+    setDailyDigest(me.dailyDigest);
     savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
     setLoaded(true);
   }, [me]);
@@ -108,6 +112,14 @@ export default function ProfilePage() {
   useEffect(() => {
     fetchJsonArray<ApiTeam>("/api/teams").then(setAllTeams);
   }, []);
+
+  // Always have a team selected: pick the first one, and re-point at it if the
+  // selected team disappears (e.g. after leaving it).
+  useEffect(() => {
+    setSelectedTeamId((prev) =>
+      teams.some((t) => t.id === prev) ? prev : (teams[0]?.id ?? "")
+    );
+  }, [teams]);
 
   // Roles are per-team, saved to their own endpoint. Toggling a role writes the
   // whole next role list for THAT team; joining/leaving add/remove a team.
@@ -202,6 +214,25 @@ export default function ProfilePage() {
       window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
     } finally {
       setSavingRoles(false);
+    }
+  }
+
+  // Flip the daily-digest preference. Optimistic (the checkbox responds at
+  // once) and reverted if the PUT fails, like the role toggles above.
+  async function saveDailyDigest(next: boolean) {
+    const prev = dailyDigest;
+    setDailyDigest(next);
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // name is required by the endpoint, so send the current one through.
+        body: JSON.stringify({ name, email: email || null, dailyDigest: next }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setDailyDigest(prev);
+      setMessage("Error: could not save that");
     }
   }
 
@@ -437,7 +468,6 @@ export default function ProfilePage() {
               value={selectedTeamId}
               onChange={(e) => setSelectedTeamId(e.target.value)}
             >
-              <option value="">Select a team…</option>
               {teams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {teamLabel(t.name, t.orgId)}
@@ -513,7 +543,11 @@ export default function ProfilePage() {
         )}
       </Modal>
 
-      <SlackConnections initial={memberships} />
+      <SlackConnections
+        initial={memberships}
+        dailyDigest={dailyDigest}
+        onDailyDigestChange={saveDailyDigest}
+      />
 
       <Modal open={pwOpen} onClose={() => setPwOpen(false)} title="Change password">
         <form onSubmit={changePassword} className="space-y-4">
@@ -570,7 +604,15 @@ const SLACK_RESULTS: Record<string, { text: string; ok: boolean }> = {
   error: { text: "Slack connection failed — please try again.", ok: false },
 };
 
-function SlackConnections({ initial }: { initial: Membership[] }) {
+function SlackConnections({
+  initial,
+  dailyDigest,
+  onDailyDigestChange,
+}: {
+  initial: Membership[];
+  dailyDigest: boolean;
+  onDailyDigestChange: (next: boolean) => void;
+}) {
   const [rows, setRows] = useState(initial);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   // orgId whose OAuth popup is open (its button shows a spinner); null = idle.
@@ -651,6 +693,22 @@ function SlackConnections({ initial }: { initial: Membership[] }) {
         Connect Slack per organization so the bot can DM you about assignments,
         swaps, and availability. Member IDs are different in each workspace.
       </p>
+
+      {/* Daily digest opt-out. Lives here because Slack is how it's delivered —
+          it does nothing until at least one org below is connected. */}
+      <div className="mb-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+        <Checkbox
+          label="Daily summary at 8:00 AM"
+          checked={dailyDigest}
+          onChange={(e) => onDailyDigestChange(e.target.checked)}
+        />
+        <p className="mt-1 text-xs text-gray-500">
+          {rows.some((m) => m.slackUserId)
+            ? "A short DM listing what needs you that day — sets, confirmations, and availability. Nothing is sent on days you're all clear."
+            : "Connect Slack below to start receiving it. A short DM listing what needs you that day — sets, confirmations, and availability."}
+        </p>
+      </div>
+
       <div className="space-y-4">
         {rows.map((m) => (
           <div

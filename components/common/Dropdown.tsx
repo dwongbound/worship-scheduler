@@ -17,6 +17,9 @@ interface DropdownProps {
   // trigger + panel area) instead of only on click. Click still toggles it, so
   // touch devices — which have no hover — keep working.
   hover?: boolean;
+  // Tailwind width class for the menu panel. Widen it when an item's label
+  // would otherwise wrap onto a second line.
+  widthClassName?: string;
 }
 
 export default function Dropdown({
@@ -25,6 +28,7 @@ export default function Dropdown({
   align = "right",
   menuClassName = "overflow-hidden",
   hover = false,
+  widthClassName = "w-48",
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -89,7 +93,7 @@ export default function Dropdown({
           <div
             // Clicks inside the menu (e.g. "Log out") close it too.
             onClick={() => setOpen(false)}
-            className={`w-48 rounded-lg border border-gray-200 bg-white py-1
+            className={`${widthClassName} rounded-lg border border-gray-200 bg-white py-1
               shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
           >
             {children}

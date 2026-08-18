@@ -12,7 +12,13 @@
 import { prisma } from "./prisma";
 import { decryptSecret } from "./crypto";
 import { createOrSyncSetPlaylist, isOrgSpotifyConnected } from "./spotify";
-import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "./constants";
+import {
+  ALL_INSTRUMENTS,
+  DIGEST_SEND_MINUTE,
+  INSTRUMENT_LABELS,
+  type Instrument,
+} from "./constants";
+import { buildOrgDigest, renderDigestText } from "./digest";
 import { formatDay, formatTime, shortDateLabel } from "./dates";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
 
@@ -805,4 +811,89 @@ export async function sendTeamWeeklySummary(
         ok: false,
         error: "Could not post — is the bot invited to that channel?",
       };
+}
+
+/**
+ * The daily digest run (called by the daily cron). DMs every person whose
+ * 8 AM send time has passed today and who hasn't already been sent one today,
+ * one message per org they belong to. Skips anyone with nothing to do, anyone
+ * opted out, and any org/person without a Slack link.
+ *
+ * The lastSent guard is per membership and compares against the START of today,
+ * so this is safe to call repeatedly — the cron currently fires once a day, but
+ * running it more often just delivers closer to 8 AM rather than duplicating.
+ * Best-effort and non-throwing, like every other sender here.
+ */
+export async function sendDailyDigests(
+  now: Date = new Date()
+): Promise<{ sent: number; skipped: number }> {
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const minutesNow = now.getHours() * 60 + now.getMinutes();
+  // Before the send time — nothing is due yet. (Only reachable if the cron is
+  // moved earlier or run by hand; the daily cron fires at 8 AM.)
+  if (minutesNow < DIGEST_SEND_MINUTE) return { sent: 0, skipped: 0 };
+
+  const due = await prisma.orgMembership.findMany({
+    where: {
+      slackUserId: { not: null },
+      user: { dailyDigest: true },
+      OR: [{ digestSentAt: null }, { digestSentAt: { lt: startOfToday } }],
+    },
+    select: {
+      id: true,
+      orgId: true,
+      isAdmin: true,
+      slackUserId: true,
+      user: { select: { id: true, name: true } },
+      org: { select: { name: true } },
+    },
+  });
+
+  let sent = 0;
+  let skipped = 0;
+  // Bot tokens are per org and most orgs have several members — resolve each
+  // token once instead of per membership.
+  const tokens = new Map<string, string | null>();
+
+  for (const m of due) {
+    try {
+      if (!tokens.has(m.orgId)) tokens.set(m.orgId, await orgBotToken(m.orgId));
+      const token = tokens.get(m.orgId) ?? null;
+      if (!token && !slackDryRun()) {
+        skipped++;
+        continue;
+      }
+
+      const items = await buildOrgDigest(m.user.id, m.orgId, {
+        isAdmin: m.isAdmin,
+        orgName: m.org.name,
+        now,
+      });
+      // Nothing needs them today — stay quiet rather than DM an empty list.
+      // Deliberately NOT stamped as sent, so a set added later today can still
+      // reach them on a subsequent run.
+      if (items.length === 0) {
+        skipped++;
+        continue;
+      }
+
+      const text = renderDigestText(m.user.name, items, appUrl());
+      const ok = await postDirectMessage(token, m.slackUserId!, text);
+      if (!ok) {
+        skipped++;
+        continue;
+      }
+      await prisma.orgMembership.update({
+        where: { id: m.id },
+        data: { digestSentAt: now },
+      });
+      sent++;
+    } catch (err) {
+      // One bad membership must never abort the whole run.
+      console.error("[slack] daily digest failed", err);
+      skipped++;
+    }
+  }
+
+  return { sent, skipped };
 }

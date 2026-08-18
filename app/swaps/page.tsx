@@ -1,9 +1,12 @@
 "use client";
-// Swaps tab:
+// Swaps tab ("Set Manager" in the navbar):
 //   1. My sets — confirm (individually or all at once) or request a swap.
+//      A horizon dropdown picks how far ahead the list reaches (default 3
+//      months); it also sizes the /api/sets fetch, so every row shown can
+//      always open its Details modal.
 //   2. Open swap requests from teammates who play my instrument(s) —
 //      one click takes over their slot (which then needs MY confirmation).
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSession } from "next-auth/react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
@@ -17,8 +20,9 @@ import StatusBadge from "@/components/StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
-import { formatDay, formatTime } from "@/lib/dates";
+import Select from "@/components/common/Select";
+import { INSTRUMENT_LABELS, SET_MANAGER_HORIZONS } from "@/lib/constants";
+import { formatDay, formatTime, toYmd } from "@/lib/dates";
 import type {
   ApiAdminUser,
   ApiIncomingSwap,
@@ -48,6 +52,22 @@ export default function SwapsPage() {
   const [adminUsersByOrg, setAdminUsersByOrg] = useState<
     Record<string, ApiAdminUser[]>
   >({});
+  // How far ahead "My sets" looks, in months (see SET_MANAGER_HORIZONS). It
+  // bounds BOTH the visible list and the /api/sets window fetched below, so a
+  // row can never appear without its full set loaded behind it.
+  const [horizonMonths, setHorizonMonths] = useState(
+    SET_MANAGER_HORIZONS[0].months
+  );
+  // The horizon as a concrete end-of-day timestamp: the cutoff for the list and
+  // the `to` of the /api/sets fetch. Memoized so reload() keeps a stable
+  // identity between renders.
+  const horizonEnd = useMemo(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() + horizonMonths);
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }, [horizonMonths]);
+
   // Id of the row currently updating (shows inline dots), and a flag for the
   // bulk "confirm all" button — so a mutation never remounts the whole page.
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -71,7 +91,14 @@ export default function SwapsPage() {
     const [mineData, swapsData, setsData, incomingData] = await Promise.all([
       fetchJsonArray<ApiMyAssignment>(`/api/assignments${orgParam}`),
       fetchJsonArray<ApiSwapRequest>(`/api/swaps${orgParam}`),
-      fetchJsonArray<ApiSet>(`/api/sets${orgParam}`),
+      // Only /api/sets takes a window; the other three are already scoped to
+      // upcoming rows and are small, so they're fetched whole and trimmed to
+      // the horizon client-side below.
+      fetchJsonArray<ApiSet>(
+        `/api/sets${orgParam ? `${orgParam}&` : "?"}from=${toYmd(
+          new Date()
+        )}&to=${toYmd(horizonEnd)}`
+      ),
       fetchJsonArray<ApiIncomingSwap>(
         `/api/swaps/proposals/incoming${orgParam}`
       ),
@@ -82,7 +109,7 @@ export default function SwapsPage() {
     setIncoming(incomingData);
     // Nudge the navbar to refresh its red dot.
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
-  }, [orgs, viewOrgId]);
+  }, [orgs, viewOrgId, horizonEnd]);
 
   // Accept or reject a targeted swap proposed to me.
   async function respondSwap(proposalId: string, action: "accept" | "reject") {
@@ -178,6 +205,16 @@ export default function SwapsPage() {
   usePageLoading(!mine || !openSwaps || !allSets || !incoming);
   if (!mine || !openSwaps || !allSets || !incoming) return null;
 
+  // Rows past the chosen horizon are hidden here rather than server-side —
+  // /api/assignments has no window and the payload is one person's own sets,
+  // so trimming in the client keeps the API surface unchanged.
+  const visibleMine = mine.filter(
+    (a) => new Date(a.set.startsAt).getTime() <= horizonEnd.getTime()
+  );
+  const hiddenCount = mine.length - visibleMine.length;
+  // Counted over ALL my sets, not just the visible ones: /api/assignments/
+  // confirm-all confirms every pending assignment server-side, so scoping this
+  // to the horizon would advertise a smaller number than the button performs.
   const pendingCount = mine.filter((a) => a.status === "PENDING").length;
   // The full set behind the open Details modal (null = closed / not found).
   const detailSet = allSets.find((s) => s.id === detailSetId) ?? null;
@@ -296,6 +333,23 @@ export default function SwapsPage() {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold">My Sets</h1>
           <div className="flex items-center gap-2">
+            {/* How far ahead to look. Also sizes the /api/sets fetch, so
+                widening it loads the sets behind the newly shown rows. */}
+            <div className="w-40">
+              <Select
+                label="How far ahead"
+                hideLabel
+                data-testid="horizon-select"
+                value={horizonMonths}
+                onChange={(e) => setHorizonMonths(Number(e.target.value))}
+              >
+                {SET_MANAGER_HORIZONS.map((h) => (
+                  <option key={h.months} value={h.months}>
+                    {h.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
             {/* Plain link download: the browser sends session cookies along.
                 Hidden on phones — no .ics export on narrow screens. */}
             <a href="/api/export" download className="hidden sm:block">
@@ -317,11 +371,15 @@ export default function SwapsPage() {
           </div>
         </div>
 
-        {mine.length === 0 && (
-          <p className="text-gray-500">You're not on any upcoming sets.</p>
+        {visibleMine.length === 0 && (
+          <p className="text-gray-500">
+            {hiddenCount > 0
+              ? `No sets in the next ${horizonMonths} months — you have ${hiddenCount} further out.`
+              : "You're not on any upcoming sets."}
+          </p>
         )}
         <ul className="space-y-3">
-          {mine.map((a) => (
+          {visibleMine.map((a) => (
             <li key={a.id}>
               <Card className="flex flex-wrap items-center justify-between gap-3">
                 <div>

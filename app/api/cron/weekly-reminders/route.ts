@@ -1,11 +1,13 @@
 // GET /api/cron/weekly-reminders — the app's single daily Vercel Cron. It does
-// two jobs:
+// three jobs:
 //   1. Weekly reminders: send every scheduled reminder whose dayOfWeek is today
 //      and that hasn't gone out yet today (lastSentAt guard), posting each
 //      team's "this week's sets" to Slack.
 //   2. Auto group chats: create the private Slack channel for any upcoming set
 //      now within its per-set lead window (runDueGroupChats), and archive the
 //      channels of sets whose event date has passed (archiveDueGroupChats).
+//   3. Daily digests: DM each person their 8 AM "here's your day" summary
+//      (sendDailyDigests) — skipped for anyone with nothing to do.
 //
 // Vercel's free tier only runs crons once per day, so the per-reminder `minute`
 // is best-effort (stored for display; the daily run fires them all at once).
@@ -16,6 +18,7 @@ import { prisma } from "@/lib/prisma";
 import {
   runDueGroupChats,
   archiveDueGroupChats,
+  sendDailyDigests,
   sendTeamWeeklySummary,
 } from "@/lib/slack";
 
@@ -64,5 +67,16 @@ export async function GET(req: NextRequest) {
   const groupChats = await runDueGroupChats(now);
   const archived = await archiveDueGroupChats(now);
 
-  return NextResponse.json({ due: due.length, sent, skipped, groupChats, archived });
+  // Personal daily digests. Runs last so a slow digest pass can't delay the
+  // group chats, and independently of everything above.
+  const digests = await sendDailyDigests(now);
+
+  return NextResponse.json({
+    due: due.length,
+    sent,
+    skipped,
+    groupChats,
+    archived,
+    digests,
+  });
 }
