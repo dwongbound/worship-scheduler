@@ -27,6 +27,7 @@ import {
 } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
 import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
+import { buildPlayerOptions } from "@/lib/playerOptions";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
 import {
   conflictedUserIds,
@@ -195,29 +196,22 @@ export default function StagedScheduleModal({
 
   // Options for a role's dropdown: users who play `role` and aren't already on
   // this set (one slot per set), each flagged available/unavailable at this
-  // set's time and sorted available-first (mirrors SetDetailModal).
-  const eligibleFor = (set: StagedSet, role: Instrument): PlayerOption[] => {
-    const onSet = new Set(set.assignments.map((a) => a.userId));
-    const calcSet = {
-      id: set.startsAt,
-      startsAt: new Date(set.startsAt),
-      durationMinutes: set.durationMinutes,
-    };
-    return users
-      // Only people who play THIS role on the set's team (roles are per-team;
-      // no team = open to anyone who plays it on any team).
-      .filter((u) => playsRoleForSet(u, role, set.teamId) && !onSet.has(u.id))
-      .map((u) => ({
-        id: u.id,
-        name: u.name,
-        available: isUserAvailable(u.id, calcSet, rules),
-      }))
-      .sort(
-        (a, b) =>
-          Number(b.available) - Number(a.available) ||
-          a.name.localeCompare(b.name)
-      );
-  };
+  // set's time plus inactive-on-this-team, and sorted available-and-active
+  // first (mirrors SetDetailModal).
+  const eligibleFor = (set: StagedSet, role: Instrument): PlayerOption[] =>
+    buildPlayerOptions({
+      users,
+      role,
+      teamId: set.teamId,
+      set: {
+        id: set.startsAt,
+        startsAt: new Date(set.startsAt),
+        durationMinutes: set.durationMinutes,
+      },
+      rules,
+      // One slot per person on a staged set, so anyone already on it is out.
+      exclude: new Set(set.assignments.map((a) => a.userId)),
+    });
 
   // Nothing to review — everything in the window was already staffed.
   if (sets.length === 0) {

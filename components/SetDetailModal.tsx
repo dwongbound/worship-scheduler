@@ -45,7 +45,7 @@ import {
 import { formatDay, formatTime } from "@/lib/dates";
 import { eligibleMDIds, isValidMD } from "@/lib/md";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
-import { playsRoleForSet } from "@/lib/stagedPlan";
+import { buildPlayerOptions } from "@/lib/playerOptions";
 import SetHistoryEntry from "./SetHistoryEntry";
 import type {
   ApiAdminUser,
@@ -308,9 +308,10 @@ export default function SetDetailModal({
   // THIS role (per their Team-tab instruments) and aren't already filling it
   // here (a person may hold several roles on one set, so we only exclude the
   // role they already fill). Each is flagged with whether they're free at this
-  // set's time and how many times they're scheduled nearby; the list sorts
-  // available-first, then least-scheduled-first, so unavailable people sink to
-  // the bottom (but stay selectable — an admin can override).
+  // set's time, whether they're active on this team, and how many times they're
+  // scheduled nearby; the list sorts available-and-active first, then
+  // least-scheduled-first, so unavailable/inactive people sink to the bottom
+  // (but stay selectable — an admin can override).
   // The set's worship leader(s) can't double as MD, so they never get the
   // "(MD)" hint even in an MD-capable role's dropdown.
   const worshipLeaderIds = new Set(
@@ -319,31 +320,26 @@ export default function SetDetailModal({
       .map((a) => a.user.id)
   );
   const eligibleFor = (role: Instrument): PlayerOption[] => {
-    const inThisRole = new Set(
-      set.assignments.filter((a) => a.role === role).map((a) => a.user.id)
-    );
     // In an MD-capable role, mark the musical directors — picking them here
     // makes them an eligible MD for the set.
     const roleAllowsMD = (MD_ROLES as Instrument[]).includes(role);
-    return users
-      // Only people who play THIS role on this set's team (roles are per-team;
-      // a team-less set is open to anyone who plays the role on any team). Choir
-      // is team-scoped now like every other role.
-      .filter((u) => playsRoleForSet(u, role, set.teamId ?? set.team?.id))
-      .filter((u) => !inThisRole.has(u.id))
-      .map((u) => ({
-        id: u.id,
-        name: u.name,
-        available: isUserAvailable(u.id, calcSet, rules),
-        count: serveCounts.get(u.id) ?? 0,
-        md: roleAllowsMD && u.isMD && !worshipLeaderIds.has(u.id),
-      }))
-      .sort(
-        (a, b) =>
-          Number(b.available) - Number(a.available) ||
-          a.count - b.count ||
-          a.name.localeCompare(b.name)
-      );
+    return buildPlayerOptions({
+      users,
+      role,
+      teamId: set.teamId ?? set.team?.id,
+      set: calcSet,
+      rules,
+      // Whoever already fills this exact role here (a person may hold several
+      // roles on one set, so only this role's occupants are excluded).
+      exclude: new Set(
+        set.assignments.filter((a) => a.role === role).map((a) => a.user.id)
+      ),
+      serveCounts,
+      isMDHere: (u) =>
+        roleAllowsMD &&
+        !!users.find((x) => x.id === u.id)?.isMD &&
+        !worshipLeaderIds.has(u.id),
+    });
   };
 
   // Choir dropdown options — same shared eligibility/availability logic as the

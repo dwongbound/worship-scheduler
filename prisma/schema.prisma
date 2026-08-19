@@ -212,6 +212,13 @@ model TeamMember {
 
   roles Instrument[] // roles this person can fill on this team (may be empty)
 
+  // Whether this person is currently schedulable ON THIS TEAM. Per team by
+  // design: someone can be active on one team and inactive on another in the
+  // same org. Inactive keeps the membership + roles (and all their history)
+  // but the auto-scheduler skips them, and the manual pick / swap lists mark
+  // them "(inactive)" — dimmed but still choosable, like "(unavailable)".
+  active Boolean @default(true)
+
   createdAt DateTime @default(now())
 
   // One membership row per person per team.

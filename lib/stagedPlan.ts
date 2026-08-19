@@ -10,8 +10,9 @@ interface RosterUser {
   id: string;
   // Teams the user is on, each with the roles they play there (roles are
   // per-team, matching ApiTeamRole). Omitted = membership unknown → only counts
-  // for team-less sets.
-  teams?: { id: string; roles: Instrument[] }[];
+  // for team-less sets. `active` is that team's schedulable flag (absent =
+  // active, so callers with older data behave as before).
+  teams?: { id: string; roles: Instrument[]; active?: boolean }[];
 }
 
 // Whether this user may serve on a set of this team (no team = open to all).
@@ -28,6 +29,20 @@ export function rolesForSet(
   return teamId
     ? user.teams?.find((t) => t.id === teamId)?.roles ?? []
     : (user.teams ?? []).flatMap((t) => t.roles);
+}
+
+// Whether the user is marked ACTIVE for a set's team — i.e. schedulable there.
+// Inactive people stay in the pick lists (flagged "(inactive)") but the auto
+// fill skips them, so this is what "can we count on them?" checks read. For a
+// team-less set, being active on ANY of their teams counts.
+export function isActiveForSet(
+  user: RosterUser,
+  teamId: string | null | undefined
+): boolean {
+  const teams = user.teams ?? [];
+  return teamId
+    ? teams.find((t) => t.id === teamId)?.active !== false
+    : teams.length === 0 || teams.some((t) => t.active !== false);
 }
 
 // Whether the user can fill `role` on a set of this team (per-team roles).
@@ -119,6 +134,9 @@ export function unfillableRoles(
     const hasCandidate = users.some(
       (u) =>
         playsRoleForSet(u, role, set.teamId) &&
+        // Inactive people don't count: nothing will auto-fill this slot with
+        // them, so the hole is still structural.
+        isActiveForSet(u, set.teamId) &&
         !onSet.has(u.id) &&
         isUserAvailable(u.id, cs, rules)
     );

@@ -176,7 +176,11 @@ export default function ProfilePage() {
         body: JSON.stringify({ roles: [] }),
       });
       if (!res.ok) throw new Error("join failed");
-      setTeams((prev) => [...prev, { id: team.id, name: team.name, roles: [] }]);
+      // New memberships start active (the db default) — see ApiTeamRole.active.
+      setTeams((prev) => [
+        ...prev,
+        { id: team.id, name: team.name, roles: [], active: true },
+      ]);
       setSelectedTeamId(team.id); // jump straight to picking roles on it
       window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
     } catch {
@@ -471,12 +475,22 @@ export default function ProfilePage() {
               {teams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {teamLabel(t.name, t.orgId)}
+                  {t.active === false ? " (inactive)" : ""}
                 </option>
               ))}
             </Select>
 
             {selectedTeam ? (
               <div className="mt-3">
+                {/* An admin has paused you on this team: your roles stay, but
+                    the auto-scheduler skips you here until they switch it back. */}
+                {selectedTeam.active === false && (
+                  <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                    You’re marked <strong>inactive</strong> on this team, so you
+                    won’t be scheduled on its sets. Ask an admin to reactivate
+                    you.
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   {ALL_INSTRUMENTS.map((inst) => (
                     <Checkbox

@@ -4,13 +4,17 @@
 // centered over the control on macOS) — this opens a styled list *directly
 // below* the box. It also marks people who can't serve at this set's time:
 // they stay in the list (so you can see who they are) but are disabled and
-// labelled "(unavailable)", and available people are sorted to the top.
+// labelled "(unavailable)", and available people are sorted to the top. People
+// marked inactive on the set's team are flagged the same way ("(inactive)").
 import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface PlayerOption {
   id: string;
   name: string;
   available: boolean;
+  // Marked inactive on this set's team — never auto-scheduled, but an admin can
+  // still pick them by hand, so it's a label (like `available`), not a filter.
+  inactive?: boolean;
   // How many times this person is already scheduled in the surrounding weeks
   // (±2 weeks of this set). Drives the "least-scheduled first" ordering and is
   // shown as a muted count. Optional — callers that don't compute it omit it.
@@ -142,11 +146,11 @@ export default function PlayerSelect({
                 // with the "(unavailable)" marker when both apply.
                 label={`${o.name}${o.md ? " (MD)" : ""}${
                   o.available ? "" : " (unavailable)"
-                }`}
+                }${o.inactive ? " (inactive)" : ""}`}
                 count={o.count}
-                // Unavailable people are dimmed but still selectable — an admin
-                // can deliberately override and assign someone who's busy.
-                muted={!o.available}
+                // Unavailable/inactive people are dimmed but still selectable —
+                // an admin can deliberately override and assign them anyway.
+                muted={!o.available || o.inactive}
                 onClick={() => choose(o.id)}
               />
             ))}

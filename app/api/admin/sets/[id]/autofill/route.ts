@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { CHOIR, type Instrument, type SlotCapacityMap } from "@/lib/constants";
+import { schedulableRolesByTeam } from "@/lib/roster";
 import { availableChoirMembers, buildSchedule } from "@/lib/scheduler";
 import { defaultMDId, isValidMD } from "@/lib/md";
 
@@ -54,10 +55,13 @@ export async function POST(
       select: {
         id: true,
         isMD: true,
-        // Per-team roles: only this org's teams are relevant to this set.
+        // Per-team roles: only this org's teams are relevant to this set;
+        // schedulableRolesByTeam then drops the memberships they're marked
+        // inactive on, so neither the band fill nor the choir seats them (an
+        // admin can still pick them by hand).
         teamMembers: {
           where: { team: { orgId: set.orgId } },
-          select: { teamId: true, roles: true },
+          select: { teamId: true, roles: true, active: true },
         },
       },
     }),
@@ -80,9 +84,7 @@ export async function POST(
   const eligible = users.map((u) => ({
     id: u.id,
     isMD: u.isMD,
-    rolesByTeam: Object.fromEntries(
-      u.teamMembers.map((m) => [m.teamId, m.roles as Instrument[]])
-    ),
+    rolesByTeam: schedulableRolesByTeam(u.teamMembers),
   }));
   const existingCounts = new Map(existing.map((e) => [e.userId, e._count]));
 

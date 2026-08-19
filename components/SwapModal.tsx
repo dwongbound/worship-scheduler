@@ -182,9 +182,15 @@ export default function SwapModal({
                 </div>
               </div>
 
-              {/* Both-direction availability flags (only surfaced when there's
+              {/* Both-direction availability flags, plus whether they've
+                  stepped back from this team (only surfaced when there's
                   something to warn about). */}
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+                {c.theyInactive && (
+                  <span className="text-gray-500 dark:text-gray-400">
+                    (inactive) They&apos;re not active on this team right now
+                  </span>
+                )}
                 {!c.youAvailable && (
                   <span className="text-amber-600 dark:text-amber-400">
                     ⚠ You&apos;re unavailable that day
