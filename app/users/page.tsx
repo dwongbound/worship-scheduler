@@ -892,6 +892,10 @@ function UsersPageInner() {
                               {available.map((team) => (
                                 <button
                                   key={team.id}
+                                  // Named like the chip's remove control: every
+                                  // card offers the same team names, so the bare
+                                  // name isn't a unique handle on this control.
+                                  aria-label={`Add ${user.name} to ${team.name}`}
                                   onClick={() => addToTeam(user, team)}
                                   className="block w-full px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                                 >
