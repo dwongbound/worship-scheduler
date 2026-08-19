@@ -109,6 +109,9 @@ Also here: `validateSlotCapacities` (API guard, MAX_SLOTS_PER_ROLE=20), `ROLE_OR
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
 - `prisma.ts` — singleton client from generated output.
+- `dbUrl.ts` — `normalizeDatabaseUrl()`: rewrites `sslmode=require|prefer|
+  verify-ca` to `verify-full`, pinning today's TLS behavior before pg v9
+  redefines those aliases (and silencing pg's startup warning). ✅tested
 
 ## Components
 

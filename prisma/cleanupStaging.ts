@@ -4,8 +4,9 @@
 // memberships, assignments, unavailability, and swap proposals.
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../lib/generated/prisma/client";
+import { normalizeDatabaseUrl } from "../lib/dbUrl";
 
-const prisma = new PrismaClient({ adapter: new PrismaPg(process.env.DATABASE_URL!) });
+const prisma = new PrismaClient({ adapter: new PrismaPg(normalizeDatabaseUrl(process.env.DATABASE_URL!)) });
 const APPLY = process.env.APPLY === "1";
 
 const ADMIN_EMAIL = "dswong2001@gmail.com";
