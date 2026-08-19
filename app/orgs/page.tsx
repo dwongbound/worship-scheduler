@@ -6,6 +6,7 @@
 // old cramped per-org settings modal that used to live in OrgSwitcher.
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
@@ -25,6 +26,22 @@ function spotifyAccountLabel(m: ApiMeMembership): string {
   return name ? `Connected as ${name} ✓` : "Connected ✓";
 }
 
+// What /api/spotify/callback's ?spotify=<status> means to a human. The route
+// logs the real detail server-side; these are the only words the admin sees.
+const SPOTIFY_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }> = {
+  connected: { tone: "indigo", text: "Spotify connected — set playlists can now be created." },
+  denied: { tone: "amber", text: "Spotify authorization was cancelled, so nothing changed." },
+  expired: {
+    tone: "amber",
+    text: "That Spotify link had already been used or expired. Click Connect to Spotify to start again.",
+  },
+  forbidden: { tone: "amber", text: "Only an admin of that org can connect its Spotify account." },
+  error: {
+    tone: "amber",
+    text: "Spotify refused the connection — this is a problem with the Spotify app itself, not your account. The server log has Spotify's reason.",
+  },
+};
+
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
   const { update } = useSession();
@@ -35,6 +52,9 @@ export default function OrgSettingsPage() {
   const memberships = me?.memberships ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Add-an-org modal (same join-by-key flow as the navbar switcher).
+  // Outcome of a Spotify connect round-trip, read once from ?spotify= on mount.
+  const [spotifyNotice, setSpotifyNotice] =
+    useState<{ tone: "indigo" | "amber"; text: string } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [orgKey, setOrgKey] = useState("");
   const [addError, setAddError] = useState("");
@@ -45,6 +65,16 @@ export default function OrgSettingsPage() {
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyError, setKeyError] = useState("");
   const [keyCopied, setKeyCopied] = useState(false);
+
+  // /api/spotify/callback sends the admin back here with ?spotify=<status>.
+  // Show what happened, then strip the param so a reload doesn't re-announce it.
+  useEffect(() => {
+    const status = new URLSearchParams(window.location.search).get("spotify");
+    if (!status) return;
+    setSpotifyNotice(SPOTIFY_NOTICES[status] ?? SPOTIFY_NOTICES.error);
+    window.history.replaceState(null, "", window.location.pathname);
+    if (status === "connected") refreshMe();
+  }, [refreshMe]);
 
   // Default the selection to the "current" org — whatever the switcher points
   // at — falling back to the first org. Only runs until a valid pick is set so
@@ -142,6 +172,12 @@ export default function OrgSettingsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold">Org settings</h1>
+
+      {spotifyNotice && (
+        <Banner tone={spotifyNotice.tone} onDismiss={() => setSpotifyNotice(null)}>
+          {spotifyNotice.text}
+        </Banner>
+      )}
 
       {orgs.length === 0 ? (
         <Card>

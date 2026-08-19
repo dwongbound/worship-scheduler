@@ -131,33 +131,38 @@ function basicAuth(): string {
 }
 
 /**
- * The connected account's {id, displayName} from GET /v1/me, or null if the
- * call fails. Logs WHY on failure: without the id we can't create playlists
- * (the create endpoint is /users/{id}/playlists), so a silent null here is the
- * difference between a working connection and a dead one.
+ * The connected account's {id, displayName} from GET /v1/me. Without the id we
+ * can't create playlists (the create endpoint is /users/{id}/playlists), so a
+ * failure here is the difference between a working connection and a dead one.
+ *
+ * Returns the reason rather than a bare null, because the reasons want opposite
+ * responses: a 403 "Active premium subscription required for the owner of the
+ * app" is a Spotify dashboard problem no amount of retrying fixes, while a
+ * timeout is worth another click. Both get logged AND handed to the caller.
  */
-async function fetchSpotifyProfile(
-  accessToken: string
-): Promise<{ id: string; displayName: string | null } | null> {
+type SpotifyProfile =
+  | { ok: true; id: string; displayName: string | null }
+  | { ok: false; error: string };
+
+async function fetchSpotifyProfile(accessToken: string): Promise<SpotifyProfile> {
+  const fail = (error: string): SpotifyProfile => {
+    console.error(`[spotify] GET /me failed: ${error}`);
+    return { ok: false, error };
+  };
   try {
     const res = await fetch(`${API}/me`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!res.ok) {
-      console.error(
-        `[spotify] GET /me failed: ${res.status} ${await res.text().catch(() => "")}`
-      );
-      return null;
+      // Spotify puts the human-readable cause in error.message.
+      const body = await res.json().catch(() => null);
+      return fail(`${res.status} ${body?.error?.message ?? "no message"}`);
     }
     const profile = await res.json();
-    if (!profile?.id) {
-      console.error("[spotify] GET /me returned no id");
-      return null;
-    }
-    return { id: profile.id, displayName: profile.display_name ?? null };
+    if (!profile?.id) return fail("200 but no account id in the response");
+    return { ok: true, id: profile.id, displayName: profile.display_name ?? null };
   } catch (err) {
-    console.error("[spotify] GET /me threw", err);
-    return null;
+    return fail(String(err));
   }
 }
 
@@ -187,18 +192,22 @@ export async function connectOrgFromCode(
     });
     const data = await res.json();
     if (!res.ok || !data.refresh_token) {
-      return { ok: false, error: data.error_description ?? "Token exchange failed." };
+      // Log Spotify's own code, not just the prose: `invalid_client` means the
+      // server's SPOTIFY_CLIENT_SECRET is wrong or missing, `invalid_grant`
+      // means the code was already used or expired (e.g. a refreshed callback)
+      // — the same user-facing failure, completely different fixes.
+      const code = data?.error ? `${data.error}: ` : "";
+      const detail = `${res.status} ${code}${data?.error_description ?? "no error_description"}`;
+      console.error(`[spotify] token exchange failed — ${detail}`);
+      return { ok: false, error: detail };
     }
     // Look up who we just connected as. NOT cosmetic: the playlist-create
     // endpoint is /users/{id}/playlists, so without an id this connection can
     // never build a playlist. Refuse to store it rather than leave the org
     // looking connected while every playlist silently fails.
     const profile = await fetchSpotifyProfile(data.access_token);
-    if (!profile) {
-      return {
-        ok: false,
-        error: "Connected, but Spotify wouldn't tell us which account — try again.",
-      };
+    if (!profile.ok) {
+      return { ok: false, error: `Spotify wouldn't identify the account — ${profile.error}` };
     }
     await prisma.org.update({
       where: { id: orgId },
@@ -340,10 +349,10 @@ export async function createOrSyncSetPlaylist(
     let spotifyUserId = org?.spotifyUserId ?? null;
     if (!spotifyUserId) {
       const profile = await fetchSpotifyProfile(accessToken);
-      if (!profile) {
+      if (!profile.ok) {
         return {
           ok: false,
-          error: "Spotify won't identify the connected account — reconnect it.",
+          error: `Spotify won't identify the connected account (${profile.error}) — reconnect it.`,
         };
       }
       spotifyUserId = profile.id;
