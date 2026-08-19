@@ -28,5 +28,7 @@ export async function POST(
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
-  return NextResponse.json({ ok: true });
+  // The chat is made either way; playlistNote (when set) says why no Spotify
+  // playlist link went with it, so the UI can show that instead of nothing.
+  return NextResponse.json({ ok: true, playlistNote: result.playlistNote });
 }

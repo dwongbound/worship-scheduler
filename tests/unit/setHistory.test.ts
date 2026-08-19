@@ -20,6 +20,7 @@ function event(
     id: "e1",
     type,
     role: "DRUMS",
+    detail: null,
     actor: { id: "a", name: "Alice Admin" },
     targetUser: { id: "t", name: "Tara Target" },
     previousUser: { id: "p", name: "Pat Previous" },
@@ -29,6 +30,18 @@ function event(
 }
 
 describe("describeSetHistoryEvent", () => {
+  it("renders a setlist change from its detail, with no role", () => {
+    const d = describeSetHistoryEvent(
+      event("SETLIST_CHANGED", {
+        role: null,
+        detail: 'added "Who Else" (E)',
+        actor: { id: "u", name: "Dylan Wong" },
+      })
+    );
+    expect(d.actor).toBe("Dylan Wong");
+    expect(d.tokens).toEqual(['added "Who Else" (E)']);
+  });
+
   // Exhaustiveness guard: a missing switch case would return undefined here.
   it("returns a non-empty descriptor for every event type", () => {
     for (const type of ALL_HISTORY_TYPES) {

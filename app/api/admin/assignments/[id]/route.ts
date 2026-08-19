@@ -7,13 +7,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "@/lib/setMd";
+import { notifySetChange } from "@/lib/slack";
+import { INSTRUMENT_LABELS } from "@/lib/constants";
 
 // Look up the assignment + gate on the set's org. Returns the row and the
 // acting admin, or an error response.
 async function load(id: string) {
   const existing = await prisma.assignment.findUnique({
     where: { id },
-    include: { set: { select: { orgId: true } } },
+    include: {
+      set: { select: { orgId: true } },
+      // Whose slot this is, for the group-chat notice.
+      user: { select: { name: true } },
+    },
   });
   if (!existing) {
     return { error: NextResponse.json({ error: "Not found" }, { status: 404 }) };
@@ -42,7 +48,7 @@ export async function PATCH(
   // The new person must belong to the set's org.
   const membership = await prisma.orgMembership.findUnique({
     where: { userId_orgId: { userId, orgId: existing.set.orgId } },
-    select: { id: true },
+    select: { id: true, user: { select: { name: true } } },
   });
   if (!membership) {
     return NextResponse.json({ error: "userId is required" }, { status: 400 });
@@ -67,6 +73,11 @@ export async function PATCH(
     // one and the newly-assigned person qualifies, promote them automatically.
     await clearStaleMD(existing.setId);
     await promoteMDIfEmpty(existing.setId, userId);
+    await notifySetChange(
+      existing.setId,
+      `\u{1F501} ${INSTRUMENT_LABELS[existing.role]}: ${membership.user.name} ` +
+        `is now covering for ${existing.user.name}.`
+    );
     return NextResponse.json(updated);
   } catch {
     // Unique [setId, userId, role] — that person already fills this role here.
@@ -97,5 +108,9 @@ export async function DELETE(
     },
   });
   await clearStaleMD(existing.setId);
+  await notifySetChange(
+    existing.setId,
+    `\u{2796} ${existing.user.name} is no longer on ${INSTRUMENT_LABELS[existing.role]}.`
+  );
   return NextResponse.json({ ok: true });
 }
