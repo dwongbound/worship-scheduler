@@ -1,7 +1,22 @@
 "use client";
-// Click-to-open dropdown menu (used for the navbar user menu).
-// Closes on outside click.
-import { ReactNode, useEffect, useRef, useState } from "react";
+// Click-to-open dropdown menu (used for the navbar user menu and the set-detail
+// overflow menu). Closes on outside click.
+//
+// The menu renders in a PORTAL on document.body, positioned with fixed
+// coordinates measured from the trigger. It has to: inside a modal the menu's
+// ancestors are `overflow-hidden` (the panel) and `overflow-y-auto` (the body),
+// either of which would clip it — a menu that opens near the bottom of a modal
+// would be cut off with no way to reach its items. At body level nothing clips
+// it, and a z-index above the modal's keeps it on top of the backdrop too.
+import {
+  ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 
 interface DropdownProps {
   // What you click to open the menu. Pass a function to react to the open
@@ -22,6 +37,20 @@ interface DropdownProps {
   widthClassName?: string;
 }
 
+// Where the portaled panel sits: always pinned under the trigger, anchored by
+// whichever edge `align` names.
+interface MenuPosition {
+  top: number;
+  left?: number;
+  right?: number;
+}
+
+// How long the menu survives the pointer leaving it, in hover mode. The trigger
+// and the panel are in different DOM trees now, so moving between them fires a
+// real mouseleave; without this grace period the menu would close before the
+// pointer ever arrived.
+const HOVER_CLOSE_MS = 120;
+
 export default function Dropdown({
   trigger,
   children,
@@ -31,18 +60,55 @@ export default function Dropdown({
   widthClassName = "w-48",
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<MenuPosition | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   // Hover mode only: set when the pointer entering the trigger is what opened
   // the menu, so the click that follows in the SAME interaction doesn't toggle
   // it straight back shut. Both a mouse click and a touch tap fire mouseenter
   // before click, so without this the menu opened and closed in one gesture and
   // could never be opened by clicking at all.
   const openedByHover = useRef(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Measure the trigger and pin the panel under it. Called on open and again
+  // whenever anything moves the trigger under it.
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setPosition(
+      align === "right"
+        ? { top: rect.bottom, right: window.innerWidth - rect.right }
+        : { top: rect.bottom, left: rect.left }
+    );
+  }, [align]);
+
+  // Before paint, so the menu never flashes at a stale position.
+  useLayoutEffect(() => {
+    if (open) measure();
+  }, [open, measure]);
+
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => measure();
+    // Capture phase: the trigger may live inside a scrollable modal body, whose
+    // scroll events don't bubble to window.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, measure]);
 
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      // The panel is outside `ref`'s subtree now, so it needs its own check —
+      // otherwise every click inside the menu would read as an outside click.
+      if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -50,16 +116,29 @@ export default function Dropdown({
     return () => document.removeEventListener("mousedown", onClick);
   }, [open]);
 
-  // Hover mode opens/closes as the pointer enters/leaves the whole container.
+  // Never leave a close pending after unmount.
+  useEffect(
+    () => () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    },
+    []
+  );
+
+  // Hover mode opens/closes as the pointer enters/leaves either the trigger or
+  // the panel; the delay bridges the gap between the two.
   const hoverHandlers = hover
     ? {
         onMouseEnter: () => {
+          if (closeTimer.current) clearTimeout(closeTimer.current);
           openedByHover.current = true;
           setOpen(true);
         },
         onMouseLeave: () => {
-          openedByHover.current = false;
-          setOpen(false);
+          if (closeTimer.current) clearTimeout(closeTimer.current);
+          closeTimer.current = setTimeout(() => {
+            openedByHover.current = false;
+            setOpen(false);
+          }, HOVER_CLOSE_MS);
         },
       }
     : {};
@@ -76,30 +155,36 @@ export default function Dropdown({
     setOpen((o) => !o);
   };
 
+  const menu =
+    open && position ? (
+      // The `pt-2` (rather than a margin) keeps the gap below the trigger part
+      // of the hoverable area, so the pointer can travel from trigger into the
+      // panel without crossing dead space.
+      <div
+        ref={menuRef}
+        style={{ top: position.top, left: position.left, right: position.right }}
+        className="fixed z-[60] pt-2"
+        {...hoverHandlers}
+      >
+        <div
+          // Clicks inside the menu (e.g. "Log out") close it too.
+          onClick={() => setOpen(false)}
+          className={`${widthClassName} rounded-lg border border-gray-200 bg-white py-1
+            shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
+        >
+          {children}
+        </div>
+      </div>
+    ) : null;
+
   return (
     <div className="relative" ref={ref} {...hoverHandlers}>
       <button onClick={onTriggerClick} className="flex items-center">
         {typeof trigger === "function" ? trigger(open) : trigger}
       </button>
-      {open && (
-        // The `pt-2` wrapper (rather than a margin on the panel) keeps the gap
-        // below the trigger part of the hoverable area, so the pointer can
-        // travel from trigger into the panel without dropping hover and closing.
-        <div
-          className={`absolute top-full z-40 pt-2 ${
-            align === "right" ? "right-0" : "left-0"
-          }`}
-        >
-          <div
-            // Clicks inside the menu (e.g. "Log out") close it too.
-            onClick={() => setOpen(false)}
-            className={`${widthClassName} rounded-lg border border-gray-200 bg-white py-1
-              shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
-          >
-            {children}
-          </div>
-        </div>
-      )}
+      {menu && typeof document !== "undefined"
+        ? createPortal(menu, document.body)
+        : null}
     </div>
   );
 }

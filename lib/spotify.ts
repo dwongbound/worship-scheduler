@@ -131,6 +131,37 @@ function basicAuth(): string {
 }
 
 /**
+ * The connected account's {id, displayName} from GET /v1/me, or null if the
+ * call fails. Logs WHY on failure: without the id we can't create playlists
+ * (the create endpoint is /users/{id}/playlists), so a silent null here is the
+ * difference between a working connection and a dead one.
+ */
+async function fetchSpotifyProfile(
+  accessToken: string
+): Promise<{ id: string; displayName: string | null } | null> {
+  try {
+    const res = await fetch(`${API}/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) {
+      console.error(
+        `[spotify] GET /me failed: ${res.status} ${await res.text().catch(() => "")}`
+      );
+      return null;
+    }
+    const profile = await res.json();
+    if (!profile?.id) {
+      console.error("[spotify] GET /me returned no id");
+      return null;
+    }
+    return { id: profile.id, displayName: profile.display_name ?? null };
+  } catch (err) {
+    console.error("[spotify] GET /me threw", err);
+    return null;
+  }
+}
+
+/**
  * Exchange an authorization code for a refresh token and the account's identity,
  * then store them (token encrypted) on the org. Returns ok/err — never throws.
  */
@@ -158,23 +189,23 @@ export async function connectOrgFromCode(
     if (!res.ok || !data.refresh_token) {
       return { ok: false, error: data.error_description ?? "Token exchange failed." };
     }
-    // Look up who we just connected as (cosmetic — shown on the admin page).
-    let userId: string | null = null;
-    let displayName: string | null = null;
-    const me = await fetch(`${API}/me`, {
-      headers: { Authorization: `Bearer ${data.access_token}` },
-    });
-    if (me.ok) {
-      const profile = await me.json();
-      userId = profile.id ?? null;
-      displayName = profile.display_name ?? profile.id ?? null;
+    // Look up who we just connected as. NOT cosmetic: the playlist-create
+    // endpoint is /users/{id}/playlists, so without an id this connection can
+    // never build a playlist. Refuse to store it rather than leave the org
+    // looking connected while every playlist silently fails.
+    const profile = await fetchSpotifyProfile(data.access_token);
+    if (!profile) {
+      return {
+        ok: false,
+        error: "Connected, but Spotify wouldn't tell us which account — try again.",
+      };
     }
     await prisma.org.update({
       where: { id: orgId },
       data: {
         spotifyRefreshToken: encryptSecret(data.refresh_token),
-        spotifyUserId: userId,
-        spotifyDisplayName: displayName,
+        spotifyUserId: profile.id,
+        spotifyDisplayName: profile.displayName,
       },
     });
     return { ok: true };
@@ -303,12 +334,31 @@ export async function createOrSyncSetPlaylist(
       where: { id: set.orgId },
       select: { spotifyUserId: true },
     });
-    if (!org?.spotifyUserId) {
-      return { ok: false, error: "Spotify account is missing its user id — reconnect it." };
+    // Older connections were stored without an id (the /me call failed and we
+    // saved anyway). Repair them in place rather than making an admin reconnect:
+    // we already hold a working access token, so just ask again and persist it.
+    let spotifyUserId = org?.spotifyUserId ?? null;
+    if (!spotifyUserId) {
+      const profile = await fetchSpotifyProfile(accessToken);
+      if (!profile) {
+        return {
+          ok: false,
+          error: "Spotify won't identify the connected account — reconnect it.",
+        };
+      }
+      spotifyUserId = profile.id;
+      await prisma.org.update({
+        where: { id: set.orgId },
+        data: {
+          spotifyUserId: profile.id,
+          // Only fill the display name if it's still blank — never clobber one.
+          ...(profile.displayName ? { spotifyDisplayName: profile.displayName } : {}),
+        },
+      });
     }
     const created = await spotifyPost(
       accessToken,
-      `${API}/users/${org.spotifyUserId}/playlists`,
+      `${API}/users/${spotifyUserId}/playlists`,
       {
         name,
         public: false, // required: a collaborative playlist must be private

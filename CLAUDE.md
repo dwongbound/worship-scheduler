@@ -39,6 +39,12 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).
+- **SetHistoryEvent** — the per-set activity log. `role` is null only for
+  `SETLIST_CHANGED` (song added/removed/re-keyed/reordered), whose summary
+  lives in `detail`. Roster + setlist changes also ping the set's Slack group
+  chat via `notifySetChange` — but only when `groupChatLeadDays` is set (None =
+  never), the lead window has opened, a channel exists, and the set is still
+  upcoming.
 - **Set** — `startsAt`+`durationMinutes`, optional `label`/`notes`, required
   `orgId` (tenant anchor even when teamId is null), `teamId`,
   `slotCapacities: Json?` (per-set team-shape override; null = global default).
@@ -94,6 +100,10 @@ Also here: `validateSlotCapacities` (API guard, MAX_SLOTS_PER_ROLE=20), `ROLE_OR
 - `constants.ts` ✅ · `dates.ts` ✅ (`upcomingOccurrences`, `format*`, minute⇄time)
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
 - `setStatus.ts` — `setStatus()` → empty|confirmed|unconfirmed|cover.
+- `setlist.ts` — `describeSetlistChange(before, after)` → one human fragment
+  ("added \"Who Else\" (E)") or null when nothing changed. Feeds the
+  SETLIST_CHANGED history event + the Slack notice. ✅tested
+- `setHistory.ts` — `describeSetHistoryEvent()` → chips/tokens for the log.
 - `types.ts` — `Api*` (server shapes) & `Staged*` (create-flow) interfaces.
 - `auth.ts` — `authOptions`, `getSessionUser()`, `getAdminUser()`.
 - `api.ts` — `fetchJsonArray<T>` client helper.

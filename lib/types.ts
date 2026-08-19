@@ -155,7 +155,10 @@ export interface ApiSwapRequest {
 export interface ApiSetHistoryEvent {
   id: string;
   type: SetHistoryEventType;
-  role: Instrument;
+  // Null for SETLIST_CHANGED — that event is about the songs, not a slot.
+  role: Instrument | null;
+  // Human summary, currently only for SETLIST_CHANGED.
+  detail: string | null;
   actor: ApiUserRef | null; // null = the auto-scheduler
   targetUser: ApiUserRef | null; // null if that user was later deleted
   previousUser: ApiUserRef | null;

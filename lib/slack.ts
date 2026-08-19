@@ -551,7 +551,11 @@ export async function notifyAdminsPendingApproval(
  */
 export async function messageSetTeamOnSlack(
   setId: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<
+  // `playlistNote` = why no Spotify playlist link was posted (undefined when one
+  // was). Informational only — the group chat itself still succeeded.
+  { ok: true; playlistNote?: string } | { ok: false; error: string }
+> {
   const set = await prisma.set.findUnique({
     where: { id: setId },
     select: {
@@ -616,11 +620,15 @@ export async function messageSetTeamOnSlack(
   const posted = await postToChannel(token, channelId, text);
 
   // Auto-build the set's collaborative Spotify playlist alongside the group chat
-  // and drop its link in the channel. Best-effort and fully decoupled: skipped
-  // silently when the org hasn't connected Spotify or the set has no songs, and
-  // a Spotify failure never affects the group chat result.
+  // and drop its link in the channel. Best-effort and fully decoupled: a Spotify
+  // failure never affects the group chat result. It is REPORTED, though —
+  // `playlistNote` carries the reason back to the caller and the log, because a
+  // silent skip is indistinguishable from the feature being broken.
+  let playlistNote: string | undefined;
   try {
-    if (await isOrgSpotifyConnected(set.orgId)) {
+    if (!(await isOrgSpotifyConnected(set.orgId))) {
+      playlistNote = "Spotify isn't connected for this org.";
+    } else {
       const playlist = await createOrSyncSetPlaylist(setId);
       if (playlist.ok) {
         await postToChannel(
@@ -628,18 +636,67 @@ export async function messageSetTeamOnSlack(
           channelId,
           `🎵 Spotify playlist for this set: ${playlist.url}`
         );
+      } else {
+        playlistNote = playlist.error;
       }
     }
   } catch (err) {
     console.error("[slack] spotify playlist post failed", err);
+    playlistNote = "The Spotify step failed unexpectedly.";
+  }
+  if (playlistNote) {
+    console.warn(`[spotify] no playlist for set ${setId}: ${playlistNote}`);
   }
 
   return posted
-    ? { ok: true }
+    ? { ok: true, playlistNote }
     : { ok: false, error: "Could not post the message." };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Post a "this set changed" notice into the set's group chat — roster edits and
+ * setlist edits both come through here. Deliberately narrow about when it
+ * speaks, so a set nobody is thinking about yet stays quiet:
+ *
+ *   • groupChatLeadDays null ("No Auto GC") → never. Turning the auto chat off
+ *     is how you opt a set out of these notices entirely.
+ *   • before startsAt − leadDays → too early: that's the window in which the
+ *     chat gets created, and there may be no chat (or audience) yet.
+ *   • no channel on the set → nothing to post into. The chat is created by the
+ *     cron (or the Slack Team button); we never create one just to complain.
+ *   • the set has already happened → the channel is being archived; stay quiet.
+ *
+ * Best-effort and non-throwing: a Slack outage must never fail the db mutation
+ * that triggered the notice.
+ */
+export async function notifySetChange(setId: string, text: string): Promise<void> {
+  try {
+    const set = await prisma.set.findUnique({
+      where: { id: setId },
+      select: {
+        orgId: true,
+        startsAt: true,
+        groupChatLeadDays: true,
+        groupChatChannelId: true,
+      },
+    });
+    if (!set || set.groupChatLeadDays === null || !set.groupChatChannelId) return;
+
+    const now = new Date();
+    const windowStart = new Date(
+      set.startsAt.getTime() - set.groupChatLeadDays * DAY_MS
+    );
+    if (now < windowStart || now > set.startsAt) return;
+
+    const token = await orgBotToken(set.orgId);
+    if (!token && !slackDryRun()) return;
+    await postToChannel(token, set.groupChatChannelId, text);
+  } catch (err) {
+    console.error("[slack] set-change notice failed", err);
+  }
+}
 
 /**
  * Auto group-chat cron worker. For every upcoming set with a per-set lead time

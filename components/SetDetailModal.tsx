@@ -6,7 +6,7 @@
 //     "✕" beside each row), and edit the notes.
 //   • The set's worship leader can also edit the notes.
 //   • Everyone else sees it read-only.
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   DndContext,
   closestCenter,
@@ -93,7 +93,21 @@ export default function SetDetailModal({
   // Slack "message team" state. The button is shown to everyone (anyone on the
   // team can start the group chat); it's disabled until this org connects Slack.
   const [slackConfigured, setSlackConfigured] = useState(false);
+  // Only set when there's something to SAY — an error, or the reason no Spotify
+  // playlist came with the chat. Plain success is shown on the button instead.
   const [slackMsg, setSlackMsg] = useState("");
+  // Flips the Slack button to a checkmark for a moment after a successful post,
+  // so the confirmation lives on the control you clicked rather than as a line
+  // of text that shifts the layout.
+  const [slackDone, setSlackDone] = useState(false);
+  const slackDoneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Don't fire setState after the modal closes mid-timeout.
+  useEffect(
+    () => () => {
+      if (slackDoneTimer.current) clearTimeout(slackDoneTimer.current);
+    },
+    []
+  );
 
   // The worship leader's setlist, edited as local draft rows ({ title, key })
   // and saved as a whole list (PUT replaces). key "" = unspecified. Synced from
@@ -469,9 +483,18 @@ export default function SetDetailModal({
         method: "POST",
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSlackMsg(data.error ?? "Could not message the team.");
+        return;
+      }
+      // Success: tick the button. The only text left is the caveat — the chat
+      // went out but its Spotify playlist didn't, and why.
       setSlackMsg(
-        res.ok ? "Group chat created on Slack." : data.error ?? "Could not message the team."
+        data.playlistNote ? `No Spotify playlist: ${data.playlistNote}` : ""
       );
+      setSlackDone(true);
+      if (slackDoneTimer.current) clearTimeout(slackDoneTimer.current);
+      slackDoneTimer.current = setTimeout(() => setSlackDone(false), 2500);
     } finally {
       setBusy(false);
     }
@@ -591,8 +614,28 @@ export default function SetDetailModal({
             }
           >
             <span className="flex items-center gap-1.5">
-              <SlackIcon />
-              Slack Team
+              {slackDone ? (
+                <>
+                  <svg
+                    aria-hidden
+                    viewBox="0 0 20 20"
+                    className="h-4 w-4 text-green-600 dark:text-green-400"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M4 10.5l4 4 8-9" />
+                  </svg>
+                  Sent
+                </>
+              ) : (
+                <>
+                  <SlackIcon />
+                  Slack Team
+                </>
+              )}
             </span>
           </Button>
 
