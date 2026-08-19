@@ -54,11 +54,15 @@ interface DayBlocks {
   labels: string[]; // each blocked time window — one tooltip line apiece
 }
 
-// Does `rule` block `day`? RECURRING matches by weekday; SPECIFIC and
+// Does `rule` block `day`? RECURRING matches by weekday, until its endDate if
+// it has one (the last day it repeats; null = forever); SPECIFIC and
 // DATE_RANGE match when the day falls within [startDate, endDate] (endDate
 // defaults to startDate for a single-day specific block).
 function ruleAppliesOn(rule: ApiUnavailability, day: Date): boolean {
-  if (rule.type === "RECURRING") return day.getDay() === rule.dayOfWeek;
+  if (rule.type === "RECURRING") {
+    if (day.getDay() !== rule.dayOfWeek) return false;
+    return !rule.endDate || day <= startOfDay(new Date(rule.endDate));
+  }
   if (!rule.startDate) return false;
   const start = startOfDay(new Date(rule.startDate));
   const end = rule.endDate ? startOfDay(new Date(rule.endDate)) : start;
@@ -308,7 +312,10 @@ export default function AvailabilityCalendar({
               }}
               className={`min-h-[84px] select-none border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
                 blockable
-                  ? "cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                  ? // Outline the cell on hover instead of washing it in
+                    // indigo: the wash sat on top of the rose/amber "blocked"
+                    // colors and read as the day being disabled.
+                    "cursor-pointer hover:ring-2 hover:ring-inset hover:ring-indigo-500 dark:hover:ring-indigo-400"
                   : ""
               } ${
                 !inMonth || (isPast && !blocked)
