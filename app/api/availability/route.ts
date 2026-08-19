@@ -6,6 +6,7 @@ import { getSessionUser } from "@/lib/auth";
 import { targetsUser } from "@/lib/availabilityTargets";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { toYmd } from "@/lib/dates";
 
 // Parse "YYYY-MM-DD" (from <input type=date>) as LOCAL midnight.
 // `new Date("2026-08-05")` would be UTC midnight, which displays as the
@@ -15,11 +16,13 @@ function parseLocalDate(value: string): Date {
   return new Date(y, m - 1, d);
 }
 
-// One weekly recurring block as it arrives from the client.
+// One weekly recurring block as it arrives from the client. `endDate` is the
+// last day it applies ("YYYY-MM-DD"); absent/null = repeats forever.
 interface RecurringInput {
   dayOfWeek: number;
   startMinute: number;
   endMinute: number;
+  endDate?: string | null;
 }
 
 function isValidRecurring(block: RecurringInput): boolean {
@@ -30,7 +33,10 @@ function isValidRecurring(block: RecurringInput): boolean {
     block.dayOfWeek <= 6 &&
     typeof block.startMinute === "number" &&
     typeof block.endMinute === "number" &&
-    block.startMinute < block.endMinute
+    block.startMinute < block.endMinute &&
+    (block.endDate == null ||
+      (typeof block.endDate === "string" &&
+        !isNaN(parseLocalDate(block.endDate).getTime())))
   );
 }
 
@@ -39,8 +45,27 @@ function recurringKey(block: {
   dayOfWeek: number | null;
   startMinute: number | null;
   endMinute: number | null;
+  endDate?: Date | string | null;
 }): string {
-  return `${block.dayOfWeek}-${block.startMinute}-${block.endMinute}`;
+  // A block that stops on a different date is a different block.
+  const end = block.endDate
+    ? toYmd(
+        block.endDate instanceof Date
+          ? block.endDate
+          : parseLocalDate(block.endDate)
+      )
+    : "forever";
+  return `${block.dayOfWeek}-${block.startMinute}-${block.endMinute}-${end}`;
+}
+
+// The db row for one recurring block (its stop date as a local-midnight Date).
+function toRecurringRow(block: RecurringInput) {
+  return {
+    dayOfWeek: block.dayOfWeek,
+    startMinute: block.startMinute,
+    endMinute: block.endMinute,
+    endDate: block.endDate ? parseLocalDate(block.endDate) : null,
+  };
 }
 
 export async function GET() {
@@ -95,13 +120,14 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
-    // Keep only the three fields we store — the single-block shape arrives as
-    // the whole request body.
+    // Keep only the fields we store — the single-block shape arrives as the
+    // whole request body.
     const incoming: RecurringInput[] = raw.map(
-      ({ dayOfWeek, startMinute, endMinute }) => ({
+      ({ dayOfWeek, startMinute, endMinute, endDate }) => ({
         dayOfWeek,
         startMinute,
         endMinute,
+        endDate: endDate ?? null,
       })
     );
 
@@ -110,7 +136,12 @@ export async function POST(req: NextRequest) {
     // rows.
     const existing = await prisma.unavailability.findMany({
       where: { userId: user.id, type: "RECURRING" },
-      select: { dayOfWeek: true, startMinute: true, endMinute: true },
+      select: {
+        dayOfWeek: true,
+        startMinute: true,
+        endMinute: true,
+        endDate: true,
+      },
     });
     const seen = new Set(existing.map(recurringKey));
     const fresh: RecurringInput[] = [];
@@ -129,7 +160,7 @@ export async function POST(req: NextRequest) {
         );
       }
       const entry = await prisma.unavailability.create({
-        data: { userId: user.id, type: "RECURRING", ...fresh[0] },
+        data: { userId: user.id, type: "RECURRING", ...toRecurringRow(fresh[0]) },
       });
       return NextResponse.json(entry, { status: 201 });
     }
@@ -138,7 +169,7 @@ export async function POST(req: NextRequest) {
       data: fresh.map((block) => ({
         userId: user.id,
         type: "RECURRING" as const,
-        ...block,
+        ...toRecurringRow(block),
       })),
     });
     return NextResponse.json(

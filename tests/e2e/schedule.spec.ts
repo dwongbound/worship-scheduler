@@ -6,7 +6,7 @@
 // admin's window, "Block out times" adds a standalone weekly-recurring OR
 // specific block behind a toggle, and "Busy Blocks" lists everything.
 // The phone-width pass over this page lives in mobile.spec.ts.
-import { expect, test } from "@playwright/test";
+import { Page, expect, test } from "@playwright/test";
 import {
   login,
   pickSingleDay,
@@ -17,6 +17,23 @@ import {
 // The calendar is desktop-only (hidden below lg), so make sure the viewport is
 // wide enough for the click-to-block test.
 test.use({ viewport: { width: 1280, height: 900 } });
+
+/**
+ * Delete every busy block the logged-in user has.
+ *
+ * The suite shares one database, so a test that leaves blocks behind changes
+ * what the later ones see (a stray all-day block turns "available the whole
+ * time" into a list of blocked days). Tests that add blocks call this before
+ * they finish.
+ */
+async function clearBusyBlocks(page: Page) {
+  const { entries } = (await (
+    await page.request.get("/api/availability")
+  ).json()) as { entries: { id: string }[] };
+  for (const entry of entries) {
+    await page.request.delete(`/api/availability/${entry.id}`);
+  }
+}
 
 test("adds and deletes a recurring weekly block", async ({ page }) => {
   await requestAvailability(page);
@@ -74,6 +91,62 @@ test("adds several weekly blocks in one submit", async ({ page }) => {
       page.getByText(new RegExp(`Every ${day}, 6:00 AM`))
     ).toBeVisible();
   }
+
+  await clearBusyBlocks(page);
+});
+
+test("stops a weekly block repeating after a number of weeks", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  // "Every Thursday, for the next 2 weeks" — the stored block carries a stop
+  // date, which the busy list shows as "until <date>".
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Every week" }).click();
+  await blockOutTimes.getByRole("button", { name: "Tuesday" }).click(); // off
+  await blockOutTimes.getByRole("button", { name: "Thursday" }).click();
+  await blockOutTimes.getByRole("button", { name: "For N weeks" }).click();
+  await blockOutTimes.getByLabel("Number of weeks").fill("2");
+  await blockOutTimes
+    .getByRole("button", { name: "Add recurring block" })
+    .click();
+
+  // Two weeks from today, in the same format the list uses (lib/dates
+  // shortDateLabel — "9/2/26").
+  const stop = new Date();
+  stop.setDate(stop.getDate() + 14);
+  const stopLabel = stop.toLocaleDateString("en-US", {
+    month: "numeric",
+    day: "numeric",
+    year: "2-digit",
+  });
+  await expect(
+    page.getByText(`Every Thursday, All day · until ${stopLabel}`)
+  ).toBeVisible();
+
+  await clearBusyBlocks(page);
+});
+
+test("custom time window replaces the presets", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  // Custom defines the one window by hand, so the presets switch off and go
+  // un-clickable until it's turned back off.
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Every week" }).click();
+  await blockOutTimes.getByRole("button", { name: "Custom…" }).click();
+  await expect(
+    blockOutTimes.getByRole("button", { name: "All day" })
+  ).toBeDisabled();
+  await expect(blockOutTimes.getByLabel("From")).toBeVisible();
+
+  await blockOutTimes.getByRole("button", { name: "Custom…" }).click(); // off
+  await expect(
+    blockOutTimes.getByRole("button", { name: "All day" })
+  ).toBeEnabled();
 });
 
 test("blocks a day by clicking it on the calendar", async ({ page }) => {

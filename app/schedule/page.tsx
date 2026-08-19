@@ -29,6 +29,7 @@ import {
   dayBlockLevel,
   expandRecurringBlocks,
   isOptimisticId,
+  weeksFromToday,
 } from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
 import {
@@ -58,6 +59,18 @@ const TIME_PRESETS = [
   { label: "Custom…", start: -1, end: -1 },
 ];
 
+// "Custom…" is exclusive: it defines the one window by hand, so the presets
+// are switched off (and disabled) while it's picked.
+const CUSTOM_PRESET = TIME_PRESETS.findIndex((p) => p.start === -1);
+
+// How long a recurring block keeps repeating. "Forever" is the default — the
+// other two stamp a stop date (endDate) on each block.
+const REPEAT_OPTIONS: { value: "forever" | "weeks" | "until"; label: string }[] = [
+  { value: "forever", label: "Forever" },
+  { value: "weeks", label: "For N weeks" },
+  { value: "until", label: "Until a date" },
+];
+
 // Human label for a request in summaries (the short form: name if it has
 // one), prefixed with its org — requests from ALL my orgs mix in one list.
 function requestLabel(r: ApiAvailabilityRequest): string {
@@ -85,8 +98,12 @@ function blockKindClass(active: boolean): string {
 }
 
 // Multi-select chip styling for the recurring day/time pickers.
-function chipClass(active: boolean): string {
-  return `rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+function chipClass(active: boolean, disabled = false): string {
+  const base = "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors";
+  if (disabled) {
+    return `${base} cursor-not-allowed border-gray-200 text-gray-400 opacity-60 dark:border-gray-700 dark:text-gray-500`;
+  }
+  return `${base} ${
     active
       ? "border-indigo-600 bg-indigo-600 text-white"
       : "border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
@@ -125,6 +142,11 @@ export default function SchedulePage() {
   // any set of time windows, so "Mon–Fri mornings + afternoons" is one submit.
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([2]); // Tuesday
   const [presetIndexes, setPresetIndexes] = useState<number[]>([0]); // All day
+  // How long the recurring blocks keep repeating: forever (default), a number
+  // of weeks from today, or up to a date you pick.
+  const [repeats, setRepeats] = useState<"forever" | "weeks" | "until">("forever");
+  const [repeatWeeks, setRepeatWeeks] = useState("4");
+  const [repeatUntil, setRepeatUntil] = useState("");
   const [customStart, setCustomStart] = useState("09:00");
   const [customEnd, setCustomEnd] = useState("12:00");
   const [blockStart, setBlockStart] = useState(""); // specific range start
@@ -161,6 +183,19 @@ export default function SchedulePage() {
     reload();
   }, [reload]);
 
+  // Is the hand-picked window in play? It's exclusive, so it's also what
+  // disables the preset chips.
+  const customWindow = presetIndexes.includes(CUSTOM_PRESET);
+
+  // Pick/unpick one time window. Custom replaces whatever was picked (it
+  // defines the window by hand); the presets stack with each other.
+  function toggleWindow(index: number) {
+    setPresetIndexes((prev) => {
+      if (prev.includes(index)) return prev.filter((v) => v !== index);
+      return index === CUSTOM_PRESET ? [index] : [...prev, index];
+    });
+  }
+
   // Unified block creator: a weekly recurring block, or a one-off specific
   // date/range — both carry the shared time window.
   async function addBlock(e: FormEvent) {
@@ -183,7 +218,23 @@ export default function SchedulePage() {
         setBlockError("The custom end time must be after the start time.");
         return;
       }
-      const blocks = expandRecurringBlocks(daysOfWeek, windows);
+      // Where the repeat stops: null = forever.
+      let endDate: string | null = null;
+      if (repeats === "weeks") {
+        const weeks = Number(repeatWeeks);
+        if (!Number.isFinite(weeks) || weeks < 1) {
+          setBlockError("Enter how many weeks these blocks should repeat for.");
+          return;
+        }
+        endDate = weeksFromToday(weeks);
+      } else if (repeats === "until") {
+        if (!repeatUntil) {
+          setBlockError("Pick the last day these blocks should repeat.");
+          return;
+        }
+        endDate = repeatUntil;
+      }
+      const blocks = expandRecurringBlocks(daysOfWeek, windows, endDate);
       // Drop the ones already stored (the server skips them too) so the
       // message is accurate when everything picked is a repeat.
       const fresh = blocks.filter(
@@ -193,7 +244,9 @@ export default function SchedulePage() {
               entry.type === "RECURRING" &&
               entry.dayOfWeek === block.dayOfWeek &&
               entry.startMinute === block.startMinute &&
-              entry.endMinute === block.endMinute
+              entry.endMinute === block.endMinute &&
+              (entry.endDate ? toYmd(new Date(entry.endDate)) : null) ===
+                (block.endDate ?? null)
           )
       );
       if (fresh.length === 0) {
@@ -346,6 +399,8 @@ export default function SchedulePage() {
         <>
           Every <strong>{DAY_LABELS[entry.dayOfWeek!]}</strong>,{" "}
           {timeWindowLabel(entry.startMinute!, entry.endMinute!)}
+          {/* Blocks that stop repeating say when; open-ended ones say nothing. */}
+          {entry.endDate && <> · until {shortDateLabel(entry.endDate)}</>}
         </>
       );
     }
@@ -674,22 +729,28 @@ export default function SchedulePage() {
                       Times
                     </legend>
                     <div className="flex flex-wrap gap-1.5">
-                      {TIME_PRESETS.map((p, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          aria-pressed={presetIndexes.includes(i)}
-                          onClick={() =>
-                            setPresetIndexes(toggled(presetIndexes, i))
-                          }
-                          className={chipClass(presetIndexes.includes(i))}
-                        >
-                          {p.label}
-                        </button>
-                      ))}
+                      {TIME_PRESETS.map((p, i) => {
+                        // While Custom is on it's the only window, so the
+                        // presets are off limits until you switch it back off.
+                        const off = customWindow && i !== CUSTOM_PRESET;
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            disabled={off}
+                            aria-pressed={presetIndexes.includes(i)}
+                            onClick={() => toggleWindow(i)}
+                            className={chipClass(presetIndexes.includes(i), off)}
+                          >
+                            {p.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </fieldset>
-                  {presetIndexes.some((i) => TIME_PRESETS[i].start === -1) && (
+                  {/* The custom window's own From/To, right under the chip
+                      that turned it on. */}
+                  {customWindow && (
                     <div className="grid grid-cols-2 gap-3 sm:col-span-2">
                       <Input
                         label="From"
@@ -705,6 +766,52 @@ export default function SchedulePage() {
                       />
                     </div>
                   )}
+                  {/* How long it repeats. Forever is the default; the other
+                      two set a stop date on every block being added. */}
+                  <fieldset className="sm:col-span-2">
+                    <legend className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Repeats
+                    </legend>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {REPEAT_OPTIONS.map(({ value, label }) => (
+                        <button
+                          key={value}
+                          type="button"
+                          aria-pressed={repeats === value}
+                          onClick={() => setRepeats(value)}
+                          className={chipClass(repeats === value)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                      {repeats === "weeks" && (
+                        <span className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                          <Input
+                            label="Number of weeks"
+                            hideLabel
+                            type="number"
+                            min={1}
+                            max={52}
+                            value={repeatWeeks}
+                            onChange={(e) => setRepeatWeeks(e.target.value)}
+                            className="w-20 py-1.5"
+                          />
+                          weeks
+                        </span>
+                      )}
+                    </div>
+                    {repeats === "until" && (
+                      <div className="mt-2 max-w-xs">
+                        <DateSelect
+                          label="Last day it repeats"
+                          value={repeatUntil}
+                          min={toYmd(new Date())}
+                          onChange={setRepeatUntil}
+                          required
+                        />
+                      </div>
+                    )}
+                  </fieldset>
                   <div className="sm:col-span-2">
                     <Button
                       type="submit"
