@@ -2,8 +2,9 @@
 // Availabilities tab: tell the scheduler when you're NOT free.
 //   • Admin Requests — respond to an admin's request by blocking dates inside
 //     its window, then submit.
-//   • Block out times — the general form: a one-off specific date/range OR a
-//     weekly recurring block (both with a time-of-day window).
+//   • Block out times — the general form: a one-off specific date/range OR
+//     weekly recurring blocks (pick any weekdays × any time-of-day windows,
+//     e.g. Mon–Fri mornings, added in one go).
 // The "Busy Blocks" column is the single source of truth for viewing/deleting:
 // the union of every block as a calendar (desktop) plus one scrollable,
 // deletable list.
@@ -26,6 +27,7 @@ import {
   applyDayEdit,
   blockedDaysInRange,
   dayBlockLevel,
+  expandRecurringBlocks,
   isOptimisticId,
 } from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
@@ -82,6 +84,22 @@ function blockKindClass(active: boolean): string {
   }`;
 }
 
+// Multi-select chip styling for the recurring day/time pickers.
+function chipClass(active: boolean): string {
+  return `rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
+    active
+      ? "border-indigo-600 bg-indigo-600 text-white"
+      : "border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+  }`;
+}
+
+// Add/remove one value from a multi-select list.
+function toggled(values: number[], value: number): number[] {
+  return values.includes(value)
+    ? values.filter((v) => v !== value)
+    : [...values, value];
+}
+
 export default function SchedulePage() {
   const [entries, setEntries] = useState<ApiUnavailability[] | null>(null);
   const [requests, setRequests] = useState<ApiAvailabilityRequest[]>([]);
@@ -103,8 +121,10 @@ export default function SchedulePage() {
   // Unified "Block out times" form: a one-off specific date/range OR a weekly
   // recurring block. Both share the time-of-day picker.
   const [blockKind, setBlockKind] = useState<"specific" | "recurring">("specific");
-  const [dayOfWeek, setDayOfWeek] = useState(2); // Tuesday (recurring)
-  const [presetIndex, setPresetIndex] = useState(0); // All day
+  // Recurring is multi-select on both axes: any set of weekdays crossed with
+  // any set of time windows, so "Mon–Fri mornings + afternoons" is one submit.
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([2]); // Tuesday
+  const [presetIndexes, setPresetIndexes] = useState<number[]>([0]); // All day
   const [customStart, setCustomStart] = useState("09:00");
   const [customEnd, setCustomEnd] = useState("12:00");
   const [blockStart, setBlockStart] = useState(""); // specific range start
@@ -148,21 +168,40 @@ export default function SchedulePage() {
     setBlockError(null);
 
     if (blockKind === "recurring") {
-      // Recurring carries a time-of-day window (from the preset / custom).
-      const preset = TIME_PRESETS[presetIndex];
-      const isCustom = preset.start === -1;
-      const startMinute = isCustom ? timeStringToMinutes(customStart) : preset.start;
-      const endMinute = isCustom ? timeStringToMinutes(customEnd) : preset.end;
-      // Reject an exact duplicate up front (the server enforces this too).
-      const isDuplicate = (entries ?? []).some(
-        (entry) =>
-          entry.type === "RECURRING" &&
-          entry.dayOfWeek === dayOfWeek &&
-          entry.startMinute === startMinute &&
-          entry.endMinute === endMinute
+      // Every selected weekday × every selected time window, with touching
+      // windows merged (morning + afternoon = one 6am–5pm block).
+      const windows = presetIndexes.map((i) => {
+        const preset = TIME_PRESETS[i];
+        return preset.start === -1
+          ? {
+              startMinute: timeStringToMinutes(customStart),
+              endMinute: timeStringToMinutes(customEnd),
+            }
+          : { startMinute: preset.start, endMinute: preset.end };
+      });
+      if (windows.some((w) => w.startMinute >= w.endMinute)) {
+        setBlockError("The custom end time must be after the start time.");
+        return;
+      }
+      const blocks = expandRecurringBlocks(daysOfWeek, windows);
+      // Drop the ones already stored (the server skips them too) so the
+      // message is accurate when everything picked is a repeat.
+      const fresh = blocks.filter(
+        (block) =>
+          !(entries ?? []).some(
+            (entry) =>
+              entry.type === "RECURRING" &&
+              entry.dayOfWeek === block.dayOfWeek &&
+              entry.startMinute === block.startMinute &&
+              entry.endMinute === block.endMinute
+          )
       );
-      if (isDuplicate) {
-        setBlockError("That block already exists.");
+      if (fresh.length === 0) {
+        setBlockError(
+          blocks.length === 1
+            ? "That block already exists."
+            : "Those blocks already exist."
+        );
         return;
       }
       setBusyAction("block");
@@ -170,7 +209,7 @@ export default function SchedulePage() {
         await fetch("/api/availability", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "RECURRING", dayOfWeek, startMinute, endMinute }),
+          body: JSON.stringify({ type: "RECURRING", blocks: fresh }),
         });
         await reload();
         window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
@@ -601,34 +640,56 @@ export default function SchedulePage() {
               </div>
 
               {blockKind === "recurring" ? (
-                // Weekly recurring: a weekday + a time-of-day window.
+                // Weekly recurring: any weekdays × any time windows, stored as
+                // one block per weekday per (merged) window.
                 <form
                   onSubmit={addBlock}
                   className="grid gap-3 sm:grid-cols-2 sm:items-end"
                 >
-                  <Select
-                    label="Day of week"
-                    value={dayOfWeek}
-                    onChange={(e) => setDayOfWeek(Number(e.target.value))}
-                  >
-                    {DAY_LABELS.map((label, i) => (
-                      <option key={i} value={i}>
-                        {label}
-                      </option>
-                    ))}
-                  </Select>
-                  <Select
-                    label="Time"
-                    value={presetIndex}
-                    onChange={(e) => setPresetIndex(Number(e.target.value))}
-                  >
-                    {TIME_PRESETS.map((p, i) => (
-                      <option key={i} value={i}>
-                        {p.label}
-                      </option>
-                    ))}
-                  </Select>
-                  {TIME_PRESETS[presetIndex].start === -1 && (
+                  {/* Weekdays — multi-select chips, so "Mon–Fri" is five taps
+                      instead of five separate blocks. */}
+                  <fieldset className="sm:col-span-2">
+                    <legend className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Days of week
+                    </legend>
+                    <div className="flex flex-wrap gap-1.5">
+                      {DAY_LABELS.map((label, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          aria-label={label}
+                          aria-pressed={daysOfWeek.includes(i)}
+                          onClick={() => setDaysOfWeek(toggled(daysOfWeek, i))}
+                          className={chipClass(daysOfWeek.includes(i))}
+                        >
+                          {label.slice(0, 3)}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                  {/* Time windows — also multi-select; touching windows merge
+                      into one block when saved. */}
+                  <fieldset className="sm:col-span-2">
+                    <legend className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Times
+                    </legend>
+                    <div className="flex flex-wrap gap-1.5">
+                      {TIME_PRESETS.map((p, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          aria-pressed={presetIndexes.includes(i)}
+                          onClick={() =>
+                            setPresetIndexes(toggled(presetIndexes, i))
+                          }
+                          className={chipClass(presetIndexes.includes(i))}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </fieldset>
+                  {presetIndexes.some((i) => TIME_PRESETS[i].start === -1) && (
                     <div className="grid grid-cols-2 gap-3 sm:col-span-2">
                       <Input
                         label="From"
@@ -645,7 +706,14 @@ export default function SchedulePage() {
                     </div>
                   )}
                   <div className="sm:col-span-2">
-                    <Button type="submit" disabled={busyAction === "block"}>
+                    <Button
+                      type="submit"
+                      disabled={
+                        busyAction === "block" ||
+                        daysOfWeek.length === 0 ||
+                        presetIndexes.length === 0
+                      }
+                    >
                       {busyAction === "block" ? (
                         <LoadingDots size="sm" />
                       ) : (

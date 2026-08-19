@@ -217,3 +217,49 @@ export function applyDayEdit(
   }
   return [...others, ...survivors];
 }
+
+// One weekly recurring block: a weekday plus a time-of-day window.
+export interface RecurringBlock {
+  dayOfWeek: number;
+  startMinute: number;
+  endMinute: number;
+}
+
+/**
+ * Collapse overlapping or touching time windows into the fewest windows that
+ * cover the same minutes — picking "Morning" and "Afternoon" together should
+ * store one 6am–5pm block, not two abutting rows.
+ */
+export function mergeWindows(
+  windows: { startMinute: number; endMinute: number }[]
+): { startMinute: number; endMinute: number }[] {
+  const sorted = [...windows].sort((a, b) => a.startMinute - b.startMinute);
+  const merged: { startMinute: number; endMinute: number }[] = [];
+  for (const w of sorted) {
+    const last = merged[merged.length - 1];
+    // Touching counts as overlapping: 6–12 then 12–17 becomes 6–17.
+    if (last && w.startMinute <= last.endMinute) {
+      last.endMinute = Math.max(last.endMinute, w.endMinute);
+    } else {
+      merged.push({ ...w });
+    }
+  }
+  return merged;
+}
+
+/**
+ * Expand the multi-select "Block out times" form — any number of weekdays
+ * crossed with any number of time windows — into the individual recurring
+ * blocks to store, one per weekday per merged window, ordered day then time.
+ * "Mon–Fri mornings and afternoons" goes in as one gesture and comes out as
+ * five blocks (the two windows merge into one).
+ */
+export function expandRecurringBlocks(
+  days: number[],
+  windows: { startMinute: number; endMinute: number }[]
+): RecurringBlock[] {
+  const merged = mergeWindows(windows);
+  return [...days]
+    .sort((a, b) => a - b)
+    .flatMap((dayOfWeek) => merged.map((w) => ({ dayOfWeek, ...w })));
+}

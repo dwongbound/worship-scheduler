@@ -6,6 +6,8 @@ import {
   applyDayEdit,
   blockedDaysInRange,
   dayBlockLevel,
+  expandRecurringBlocks,
+  mergeWindows,
 } from "@/lib/availability";
 import type { ApiUnavailability } from "@/lib/types";
 
@@ -264,5 +266,69 @@ describe("applyDayEdit", () => {
     expect(next).toContain(entries[0]);
     expect(next).toContain(entries[1]);
     expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+  });
+});
+
+describe("mergeWindows", () => {
+  it("merges touching windows", () => {
+    // Morning (6–12) + afternoon (12–17) is one 6am–5pm window.
+    expect(
+      mergeWindows([
+        { startMinute: 720, endMinute: 1020 },
+        { startMinute: 360, endMinute: 720 },
+      ])
+    ).toEqual([{ startMinute: 360, endMinute: 1020 }]);
+  });
+
+  it("keeps a gap between windows", () => {
+    const windows = [
+      { startMinute: 360, endMinute: 720 },
+      { startMinute: 1020, endMinute: 1320 },
+    ];
+    expect(mergeWindows(windows)).toEqual(windows);
+  });
+
+  it("swallows narrower windows inside an all-day one", () => {
+    expect(
+      mergeWindows([
+        { startMinute: 360, endMinute: 720 },
+        { startMinute: 0, endMinute: FULL_DAY_MIN },
+      ])
+    ).toEqual([{ startMinute: 0, endMinute: FULL_DAY_MIN }]);
+  });
+});
+
+describe("expandRecurringBlocks", () => {
+  it("crosses every day with every merged window, day then time", () => {
+    // Mon–Wed, mornings + afternoons → three blocks, one merged window each.
+    const blocks = expandRecurringBlocks(
+      [3, 1, 2],
+      [
+        { startMinute: 360, endMinute: 720 },
+        { startMinute: 720, endMinute: 1020 },
+      ]
+    );
+    expect(blocks).toEqual([
+      { dayOfWeek: 1, startMinute: 360, endMinute: 1020 },
+      { dayOfWeek: 2, startMinute: 360, endMinute: 1020 },
+      { dayOfWeek: 3, startMinute: 360, endMinute: 1020 },
+    ]);
+  });
+
+  it("keeps separate windows on each day", () => {
+    const blocks = expandRecurringBlocks(
+      [1, 5],
+      [
+        { startMinute: 360, endMinute: 720 },
+        { startMinute: 1020, endMinute: 1320 },
+      ]
+    );
+    expect(blocks).toHaveLength(4);
+    expect(blocks.map((b) => b.dayOfWeek)).toEqual([1, 1, 5, 5]);
+  });
+
+  it("returns nothing when either axis is empty", () => {
+    expect(expandRecurringBlocks([], [{ startMinute: 0, endMinute: 60 }])).toEqual([]);
+    expect(expandRecurringBlocks([1], [])).toEqual([]);
   });
 });

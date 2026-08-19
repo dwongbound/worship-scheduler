@@ -25,11 +25,16 @@ test("adds and deletes a recurring weekly block", async ({ page }) => {
 
   // "Every Tuesday morning." The section defaults to the specific-date form,
   // so switch to the weekly one first. Scope to the section — the Admin
-  // Requests form has a "Time" select too, so getByLabel alone is ambiguous.
+  // Requests form has its own time picker, so page-level locators are ambiguous.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  await blockOutTimes.getByLabel("Day of week").selectOption("2");
-  await blockOutTimes.getByLabel("Time").selectOption("1"); // Morning preset
+  // Days and times are multi-select chips: Tuesday is on by default, so just
+  // swap the default "All day" window for Morning.
+  await expect(
+    blockOutTimes.getByRole("button", { name: "Tuesday" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await blockOutTimes.getByRole("button", { name: "All day" }).click();
+  await blockOutTimes.getByRole("button", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
     .click();
@@ -40,6 +45,35 @@ test("adds and deletes a recurring weekly block", async ({ page }) => {
   // Clean up: delete it again.
   await page.getByRole("button", { name: "Delete" }).first().click();
   await expect(page.getByText(/Every Tuesday/)).not.toBeVisible();
+});
+
+test("adds several weekly blocks in one submit", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  // Mon–Wed, mornings AND afternoons — one submit, three stored blocks (the
+  // two touching windows merge into a single 6am–5pm window per day).
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Every week" }).click();
+  await blockOutTimes.getByRole("button", { name: "Tuesday" }).click(); // off
+  for (const day of ["Monday", "Tuesday", "Wednesday"]) {
+    await blockOutTimes.getByRole("button", { name: day }).click();
+  }
+  await blockOutTimes.getByRole("button", { name: "All day" }).click(); // off
+  await blockOutTimes.getByRole("button", { name: "Morning (6am–12pm)" }).click();
+  await blockOutTimes
+    .getByRole("button", { name: "Afternoon (12pm–5pm)" })
+    .click();
+  await blockOutTimes
+    .getByRole("button", { name: "Add recurring block" })
+    .click();
+
+  for (const day of ["Monday", "Tuesday", "Wednesday"]) {
+    await expect(
+      page.getByText(new RegExp(`Every ${day}, 6:00 AM`))
+    ).toBeVisible();
+  }
 });
 
 test("blocks a day by clicking it on the calendar", async ({ page }) => {
