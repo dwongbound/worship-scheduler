@@ -68,8 +68,8 @@ export default function MySetsPanel({
     }
   }
 
-  // With a width we're the desktop sidebar (fixed width, sticky so it stays
-  // put while the taller calendar scrolls); without one we're the mobile view:
+  // With a width we're the desktop sidebar (fixed width, full height of the
+  // calendar row, scrolling inside itself); without one we're the mobile view:
   // no wrapper card, just the page heading + one standalone card per set.
   const asSidebar = width !== undefined;
 
@@ -216,10 +216,14 @@ export default function MySetsPanel({
     );
   }
 
-  // Desktop sidebar: the sticky wrapper card with its own header.
+  // Desktop sidebar: a wrapper card that simply fills the calendar row it sits
+  // in. That row is already sized to the space under the header (banners
+  // included), so `h-full` keeps the panel in the viewport; it used to cap
+  // itself with `max-h-[calc(100vh-6rem)]`, whose hardcoded 6rem header ignored
+  // any reminder banner and pushed the whole page into a scroll.
   return (
-    <div className="shrink-0" style={{ width }}>
-      <aside className="sticky top-20 flex max-h-[calc(100vh-6rem)] flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+    <div className="flex min-h-0 shrink-0 flex-col" style={{ width }}>
+      <aside className="flex h-full min-h-0 flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
           <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
             Upcoming sets

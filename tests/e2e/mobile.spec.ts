@@ -158,8 +158,13 @@ test("phone: adds and deletes a recurring weekly block via the single-panel adde
   // column instead of the sm two-column grid.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  await blockOutTimes.getByLabel("Day of week").selectOption("2"); // Tuesday
-  await blockOutTimes.getByLabel("Time").selectOption("1"); // Morning preset
+  // Days and times are multi-select chips: Tuesday is on by default, so just
+  // swap the default "All day" window for Morning.
+  await expect(
+    blockOutTimes.getByRole("button", { name: "Tuesday" })
+  ).toHaveAttribute("aria-pressed", "true");
+  await blockOutTimes.getByRole("button", { name: "All day" }).click();
+  await blockOutTimes.getByRole("button", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
     .click();

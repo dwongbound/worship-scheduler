@@ -42,6 +42,10 @@ export interface ApiTeamRole {
   name: string;
   orgId?: string;
   roles: Instrument[];
+  // Whether this person is schedulable on THIS team (per-team, so someone can
+  // be active on one team and inactive on another). Inactive people are never
+  // auto-scheduled and read as "(inactive)" in the pick + swap lists.
+  active: boolean;
 }
 
 export interface ApiAssignment {
@@ -124,6 +128,7 @@ export interface ApiSwapCandidate {
   youAvailable: boolean; // I'm free for their set's date
   theyAvailable: boolean; // they're free for my set's date
   theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
+  theyInactive: boolean; // they're marked inactive on this set's team
 }
 
 // A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).

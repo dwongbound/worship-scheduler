@@ -11,9 +11,12 @@
 //   theyMarkedUnavailable — did they *explicitly* block my set's date in an
 //                            availability response ("previously marked
 //                            unavailable"), as opposed to a recurring block?
+//   theyInactive  — are they marked inactive on this team (still swappable,
+//                   but flagged so you know they've stepped back)?
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { inactiveMemberIds } from "@/lib/roster";
 import {
   isUserAvailable,
   type SchedulerSet,
@@ -109,18 +112,31 @@ export async function GET(req: NextRequest) {
   // Availability needs unavailability rules for me + everyone shown on this
   // page. Busy blocks are global to the person, so one query covers all orgs.
   const userIds = [user.id, ...page.map((c) => c.user.id)];
-  const blocks = await prisma.unavailability.findMany({
-    where: { userId: { in: userIds } },
-    select: {
-      userId: true,
-      type: true,
-      dayOfWeek: true,
-      startMinute: true,
-      endMinute: true,
-      startDate: true,
-      endDate: true,
-    },
-  });
+  const [blocks, memberships] = await Promise.all([
+    prisma.unavailability.findMany({
+      where: { userId: { in: userIds } },
+      select: {
+        userId: true,
+        type: true,
+        dayOfWeek: true,
+        startMinute: true,
+        endMinute: true,
+        startDate: true,
+        endDate: true,
+      },
+    }),
+    // Who on this page is still ACTIVE. Every candidate set shares my set's
+    // team, so one lookup covers them all: that team's memberships, or — for a
+    // team-less set — any active membership in the org (matching how team-less
+    // sets are "open to the whole org").
+    prisma.teamMember.findMany({
+      where: mine.set.teamId
+        ? { teamId: mine.set.teamId, userId: { in: userIds } }
+        : { team: { orgId: mine.set.orgId }, userId: { in: userIds } },
+      select: { userId: true, active: true },
+    }),
+  ]);
+  const inactiveUserIds = inactiveMemberIds(memberships);
   const rules: UnavailabilityRule[] = blocks.map((b) => ({ ...b }));
   // Only the explicit (non-recurring) blocks count as "previously marked
   // unavailable" for a specific date.
@@ -157,6 +173,7 @@ export async function GET(req: NextRequest) {
       // They'd take my set:
       theyAvailable: isUserAvailable(c.user.id, mySet, rules),
       theyMarkedUnavailable: !isUserAvailable(c.user.id, mySet, explicitRules),
+      theyInactive: inactiveUserIds.has(c.user.id),
     };
   });
 

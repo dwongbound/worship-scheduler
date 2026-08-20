@@ -60,6 +60,35 @@ describe("isUserAvailable", () => {
     expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(true);
   });
 
+  it("ignores a recurring rule that has stopped repeating", () => {
+    const rules: UnavailabilityRule[] = [
+      // Same Tuesday evening window, but it stopped repeating in December.
+      {
+        userId: "u1",
+        type: "RECURRING",
+        dayOfWeek: 2,
+        startMinute: 1080,
+        endMinute: 1200,
+        endDate: new Date(2025, 11, 30),
+      },
+    ];
+    expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(true);
+  });
+
+  it("blocks a recurring rule up to and including its last day", () => {
+    const rules: UnavailabilityRule[] = [
+      {
+        userId: "u1",
+        type: "RECURRING",
+        dayOfWeek: 2,
+        startMinute: 1080,
+        endMinute: 1200,
+        endDate: new Date(2026, 0, 6), // the set's own day
+      },
+    ];
+    expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(false);
+  });
+
   it("blocks a date range containing the set (inclusive end date)", () => {
     const rules: UnavailabilityRule[] = [
       {

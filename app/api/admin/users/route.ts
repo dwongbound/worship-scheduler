@@ -30,7 +30,11 @@ export async function GET(req: NextRequest) {
       // on that team — gate the assignment dropdowns + Team page role editing.
       teamMembers: {
         where: { team: { orgId: admin.orgId } },
-        select: { roles: true, team: { select: { id: true, name: true } } },
+        select: {
+          roles: true,
+          active: true,
+          team: { select: { id: true, name: true } },
+        },
       },
       // Per-request completion (this org's requests only) — drives the
       // status panel's TimeRange dropdown.
@@ -72,6 +76,7 @@ export async function GET(req: NextRequest) {
         id: tm.team.id,
         name: tm.team.name,
         roles: tm.roles,
+        active: tm.active,
       })),
     }))
   );

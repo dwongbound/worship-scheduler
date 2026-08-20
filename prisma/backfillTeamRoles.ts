@@ -13,8 +13,9 @@
 // name. Point DATABASE_URL at the target branch (env/{dev,staging,prod}.env).
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../lib/generated/prisma/client";
+import { normalizeDatabaseUrl } from "../lib/dbUrl";
 
-const prisma = new PrismaClient({ adapter: new PrismaPg(process.env.DATABASE_URL!) });
+const prisma = new PrismaClient({ adapter: new PrismaPg(normalizeDatabaseUrl(process.env.DATABASE_URL!)) });
 const APPLY = process.env.APPLY === "1";
 const FALLBACK_TEAM = (process.env.CHOIR_FALLBACK_TEAM ?? "Sunday Worship").toLowerCase();
 

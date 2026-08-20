@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   conflictedUserIds,
+  isActiveForSet,
   countAssignments,
   loadRows,
   maxLoad,
@@ -165,9 +166,55 @@ describe("unfillableRoles / totalUnfillable", () => {
     expect(unfillableRoles(set, [ru("k", ["KEYS"])], []).size).toBe(0);
   });
 
+  it("flags a role whose only candidate is inactive on the team", () => {
+    // A keys player who's been switched off: nothing will auto-fill the slot
+    // with them, so the hole is still structural.
+    const roster = [
+      ...rosterMinusKeys,
+      { id: "k", teams: [{ id: "team-default", roles: ["KEYS" as Instrument], active: false }] },
+    ];
+    expect(unfillableRoles(stagedSet(week1, []), roster, []).has("KEYS")).toBe(
+      true
+    );
+  });
+
   it("totals unfillable roles across the whole plan", () => {
     const sets = [stagedSet(week1, []), stagedSet(week2, [])];
     // Each set is missing keys → 2 total.
     expect(totalUnfillable(sets, rosterMinusKeys, [])).toBe(2);
+  });
+});
+
+describe("isActiveForSet", () => {
+  const onTwo = {
+    id: "u",
+    teams: [
+      { id: "t1", roles: ["KEYS" as Instrument], active: false },
+      { id: "t2", roles: ["KEYS" as Instrument], active: true },
+    ],
+  };
+
+  it("is per team — inactive on one, active on another", () => {
+    expect(isActiveForSet(onTwo, "t1")).toBe(false);
+    expect(isActiveForSet(onTwo, "t2")).toBe(true);
+  });
+
+  it("treats a membership with no flag as active (pre-flag data)", () => {
+    expect(isActiveForSet({ id: "u", teams: [{ id: "t1", roles: [] }] }, "t1")).toBe(
+      true
+    );
+  });
+
+  it("counts a team-less set as active when ANY team is active", () => {
+    expect(isActiveForSet(onTwo, null)).toBe(true);
+    const allOff = {
+      id: "u",
+      teams: [{ id: "t1", roles: [] as Instrument[], active: false }],
+    };
+    expect(isActiveForSet(allOff, null)).toBe(false);
+  });
+
+  it("is active when the person isn't on the team at all (unknown ≠ paused)", () => {
+    expect(isActiveForSet({ id: "u", teams: [] }, "t1")).toBe(true);
   });
 });

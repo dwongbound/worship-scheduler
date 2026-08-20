@@ -56,7 +56,7 @@ export default function ProfilePage() {
   const [addSelection, setAddSelection] = useState<Set<string>>(new Set());
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
-  // Daily 8 AM Slack digest, on by default. The send time is fixed, so this
+  // Daily morning Slack digest, on by default. The send time is fixed, so this
   // on/off switch is the whole setting (see lib/digest.ts).
   const [dailyDigest, setDailyDigest] = useState(true);
   const [message, setMessage] = useState("");
@@ -176,7 +176,11 @@ export default function ProfilePage() {
         body: JSON.stringify({ roles: [] }),
       });
       if (!res.ok) throw new Error("join failed");
-      setTeams((prev) => [...prev, { id: team.id, name: team.name, roles: [] }]);
+      // New memberships start active (the db default) — see ApiTeamRole.active.
+      setTeams((prev) => [
+        ...prev,
+        { id: team.id, name: team.name, roles: [], active: true },
+      ]);
       setSelectedTeamId(team.id); // jump straight to picking roles on it
       window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
     } catch {
@@ -471,12 +475,22 @@ export default function ProfilePage() {
               {teams.map((t) => (
                 <option key={t.id} value={t.id}>
                   {teamLabel(t.name, t.orgId)}
+                  {t.active === false ? " (inactive)" : ""}
                 </option>
               ))}
             </Select>
 
             {selectedTeam ? (
               <div className="mt-3">
+                {/* An admin has paused you on this team: your roles stay, but
+                    the auto-scheduler skips you here until they switch it back. */}
+                {selectedTeam.active === false && (
+                  <p className="mb-2 text-sm text-gray-500 dark:text-gray-400">
+                    You’re marked <strong>inactive</strong> on this team, so you
+                    won’t be scheduled on its sets. Ask an admin to reactivate
+                    you.
+                  </p>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   {ALL_INSTRUMENTS.map((inst) => (
                     <Checkbox
@@ -698,7 +712,7 @@ function SlackConnections({
           it does nothing until at least one org below is connected. */}
       <div className="mb-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
         <Checkbox
-          label="Daily summary at 8:00 AM"
+          label="Daily morning summary"
           checked={dailyDigest}
           onChange={(e) => onDailyDigestChange(e.target.checked)}
         />

@@ -53,15 +53,27 @@ back to the UI instead of swallowing them.
 
 ## Scheduled — daily cron
 
-One Vercel Cron, `0 15 * * *` (UTC), at
-[`cron/weekly-reminders/route.ts`](app/api/cron/weekly-reminders/route.ts). It
-does two Slack jobs each run:
+One Vercel Cron, `0 16 * * *` (UTC — 8 AM PST / 9 AM PDT), at
+[`cron/daily/route.ts`](app/api/cron/daily/route.ts). It
+does four Slack jobs each run:
 
 | Job | Slack effect | Helper |
 |---|---|---|
 | **Weekly reminders** | For each `WeeklyReminder` scheduled for today's weekday and not yet sent, posts that team's week-ahead digest to its Slack channel. Reminders are managed on the Org settings page ([`admin/reminders/route.ts`](app/api/admin/reminders/route.ts)). | `sendTeamWeeklySummary` |
 | **Auto group chats** | For every upcoming set now inside its **per-set** `groupChatLeadDays` window with no channel yet, creates the private channel (via `messageSetTeamOnSlack`, which stamps `groupChatCreatedAt` so it's made only once). | `runDueGroupChats` |
 | **Auto-archive** | Archives the channel of any set whose event date has fully passed, stamping `groupChatArchivedAt`. Once-daily, so it lands the day after the event rather than at 11:59pm sharp. | `archiveDueGroupChats` |
+| **Daily digest** | DMs each person a morning "here's your day" summary — **one message per org** they belong to, sent with that org's bot token to that org's `slackUserId`. Nothing is sent for an org that has nothing to report, and `OrgMembership.digestSentAt` keeps it to once per org per day. How far ahead it looks is per org (`Org.digestUpcomingDays`, on the Org settings page) and is quoted in the message itself. Opt out per person on the Profile page (`User.dailyDigest`). | `sendDailyDigests` → [`lib/digest.ts`](lib/digest.ts) |
+
+The 16:00 UTC slot matters: Vercel schedules crons in UTC while the app runs in
+`APP_TZ`, so the local hour shifts across DST. The digest only sends inside a
+morning window (`DIGEST_WINDOW_*` in [`lib/constants.ts`](lib/constants.ts));
+16:00 UTC sits inside it in both PST and PDT. Change one and re-check the other.
+
+Every Slack call in the app is queued through one rate limiter
+([`lib/rateLimit.ts`](lib/rateLimit.ts)) so a fan-out of DMs arrives paced
+rather than as a burst, and `slackApi` honors a 429's `Retry-After` with one
+retry instead of dropping the message. DM channel ids are cached per membership
+(`OrgMembership.slackDmChannelId`), so each DM costs one API call, not two.
 
 Auth: if `CRON_SECRET` is set, the route requires
 `Authorization: Bearer <CRON_SECRET>` (Vercel sends this automatically);

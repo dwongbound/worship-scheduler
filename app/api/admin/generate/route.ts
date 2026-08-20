@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { schedulableRolesByTeam } from "@/lib/roster";
 import { buildSchedule } from "@/lib/scheduler";
 import { defaultMDId } from "@/lib/md";
 import type { Instrument, SlotCapacityMap } from "@/lib/constants";
@@ -101,10 +102,12 @@ export async function POST(req: NextRequest) {
         id: true,
         isMD: true,
         // Per-team roles drive eligibility now (a person may play different
-        // roles on different teams). Only this org's teams matter here.
+        // roles on different teams). Only this org's teams matter here;
+        // schedulableRolesByTeam then drops the memberships they're marked
+        // inactive on, so the fill never proposes them for those teams.
         teamMembers: {
           where: { team: { orgId: admin.orgId } },
-          select: { teamId: true, roles: true },
+          select: { teamId: true, roles: true, active: true },
         },
       },
     }),
@@ -221,9 +224,7 @@ export async function POST(req: NextRequest) {
     users.map((u) => ({
       id: u.id,
       isMD: u.isMD,
-      rolesByTeam: Object.fromEntries(
-        u.teamMembers.map((m) => [m.teamId, m.roles as Instrument[]])
-      ),
+      rolesByTeam: schedulableRolesByTeam(u.teamMembers),
     })),
     rules,
     existingCounts,

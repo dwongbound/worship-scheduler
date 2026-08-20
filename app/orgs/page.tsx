@@ -6,6 +6,7 @@
 // old cramped per-org settings modal that used to live in OrgSwitcher.
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
@@ -15,6 +16,13 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
+import Select from "@/components/common/Select";
+import {
+  DIGEST_UPCOMING_DAYS_PRESETS,
+  DIGEST_UPCOMING_DAYS_MAX,
+  DIGEST_UPCOMING_DAYS_MIN,
+  windowPhrase,
+} from "@/lib/constants";
 import type { ApiMeMembership } from "@/lib/types";
 
 // The "Spotify account" line once an org is connected. Prefers the account's
@@ -24,6 +32,22 @@ function spotifyAccountLabel(m: ApiMeMembership): string {
   const name = m.spotifyDisplayName ?? m.spotifyUserId;
   return name ? `Connected as ${name} ✓` : "Connected ✓";
 }
+
+// What /api/spotify/callback's ?spotify=<status> means to a human. The route
+// logs the real detail server-side; these are the only words the admin sees.
+const SPOTIFY_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }> = {
+  connected: { tone: "indigo", text: "Spotify connected — set playlists can now be created." },
+  denied: { tone: "amber", text: "Spotify authorization was cancelled, so nothing changed." },
+  expired: {
+    tone: "amber",
+    text: "That Spotify link had already been used or expired. Click Connect to Spotify to start again.",
+  },
+  forbidden: { tone: "amber", text: "Only an admin of that org can connect its Spotify account." },
+  error: {
+    tone: "amber",
+    text: "Spotify refused the connection — this is a problem with the Spotify app itself, not your account. The server log has Spotify's reason.",
+  },
+};
 
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
@@ -35,16 +59,37 @@ export default function OrgSettingsPage() {
   const memberships = me?.memberships ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Add-an-org modal (same join-by-key flow as the navbar switcher).
+  // Outcome of a Spotify connect round-trip, read once from ?spotify= on mount.
+  const [spotifyNotice, setSpotifyNotice] =
+    useState<{ tone: "indigo" | "amber"; text: string } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [orgKey, setOrgKey] = useState("");
   const [addError, setAddError] = useState("");
   const [addBusy, setAddBusy] = useState(false);
+  // How far ahead this org's daily digest looks, in days. `null` = not loaded
+  // yet (same convention as joinKey — both come from GET /api/orgs/[id]).
+  const [digestDays, setDigestDays] = useState<number | null>(null);
+  const [digestBusy, setDigestBusy] = useState(false);
+  const [digestError, setDigestError] = useState("");
+  // Briefly true after a successful save so the row can flash a confirmation.
+  const [digestSaved, setDigestSaved] = useState(false);
+
   // Join key for the selected org (admins only). `null` = not loaded yet.
   const [joinKey, setJoinKey] = useState<string | null>(null);
   const [keyDraft, setKeyDraft] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [keyError, setKeyError] = useState("");
   const [keyCopied, setKeyCopied] = useState(false);
+
+  // /api/spotify/callback sends the admin back here with ?spotify=<status>.
+  // Show what happened, then strip the param so a reload doesn't re-announce it.
+  useEffect(() => {
+    const status = new URLSearchParams(window.location.search).get("spotify");
+    if (!status) return;
+    setSpotifyNotice(SPOTIFY_NOTICES[status] ?? SPOTIFY_NOTICES.error);
+    window.history.replaceState(null, "", window.location.pathname);
+    if (status === "connected") refreshMe();
+  }, [refreshMe]);
 
   // Default the selection to the "current" org — whatever the switcher points
   // at — falling back to the first org. Only runs until a valid pick is set so
@@ -68,6 +113,9 @@ export default function OrgSettingsPage() {
     setKeyDraft("");
     setKeyError("");
     setKeyCopied(false);
+    setDigestDays(null);
+    setDigestError("");
+    setDigestSaved(false);
     if (!selectedId) return;
     const org = orgs?.find((o) => o.id === selectedId);
     if (!org?.isAdmin) return;
@@ -78,12 +126,41 @@ export default function OrgSettingsPage() {
         if (cancelled || !data) return;
         setJoinKey(data.joinKey ?? "");
         setKeyDraft(data.joinKey ?? "");
+        setDigestDays(data.digestUpcomingDays ?? null);
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [selectedId, orgs]);
+
+  // Save the digest window. Optimistic: the select moves immediately and rolls
+  // back only if the API rejects it, so the control never feels laggy.
+  async function saveDigestDays(days: number) {
+    if (!selectedId) return;
+    const previous = digestDays;
+    setDigestDays(days);
+    setDigestBusy(true);
+    setDigestError("");
+    setDigestSaved(false);
+    try {
+      const res = await fetch(`/api/orgs/${selectedId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ digestUpcomingDays: days }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setDigestDays(previous);
+        setDigestError(data.error ?? "Could not save the digest window.");
+        return;
+      }
+      setDigestDays(data.digestUpcomingDays);
+      setDigestSaved(true);
+    } finally {
+      setDigestBusy(false);
+    }
+  }
 
   // Save a new key: rotate a random one, or set the typed value.
   async function saveKey(rotate: boolean) {
@@ -142,6 +219,12 @@ export default function OrgSettingsPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold">Org settings</h1>
+
+      {spotifyNotice && (
+        <Banner tone={spotifyNotice.tone} onDismiss={() => setSpotifyNotice(null)}>
+          {spotifyNotice.text}
+        </Banner>
+      )}
 
       {orgs.length === 0 ? (
         <Card>
@@ -298,6 +381,71 @@ export default function OrgSettingsPage() {
                     </p>
                   )}
                 </div>
+
+                {/* Daily digest window — how far ahead the morning Slack DM
+                    looks when it counts what still needs attention. The digest
+                    quotes this window in its own wording, so the number an
+                    admin picks here is the number people read. */}
+                {selected.isAdmin && (
+                  <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium">Daily digest window</p>
+                      <InfoTooltip text="How far ahead the morning Slack digest looks. It decides which unconfirmed spots people are nudged about, and (for admins) which upcoming sets are flagged as still having people who haven't confirmed. A shorter window means fewer, more urgent reminders; a longer one surfaces problems earlier but repeats them for longer." />
+                    </div>
+                    {digestDays === null ? (
+                      <p className="text-sm text-gray-400">Loading…</p>
+                    ) : (
+                      <>
+                        <p className="text-sm text-gray-500">
+                          The digest counts sets{" "}
+                          <span className="font-medium text-gray-700 dark:text-gray-300">
+                            {windowPhrase(digestDays)}
+                          </span>{" "}
+                          and says so in the message.
+                        </p>
+                        <div className="max-w-[16rem] pt-1">
+                          <Select
+                            label="Look ahead"
+                            hideLabel
+                            value={digestDays}
+                            disabled={digestBusy}
+                            onChange={(e) =>
+                              saveDigestDays(Number(e.target.value))
+                            }
+                          >
+                            {/* The presets, plus whatever this org already has
+                                if it was set to something custom via the API. */}
+                            {[
+                              ...new Set([
+                                ...DIGEST_UPCOMING_DAYS_PRESETS,
+                                digestDays,
+                              ]),
+                            ]
+                              .filter(
+                                (d) =>
+                                  d >= DIGEST_UPCOMING_DAYS_MIN &&
+                                  d <= DIGEST_UPCOMING_DAYS_MAX
+                              )
+                              .sort((a, b) => a - b)
+                              .map((d) => (
+                                <option key={d} value={d}>
+                                  {d} {d === 1 ? "day" : "days"}
+                                </option>
+                              ))}
+                          </Select>
+                        </div>
+                        {digestSaved && !digestError && (
+                          <p className="text-sm text-green-600 dark:text-green-400">
+                            Saved ✓
+                          </p>
+                        )}
+                        {digestError && (
+                          <p className="text-sm text-red-600">{digestError}</p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Join key — admins can copy it, set a custom one, or rotate
                     to a fresh random key (invalidating the old one). */}

@@ -27,8 +27,15 @@ export function dayBlockLevel(
   let partial = false;
   for (const e of entries) {
     if (e.type === "RECURRING") {
-      // Recurring blocks apply to every date on their weekday.
+      // Recurring blocks apply to every date on their weekday, up to their
+      // optional endDate (the last day they repeat; null = forever).
       if (date.getDay() !== e.dayOfWeek) continue;
+      if (e.endDate) {
+        const stop = new Date(e.endDate);
+        if (date > new Date(stop.getFullYear(), stop.getMonth(), stop.getDate())) {
+          continue;
+        }
+      }
     } else {
       // SPECIFIC / DATE_RANGE: the date must fall in [startDate, endDate].
       if (!e.startDate) continue;
@@ -216,4 +223,65 @@ export function applyDayEdit(
     }
   }
   return [...others, ...survivors];
+}
+
+// One weekly recurring block: a weekday plus a time-of-day window, and
+// optionally the last day it repeats ("YYYY-MM-DD"; null = forever).
+export interface RecurringBlock {
+  dayOfWeek: number;
+  startMinute: number;
+  endMinute: number;
+  endDate: string | null;
+}
+
+/**
+ * The stop date for a "repeat for N weeks" block: N weeks from today, as
+ * YYYY-MM-DD. Four weeks starting today therefore covers today through the
+ * same weekday four weeks out.
+ */
+export function weeksFromToday(weeks: number, from = new Date()): string {
+  const end = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  end.setDate(end.getDate() + weeks * 7);
+  return toYmd(end);
+}
+
+/**
+ * Collapse overlapping or touching time windows into the fewest windows that
+ * cover the same minutes — picking "Morning" and "Afternoon" together should
+ * store one 6am–5pm block, not two abutting rows.
+ */
+export function mergeWindows(
+  windows: { startMinute: number; endMinute: number }[]
+): { startMinute: number; endMinute: number }[] {
+  const sorted = [...windows].sort((a, b) => a.startMinute - b.startMinute);
+  const merged: { startMinute: number; endMinute: number }[] = [];
+  for (const w of sorted) {
+    const last = merged[merged.length - 1];
+    // Touching counts as overlapping: 6–12 then 12–17 becomes 6–17.
+    if (last && w.startMinute <= last.endMinute) {
+      last.endMinute = Math.max(last.endMinute, w.endMinute);
+    } else {
+      merged.push({ ...w });
+    }
+  }
+  return merged;
+}
+
+/**
+ * Expand the multi-select "Block out times" form — any number of weekdays
+ * crossed with any number of time windows — into the individual recurring
+ * blocks to store, one per weekday per merged window, ordered day then time.
+ * "Mon–Fri mornings and afternoons" goes in as one gesture and comes out as
+ * five blocks (the two windows merge into one). `endDate` (the last day they
+ * repeat) rides along on every block.
+ */
+export function expandRecurringBlocks(
+  days: number[],
+  windows: { startMinute: number; endMinute: number }[],
+  endDate: string | null = null
+): RecurringBlock[] {
+  const merged = mergeWindows(windows);
+  return [...days]
+    .sort((a, b) => a - b)
+    .flatMap((dayOfWeek) => merged.map((w) => ({ dayOfWeek, ...w, endDate })));
 }

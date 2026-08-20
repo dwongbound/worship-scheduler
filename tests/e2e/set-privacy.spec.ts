@@ -83,12 +83,13 @@ test("admin creates a private set from the calendar, then toggles it public", as
   ).toBeFalsy();
 
   // Admin toggles it public from the detail modal's overflow (⋮) menu, where
-  // the "Private" toggle now lives. The menu's item is a button named
-  // "Private"; the title's lock badge is a span, so this doesn't collide.
+  // the "Private" toggle now lives. The menu's panel is portalled to <body>
+  // (components/common/Dropdown.tsx), so the item is looked up on the page;
+  // the title's lock badge is a span, so the name doesn't collide.
   await login(page, "admin");
   const detail = await openSetByLabel(page, "Secret Set");
   await detail.getByRole("button", { name: "More actions" }).click();
-  await detail.getByRole("button", { name: "Private" }).click();
+  await page.getByRole("button", { name: "Private", exact: true }).click();
   await expect(async () => {
     const nowPublic = (await fetchSets(page)).find((s) => s.label === "Secret Set");
     expect(nowPublic?.isPrivate).toBe(false);

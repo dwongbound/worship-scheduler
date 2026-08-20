@@ -94,6 +94,35 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
     window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
   }
 
+  // Flip a member's per-team "active" flag from the members modal. Inactive =
+  // not auto-scheduled on that team; they stay pickable by hand, flagged
+  // "(inactive)". Optimistic, then PATCH; reload from the server on failure.
+  async function setTeamActive(
+    user: ApiAdminUser,
+    teamId: string,
+    active: boolean
+  ) {
+    setUsers(
+      (prev) =>
+        prev?.map((u) =>
+          u.id === user.id
+            ? {
+                ...u,
+                teams: u.teams.map((t) =>
+                  t.id === teamId ? { ...t, active } : t
+                ),
+              }
+            : u
+        ) ?? prev
+    );
+    const res = await fetch(`/api/admin/users/${user.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", ...orgHeaders(orgId) },
+      body: JSON.stringify({ teamActive: [{ teamId, active }] }),
+    });
+    if (!res.ok) loadUsers();
+  }
+
   const memberCount = (teamId: string) =>
     users?.filter((u) => u.teams.some((t) => t.id === teamId)).length ?? 0;
 
@@ -241,7 +270,10 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
         onAdd={(user, team) => {
           if (user.teams.some((t) => t.id === team.id)) return;
           // New member starts with no roles on the team (they/an admin pick them).
-          patchUserTeams(user, [...user.teams, { id: team.id, name: team.name, roles: [] }]);
+          patchUserTeams(user, [
+            ...user.teams,
+            { id: team.id, name: team.name, roles: [], active: true },
+          ]);
           setMemberQuery(""); // clear so they can type the next name
         }}
         onRemove={(user, team) =>
@@ -250,6 +282,7 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
             user.teams.filter((t) => t.id !== team.id)
           )
         }
+        onSetActive={(user, team, active) => setTeamActive(user, team.id, active)}
         onSaved={loadTeams}
         onClose={() => setOpenTeamId(null)}
       />

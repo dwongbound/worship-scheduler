@@ -19,11 +19,12 @@ import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, Instrument } from "../lib/generated/prisma/client";
 import bcrypt from "bcryptjs";
 import { parseOrgKeys } from "../lib/orgKeys";
+import { normalizeDatabaseUrl } from "../lib/dbUrl";
 
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is required to seed the database.");
 
-const prisma = new PrismaClient({ adapter: new PrismaPg(url) });
+const prisma = new PrismaClient({ adapter: new PrismaPg(normalizeDatabaseUrl(url)) });
 
 // The admin login + the one shared demo password are configurable via env
 // (env/dev.env, env/test.env) so they aren't baked into the source; the

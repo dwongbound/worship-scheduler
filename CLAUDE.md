@@ -35,6 +35,12 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   m-n with User. Sets/SetTemplates carry a nullable `teamId` (`onDelete:
   SetNull` — a null team = "open to the whole org"). The scheduler and all
   assignment dropdowns only offer the set's team members.
+- **TeamMember** — the user↔team join, carrying that person's per-team `roles`
+  and `active` flag. Inactive = not auto-scheduled on that team (both scheduler
+  callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
+  still hand-pickable — the pick lists and swap picker label them
+  "(inactive)" the way they label "(unavailable)". Per team, so someone can be
+  active on one team and paused on another in the same org.
 - **User** — username/passwordHash/name, `isMD` (musical director; global
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
@@ -99,6 +105,12 @@ Also here: `validateSlotCapacities` (API guard, MAX_SLOTS_PER_ROLE=20), `ROLE_OR
   existing DB bookings) are picked last → weekly sets rotate round-robin. ✅tested
 - `constants.ts` ✅ · `dates.ts` ✅ (`upcomingOccurrences`, `format*`, minute⇄time)
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
+- `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops
+  inactive memberships, so the auto-fill can't propose them) +
+  `inactiveMemberIds()` (who the swap picker flags). ✅tested
+- `playerOptions.ts` — `buildPlayerOptions()`: the assignment dropdown's
+  candidate list, shared by SetDetailModal + StagedScheduleModal. Nobody is
+  filtered out — unavailable/inactive people are flagged and sink. ✅tested
 - `setStatus.ts` — `setStatus()` → empty|confirmed|unconfirmed|cover.
 - `setlist.ts` — `describeSetlistChange(before, after)` → one human fragment
   ("added \"Who Else\" (E)") or null when nothing changed. Feeds the
@@ -109,6 +121,9 @@ Also here: `validateSlotCapacities` (API guard, MAX_SLOTS_PER_ROLE=20), `ROLE_OR
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
 - `prisma.ts` — singleton client from generated output.
+- `dbUrl.ts` — `normalizeDatabaseUrl()`: rewrites `sslmode=require|prefer|
+  verify-ca` to `verify-full`, pinning today's TLS behavior before pg v9
+  redefines those aliases (and silencing pg's startup warning). ✅tested
 
 ## Components
 

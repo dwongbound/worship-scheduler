@@ -10,19 +10,45 @@
 // This module is server-only (it imports prisma). The client talks to it via
 // the API routes, never by importing it directly.
 import { prisma } from "./prisma";
+import type { Prisma } from "./generated/prisma/client";
 import { decryptSecret } from "./crypto";
 import { createOrSyncSetPlaylist, isOrgSpotifyConnected } from "./spotify";
 import {
   ALL_INSTRUMENTS,
-  DIGEST_SEND_MINUTE,
+  DIGEST_WINDOW_END_MINUTE,
+  DIGEST_WINDOW_START_MINUTE,
   INSTRUMENT_LABELS,
   type Instrument,
 } from "./constants";
 import { buildOrgDigest, renderDigestText } from "./digest";
 import { formatDay, formatTime, shortDateLabel } from "./dates";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
+import { createRateLimiter } from "./rateLimit";
 
 const SLACK_API = "https://slack.com/api";
+
+// Minimum gap between two Slack calls. Deliberately modest: it exists to stop a
+// `Promise.all` fan-out from arriving as one burst, which is what actually
+// provokes a 429. The real guarantee is the Retry-After handling below. A full
+// second here would be "safer" per Slack's slowest documented tier and would
+// also make a 100-person digest outlive the cron's time budget.
+// Zero under vitest: the unit tests exercise slackApi against a mocked fetch,
+// and real pacing there just makes the suite slow without testing anything —
+// the limiter has its own tests in tests/unit/rateLimit.test.ts.
+const SLACK_MIN_INTERVAL_MS = process.env.NODE_ENV === "test" ? 0 : 100;
+
+// How long to respect a 429 that arrives without a usable Retry-After header,
+// and the ceiling on one that asks for an implausibly long wait (we'd rather
+// drop the message and retry on the next run than hold the function open).
+const RETRY_AFTER_FALLBACK_MS = 1000;
+const RETRY_AFTER_MAX_MS = 30_000;
+
+// ONE limiter for the whole module, so every path — digests, swap DMs,
+// availability blasts, group chats — shares a single queue rather than each
+// fan-out pacing itself in ignorance of the others.
+const slackLimit = createRateLimiter(SLACK_MIN_INTERVAL_MS);
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Whether an org can currently send Slack messages: its bot is installed, or
@@ -77,7 +103,12 @@ async function slackApi(
       : {};
   }
   if (!token) return null;
-  try {
+
+  // Queued behind every other Slack call in this process. `attempt` runs once
+  // normally and once more after a rate-limited backoff.
+  const attempt = async (): Promise<
+    { data: Record<string, any> | null } | { retryAfterMs: number }
+  > => {
     const res = await fetch(`${SLACK_API}/${method}`, {
       method: "POST",
       headers: {
@@ -86,12 +117,44 @@ async function slackApi(
       },
       body: JSON.stringify(body),
     });
+    // Slack signals rate limiting with a 429 + Retry-After (in seconds). It
+    // also sets error:"ratelimited" in the body, which is what this code used
+    // to swallow as an ordinary failure — silently dropping the message.
+    if (res.status === 429) {
+      const header = Number(res.headers.get("retry-after"));
+      const waitMs =
+        Number.isFinite(header) && header > 0
+          ? header * 1000
+          : RETRY_AFTER_FALLBACK_MS;
+      return { retryAfterMs: Math.min(waitMs, RETRY_AFTER_MAX_MS) };
+    }
     const data = await res.json();
     if (!data.ok) {
       console.error(`[slack] ${method} failed:`, data.error);
+      return { data: null };
+    }
+    return { data };
+  };
+
+  try {
+    // The backoff sleeps INSIDE the queue slot on purpose: when Slack says slow
+    // down, everything waiting behind us should slow down too, not pile on.
+    const first = await slackLimit(async () => {
+      const result = await attempt();
+      if (!("retryAfterMs" in result)) return result;
+      console.warn(
+        `[slack] ${method} rate limited — retrying in ${result.retryAfterMs}ms`
+      );
+      await sleep(result.retryAfterMs);
+      return attempt();
+    });
+    if ("retryAfterMs" in first) {
+      // Still limited after one retry — give up and let the caller's own retry
+      // path (the next cron run, usually) handle it.
+      console.error(`[slack] ${method} still rate limited after retry`);
       return null;
     }
-    return data;
+    return first.data;
   } catch (err) {
     console.error(`[slack] ${method} threw:`, err);
     return null;
@@ -131,6 +194,63 @@ export async function postDirectMessage(
   const channelId = await openConversation(token, [slackUserId]);
   if (!channelId) return false;
   return postToChannel(token, channelId, text);
+}
+
+// The membership fields every cached DM needs. Select these wherever you're
+// about to message people (see DM_FIELDS below for the Prisma `select`).
+export type DmTarget = {
+  id: string;
+  slackUserId: string | null;
+  slackDmChannelId: string | null;
+};
+
+/** The `select` that produces a DmTarget — kept next to the type so they can't drift. */
+export const DM_FIELDS = {
+  id: true,
+  slackUserId: true,
+  slackDmChannelId: true,
+} as const;
+
+/**
+ * DM one membership, reusing its cached DM channel id.
+ *
+ * A (bot, user) DM channel is permanent, so `conversations.open` only needs to
+ * happen once per person per org — after that it's one API call per message
+ * instead of two. That halves the digest's Slack traffic, which is the run most
+ * at risk of hitting both the rate limiter and the function time budget.
+ *
+ * Self-healing: if posting to a CACHED channel fails (the workspace removed the
+ * user, the id went stale), the cache is cleared so the next send re-opens it.
+ */
+export async function postDirectMessageTo(
+  token: string | null,
+  member: DmTarget,
+  text: string
+): Promise<boolean> {
+  const cached = member.slackDmChannelId;
+  let channelId = cached;
+
+  if (!channelId) {
+    if (!member.slackUserId) return false;
+    channelId = await openConversation(token, [member.slackUserId]);
+    if (!channelId) return false;
+    // Best-effort: a failed cache write costs an extra open next time, nothing
+    // more, so it must never take the message down with it.
+    await prisma.orgMembership
+      .update({
+        where: { id: member.id },
+        data: { slackDmChannelId: channelId },
+      })
+      .catch(() => {});
+  }
+
+  const posted = await postToChannel(token, channelId, text);
+  if (!posted && cached) {
+    await prisma.orgMembership
+      .update({ where: { id: member.id }, data: { slackDmChannelId: null } })
+      .catch(() => {});
+  }
+  return posted;
 }
 
 // Create a PRIVATE channel and return its id. Channel names must be lowercase
@@ -298,21 +418,32 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
   // requester, is in the set's org, is on the set's team (a team-less set is
   // open to the whole org), and has linked Slack in THAT org (so people who
   // never connected Slack are simply skipped — the graceful-fail path).
+  //
+  // Roles are PER TEAM (TeamMember.roles), so the role test has to name the
+  // team: on the set's own team for a team-assigned set, or on any team in this
+  // org for a team-less one. (This used to read the deprecated User.instruments
+  // + User.teams, which nothing writes anymore — so it matched nobody and the
+  // DM silently went out to an empty list.)
+  const playsRole: Prisma.UserWhereInput = {
+    teamMembers: {
+      some: {
+        roles: { has: assignment.role },
+        ...(assignment.set.teamId
+          ? { teamId: assignment.set.teamId }
+          : { team: { orgId: assignment.set.orgId } }),
+      },
+    },
+  };
   const eligible = await prisma.orgMembership.findMany({
     where: {
       orgId: assignment.set.orgId,
       userId: { not: assignment.userId },
       slackUserId: { not: null },
-      user: {
-        instruments: { has: assignment.role },
-        ...(assignment.set.teamId
-          ? { teams: { some: { id: assignment.set.teamId } } }
-          : {}),
-      },
+      user: playsRole,
     },
     select: {
+      ...DM_FIELDS,
       userId: true,
-      slackUserId: true,
       // Busy blocks are global to the person (they apply in every org), so we
       // can filter out anyone unavailable at this set's time before DMing.
       user: {
@@ -354,8 +485,10 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
     `${setLabel(assignment.set)} just opened up for swap.` +
     (url ? ` Take it here: ${url}` : "");
 
+  // Queued through the shared rate limiter (lib/rateLimit), so this fans out in
+  // call order at a safe pace rather than as one burst.
   await Promise.all(
-    available.map((m) => postDirectMessage(token, m.slackUserId!, text))
+    available.map((m) => postDirectMessageTo(token, m, text))
   );
 }
 
@@ -380,14 +513,14 @@ export async function notifySwapTaken(
 
   const owner = await prisma.orgMembership.findUnique({
     where: { userId_orgId: { userId: previousOwnerId, orgId: assignment.set.orgId } },
-    select: { slackUserId: true },
+    select: DM_FIELDS,
   });
   if (!owner?.slackUserId) return;
 
   const text =
     `✅ ${takerName} took your ${INSTRUMENT_LABELS[assignment.role]} slot on ` +
     `${setLabel(assignment.set)}. You're off the hook!`;
-  await postDirectMessage(token, owner.slackUserId, text);
+  await postDirectMessageTo(token, owner, text);
 }
 
 // A proposal's two sets + the org they share, plus each party's per-org Slack
@@ -419,11 +552,12 @@ async function loadProposalSlack(proposalId: string) {
   // Per-org Slack ids for the two parties.
   const memberships = await prisma.orgMembership.findMany({
     where: { orgId, userId: { in: [p.requestedById, p.toAssignment.userId] } },
-    select: { userId: true, slackUserId: true },
+    select: { ...DM_FIELDS, userId: true },
   });
-  const slackIdOf = (userId: string) =>
-    memberships.find((m) => m.userId === userId)?.slackUserId ?? null;
-  return { p, token, slackIdOf };
+  // The membership row (not just the Slack id) so DMs can use the cached channel.
+  const memberFor = (userId: string) =>
+    memberships.find((m) => m.userId === userId && m.slackUserId) ?? null;
+  return { p, token, memberFor };
 }
 
 /**
@@ -433,9 +567,9 @@ async function loadProposalSlack(proposalId: string) {
 export async function notifySwapProposed(proposalId: string): Promise<void> {
   const loaded = await loadProposalSlack(proposalId);
   if (!loaded) return;
-  const { p, token, slackIdOf } = loaded;
-  const slackId = slackIdOf(p.toAssignment.userId);
-  if (!slackId) return;
+  const { p, token, memberFor } = loaded;
+  const member = memberFor(p.toAssignment.userId);
+  if (!member) return;
 
   const url = appUrl("/swaps");
   const text =
@@ -444,7 +578,7 @@ export async function notifySwapProposed(proposalId: string): Promise<void> {
     `${setLabel(p.fromAssignment.set)} for yours on ` +
     `${setLabel(p.toAssignment.set)}.` +
     (url ? ` Accept or decline here: ${url}` : "");
-  await postDirectMessage(token, slackId, text);
+  await postDirectMessageTo(token, member, text);
 }
 
 /**
@@ -457,9 +591,9 @@ export async function notifySwapResolved(
 ): Promise<void> {
   const loaded = await loadProposalSlack(proposalId);
   if (!loaded) return;
-  const { p, token, slackIdOf } = loaded;
-  const slackId = slackIdOf(p.requestedById);
-  if (!slackId) return;
+  const { p, token, memberFor } = loaded;
+  const member = memberFor(p.requestedById);
+  if (!member) return;
 
   const who = p.toAssignment.user.name;
   const text = accepted
@@ -468,7 +602,7 @@ export async function notifySwapResolved(
       `${setLabel(p.fromAssignment.set)}.`
     : `🚫 ${who} declined your swap for ` +
       `${setLabel(p.fromAssignment.set)}. Your slot is unchanged.`;
-  await postDirectMessage(token, slackId, text);
+  await postDirectMessageTo(token, member, text);
 }
 
 /**
@@ -496,7 +630,7 @@ export async function notifyAvailabilityRequest(request: {
         ? { user: { teamMembers: { some: { teamId: { in: teamIds } } } } }
         : {}),
     },
-    select: { slackUserId: true },
+    select: DM_FIELDS,
   });
 
   const label =
@@ -507,9 +641,7 @@ export async function notifyAvailabilityRequest(request: {
     `📅 Please enter your availability for *${label}*.` +
     (url ? ` ${url}` : "");
 
-  await Promise.all(
-    members.map((m) => postDirectMessage(token, m.slackUserId!, text))
-  );
+  await Promise.all(members.map((m) => postDirectMessageTo(token, m, text)));
 }
 
 /**
@@ -526,7 +658,7 @@ export async function notifyAdminsPendingApproval(
 
   const admins = await prisma.orgMembership.findMany({
     where: { orgId, isAdmin: true, slackUserId: { not: null } },
-    select: { slackUserId: true },
+    select: DM_FIELDS,
   });
   if (admins.length === 0) return;
 
@@ -537,9 +669,7 @@ export async function notifyAdminsPendingApproval(
     `is awaiting your approval.` +
     (url ? ` Review it here: ${url}` : "");
 
-  await Promise.all(
-    admins.map((m) => postDirectMessage(token, m.slackUserId!, text))
-  );
+  await Promise.all(admins.map((m) => postDirectMessageTo(token, m, text)));
 }
 
 /**
@@ -871,14 +1001,14 @@ export async function sendTeamWeeklySummary(
 }
 
 /**
- * The daily digest run (called by the daily cron). DMs every person whose
- * 8 AM send time has passed today and who hasn't already been sent one today,
- * one message per org they belong to. Skips anyone with nothing to do, anyone
- * opted out, and any org/person without a Slack link.
+ * The daily digest run (called by the daily cron). DMs everyone who hasn't
+ * already been sent one today, ONE MESSAGE PER ORG they belong to. Skips anyone
+ * with nothing to do in that org, anyone opted out, and any org/person without
+ * a Slack link.
  *
  * The lastSent guard is per membership and compares against the START of today,
- * so this is safe to call repeatedly — the cron currently fires once a day, but
- * running it more often just delivers closer to 8 AM rather than duplicating.
+ * so this is safe to call repeatedly — the cron fires once a day, and running it
+ * more often just delivers closer to 8 AM rather than duplicating.
  * Best-effort and non-throwing, like every other sender here.
  */
 export async function sendDailyDigests(
@@ -886,9 +1016,16 @@ export async function sendDailyDigests(
 ): Promise<{ sent: number; skipped: number }> {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const minutesNow = now.getHours() * 60 + now.getMinutes();
-  // Before the send time — nothing is due yet. (Only reachable if the cron is
-  // moved earlier or run by hand; the daily cron fires at 8 AM.)
-  if (minutesNow < DIGEST_SEND_MINUTE) return { sent: 0, skipped: 0 };
+  // Outside the morning window this isn't a digest run — bail without sending.
+  // The window is deliberately wider than the 8 AM target: the UTC cron slot
+  // shifts an hour against local time across DST, so an exact-time check would
+  // (and did) skip the whole winter. See the constants for the full reasoning.
+  if (
+    minutesNow < DIGEST_WINDOW_START_MINUTE ||
+    minutesNow >= DIGEST_WINDOW_END_MINUTE
+  ) {
+    return { sent: 0, skipped: 0 };
+  }
 
   const due = await prisma.orgMembership.findMany({
     where: {
@@ -897,12 +1034,13 @@ export async function sendDailyDigests(
       OR: [{ digestSentAt: null }, { digestSentAt: { lt: startOfToday } }],
     },
     select: {
-      id: true,
+      ...DM_FIELDS,
       orgId: true,
       isAdmin: true,
-      slackUserId: true,
       user: { select: { id: true, name: true } },
-      org: { select: { name: true } },
+      // digestUpcomingDays is the org's own look-ahead window (Org settings) —
+      // it decides what the digest counts AND what its copy says.
+      org: { select: { name: true, digestUpcomingDays: true } },
     },
   });
 
@@ -924,6 +1062,7 @@ export async function sendDailyDigests(
       const items = await buildOrgDigest(m.user.id, m.orgId, {
         isAdmin: m.isAdmin,
         orgName: m.org.name,
+        upcomingDays: m.org.digestUpcomingDays,
         now,
       });
       // Nothing needs them today — stay quiet rather than DM an empty list.
@@ -935,7 +1074,7 @@ export async function sendDailyDigests(
       }
 
       const text = renderDigestText(m.user.name, items, appUrl());
-      const ok = await postDirectMessage(token, m.slackUserId!, text);
+      const ok = await postDirectMessageTo(token, m, text);
       if (!ok) {
         skipped++;
         continue;

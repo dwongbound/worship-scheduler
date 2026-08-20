@@ -45,7 +45,11 @@ export async function GET() {
       // Roles are per-team: the profile page shows a team dropdown + the roles
       // the user has picked on each team they're on.
       teamMembers: {
-        select: { roles: true, team: { select: { id: true, name: true, orgId: true } } },
+        select: {
+          roles: true,
+          active: true,
+          team: { select: { id: true, name: true, orgId: true } },
+        },
       },
     },
   });
@@ -76,6 +80,7 @@ export async function GET() {
       name: tm.team.name,
       orgId: tm.team.orgId,
       roles: tm.roles,
+      active: tm.active,
     })),
   });
 }
