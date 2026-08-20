@@ -30,6 +30,7 @@ import Dropdown from "./common/Dropdown";
 import InfoTooltip from "./common/InfoTooltip";
 import LoadingDots from "./common/LoadingDots";
 import SlackIcon from "./common/SlackIcon";
+import Toast, { type ToastMessage } from "./common/Toast";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
@@ -93,9 +94,10 @@ export default function SetDetailModal({
   // Slack "message team" state. The button is shown to everyone (anyone on the
   // team can start the group chat); it's disabled until this org connects Slack.
   const [slackConfigured, setSlackConfigured] = useState(false);
-  // Only set when there's something to SAY — an error, or the reason no Spotify
-  // playlist came with the chat. Plain success is shown on the button instead.
-  const [slackMsg, setSlackMsg] = useState("");
+  // The result of the last "Slack Team" click, shown as a floating toast rather
+  // than inline text — the outcome is transient, and a line of copy appearing
+  // under the action bar shoved the whole modal body down.
+  const [toast, setToast] = useState<ToastMessage | null>(null);
   // Flips the Slack button to a checkmark for a moment after a successful post,
   // so the confirmation lives on the control you clicked rather than as a line
   // of text that shifts the layout.
@@ -166,11 +168,12 @@ export default function SetDetailModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [songDraft, set]);
 
-  // Reset the delete confirmations + Slack feedback whenever a different set opens.
+  // Reset the delete confirmations + Slack feedback whenever a different set
+  // opens (or the modal closes) — a toast about set A shouldn't outlive it.
   useEffect(() => {
     setConfirmingDelete(false);
     setSlotToDelete(null);
-    setSlackMsg("");
+    setToast(null);
   }, [set?.id]);
 
   // Is the Slack bot configured for this org? Drives whether the "Slack Team"
@@ -473,20 +476,29 @@ export default function SetDetailModal({
   // Open a Slack group DM among this set's assigned team and post an intro.
   const messageTeamOnSlack = async () => {
     setBusy(true);
-    setSlackMsg("");
+    setToast(null);
     try {
       const res = await fetch(`/api/sets/${set.id}/slack-group`, {
         method: "POST",
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setSlackMsg(data.error ?? "Could not message the team.");
+        setToast({
+          text: data.error ?? "Could not message the team.",
+          tone: "error",
+        });
         return;
       }
-      // Success: tick the button. The only text left is the caveat — the chat
-      // went out but its Spotify playlist didn't, and why.
-      setSlackMsg(
-        data.playlistNote ? `No Spotify playlist: ${data.playlistNote}` : ""
+      // One toast per click, plus the tick on the button itself. The caveat —
+      // the chat went out but its Spotify playlist didn't — rides along in the
+      // same message rather than as a second piece of feedback.
+      setToast(
+        data.playlistNote
+          ? {
+              text: `Team messaged on Slack. No Spotify playlist: ${data.playlistNote}`,
+              tone: "info",
+            }
+          : { text: "Team messaged on Slack.", tone: "success" }
       );
       setSlackDone(true);
       if (slackDoneTimer.current) clearTimeout(slackDoneTimer.current);
@@ -731,11 +743,10 @@ export default function SetDetailModal({
           </Dropdown>
         </div>
       </div>
-      {slackConfigured && slackMsg && (
-        <p className="-mt-1 mb-4 text-sm text-gray-600 dark:text-gray-400">
-          {slackMsg}
-        </p>
-      )}
+      {/* Slack result. Portals itself to the bottom of the screen and clears
+          after a few seconds, so it floats over the modal instead of pushing
+          this content around. */}
+      <Toast toast={toast} onDismiss={() => setToast(null)} />
 
       {/* Amber warning while a required-MD set still has no musical director;
           nothing once an MD is on the team (the * MD marker says enough). */}

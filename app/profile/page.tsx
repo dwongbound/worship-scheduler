@@ -56,7 +56,7 @@ export default function ProfilePage() {
   const [addSelection, setAddSelection] = useState<Set<string>>(new Set());
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
-  // Daily 8 AM Slack digest, on by default. The send time is fixed, so this
+  // Daily morning Slack digest, on by default. The send time is fixed, so this
   // on/off switch is the whole setting (see lib/digest.ts).
   const [dailyDigest, setDailyDigest] = useState(true);
   const [message, setMessage] = useState("");
@@ -712,7 +712,7 @@ function SlackConnections({
           it does nothing until at least one org below is connected. */}
       <div className="mb-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
         <Checkbox
-          label="Daily summary at 8:00 AM"
+          label="Daily morning summary"
           checked={dailyDigest}
           onChange={(e) => onDailyDigestChange(e.target.checked)}
         />

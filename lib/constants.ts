@@ -276,15 +276,53 @@ export function parseGroupChatLeadDays(raw: unknown): number | null {
 // ── Daily digest ───────────────────────────────────────────────────────────
 
 // When the daily "here's what needs you" Slack DM goes out, as minutes from
-// midnight in the server's TZ. Fixed at 8:00 AM and deliberately NOT
+// midnight in the server's TZ. The target is 8:00 AM, deliberately NOT
 // user-configurable — the only per-person setting is User.dailyDigest (on/off).
-// The cron still compares against this rather than assuming, so the send stays
-// correct if the cron ever fires more than once a day (see lib/digest.ts).
 export const DIGEST_SEND_MINUTE = 8 * 60;
 
-// How far ahead the digest's admin "sets still awaiting confirmations" line
-// looks.
+// The cron can't hit DIGEST_SEND_MINUTE exactly: Vercel schedules crons in UTC,
+// so a fixed slot drifts an hour against the server's local time twice a year
+// (and free-tier crons aren't minute-accurate). So the sender accepts any run
+// inside this morning window rather than requiring >= 8:00 exactly — a hard
+// cutoff silently skipped every winter, when the UTC slot landed at 7 AM local.
+// Once-a-day is enforced by OrgMembership.digestSentAt, not by these bounds;
+// the window's only job is to keep a stray run (say, a manual curl at midnight)
+// from DMing everyone "here's your day" at the wrong hour.
+export const DIGEST_WINDOW_START_MINUTE = 6 * 60;
+export const DIGEST_WINDOW_END_MINUTE = 12 * 60;
+
+// How far ahead the digest looks — the default for a new org. The live value is
+// per org (Org.digestUpcomingDays, edited on the Org settings page) and drives
+// BOTH "confirm your spot on N sets…" and the admin "N sets … have people who
+// haven't confirmed", as well as the phrase the digest quotes for the window.
 export const DIGEST_UPCOMING_DAYS = 7;
+
+// Bounds for that setting. Below a day the window means nothing; a very long
+// one turns the digest into a standing to-do list nobody acts on. Enforced by
+// the API route on write and clamped again in lib/digest.ts on read.
+export const DIGEST_UPCOMING_DAYS_MIN = 1;
+export const DIGEST_UPCOMING_DAYS_MAX = 60;
+
+// The horizons offered in the Org settings dropdown. Any integer in range is
+// accepted by the API — these are just the ones worth one click.
+export const DIGEST_UPCOMING_DAYS_PRESETS = [7, 14, 30] as const;
+
+/**
+ * How the digest SAYS its look-ahead window, so the reader knows what the count
+ * covers. The common horizons get their natural phrasing; anything else is
+ * spelled out in days.
+ *
+ * Lives here rather than in lib/digest.ts because the Org settings page shows
+ * the same phrase back to the admin choosing the window — and digest.ts imports
+ * prisma, which must never reach a client bundle.
+ */
+export function windowPhrase(days: number): string {
+  if (days === 1) return "today";
+  if (days === 7) return "in the next week";
+  if (days === 14) return "in the next two weeks";
+  if (days === 30) return "in the next month";
+  return `in the next ${days} days`;
+}
 
 // ── Sets window (GET /api/sets) ────────────────────────────────────────────
 
