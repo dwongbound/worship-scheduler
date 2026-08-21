@@ -1,10 +1,11 @@
 "use client";
-// Members modal for one team: the current roster (with per-person remove), an
-// autocomplete input to add people, the team's Slack channel + weekly-summary
-// send button, and the team's delete button. Fully prop-driven so both the
+// Members modal for one team: the current roster (with a per-person active
+// toggle + remove), an autocomplete input to add people, the team's Slack
+// channel + weekly-summary send button, and the team's delete button. Fully prop-driven so both the
 // Team tab and the Org settings page can drive it with their own state.
 import { useCallback, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
+import Checkbox from "@/components/common/Checkbox";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
@@ -27,6 +28,7 @@ export default function TeamMembersModal({
   onDelete,
   onAdd,
   onRemove,
+  onSetActive,
   onSaved,
   onClose,
 }: {
@@ -40,6 +42,10 @@ export default function TeamMembersModal({
   onDelete: (teamId: string) => void;
   onAdd: (user: ApiAdminUser, team: ApiTeam) => void;
   onRemove: (user: ApiAdminUser, team: ApiTeam) => void;
+  // Flip whether this person is schedulable ON THIS TEAM. Inactive members keep
+  // their roles and history — they're just skipped by the auto-scheduler and
+  // flagged "(inactive)" wherever they can still be picked by hand.
+  onSetActive: (user: ApiAdminUser, team: ApiTeam, active: boolean) => void;
   onSaved: () => void; // parent refetch after the channel id changes
   onClose: () => void;
 }) {
@@ -205,25 +211,46 @@ export default function TeamMembersModal({
         <p className="text-sm text-gray-400">Nobody on this team yet.</p>
       ) : (
         <ul className="scrollbar-visible max-h-56 space-y-1 overflow-y-auto pr-1">
-          {members.map((u) => (
-            <li
-              key={u.id}
-              className="flex items-center justify-between gap-2 rounded-md bg-gray-50 px-3 py-1.5 text-sm dark:bg-gray-800/60"
-            >
-              <span>{u.name}</span>
-              <button
-                type="button"
-                onClick={() => onRemove(u, team)}
-                disabled={busy}
-                aria-label={`Remove ${u.name} from ${team.name}`}
-                className="rounded p-1 text-xs leading-none text-gray-400
-                  hover:bg-red-50 hover:text-red-600 disabled:opacity-50
-                  dark:hover:bg-red-900/30 dark:hover:text-red-400"
+          {members.map((u) => {
+            // Their membership row on THIS team drives the toggle (a row that
+            // predates the flag reads as active).
+            const active =
+              u.teams.find((t) => t.id === team.id)?.active !== false;
+            return (
+              <li
+                key={u.id}
+                className="flex items-center justify-between gap-2 rounded-md bg-gray-50 px-3 py-1.5 text-sm dark:bg-gray-800/60"
               >
-                ✕
-              </button>
-            </li>
-          ))}
+                <span
+                  className={active ? "" : "text-gray-400 dark:text-gray-500"}
+                >
+                  {u.name}
+                  {!active && " (inactive)"}
+                </span>
+                <div className="flex items-center gap-2">
+                  {/* Off = not auto-scheduled on this team; they stay in the
+                      manual pick lists, flagged "(inactive)". */}
+                  <Checkbox
+                    label="Active"
+                    checked={active}
+                    disabled={busy}
+                    onChange={(e) => onSetActive(u, team, e.target.checked)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onRemove(u, team)}
+                    disabled={busy}
+                    aria-label={`Remove ${u.name} from ${team.name}`}
+                    className="rounded p-1 text-xs leading-none text-gray-400
+                      hover:bg-red-50 hover:text-red-600 disabled:opacity-50
+                      dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
 

@@ -340,7 +340,11 @@ export default function CreatePage() {
 
   function formatUnavailability(entry: AdminUnavailabilityEntry): string {
     if (entry.type === "RECURRING") {
-      return `Every ${DAY_LABELS[entry.dayOfWeek!]} from ${minutesToTimeLabel(entry.startMinute!)} to ${minutesToTimeLabel(entry.endMinute!)}`;
+      const base = `Every ${DAY_LABELS[entry.dayOfWeek!]} from ${minutesToTimeLabel(entry.startMinute!)} to ${minutesToTimeLabel(entry.endMinute!)}`;
+      // A recurring block can stop repeating; say when if it does.
+      return entry.endDate
+        ? `${base} (until ${new Date(entry.endDate).toLocaleDateString()})`
+        : base;
     }
     if (entry.type === "SPECIFIC") {
       return `${new Date(entry.startDate!).toLocaleDateString()} ${minutesToTimeLabel(entry.startMinute!)} to ${minutesToTimeLabel(entry.endMinute!)}`;

@@ -124,6 +124,7 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
 | `SPOTIFY_CLIENT_ID` / `_SECRET` | optional⁵ | optional⁵ | set to enable playlists⁵ |
 | `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
+| `CRON_SECRET` | optional⁶ | `openssl rand -base64 24` (unique) | `openssl rand -base64 24` (unique, ≠ staging)⁶ |
 | `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
@@ -189,6 +190,14 @@ migration locally (`npx prisma migrate dev --name <desc>`), commit
 URL for `migrate deploy`; always set `TZ` on Vercel (its runtime defaults to
 UTC and recurring set times would silently shift); Vercel Hobby is
 non-commercial/single-developer (Pro at $20/mo removes the ambiguity).
+
+⁶ Guards the daily cron (`/api/cron/daily`), which has no session to
+check — Vercel authenticates itself by sending `Authorization: Bearer
+<CRON_SECRET>` on every job it fires from `vercel.json`. **The check is skipped
+entirely when the variable is unset**, so a missing value in the Vercel
+dashboard leaves the endpoint publicly callable (anyone could trigger Slack
+group-chat creation). Locally it's fine to leave unset so you can curl the route
+directly. Changing it takes effect on the next deploy.
 
 ## How it fits together
 

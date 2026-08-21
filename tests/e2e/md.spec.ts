@@ -90,36 +90,34 @@ test("the set actions (⋮) menu lists the actions and toggles Require MD", asyn
   ).toHaveCount(0);
 
   // The ⋮ menu lists every set action (toggles as buttons, export as a link).
+  // Its panel is portalled to <body> (components/common/Dropdown.tsx), so the
+  // items are looked up on the page, not inside the dialog.
   const openMenu = () =>
     modal.getByRole("button", { name: "More actions" }).click();
+  const menuItem = (name: string) =>
+    page.getByRole("button", { name, exact: true });
   await openMenu();
+  await expect(menuItem("Require MD")).toBeVisible();
   await expect(
-    modal.getByRole("button", { name: "Require MD", exact: true })
+    page.getByRole("button", { name: "Include choir in set" })
   ).toBeVisible();
-  await expect(
-    modal.getByRole("button", { name: "Include choir in set" })
-  ).toBeVisible();
-  await expect(
-    modal.getByRole("button", { name: "Private", exact: true })
-  ).toBeVisible();
-  await expect(modal.getByRole("link", { name: "Export (.ics)" })).toBeVisible();
+  await expect(menuItem("Private")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Export (.ics)" })).toBeVisible();
 
   // The hamburger toggles the menu back shut, then open again.
   await modal.getByRole("button", { name: "More actions" }).click();
-  await expect(
-    modal.getByRole("button", { name: "Require MD", exact: true })
-  ).toBeHidden();
+  await expect(menuItem("Require MD")).toHaveCount(0);
   await openMenu();
 
   // Toggle Require MD on → the "needs an MD" warning appears (empty set).
-  await modal.getByRole("button", { name: "Require MD", exact: true }).click();
+  await menuItem("Require MD").click();
   await expect(
     modal.getByText(/requires an MD but none is assigned/)
   ).toBeVisible();
 
   // Toggle it back off → the warning clears.
   await openMenu();
-  await modal.getByRole("button", { name: "Require MD", exact: true }).click();
+  await menuItem("Require MD").click();
   await expect(
     modal.getByText(/requires an MD but none is assigned/)
   ).toHaveCount(0);

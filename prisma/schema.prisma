@@ -123,6 +123,12 @@ model Org {
   spotifyUserId       String?
   spotifyDisplayName  String?
 
+  // How many days ahead this org's daily digest looks when it counts sets that
+  // still need attention — and the number the digest's own copy quotes. Per org
+  // because a church running two services a week wants a different horizon than
+  // one running monthly. See DIGEST_UPCOMING_DAYS for the default + bounds.
+  digestUpcomingDays Int @default(7)
+
   memberships          OrgMembership[]
   teams                Team[]
   sets                 Set[]
@@ -154,6 +160,12 @@ model OrgMembership {
   // org's sets — even sets they aren't assigned to (e.g. a ministry lead who
   // wants to be in every set's chat). Best-effort: needs a linked slackUserId.
   alwaysInGroupChats Boolean @default(false)
+
+  // This membership's open DM channel (D…) with the bot, cached after the first
+  // conversations.open. The id never changes for a given (bot, user) pair, so
+  // caching it saves one Slack API call on EVERY DM the app sends — the single
+  // biggest source of call volume. Null = not opened yet; re-resolved on demand.
+  slackDmChannelId String?
 
   // When this membership's daily digest DM last went out — the cron's
   // once-per-day guard. Per membership, not per user: each org DMs from its own
@@ -211,6 +223,13 @@ model TeamMember {
   userId String
 
   roles Instrument[] // roles this person can fill on this team (may be empty)
+
+  // Whether this person is currently schedulable ON THIS TEAM. Per team by
+  // design: someone can be active on one team and inactive on another in the
+  // same org. Inactive keeps the membership + roles (and all their history)
+  // but the auto-scheduler skips them, and the manual pick / swap lists mark
+  // them "(inactive)" — dimmed but still choosable, like "(unavailable)".
+  active Boolean @default(true)
 
   createdAt DateTime @default(now())
 

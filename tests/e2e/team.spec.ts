@@ -105,10 +105,13 @@ test("admin removes a person from a team via the chip's x", async ({ page }) => 
   ).toHaveCount(0);
 
   // Revert via the card's "+ Add to team" chip so the shared seed is untouched.
+  // The picker's panel is portalled to <body>, so its item is looked up on the
+  // page — by its full "Add <person> to <team>" name, since every card lists
+  // the same team names.
   await bobCard().getByText("+ Add to team").click();
   await Promise.all([
     savePatch(),
-    page.getByRole("button", { name: "Sunday Team", exact: true }).click(),
+    page.getByRole("button", { name: "Add Bob Baker to Sunday Team" }).click(),
   ]);
   await page.reload();
   await expect(

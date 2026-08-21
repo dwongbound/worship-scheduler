@@ -2,6 +2,7 @@
 // in dev; caching the client on globalThis prevents "too many connections".
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "./generated/prisma/client";
+import { normalizeDatabaseUrl } from "./dbUrl";
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
@@ -10,7 +11,7 @@ function createPrismaClient() {
   if (!url) throw new Error("DATABASE_URL is required to initialize Prisma.");
 
   return new PrismaClient({
-    adapter: new PrismaPg(url),
+    adapter: new PrismaPg(normalizeDatabaseUrl(url)),
   });
 }
 

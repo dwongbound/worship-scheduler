@@ -91,8 +91,8 @@ test("Team tab scopes members and teams to one org with no cross-org leakage", a
 
   // Default admin org = the oldest one paul administers (org 1): the whole
   // congregation is listed.
-  // exact:true — each member card has an sr-only "Team for <name>" select label
-  // that a substring match would also catch.
+  // exact:true — names also appear inside per-card controls' labels/titles,
+  // which a substring match would also catch.
   await expect(page.getByText("Bob Baker", { exact: true })).toBeVisible();
 
   // Switch the admin org to org 2: only its four members remain, only its

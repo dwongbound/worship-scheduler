@@ -1,7 +1,8 @@
 // PATCH /api/admin/users/:id — an org admin edits a member's admin flag
 // (for THIS org), musical-director flag, this-org team memberships, that
-// member's per-team roles, and the per-org "always in group chats" flag. Org
-// comes from the x-org-id header; the target must be a member of that org.
+// member's per-team roles + per-team active flag, and the per-org "always in
+// group chats" flag. Org comes from the x-org-id header; the target must be a
+// member of that org.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -91,6 +92,28 @@ export async function PATCH(
     }
   }
 
+  // Flip a member's per-team "active" flag: [{ teamId, active }]. Inactive
+  // people keep the membership (and their roles + history) but drop out of the
+  // auto-scheduler and read as "(inactive)" in the pick lists. Only updates an
+  // EXISTING membership — you can't activate someone onto a team they're not on.
+  if (Array.isArray(body.teamActive)) {
+    for (const entry of body.teamActive) {
+      if (!entry || typeof entry.teamId !== "string") continue;
+      if (typeof entry.active !== "boolean") continue;
+      const team = await prisma.team.findFirst({
+        where: { id: entry.teamId, orgId: admin.orgId },
+        select: { id: true },
+      });
+      if (!team) {
+        return NextResponse.json({ error: "Unknown team" }, { status: 400 });
+      }
+      await prisma.teamMember.updateMany({
+        where: { teamId: entry.teamId, userId: id },
+        data: { active: entry.active },
+      });
+    }
+  }
+
   // isAdmin, alwaysInGroupChats, and the Slack member id all live on the org
   // membership. slackUserId lets an admin set/clear it for a person who can't
   // (or won't) run the Slack Connect flow themselves; "" clears it.
@@ -148,7 +171,11 @@ export async function PATCH(
       },
       teamMembers: {
         where: { team: { orgId: admin.orgId } },
-        select: { roles: true, team: { select: { id: true, name: true } } },
+        select: {
+          roles: true,
+          active: true,
+          team: { select: { id: true, name: true } },
+        },
       },
       availabilityResponses: {
         where: { request: { orgId: admin.orgId } },
@@ -168,6 +195,7 @@ export async function PATCH(
       id: tm.team.id,
       name: tm.team.name,
       roles: tm.roles,
+      active: tm.active,
     })),
   });
 }

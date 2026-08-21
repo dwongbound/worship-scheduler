@@ -1,7 +1,7 @@
 // E2E: calendar tab — set list, team modal, stats windows, .ics export,
 // and the admin inline "+" create / set delete flows.
 import { Page, expect, test } from "@playwright/test";
-import { login, openSetByLabel } from "./helpers";
+import { login, openSetByLabel, requestAvailability } from "./helpers";
 
 // Open the "New set" form via the calendar's hover "+" button. Uses the last
 // in-month day cell (always present, avoids month-boundary date math) and
@@ -64,6 +64,32 @@ test("'Upcoming Sets' sidebar shows all sets by default, filterable to mine", as
   await panel.getByLabel("Show sets").selectOption("mine");
   await expect(panel.getByText("Sunday Morning").first()).toBeVisible();
   await expect(panel.getByText("Saturday Prayer")).toHaveCount(0);
+});
+
+test("the sidebar stays inside the viewport under a banner", async ({ page }) => {
+  // With a reminder banner in the header the page is that much shorter. The
+  // sidebar used to cap itself at a hardcoded `100vh - 6rem`, which ignored the
+  // banner and pushed the whole calendar into a page scroll.
+  await requestAvailability(page);
+  await login(page, "bob");
+  await page.goto("/calendar");
+  await page.getByRole("button", { name: "Upcoming Sets" }).click();
+
+  const panel = page
+    .locator("aside")
+    .filter({ hasText: "Upcoming sets", visible: true });
+  await expect(panel).toBeVisible();
+
+  const overflow = await page.evaluate(() => {
+    const aside = document.querySelector("aside");
+    const asideBottom = aside ? aside.getBoundingClientRect().bottom : 0;
+    return {
+      page: document.documentElement.scrollHeight - window.innerHeight,
+      aside: asideBottom - window.innerHeight,
+    };
+  });
+  expect(overflow.page).toBeLessThanOrEqual(1);
+  expect(overflow.aside).toBeLessThanOrEqual(1);
 });
 
 test("non-admins get no inline '+' create button", async ({ page }) => {
@@ -297,14 +323,16 @@ test("admin removes an empty role slot with its ✕ (no confirm)", async ({
   await createAdHocSet(page, "Slot Trim Night");
   const modal = await openSetByLabel(page, "Slot Trim Night");
 
-  // Strings has a single empty slot; its ✕ removes the whole row outright.
+  // Acoustic Guitar has a single empty slot; its ✕ removes the whole row
+  // outright. (Strings used to play this part, but the default team shape no
+  // longer gives it any slots — see SLOT_CAPACITIES.)
   await modal
-    .getByRole("button", { name: "Remove empty Strings slot" })
+    .getByRole("button", { name: "Remove empty Acoustic Guitar slot" })
     .click();
   await expect(
-    modal.getByRole("button", { name: "Remove empty Strings slot" })
+    modal.getByRole("button", { name: "Remove empty Acoustic Guitar slot" })
   ).toHaveCount(0);
-  await expect(modal.getByText("Strings")).toHaveCount(0);
+  await expect(modal.getByText("Acoustic Guitar")).toHaveCount(0);
 });
 
 test("removing a filled slot asks for confirmation first", async ({ page }) => {

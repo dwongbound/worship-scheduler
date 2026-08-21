@@ -73,6 +73,11 @@ const config: Config = {
           "0%": { strokeDashoffset: "24" },
           "100%": { strokeDashoffset: "0" },
         },
+        // A toast rising into place (components/common/Toast.tsx).
+        "toast-in": {
+          "0%": { opacity: "0", transform: "translateY(0.5rem)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
       },
       animation: {
         jump: "jump 1.2s ease-in-out infinite",
@@ -80,6 +85,7 @@ const config: Config = {
         "pulse-name": "pulse-name 1.8s ease-in-out infinite",
         radiate: "radiate 2s ease-out infinite",
         "check-draw": "check-draw 0.4s ease-out forwards",
+        "toast-in": "toast-in 0.2s ease-out",
       },
     },
   },
