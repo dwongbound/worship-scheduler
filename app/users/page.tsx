@@ -31,11 +31,8 @@ import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import {
-  ALL_INSTRUMENTS,
-  INSTRUMENT_LABELS,
-  type Instrument,
-} from "@/lib/constants";
+import { type Instrument } from "@/lib/constants";
+import { DEFAULT_TEAM_ROLES, MD_KEY, orderedRoles } from "@/lib/teamRoles";
 import { STAT_RANGES, rangeForDays } from "@/lib/stats";
 import type { UserStats } from "@/app/api/admin/users/stats/route";
 import type { ApiAdminUser, ApiTeam } from "@/lib/types";
@@ -126,6 +123,12 @@ function UsersPageInner() {
     user: ApiAdminUser;
     next: boolean;
   } | null>(null);
+  // The member queued for removal from this org, and whether that request is in
+  // flight. Both this and the admin change are reached ONLY through a member's
+  // settings (cog) menu, and both confirm first — they're the two actions on
+  // this page you can't undo with another click.
+  const [removeConfirm, setRemoveConfirm] = useState<ApiAdminUser | null>(null);
+  const [removing, setRemoving] = useState(false);
   // The team whose roster + per-team roles the page is focused on ("all" = show
   // everyone, with role editing off since roles are per-team).
   const [teamFilter, setTeamFilter] = useState("all");
@@ -335,6 +338,30 @@ function UsersPageInner() {
     [load, adminOrgId]
   );
 
+  // Remove a member from this org. The server unwinds them from everything
+  // upcoming (assignments, MD spots, teams) and keeps the past intact — see the
+  // DELETE handler. Reload rather than patch locally: their departure changes
+  // team rosters and set counts across the page.
+  const removeMember = useCallback(
+    async (id: string) => {
+      setRemoving(true);
+      try {
+        await fetch(`/api/admin/users/${id}`, {
+          method: "DELETE",
+          headers: orgHeaders(adminOrgId),
+        });
+        await load();
+        // Their old slots just re-opened, so the navbar's team reminders may
+        // have changed too.
+        window.dispatchEvent(new Event(TEAMS_CHANGED_EVENT));
+      } finally {
+        setRemoving(false);
+        setRemoveConfirm(null);
+      }
+    },
+    [load, adminOrgId]
+  );
+
   // Set a member's roles ON A SPECIFIC TEAM (roles are per-team). Optimistic
   // local update, then PATCH teamRoles; reload on failure.
   const setTeamRoles = useCallback(
@@ -450,7 +477,7 @@ function UsersPageInner() {
 
   // Remove this person from a team via the "x" on their membership chip. Same
   // optimistic patchUser path as addToTeam, just the inverse team set.
-  function removeFromTeam(user: ApiAdminUser, team: ApiTeam) {
+  function removeFromTeam(user: ApiAdminUser, team: { id: string }) {
     patchUser(user.id, {
       teams: user.teams.filter((t) => t.id !== team.id),
     });
@@ -757,50 +784,60 @@ function UsersPageInner() {
                       // so no manual-entry affordance is shown.
                       <></>
                     )}
-                    {/* Admin access, as a chip in the same family as the
-                        Slack + team ones: dotted "Make admin" when they aren't
-                        one, filled amber with an ✕ once they are. Both
-                        directions confirm first — it's a rights change, not a
-                        toggle you want to fat-finger. */}
-                    {user.isAdmin ? (
-                      <span className="inline-flex items-center rounded-full bg-amber-100 py-0.5 pl-2.5 pr-1 text-xs font-medium text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
+                    {/* Admin access is now a read-only chip: granting and
+                        revoking it live in this row's settings (cog) menu, so
+                        there's exactly one door to a rights change and it
+                        always confirms first. */}
+                    {user.isAdmin && (
+                      <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/50 dark:text-amber-300">
                         Admin
-                        {/* Your own rights stay put (lockout guard), so your
-                            chip carries no ✕ unless you're a super-admin. */}
-                        {(user.id !== myId || amSuperAdmin) && (
+                      </span>
+                    )}
+                    {user.isMD && <Badge tone="blue">MD</Badge>}
+
+                    {/* Member settings, pushed to the card's right edge (up
+                        against the divider before the set counts). Click-only —
+                        the two actions behind it are consequential enough that
+                        merely sweeping the pointer past shouldn't reveal them.
+                        Hidden on your own card: you can't strip your own rights
+                        or remove yourself, so an empty menu would be a lie. */}
+                    {(user.id !== myId || amSuperAdmin) && (
+                      <span className="ml-auto">
+                        <Dropdown
+                          align="right"
+                          widthClassName="w-52"
+                          trigger={
+                            <span
+                              aria-label={`Settings for ${user.name}`}
+                              title="Member settings"
+                              className="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-700 dark:hover:text-gray-200"
+                            >
+                              <CogIcon />
+                            </span>
+                          }
+                        >
                           <button
                             type="button"
                             onClick={() =>
-                              setAdminConfirm({ user, next: false })
+                              setAdminConfirm({ user, next: !user.isAdmin })
                             }
-                            aria-label={`Remove ${user.name}'s admin access`}
-                            title="Remove admin access"
-                            className="ml-1 flex h-3.5 w-3.5 items-center justify-center rounded-full text-amber-600 transition-colors hover:bg-amber-200 hover:text-amber-900 dark:text-amber-400 dark:hover:bg-amber-800 dark:hover:text-amber-100"
+                            className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
                           >
-                            <svg
-                              viewBox="0 0 14 14"
-                              className="h-2.5 w-2.5"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              aria-hidden="true"
-                            >
-                              <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
-                            </svg>
+                            {user.isAdmin ? "Remove admin access" : "Make admin"}
                           </button>
-                        )}
+                          {/* Removing yourself is blocked server-side too. */}
+                          {user.id !== myId && (
+                            <button
+                              type="button"
+                              onClick={() => setRemoveConfirm(user)}
+                              className="block w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-100 dark:text-red-400 dark:hover:bg-gray-700"
+                            >
+                              Remove from org
+                            </button>
+                          )}
+                        </Dropdown>
                       </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => setAdminConfirm({ user, next: true })}
-                        className="inline-flex items-center rounded-full border border-dashed border-gray-300 px-2.5 py-0.5 text-xs text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
-                      >
-                        Make admin
-                      </button>
                     )}
-                    {user.isMD && <Badge tone="blue">MD</Badge>}
                   </div>
 
                   {/* Team membership chips — they double as this card's team
@@ -945,33 +982,48 @@ function UsersPageInner() {
                         </div>
                         {team ? (
                           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                            {ALL_INSTRUMENTS.map((inst) => (
-                              <Checkbox
-                                key={inst}
-                                label={INSTRUMENT_LABELS[inst]}
-                                // Kept checked but greyed while they're
-                                // inactive — the roles come back untouched the
-                                // moment the switch goes on again.
-                                disabled={!active}
-                                checked={team.roles.includes(inst)}
-                                onChange={() =>
-                                  toggleTeamRole(user, team.id, inst)
-                                }
-                              />
-                            ))}
-                            {/* Musical director — the person can be a set's MD.
-                                It's stored per PERSON, not per team, but it
-                                belongs with the roles: it's the same "what can
-                                they do on a set" question, and it greys out
-                                with them. */}
-                            <Checkbox
-                              label="MD"
-                              disabled={!active}
-                              checked={user.isMD}
-                              onChange={(e) =>
-                                patchUser(user.id, { isMD: e.target.checked })
-                              }
-                            />
+                            {/* Exactly the roles THIS team offers — its own
+                                catalog, which an admin edits from the Teams
+                                card. Admin-only roles need no marking here —
+                                this IS the admin view, and every role in it is
+                                yours to grant; it's the person's own profile
+                                picker that hides them. */}
+                            {orderedRoles(
+                              teams.find((t) => t.id === team.id)?.roles ??
+                                DEFAULT_TEAM_ROLES
+                            ).map((role) =>
+                              // MD is a catalog role like the rest — it appears
+                              // here only if the team has it, and disappears
+                              // when an admin deletes it. Its checkbox is the
+                              // one that writes the PERSON-level flag rather
+                              // than a per-team role: being a musical director
+                              // is a fact about the player, while the catalog
+                              // row is what says this team uses MDs at all.
+                              role.key === MD_KEY ? (
+                                <Checkbox
+                                  key={role.key}
+                                  label={role.label}
+                                  disabled={!active}
+                                  checked={user.isMD}
+                                  onChange={(e) =>
+                                    patchUser(user.id, { isMD: e.target.checked })
+                                  }
+                                />
+                              ) : (
+                                <Checkbox
+                                  key={role.key}
+                                  label={role.label}
+                                  // Kept checked but greyed while they're
+                                  // inactive — the roles come back untouched
+                                  // the moment the switch goes on again.
+                                  disabled={!active}
+                                  checked={team.roles.includes(role.key)}
+                                  onChange={() =>
+                                    toggleTeamRole(user, team.id, role.key)
+                                  }
+                                />
+                              )
+                            )}
                           </div>
                         ) : (
                           <div className="space-y-2">
@@ -1082,6 +1134,47 @@ function UsersPageInner() {
         </Modal>
       )}
 
+      {/* Removing someone from the org — the one destructive action here. */}
+      {removeConfirm && (
+        <Modal
+          open
+          onClose={() => (removing ? undefined : setRemoveConfirm(null))}
+          title={`Remove ${removeConfirm.name}?`}
+          footer={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setRemoveConfirm(null)}
+                disabled={removing}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => removeMember(removeConfirm.id)}
+                disabled={removing}
+              >
+                {removing ? <LoadingDots size="sm" /> : "Remove from org"}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            <span className="font-medium">{removeConfirm.name}</span> will be
+            taken off this org&rsquo;s teams and dropped from every{" "}
+            <span className="font-medium">upcoming</span> set they&rsquo;re on,
+            re-opening those slots. Sets that already happened keep their
+            roster, so the history and serve counts stay accurate.
+          </p>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+            Their account itself isn&rsquo;t deleted — they may belong to other
+            orgs — and they can rejoin later with this org&rsquo;s key.
+          </p>
+        </Modal>
+      )}
+
       <TeamActivityModal
         open={activityOpen}
         onClose={() => setActivityOpen(false)}
@@ -1097,5 +1190,24 @@ export default function UsersPage() {
     <Suspense fallback={null}>
       <UsersPageInner />
     </Suspense>
+  );
+}
+
+// The member-settings glyph: a gear, drawn to match the navbar's line icons.
+function CogIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-4 w-4"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1.08-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1.08 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
   );
 }

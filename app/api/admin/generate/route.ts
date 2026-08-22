@@ -22,6 +22,7 @@ import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import { buildSchedule } from "@/lib/scheduler";
+import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { defaultMDId } from "@/lib/md";
 import type { Instrument, SlotCapacityMap } from "@/lib/constants";
 import { occurrencesInRange, parseLocalDate, upcomingOccurrences } from "@/lib/dates";
@@ -212,11 +213,15 @@ export async function POST(req: NextRequest) {
   // Use each set's ISO start time as its scheduler id so we can map the flat
   // list of proposals back onto the right set.
   const stagedList = [...staged.values()];
+  // Each staged set is filled against ITS team's role catalog — one plan can
+  // span teams whose rosters look nothing alike.
+  const catalogs = await getTeamCatalogs(stagedList.map((s) => s.teamId));
   const proposals = buildSchedule(
     stagedList.map((s) => ({
       id: s.startsAt.toISOString(),
       startsAt: s.startsAt,
       durationMinutes: s.durationMinutes,
+      roles: s.teamId ? catalogs.get(s.teamId) : null,
       capacities: s.capacities,
       requiresMD: s.requiresMD,
       teamId: s.teamId,

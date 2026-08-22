@@ -6,6 +6,11 @@ import type {
   SetHistoryEventType,
   SlotCapacityMap,
 } from "./constants";
+import type { TeamRoleDef } from "./teamRoles";
+
+// Re-exported so client components can type a catalog without reaching past
+// the Api* shapes they already import.
+export type { TeamRoleDef };
 
 // An organization (the tenant boundary). GET /api/orgs returns the caller's
 // memberships in this shape.
@@ -25,6 +30,11 @@ export interface ApiTeam {
   // The team's standing Slack channel for weekly summaries (per-set auto group
   // chats are configured on the set/template, not here).
   slackChannelId?: string | null;
+  // This team's role catalog, in order — what roles exist HERE, how many of
+  // each a set wants by default, and which are admin-only. Present wherever the
+  // client needs to render roles (GET /api/teams, and each set's team);
+  // absent = fall back to the built-in defaults.
+  roles?: TeamRoleDef[];
 }
 
 export interface ApiUserRef {
@@ -42,6 +52,10 @@ export interface ApiTeamRole {
   name: string;
   orgId?: string;
   roles: Instrument[];
+  // The team's own role catalog — what it offers, as opposed to `roles` above,
+  // which is what THIS person plays here. Present on GET /api/me (the profile's
+  // picker needs it); absent elsewhere, where the page already has the team.
+  catalog?: TeamRoleDef[];
   // Whether this person is schedulable on THIS team (per-team, so someone can
   // be active on one team and inactive on another). Inactive people are never
   // auto-scheduled and read as "(inactive)" in the pick + swap lists.
@@ -304,17 +318,9 @@ export interface ApiAdminUser {
     edited: boolean;
   }[];
   // When this person can't serve — used to flag them in the assignment
-  // dropdowns for a set at a conflicting time. Dates arrive as ISO strings.
-  unavailability: {
-    type: "RECURRING" | "SPECIFIC" | "DATE_RANGE";
-    dayOfWeek: number | null;
-    startMinute: number | null;
-    endMinute: number | null;
-    startDate: string | null;
-    endDate: string | null;
-    requestId: string | null;
-    note: string | null;
-  }[];
+  // dropdowns for a set at a conflicting time, and drawn as a read-only month
+  // in the Create tab's availability modal. Dates arrive as ISO strings.
+  unavailability: ApiUnavailability[];
 }
 
 // ── Staged schedule (Create tab "Generate") ──────────────────────────────

@@ -1,10 +1,11 @@
 // GET /api/export — the current user's upcoming sets as an .ics file,
 // ready to drag into any calendar app.
 import { NextResponse } from "next/server";
+import { roleLabel } from "@/lib/teamRoles";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { buildIcs, setEventTitle } from "@/lib/ics";
-import { INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
+import { type Instrument } from "@/lib/constants";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -33,7 +34,7 @@ export async function GET() {
     [...bySet.values()].map(({ set, roles }) => ({
       id: set.id,
       title: setEventTitle(set.label, roles),
-      description: `Role: ${roles.map((r) => INSTRUMENT_LABELS[r]).join(", ")}`,
+      description: `Role: ${roles.map((r) => roleLabel(r)).join(", ")}`,
       start: set.startsAt,
       durationMinutes: set.durationMinutes,
     }))

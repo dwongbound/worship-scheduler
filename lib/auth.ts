@@ -6,6 +6,7 @@ import { getServerSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
+import { claimPlaceholder, findUserByEmail } from "./accountClaim";
 import { prisma } from "./prisma";
 
 // Google sign-in is optional: it's only enabled when its OAuth credentials
@@ -27,15 +28,32 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.username || !credentials.password) return null;
 
-        const user = await prisma.user.findFirst({
-          where: {
-            OR: [
-              { username: credentials.username },
-              { email: credentials.username },
-            ],
-          },
-        });
+        // Exact match first, so an existing account always resolves to itself.
+        // Failing that, retry ignoring case: people type "Name.Kim@Gmail.com"
+        // at the login form for an account stored as "name.kim@gmail.com" —
+        // and every claimed placeholder has its lowercased email as username,
+        // which makes that mismatch the common case rather than a rare one.
+        // Google sign-in already matches case-insensitively (see signIn).
+        const identifier = credentials.username.trim();
+        const user =
+          (await prisma.user.findFirst({
+            where: { OR: [{ username: identifier }, { email: identifier }] },
+          })) ??
+          (await prisma.user.findFirst({
+            where: {
+              OR: [
+                { username: { equals: identifier, mode: "insensitive" } },
+                { email: { equals: identifier, mode: "insensitive" } },
+              ],
+            },
+          }));
         if (!user) return null;
+
+        // A placeholder (imported roster row) has no usable password and isn't
+        // a real account yet — it's claimed by signing UP with its email, not
+        // signed into. bcrypt would reject its empty hash anyway; this just
+        // makes the intent explicit.
+        if (user.isPlaceholder) return null;
 
         const passwordOk = await bcrypt.compare(
           credentials.password,
@@ -77,16 +95,29 @@ export const authOptions: NextAuthOptions = {
       const email = user.email;
       if (!email) return false;
 
-      const existing = await prisma.user.findUnique({ where: { email } });
+      // Case-insensitive so a placeholder imported as "name.kim@gmail.com" is
+      // still found when Google reports "Name.Kim@gmail.com".
+      const existing = await findUserByEmail(email);
       if (!existing) {
         await prisma.user.create({
           data: {
-            email,
+            email: email.toLowerCase(),
             name: user.name ?? email,
-            username: email,
+            username: email.toLowerCase(),
             passwordHash: "", // OAuth account — no usable password
             instruments: [],
           },
+        });
+        return true;
+      }
+      // This person was imported from the availability form before they had an
+      // account. Google has now proved they own the address, so the placeholder
+      // becomes theirs — same row, so the org membership and availability the
+      // import recorded are already on their account. Their Google name fills
+      // in only if the import left the name blank.
+      if (existing.isPlaceholder) {
+        await claimPlaceholder(existing.id, {
+          name: existing.name || user.name || undefined,
         });
       }
       return true;
@@ -97,9 +128,7 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         const isOAuth = account?.provider === "google";
         if (isOAuth && user.email) {
-          const dbUser = await prisma.user.findUnique({
-            where: { email: user.email },
-          });
+          const dbUser = await findUserByEmail(user.email);
           if (dbUser) {
             token.id = dbUser.id;
             token.name = dbUser.name;

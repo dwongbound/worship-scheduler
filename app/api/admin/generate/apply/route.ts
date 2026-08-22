@@ -13,11 +13,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import {
-  SLOT_CAPACITIES,
   validateSlotCapacities,
   parseGroupChatLeadDays,
   type Instrument,
 } from "@/lib/constants";
+import { getTeamCatalogs } from "@/lib/teamRoleStore";
+import { DEFAULT_TEAM_ROLES } from "@/lib/teamRoles";
 import type { StagedPlan, StagedSet } from "@/lib/types";
 
 // Light validation of one staged set from the request body. Returns a
@@ -43,12 +44,9 @@ function parseStagedSet(raw: unknown): StagedSet | null {
   const rawAssignments = Array.isArray(s.assignments) ? s.assignments : [];
   const assignments = rawAssignments
     .map((a) => a as Record<string, unknown>)
-    .filter(
-      (a) =>
-        typeof a.userId === "string" &&
-        typeof a.role === "string" &&
-        a.role in SLOT_CAPACITIES
-    )
+    // Shape-only check here; the role is validated against the set's team
+    // catalog once the team is known (see applyStaged below).
+    .filter((a) => typeof a.userId === "string" && typeof a.role === "string")
     .map((a) => ({ userId: a.userId as string, role: a.role as Instrument }));
 
   return {
@@ -105,13 +103,26 @@ export async function POST(req: NextRequest) {
     ).map((m) => m.userId)
   );
 
+  // Each team's role catalog, so a plan can only seat people in roles their
+  // team actually has (the plan arrives from the client — see the team-id and
+  // membership guards above, same spirit).
+  const catalogs = await getTeamCatalogs(sets.map((s) => s.teamId));
+
   let setsCreated = 0;
   let assignmentsCreated = 0;
 
   for (const s of sets) {
     const startsAt = new Date(s.startsAt);
+    const teamId = teamIdOf(s);
+    const offered = new Set(
+      (teamId ? catalogs.get(teamId) ?? DEFAULT_TEAM_ROLES : DEFAULT_TEAM_ROLES).map(
+        (r) => r.key
+      )
+    );
 
-    const roster = s.assignments.filter((a) => memberIds.has(a.userId));
+    const roster = s.assignments.filter(
+      (a) => memberIds.has(a.userId) && offered.has(a.role)
+    );
     // Honor the reviewed MD choice, but only if that person is actually in the
     // roster being applied (else leave it unset — the detail modal re-validates
     // full eligibility on display).

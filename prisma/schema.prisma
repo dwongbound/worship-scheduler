@@ -20,22 +20,11 @@ datasource db {
   provider = "postgresql"
 }
 
-// Instruments double as both a user's skills and a team slot's role.
-enum Instrument {
-  WORSHIP_LEADER
-  VOCALS // support vocals
-  ACOUSTIC_GUITAR
-  ELECTRIC_GUITAR
-  KEYS // piano / keys
-  STRINGS
-  DRUMS
-  BASS
-  // Choir is a special role: unlike the band roles above it has no fixed slot
-  // count in the team shape (SLOT_CAPACITIES / ROLE_ORDER omit it). It's an
-  // unbounded, admin-managed list on a set — the set-detail modal's "Auto
-  // schedule" seats everyone on the team who's free, and admins add more by hand.
-  CHOIR
-}
+// Roles double as both a person's skills and a set slot's position.
+// NOTE: roles used to be the `Instrument` enum. They're per-team DATA now — see
+// the TeamRole model — so every role column is a plain String holding a
+// TeamRole.key. The built-in keys ("KEYS", "DRUMS", …) are unchanged, so rows
+// written before the switch still resolve; lib/teamRoles.ts is the vocabulary.
 
 // Lifecycle of an assignment:
 //   PENDING        — auto-scheduled ("scheduled pending"), awaiting the
@@ -195,6 +184,10 @@ model Team {
   // (Per-set auto group chats are configured on the Set/SetTemplate, not here.)
   slackChannelId String?
 
+  // This team's role catalog — what roles exist here, how many of each a set
+  // wants by default, and which are admin-only. Seeded with the built-in
+  // defaults (lib/teamRoles.ts DEFAULT_TEAM_ROLES) and edited per team.
+  roles     TeamRole[]
   members   TeamMember[]
   // DEPRECATED: old role-less membership — see User.teams. Dropped after backfill.
   users     User[]           @relation("TeamMembers")
@@ -211,6 +204,40 @@ model Team {
   @@map("teams")
 }
 
+// One role in a team's catalog. Teams define their own — the built-ins below
+// are only what a new team STARTS with, and an admin may rename, re-count,
+// remove, or add to them.
+model TeamRole {
+  id     String @id @default(cuid())
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+
+  // Stable machine key, unique within the team, and what Assignment.role /
+  // TeamMember.roles store. Built-ins keep the old enum names ("KEYS"); a
+  // custom role derives its key from its name once ("Sound Booth" →
+  // "SOUND_BOOTH") and then keeps it forever, so renaming can't orphan a slot.
+  key   String
+  // What people actually read. Renameable; the key underneath doesn't move.
+  label String
+
+  // How many of this role a set on this team wants when it carries no per-set
+  // override. 0 is valid — the role exists but seats nobody by default.
+  defaultCount Int @default(1)
+
+  // Only an admin may put someone in this role: it's hidden from the person's
+  // own profile role picker and rejected if they send it anyway. The same rule
+  // that has always governed MD. Default false — nothing is admin-only.
+  adminOnly Boolean @default(false)
+
+  // Display AND fill order (scarce-first), low to high.
+  order Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([teamId, key])
+  @@map("team_roles")
+}
+
 // A person's membership on one team, carrying the roles they can fill ON THAT
 // team. Replaces the old implicit User↔Team m-n so roles can differ per team
 // (someone may play keys on Sunday but only sing on the Youth team). An empty
@@ -222,7 +249,10 @@ model TeamMember {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
 
-  roles Instrument[] // roles this person can fill on this team (may be empty)
+  // TeamRole.key values this person can fill ON THIS TEAM (may be empty). Not a
+  // FK: a key is only meaningful against its own team's catalog, and the array
+  // is always read through that catalog anyway.
+  roles String[]
 
   // Whether this person is currently schedulable ON THIS TEAM. Per team by
   // design: someone can be active on one team and inactive on another in the
@@ -270,13 +300,23 @@ model User {
   name         String
   email        String? @unique
 
+  // True for an account created by an admin IMPORT (the availability form
+  // roster) rather than by the person themselves — a stand-in that holds their
+  // org membership and availability until they first sign in. Email is the
+  // identity that links the two: signing in with Google, or signing up, with
+  // this row's email CLAIMS it (see lib/auth.ts signIn and /api/signup) and
+  // clears this flag, so everything imported against them is already theirs.
+  // A placeholder is never a normal account: it has no usable password and
+  // can't be signed into until it is claimed.
+  isPlaceholder Boolean @default(false)
+
   // Musical director: can be the designated MD on a set that requires one.
   // Note: isMD is global to the person, not per-org.
   isMD        Boolean      @default(false)
   // DEPRECATED: roles are now per-team (see TeamMember.roles). Kept only so the
   // backfill (prisma/backfillTeamRoles.ts) can copy each person's old global
   // roles onto their teams; a follow-up migration drops this column.
-  instruments Instrument[]
+  instruments String[]
   // Orgs this person belongs to (admin is per-org — see OrgMembership).
   memberships OrgMembership[]
   // Teams this person serves on, with the roles they play ON EACH team — only
@@ -360,7 +400,7 @@ model Set {
   md       User?   @relation("SetMD", fields: [mdUserId], references: [id], onDelete: SetNull)
   mdUserId String?
 
-  // Per-set team shape: an Instrument→count map (e.g. { ELECTRIC_GUITAR: 2,
+  // Per-set team shape: a role-key→count map (e.g. { ELECTRIC_GUITAR: 2,
   // ACOUSTIC_GUITAR: 0 }). Null = use the global SLOT_CAPACITIES default.
   // Copied from the SetTemplate at generate time; editable per ad-hoc set.
   slotCapacities Json?
@@ -421,7 +461,8 @@ model Assignment {
   setId  String
   user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
-  role   Instrument
+  // The TeamRole.key this slot is for, on the set's team.
+  role   String
   status AssignmentStatus @default(PENDING)
 
   // Optional note the owner leaves when requesting cover (status
@@ -506,9 +547,11 @@ model SetHistoryEvent {
   set    Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
   setId  String
   type   SetHistoryEventType
-  // The slot this event is about. Null only for SETLIST_CHANGED, which concerns
-  // the set's songs rather than any one role.
-  role   Instrument?
+  // The slot this event is about (a TeamRole.key). Null only for
+  // SETLIST_CHANGED, which concerns the set's songs rather than any one role.
+  // Kept as a bare string even if the role is later deleted — the log is a
+  // record of what happened, not a live reference.
+  role   String?
 
   // Human summary for events that type + people don't fully describe (currently
   // SETLIST_CHANGED, e.g. 'Added "Who Else" (E)').

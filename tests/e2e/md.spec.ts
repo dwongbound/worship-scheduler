@@ -44,8 +44,9 @@ test("auto-scheduling a required-MD set from its detail modal seats an MD", asyn
   await addButton.click();
 
   const form = page.getByRole("dialog");
-  await expect(form.getByRole("heading", { name: "New set" })).toBeVisible();
-  await form.getByLabel("Label").fill("MD Night");
+  // The set's name IS the modal heading — an editable field, not an <h2>.
+  await expect(form.getByLabel("Set name")).toBeVisible();
+  await form.getByLabel("Set name").fill("MD Night");
   await form.getByLabel("Add MD").check();
   await form.getByLabel("Start time").fill("15:37");
   await form.getByRole("button", { name: "Create set" }).click();
@@ -65,7 +66,7 @@ test("auto-scheduling a required-MD set from its detail modal seats an MD", asyn
   await expect(modal.getByText("* (MD)").first()).toBeVisible();
 });
 
-test("the set actions (⋮) menu lists the actions and toggles Require MD", async ({
+test("the set actions (⋮) menu lists the actions and Change Roles sets Require MD", async ({
   page,
 }) => {
   await login(page, "admin");
@@ -97,27 +98,32 @@ test("the set actions (⋮) menu lists the actions and toggles Require MD", asyn
   const menuItem = (name: string) =>
     page.getByRole("button", { name, exact: true });
   await openMenu();
-  await expect(menuItem("Require MD")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Include choir in set" })
-  ).toBeVisible();
+  await expect(menuItem("Change Roles")).toBeVisible();
   await expect(menuItem("Private")).toBeVisible();
   await expect(page.getByRole("link", { name: "Export (.ics)" })).toBeVisible();
 
   // The hamburger toggles the menu back shut, then open again.
   await modal.getByRole("button", { name: "More actions" }).click();
-  await expect(menuItem("Require MD")).toHaveCount(0);
+  await expect(menuItem("Change Roles")).toHaveCount(0);
   await openMenu();
 
-  // Toggle Require MD on → the "needs an MD" warning appears (empty set).
-  await menuItem("Require MD").click();
+  // "Change Roles" opens a stacked modal holding the team shape plus the MD
+  // and choir flags. Turning Require MD on → the "needs an MD" warning appears
+  // (this set is empty).
+  await menuItem("Change Roles").click();
+  const roles = () => page.getByRole("dialog").last();
+  await expect(roles().getByLabel("Include choir in set")).toBeVisible();
+  await roles().getByLabel("Require MD").check();
+  await roles().getByRole("button", { name: "Save" }).click();
   await expect(
     modal.getByText(/requires an MD but none is assigned/)
   ).toBeVisible();
 
-  // Toggle it back off → the warning clears.
+  // Turn it back off → the warning clears.
   await openMenu();
-  await menuItem("Require MD").click();
+  await menuItem("Change Roles").click();
+  await roles().getByLabel("Require MD").uncheck();
+  await roles().getByRole("button", { name: "Save" }).click();
   await expect(
     modal.getByText(/requires an MD but none is assigned/)
   ).toHaveCount(0);

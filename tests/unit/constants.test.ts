@@ -1,5 +1,6 @@
-// Unit tests for the slot-capacity helpers (lib/constants.ts): the per-set
-// team-shape resolver and the API-input validator.
+// Unit tests for the slot-capacity helpers (lib/constants.ts): the API-input
+// validator, plus the built-in role list that seeds every new team's catalog.
+// The per-team shape resolver lives in lib/teamRoles.ts (teamRoles.test.ts).
 import { describe, expect, it } from "vitest";
 import {
   ALL_INSTRUMENTS,
@@ -8,28 +9,8 @@ import {
   MAX_SLOTS_PER_ROLE,
   ROLE_ORDER,
   SLOT_CAPACITIES,
-  resolveCapacities,
   validateSlotCapacities,
 } from "@/lib/constants";
-
-describe("resolveCapacities", () => {
-  it("returns the global defaults when given null/undefined", () => {
-    expect(resolveCapacities(null)).toEqual(SLOT_CAPACITIES);
-    expect(resolveCapacities(undefined)).toEqual(SLOT_CAPACITIES);
-  });
-
-  it("overlays a partial override on top of the defaults", () => {
-    const resolved = resolveCapacities({ ELECTRIC_GUITAR: 3, ACOUSTIC_GUITAR: 0 });
-    expect(resolved.ELECTRIC_GUITAR).toBe(3); // overridden
-    expect(resolved.ACOUSTIC_GUITAR).toBe(0); // "we don't want any"
-    expect(resolved.DRUMS).toBe(SLOT_CAPACITIES.DRUMS); // untouched → default
-  });
-
-  it("does not mutate the shared SLOT_CAPACITIES default", () => {
-    resolveCapacities({ DRUMS: 9 });
-    expect(SLOT_CAPACITIES.DRUMS).toBe(1);
-  });
-});
 
 describe("validateSlotCapacities", () => {
   it("accepts a well-formed role→count map", () => {
@@ -37,8 +18,16 @@ describe("validateSlotCapacities", () => {
     expect(validateSlotCapacities(map)).toEqual(map);
   });
 
-  it("rejects unknown instrument keys", () => {
-    expect(validateSlotCapacities({ TRUMPET: 1 })).toBeNull();
+  it("rejects keys outside the team's catalog when one is given", () => {
+    const allowed = ["DRUMS", "BASS"];
+    expect(validateSlotCapacities({ TRUMPET: 1 }, allowed)).toBeNull();
+    expect(validateSlotCapacities({ DRUMS: 1 }, allowed)).toEqual({ DRUMS: 1 });
+  });
+
+  it("accepts a custom role key when the catalog allows it", () => {
+    // Roles are per-team now, so there's no fixed vocabulary to check against.
+    const map = { SOUND_BOOTH: 2 };
+    expect(validateSlotCapacities(map, ["SOUND_BOOTH"])).toEqual(map);
   });
 
   it("rejects negative, non-integer, or over-cap values", () => {
@@ -54,19 +43,20 @@ describe("validateSlotCapacities", () => {
   });
 
   it("rejects CHOIR — it has no slot count and never belongs in a team shape", () => {
-    expect(validateSlotCapacities({ CHOIR: 2 })).toBeNull();
-    expect(validateSlotCapacities({ VOCALS: 2, CHOIR: 1 })).toBeNull();
+    // Enforced by the catalog the caller passes: choir is never a band role.
+    const bandOnly = ["VOCALS", "DRUMS"];
+    expect(validateSlotCapacities({ CHOIR: 2 }, bandOnly)).toBeNull();
+    expect(validateSlotCapacities({ VOCALS: 2, CHOIR: 1 }, bandOnly)).toBeNull();
   });
 });
 
 describe("choir role", () => {
-  it("is a selectable instrument with a label but not a band/capacity role", () => {
+  it("is a selectable role with a label but not a band/capacity role", () => {
     expect(ALL_INSTRUMENTS).toContain(CHOIR);
     expect(INSTRUMENT_LABELS[CHOIR]).toBe("Choir");
     // Choir has no slot count, so it stays out of the capacity-only lists.
     expect(ROLE_ORDER).not.toContain(CHOIR);
     expect(Object.keys(SLOT_CAPACITIES)).not.toContain(CHOIR);
-    expect(resolveCapacities(null)).not.toHaveProperty(CHOIR);
   });
 
   it("lists every band role plus choir, choir last", () => {

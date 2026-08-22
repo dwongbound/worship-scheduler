@@ -40,6 +40,12 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [signupPassword, setSignupPassword] = useState("");
   const [signupPassword2, setSignupPassword2] = useState("");
+  // Revealed only when the server says this email already has a PLACEHOLDER
+  // account waiting (one an admin imported from the availability form). Claiming
+  // it needs the org key, since the placeholder is already inside the org and
+  // would otherwise skip the /join gate. Ordinary signups never see this field.
+  const [needsOrgKey, setNeedsOrgKey] = useState(false);
+  const [orgKey, setOrgKey] = useState("");
 
   useEffect(() => {
     getProviders().then((providers) => {
@@ -50,6 +56,8 @@ function LoginForm() {
   function switchMode(next: "signin" | "signup") {
     setMode(next);
     setError("");
+    setNeedsOrgKey(false);
+    setOrgKey("");
   }
 
   async function onSignIn(e: FormEvent) {
@@ -82,10 +90,20 @@ function LoginForm() {
     const res = await fetch("/api/signup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ firstName, lastName, email, password: signupPassword }),
+      body: JSON.stringify({
+        firstName,
+        lastName,
+        email,
+        password: signupPassword,
+        // Only meaningful when claiming a placeholder; ignored otherwise.
+        orgKey: orgKey.trim() || undefined,
+      }),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
+      // "There's already an account for you — prove you're in the org." Reveal
+      // the key field and let them submit again with it filled in.
+      if (data.needsOrgKey) setNeedsOrgKey(true);
       setError(data.error ?? "Could not create account.");
       setSubmitting(false);
       return;
@@ -200,9 +218,25 @@ function LoginForm() {
               autoComplete="new-password"
               required
             />
+            {needsOrgKey && (
+              <Input
+                label="Organization key"
+                value={orgKey}
+                onChange={(e) => setOrgKey(e.target.value)}
+                autoComplete="off"
+                autoFocus
+                required
+              />
+            )}
             {error && <p className="text-sm text-red-600">{error}</p>}
             <Button type="submit" disabled={submitting} className="w-full">
-              {submitting ? "Creating account…" : "Sign up"}
+              {submitting
+                ? needsOrgKey
+                  ? "Claiming account…"
+                  : "Creating account…"
+                : needsOrgKey
+                  ? "Claim my account"
+                  : "Sign up"}
             </Button>
           </form>
         )}

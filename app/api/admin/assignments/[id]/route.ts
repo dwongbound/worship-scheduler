@@ -4,11 +4,11 @@
 // resets status to PENDING, even if the slot was previously CONFIRMED — the
 // new person hasn't agreed yet.
 import { NextRequest, NextResponse } from "next/server";
+import { roleLabel } from "@/lib/teamRoles";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "@/lib/setMd";
 import { notifySetChange } from "@/lib/slack";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
 
 // Look up the assignment + gate on the set's org. Returns the row and the
 // acting admin, or an error response.
@@ -75,7 +75,7 @@ export async function PATCH(
     await promoteMDIfEmpty(existing.setId, userId);
     await notifySetChange(
       existing.setId,
-      `\u{1F501} ${INSTRUMENT_LABELS[existing.role]}: ${membership.user.name} ` +
+      `\u{1F501} ${roleLabel(existing.role)}: ${membership.user.name} ` +
         `is now covering for ${existing.user.name}.`
     );
     return NextResponse.json(updated);
@@ -110,7 +110,7 @@ export async function DELETE(
   await clearStaleMD(existing.setId);
   await notifySetChange(
     existing.setId,
-    `\u{2796} ${existing.user.name} is no longer on ${INSTRUMENT_LABELS[existing.role]}.`
+    `\u{2796} ${existing.user.name} is no longer on ${roleLabel(existing.role)}.`
   );
   return NextResponse.json({ ok: true });
 }

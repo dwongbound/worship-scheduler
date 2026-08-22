@@ -35,6 +35,13 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   m-n with User. Sets/SetTemplates carry a nullable `teamId` (`onDelete:
   SetNull` — a null team = "open to the whole org"). The scheduler and all
   assignment dropdowns only offer the set's team members.
+- **TeamRole** — the team's ROLE CATALOG (`@@unique([teamId, key])`). Roles are
+  per-team data, not a fixed enum: `key` (stable, what Assignment.role stores),
+  `label` (renameable), `defaultCount`, `adminOnly`, `order`. Seeded with
+  `DEFAULT_TEAM_ROLES` on team create; edited in TeamMembersModal → Roles
+  (`PUT /api/teams/[id]/roles`), which REFUSES to delete a role anyone holds on
+  an upcoming set. `adminOnly` = only an admin may grant it (hidden from the
+  profile picker), the same rule MD has.
 - **TeamMember** — the user↔team join, carrying that person's per-team `roles`
   and `active` flag. Inactive = not auto-scheduled on that team (both scheduler
   callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
@@ -54,9 +61,9 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - **Set** — `startsAt`+`durationMinutes`, optional `label`/`notes`, required
   `orgId` (tenant anchor even when teamId is null), `teamId`,
   `slotCapacities: Json?` (per-set team-shape override; null = global default).
-- **Assignment** — one User in one `role: Instrument` on one Set (a user may
-  fill several roles on a set). `status: PENDING|CONFIRMED|SWAP_REQUESTED`.
-  `@@unique([setId, userId, role])`.
+- **Assignment** — one User in one `role` (a TeamRole.key **string**, not an
+  enum) on one Set; a user may fill several roles on a set.
+  `status: PENDING|CONFIRMED|SWAP_REQUESTED`. `@@unique([setId, userId, role])`.
 - **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute),
   `SPECIFIC` (startDate + time window, tied to a request), or `DATE_RANGE`
   (startDate/endDate, legacy). Times = minutes from midnight, day 0=Sun.
@@ -68,15 +75,22 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `completedAt` set = done. A user owes a response per org until each active
   request has a completed one. Drives the red dot + banner (dot = any org).
 
-Enums: `Instrument` (WORSHIP_LEADER, VOCALS, ACOUSTIC/ELECTRIC_GUITAR, KEYS,
-STRINGS, DRUMS, BASS) · `AssignmentStatus` · `UnavailabilityType`.
+Enums: `AssignmentStatus` · `UnavailabilityType`. (`Instrument` is **gone** —
+roles are TeamRole rows now; every role column is a `String` holding a key.)
 
-## Team shape — `lib/constants.ts`
+## Team shape — `lib/teamRoles.ts` (+ `lib/constants.ts`)
 
-`SLOT_CAPACITIES` = default counts (WL 1, VOCALS 4, ELECTRIC 2, KEYS 2, rest 1).
-Never index it directly once a Set may override — use `resolveCapacities(stored)`.
-Also here: `validateSlotCapacities` (API guard, MAX_SLOTS_PER_ROLE=20), `ROLE_ORDER`
-(scarce-first fill order), `INSTRUMENT_LABELS`, `STATUS_LABELS`, `DAY_LABELS`.
+Roles are **per team**. `lib/teamRoles.ts` is the vocabulary: `TeamRoleDef`,
+`DEFAULT_TEAM_ROLES` (the built-ins a new team starts with), `orderedRoles`,
+`bandRoles` (drops CHOIR), **`resolveTeamCapacities(catalog, stored)`** — THE
+way to read a set's shape — `roleLabel(key, catalog?)` (team label → built-in →
+humanized key, so a custom/deleted role never renders blank), `roleKeyFromLabel`,
+`validateCatalog`. `lib/teamRoleStore.ts` is its prisma side
+(`getTeamCatalog`/`getTeamCatalogs`/`seedTeamRoles`/`TEAM_ROLE_FIELDS`).
+`lib/constants.ts` keeps the BUILT-IN defaults only (`SLOT_CAPACITIES`,
+`ROLE_ORDER`, `INSTRUMENT_LABELS`, `ALL_INSTRUMENTS`) plus `MD_ROLES` /
+`ACOUSTIC_HOST_ROLES` / `CHOIR` — special behaviours pinned to built-in keys
+that custom roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`.
 
 ## Pages (`app/*/page.tsx`)
 

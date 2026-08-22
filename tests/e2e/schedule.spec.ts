@@ -1,18 +1,14 @@
 // E2E: Availabilities tab — recurring blocks, click-to-block on the calendar,
 // and the submit ("I'm done") workflow. Each test opens with an availability
-// request so the Admin Requests form is present.
+// request so a request card is present.
 //
-// Page shape (see app/schedule/page.tsx): "Admin Requests" responds to an
-// admin's window, "Block out times" adds a standalone weekly-recurring OR
-// specific block behind a toggle, and "Busy Blocks" lists everything.
+// Page shape (see app/schedule/page.tsx): "Requests" is a card per availability
+// request — picking one lenses the calendar onto its window and puts Submit on
+// the card — and "My availability" holds the calendar, the block list, and the
+// "Block out times" form that creates them.
 // The phone-width pass over this page lives in mobile.spec.ts.
 import { Page, expect, test } from "@playwright/test";
-import {
-  login,
-  pickSingleDay,
-  requestAvailability,
-  sectionByHeading,
-} from "./helpers";
+import { login, requestAvailability, sectionByHeading } from "./helpers";
 
 // The calendar is desktop-only (hidden below lg), so make sure the viewport is
 // wide enough for the click-to-block test.
@@ -45,13 +41,14 @@ test("adds and deletes a recurring weekly block", async ({ page }) => {
   // Requests form has its own time picker, so page-level locators are ambiguous.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  // Days and times are multi-select chips: Tuesday is on by default, so just
+  // Days are a multi-select strip and times a checkbox list: Tuesday is on
+  // by default, so just
   // swap the default "All day" window for Morning.
   await expect(
     blockOutTimes.getByRole("button", { name: "Tuesday" })
   ).toHaveAttribute("aria-pressed", "true");
-  await blockOutTimes.getByRole("button", { name: "All day" }).click();
-  await blockOutTimes.getByRole("button", { name: "Morning (6am–12pm)" }).click();
+  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
+  await blockOutTimes.getByRole("checkbox", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
     .click();
@@ -77,10 +74,10 @@ test("adds several weekly blocks in one submit", async ({ page }) => {
   for (const day of ["Monday", "Tuesday", "Wednesday"]) {
     await blockOutTimes.getByRole("button", { name: day }).click();
   }
-  await blockOutTimes.getByRole("button", { name: "All day" }).click(); // off
-  await blockOutTimes.getByRole("button", { name: "Morning (6am–12pm)" }).click();
+  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click(); // off
+  await blockOutTimes.getByRole("checkbox", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
-    .getByRole("button", { name: "Afternoon (12pm–5pm)" })
+    .getByRole("checkbox", { name: "Afternoon (12pm–5pm)" })
     .click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
@@ -106,7 +103,7 @@ test("stops a weekly block repeating after a number of weeks", async ({ page }) 
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
   await blockOutTimes.getByRole("button", { name: "Tuesday" }).click(); // off
   await blockOutTimes.getByRole("button", { name: "Thursday" }).click();
-  await blockOutTimes.getByRole("button", { name: "For N weeks" }).click();
+  await blockOutTimes.getByLabel("Repeats").selectOption("weeks");
   await blockOutTimes.getByLabel("Number of weeks").fill("2");
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
@@ -128,25 +125,42 @@ test("stops a weekly block repeating after a number of weeks", async ({ page }) 
   await clearBusyBlocks(page);
 });
 
-test("custom time window replaces the presets", async ({ page }) => {
+test("All day and Custom each lock out the other windows", async ({ page }) => {
   await requestAvailability(page);
   await login(page, "carol");
   await page.goto("/schedule");
 
-  // Custom defines the one window by hand, so the presets switch off and go
-  // un-clickable until it's turned back off.
   const blockOutTimes = sectionByHeading(page, "Block out times");
+  const allDay = blockOutTimes.getByRole("checkbox", { name: "All day" });
+  const custom = blockOutTimes.getByRole("checkbox", { name: "Custom" });
+  const morning = blockOutTimes.getByRole("checkbox", {
+    name: "Morning (6am–12pm)",
+  });
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  await blockOutTimes.getByRole("button", { name: "Custom…" }).click();
+
+  // All day is ticked by default, and it IS every hour — so nothing else is
+  // pickable until it's unticked.
+  await expect(allDay).toBeChecked();
+  await expect(morning).toBeDisabled();
+  await expect(custom).toBeDisabled();
+
+  // Untick it and the part-of-day windows open up, stacking with each other.
+  await allDay.click();
+  await expect(morning).toBeEnabled();
+  await morning.click();
   await expect(
-    blockOutTimes.getByRole("button", { name: "All day" })
-  ).toBeDisabled();
+    blockOutTimes.getByRole("checkbox", { name: "Afternoon (12pm–5pm)" })
+  ).toBeEnabled();
+
+  // Custom is exclusive the same way, and brings its own From/To.
+  await morning.click(); // off
+  await custom.click();
+  await expect(allDay).toBeDisabled();
+  await expect(morning).toBeDisabled();
   await expect(blockOutTimes.getByLabel("From")).toBeVisible();
 
-  await blockOutTimes.getByRole("button", { name: "Custom…" }).click(); // off
-  await expect(
-    blockOutTimes.getByRole("button", { name: "All day" })
-  ).toBeEnabled();
+  await custom.click(); // off
+  await expect(allDay).toBeEnabled();
 });
 
 test("blocks a day by clicking it on the calendar", async ({ page }) => {
@@ -164,7 +178,7 @@ test("blocks a day by clicking it on the calendar", async ({ page }) => {
 
   await page.locator(`[data-date="${todayYmd}"]`).click();
 
-  // The block shows up in the Busy Blocks list as an all-day entry. (Scope to
+  // The block shows up in the My availability list as an all-day entry. (Scope to
   // the list item — "All day" is also a time-preset <option> in the forms.)
   const blockEntry = page.getByRole("listitem").filter({ hasText: "All day" });
   await expect(blockEntry.first()).toBeVisible();
@@ -181,20 +195,21 @@ test("submits availability and re-opens it for changes", async ({ page }) => {
   await login(page, "carol");
   await page.goto("/schedule");
 
-  // "Submit Response" opens a confirmation modal summarizing the blocked
-  // days before actually sending.
-  await page.getByRole("button", { name: "Submit Response" }).click();
+  // The request card's "Submit response" opens a confirmation modal
+  // summarizing the blocked days before actually sending.
+  await page.getByRole("button", { name: "Submit response" }).click();
   const modal = page.getByRole("dialog").filter({ hasText: "Submit your response?" });
   await expect(modal).toBeVisible();
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByText(/Submitted on|Updated on/)).toBeVisible();
+  // The card flips to a "Sent" badge with the date it went.
+  await expect(page.getByText("Sent", { exact: true })).toBeVisible();
 
-  // "Make changes" re-opens the form (unsubmits).
+  // "Make changes" re-opens it (unsubmits).
   await page.getByRole("button", { name: "Make changes" }).click();
   await expect(
-    page.getByRole("button", { name: "Submit Response" })
+    page.getByRole("button", { name: "Submit response" })
   ).toBeVisible();
 });
 
@@ -205,18 +220,19 @@ test("confirmation modal lists a blocked day, and the date picker marks it", asy
   await login(page, "carol");
   await page.goto("/schedule");
 
-  // Scope to the Admin Requests section — its "Dates to block"/"Block these
-  // dates" field+button share labels with the Block out times section below.
-  const adminRequests = sectionByHeading(page, "Admin Requests");
+  // A request is answered by clicking the lensed calendar — block today
+  // (all-day), which falls inside the active request's window.
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayYmd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+    now.getDate()
+  )}`;
+  await page.locator(`[data-date="${todayYmd}"]`).click();
 
-  // Block today (an all-day block, the form's default preset) within the
-  // active request's window.
-  await adminRequests.getByLabel("Dates to block", { exact: true }).click();
-  await pickSingleDay(page);
-  await adminRequests.getByRole("button", { name: "Block these dates" }).click();
-
-  // Re-opening the date picker now shows a red "full day" dot on today.
-  await adminRequests.getByLabel("Dates to block", { exact: true }).click();
+  // The "Block out times" picker marks it with a red "full day" dot.
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Specific times" }).click();
+  await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
   const todayCell = page
     .getByRole("dialog")
     .getByRole("button", { name: String(new Date().getDate()), exact: true });
@@ -225,7 +241,7 @@ test("confirmation modal lists a blocked day, and the date picker marks it", asy
 
   // The submit-confirmation modal breaks the blocked day out instead of
   // claiming full availability.
-  await page.getByRole("button", { name: "Submit Response" }).click();
+  await page.getByRole("button", { name: "Submit response" }).click();
   const modal = page.getByRole("dialog").filter({ hasText: "Submit your response?" });
   await expect(modal).toBeVisible();
   await expect(modal.getByText(/available the whole time/)).toHaveCount(0);

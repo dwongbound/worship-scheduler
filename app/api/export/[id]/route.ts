@@ -2,12 +2,13 @@
 // title carries the current user's role(s) on that set (see setEventTitle),
 // matching the whole-calendar export at /api/export.
 import { NextRequest, NextResponse } from "next/server";
+import { roleLabel } from "@/lib/teamRoles";
 import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { canViewSet } from "@/lib/sets";
 import { buildIcs, setEventTitle } from "@/lib/ics";
-import { INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
+import { type Instrument } from "@/lib/constants";
 
 export async function GET(
   _req: NextRequest,
@@ -47,7 +48,7 @@ export async function GET(
       id: set.id,
       title: setEventTitle(set.label, roles),
       description: roles.length
-        ? `Role: ${roles.map((r) => INSTRUMENT_LABELS[r]).join(", ")}`
+        ? `Role: ${roles.map((r) => roleLabel(r)).join(", ")}`
         : undefined,
       start: set.startsAt,
       durationMinutes: set.durationMinutes,

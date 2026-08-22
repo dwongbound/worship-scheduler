@@ -60,3 +60,6 @@ next-env.d.ts
 # Local debug artifacts (Playwright traces etc.)
 scratchpad/
 test-results/
+
+# form-response exports — real people's emails, same rule as env/
+prisma/data/

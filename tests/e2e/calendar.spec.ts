@@ -13,8 +13,9 @@ async function openNewSetForm(page: Page, label: string) {
   await addButton.click();
 
   const modal = page.getByRole("dialog");
-  await expect(modal.getByRole("heading", { name: "New set" })).toBeVisible();
-  await modal.getByLabel("Label").fill(label);
+  // The set's name IS the modal heading — an editable field, not an <h2>.
+  await expect(modal.getByLabel("Set name")).toBeVisible();
+  await modal.getByLabel("Set name").fill(label);
   return modal;
 }
 

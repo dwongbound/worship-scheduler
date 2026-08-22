@@ -2,12 +2,14 @@
 // in a given role. Created as PENDING (they still confirm). The org is
 // derived from the set; the person must be a member of it.
 import { NextRequest, NextResponse } from "next/server";
+import { roleLabel } from "@/lib/teamRoles";
 import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { promoteMDIfEmpty } from "@/lib/setMd";
 import { notifySetChange } from "@/lib/slack";
-import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
+import { type Instrument } from "@/lib/constants";
+import { getTeamCatalog } from "@/lib/teamRoleStore";
 
 export async function POST(req: NextRequest) {
   const sessionUser = await getSessionUser();
@@ -19,17 +21,23 @@ export async function POST(req: NextRequest) {
   if (
     typeof setId !== "string" ||
     typeof userId !== "string" ||
-    !(ALL_INSTRUMENTS as string[]).includes(role)
+    typeof role !== "string"
   ) {
     return NextResponse.json({ error: "Invalid assignment" }, { status: 400 });
   }
 
   const set = await prisma.set.findUnique({
     where: { id: setId },
-    select: { orgId: true },
+    select: { orgId: true, teamId: true },
   });
   if (!set) {
     return NextResponse.json({ error: "Set not found" }, { status: 404 });
+  }
+  // Roles are per-team, so "is this a real role" is a question about the set's
+  // own team catalog — there's no global list to check against any more.
+  const catalog = await getTeamCatalog(set.teamId);
+  if (!catalog.some((r) => r.key === role)) {
+    return NextResponse.json({ error: "Invalid assignment" }, { status: 400 });
   }
   const admin = await requireOrgAdminFor(set.orgId);
   if (!admin) {
@@ -58,7 +66,7 @@ export async function POST(req: NextRequest) {
     await promoteMDIfEmpty(setId, userId);
     await notifySetChange(
       setId,
-      `\u{2795} ${membership.user.name} was added on ${INSTRUMENT_LABELS[role as Instrument]}.`
+      `\u{2795} ${membership.user.name} was added on ${roleLabel(role as Instrument)}.`
     );
     return NextResponse.json(created, { status: 201 });
   } catch {

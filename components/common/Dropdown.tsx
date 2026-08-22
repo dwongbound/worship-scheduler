@@ -1,6 +1,7 @@
 "use client";
 // Click-to-open dropdown menu (used for the navbar user menu and the set-detail
-// overflow menu). Closes on outside click.
+// overflow menu). Closes on outside click. In `hover` mode the menu also opens
+// on hover, but a click latches it open until you click again — see `latched`.
 //
 // The menu renders in a PORTAL on document.body, positioned with fixed
 // coordinates measured from the trigger. It has to: inside a modal the menu's
@@ -63,13 +64,19 @@ export default function Dropdown({
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
-  // Hover mode only: set when the pointer entering the trigger is what opened
-  // the menu, so the click that follows in the SAME interaction doesn't toggle
-  // it straight back shut. Both a mouse click and a touch tap fire mouseenter
-  // before click, so without this the menu opened and closed in one gesture and
-  // could never be opened by clicking at all.
-  const openedByHover = useRef(false);
+  // A click on the trigger LATCHES the menu open: hover alone should close as
+  // soon as the pointer leaves, but a menu you deliberately clicked has to stay
+  // put while you read it. A latched menu ignores mouseleave and closes on the
+  // next trigger click, an outside click, or picking an item. (A ref, not
+  // state — the deferred hover-close callback has to read the current value.)
+  const latched = useRef(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Close for good: drops the latch so the next click opens cleanly.
+  const close = useCallback(() => {
+    latched.current = false;
+    setOpen(false);
+  }, []);
 
   // Measure the trigger and pin the panel under it. Called on open and again
   // whenever anything moves the trigger under it.
@@ -109,12 +116,12 @@ export default function Dropdown({
       // The panel is outside `ref`'s subtree now, so it needs its own check —
       // otherwise every click inside the menu would read as an outside click.
       if (!ref.current?.contains(target) && !menuRef.current?.contains(target)) {
-        setOpen(false);
+        close();
       }
     };
     document.addEventListener("mousedown", onClick);
     return () => document.removeEventListener("mousedown", onClick);
-  }, [open]);
+  }, [open, close]);
 
   // Never leave a close pending after unmount.
   useEffect(
@@ -130,29 +137,27 @@ export default function Dropdown({
     ? {
         onMouseEnter: () => {
           if (closeTimer.current) clearTimeout(closeTimer.current);
-          openedByHover.current = true;
           setOpen(true);
         },
         onMouseLeave: () => {
+          if (latched.current) return; // clicked open — hover can't close it
           if (closeTimer.current) clearTimeout(closeTimer.current);
-          closeTimer.current = setTimeout(() => {
-            openedByHover.current = false;
-            setOpen(false);
-          }, HOVER_CLOSE_MS);
+          closeTimer.current = setTimeout(() => setOpen(false), HOVER_CLOSE_MS);
         },
       }
     : {};
 
-  // Clicking the trigger toggles the menu — except for the click that lands
-  // right after hover already opened it, which is a no-op. Once that first
-  // click is spent, further clicks (with the pointer still on the trigger)
-  // toggle normally, so the trigger closes the menu again.
+  // Clicking the trigger toggles the LATCH, not just the open state: a click
+  // pins the menu open (even when hover had already opened it, which is the
+  // usual order — mouseenter fires before click), and the next click closes it.
   const onTriggerClick = () => {
-    if (openedByHover.current) {
-      openedByHover.current = false;
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    if (latched.current) {
+      close();
       return;
     }
-    setOpen((o) => !o);
+    latched.current = true;
+    setOpen(true);
   };
 
   const menu =
@@ -168,7 +173,7 @@ export default function Dropdown({
       >
         <div
           // Clicks inside the menu (e.g. "Log out") close it too.
-          onClick={() => setOpen(false)}
+          onClick={close}
           className={`${widthClassName} rounded-lg border border-gray-200 bg-white py-1
             shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
         >

@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { ALL_INSTRUMENTS } from "@/lib/constants";
+import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
 import { resolveProfileEmail } from "@/lib/profile";
 
 export async function GET() {
@@ -48,7 +48,16 @@ export async function GET() {
         select: {
           roles: true,
           active: true,
-          team: { select: { id: true, name: true, orgId: true } },
+          team: {
+            select: {
+              id: true,
+              name: true,
+              orgId: true,
+              // The team's catalog — which roles it offers at all, and which of
+              // them are admin-only (hidden from the profile's own picker).
+              roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
+            },
+          },
         },
       },
     },
@@ -79,7 +88,9 @@ export async function GET() {
       id: tm.team.id,
       name: tm.team.name,
       orgId: tm.team.orgId,
+      // `roles` = what I play here; `catalog` = what this team offers.
       roles: tm.roles,
+      catalog: tm.team.roles,
       active: tm.active,
     })),
   });

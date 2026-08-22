@@ -98,7 +98,7 @@ export default function RootLayout({
                 padding math here, and nothing that can go stale.
                 Extra bottom padding on phones so content can scroll clear of
                 the floating bottom nav bar (see Navbar.tsx). */}
-            <main className="mx-auto max-w-5xl px-4 pb-24 pt-6 sm:pb-6">
+            <main className="mx-auto max-w-7xl px-4 pb-24 pt-6 sm:px-6 sm:pb-6 lg:px-8">
               <SwipePager>{children}</SwipePager>
             </main>
           </SwipeProvider>
