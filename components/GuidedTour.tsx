@@ -38,8 +38,8 @@ const COMMON_STEPS: Step[] = [
     href: "/calendar",
   },
   {
-    title: "Set Manager",
-    body: "Under Sets you can request a swap when you can't make a set, and pick up sets other people have opened for cover.",
+    title: "My Sets",
+    body: "My Sets is every set you're on, split by what it's waiting on: covers and swaps in flight, sets pending your confirmation, and confirmed ones you can export to your calendar.",
     target: "/swaps",
     href: "/swaps",
   },

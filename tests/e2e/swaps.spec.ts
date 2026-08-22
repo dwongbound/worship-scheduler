@@ -7,7 +7,7 @@ import { login } from "./helpers";
 
 test("bob requests a swap on his Sunday set", async ({ page }) => {
   await login(page, "bob");
-  await page.getByRole("link", { name: "Set Manager" }).click();
+  await page.getByRole("link", { name: "My Sets" }).first().click();
 
   // Find bob's Sunday Morning drums card and request a swap.
   const card = page
@@ -28,10 +28,10 @@ test("bob requests a swap on his Sunday set", async ({ page }) => {
 test("kate sees the red dot and the open swap request", async ({ page }) => {
   await login(page, "kate");
 
-  // Red dot on the Set Manager tab (kate plays drums, so bob's request matches).
+  // Red dot on the My Sets tab (kate plays drums, so bob's request matches).
   await expect(page.getByTestId("swap-dot")).toBeVisible();
 
-  await page.getByRole("link", { name: "Set Manager" }).click();
+  await page.getByRole("link", { name: "My Sets" }).first().click();
   const request = page
     .locator("li")
     .filter({ hasText: "Sunday Morning — Drums" })

@@ -4,7 +4,7 @@
 //
 // Strategy: greedy fill with load balancing and spacing.
 //   1. Walk sets chronologically.
-//   2. For each role slot (scarce roles first, per ROLE_ORDER), pick the
+//   2. For each role slot (in the team's own catalog order, scarce first), pick the
 //      candidate who (a) plays that instrument, (b) is available, (c) isn't
 //      already on this set, then prefer (d) people who did NOT serve within
 //      the past week (soft — see SPACING below), and among those (e) whoever
@@ -28,13 +28,18 @@ import {
   ACOUSTIC_HOST_ROLES,
   CHOIR,
   MD_ROLES,
-  ROLE_ORDER,
-  resolveCapacities,
   rolesMayOverlap,
   type BandRole,
   type Instrument,
   type SlotCapacityMap,
 } from "./constants";
+import {
+  DEFAULT_TEAM_ROLES,
+  bandRoles,
+  resolveTeamCapacities,
+  teamSupportsMD,
+  type TeamRoleDef,
+} from "./teamRoles";
 
 export interface SchedulerUser {
   id: string;
@@ -61,7 +66,11 @@ export interface SchedulerSet {
   // The team this set is for. When present, only users whose teamIds include
   // it are considered; null/omitted = open to everyone.
   teamId?: string | null;
-  // The set's own team shape. Omitted → the global SLOT_CAPACITIES default.
+  // The catalog of the set's team — which roles exist here, in what order they
+  // fill (scarce-first), and how many of each the team wants by default.
+  // Omitted → the built-in defaults, which is what a team-less set uses.
+  roles?: TeamRoleDef[] | null;
+  // The set's own shape, overriding its team's default counts role by role.
   capacities?: SlotCapacityMap | null;
   // When true, reserve one slot for an available MD before the normal fill.
   requiresMD?: boolean;
@@ -229,12 +238,18 @@ export function buildSchedule(
       // Their presence here counts for spacing on the surrounding sets too.
       recordBooking(p.userId, setTime);
     }
+    // This set's role catalog and its resulting shape. Both come from the
+    // team now, so two teams can fill genuinely different rosters.
+    const catalog = set.roles?.length ? set.roles : DEFAULT_TEAM_ROLES;
+    const fillOrder = bandRoles(catalog);
     // Remaining slots per role — starts at the set's shape, decremented as we
     // fill (the MD reservation below eats into it before the normal pass).
-    const remaining = resolveCapacities(set.capacities);
+    const remaining = resolveTeamCapacities(catalog, set.capacities);
     // Pre-assigned slots are already taken (an overfilled role just goes
     // negative, which the fill loop treats as full).
-    for (const p of preAssigned) remaining[p.role]--;
+    // A pre-assigned slot in a role the team has since dropped isn't in the
+    // shape at all; `?? 0` keeps it from writing a stray NaN key.
+    for (const p of preAssigned) remaining[p.role] = (remaining[p.role] ?? 0) - 1;
 
     // Whether `userId` may additionally take `role`. Enforces one role per
     // person, minus the sanctioned overlaps: the new role must be allowed to
@@ -300,8 +315,10 @@ export function buildSchedule(
     const hasPreMD = preAssigned.some(
       (p) => p.isMD && MD_ROLES.includes(p.role)
     );
-    if (set.requiresMD && !hasPreMD) {
-      for (const role of ROLE_ORDER) {
+    // A team that has deleted MD from its catalog has no MD logic at all, so
+    // requiresMD on one of its sets is a leftover flag we simply ignore.
+    if (set.requiresMD && teamSupportsMD(catalog) && !hasPreMD) {
+      for (const { key: role } of fillOrder) {
         if (!MD_ROLES.includes(role)) continue;
         if (remaining[role] <= 0) continue;
         const md = bestFor(role, true);
@@ -319,7 +336,7 @@ export function buildSchedule(
     // ACOUSTIC_GUITAR is skipped here and filled in its own pass afterward,
     // because its candidate must ALREADY be seated as the worship leader or a
     // vocalist (which VOCALS, filled last in ROLE_ORDER, only becomes after).
-    for (const role of ROLE_ORDER) {
+    for (const { key: role } of fillOrder) {
       if (role === "ACOUSTIC_GUITAR") continue;
       while (remaining[role] > 0) {
         const pick = bestFor(role);
@@ -337,7 +354,9 @@ export function buildSchedule(
       const held = rolesOnSet.get(userId);
       return held ? ACOUSTIC_HOST_ROLES.some((r) => held.has(r)) : false;
     };
-    while (remaining.ACOUSTIC_GUITAR > 0) {
+    // Only if this team kept the built-in acoustic role — the double-up rule
+    // is built-in behaviour and a custom role never inherits it.
+    while ((remaining.ACOUSTIC_GUITAR ?? 0) > 0) {
       const pick = bestFor("ACOUSTIC_GUITAR", false, (u) => holdsHostRole(u.id));
       if (!pick) break; // no seated WL/vocalist plays acoustic — leave it empty
       assign(pick.id, "ACOUSTIC_GUITAR");

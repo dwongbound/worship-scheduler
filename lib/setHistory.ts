@@ -1,8 +1,8 @@
 // Structured description of a SetHistoryEvent. The old version returned a plain
 // sentence; now it returns a descriptor so components/SetHistoryEntry.tsx can
 // render every person as a chip (struck through when removed/replaced).
-import { INSTRUMENT_LABELS } from "./constants";
 import type { ApiSetHistoryEvent } from "./types";
+import { roleLabel } from "./teamRoles";
 
 // A line-2 token: a plain string is muted connective text ("added", "for
 // Drums"…); an object is a person chip, optionally struck through.
@@ -18,7 +18,7 @@ export function describeSetHistoryEvent(
   event: ApiSetHistoryEvent
 ): SetHistoryDescriptor {
   // Every type except SETLIST_CHANGED has a role; that one returns early below.
-  const role = event.role ? INSTRUMENT_LABELS[event.role] : "";
+  const role = event.role ? roleLabel(event.role) : "";
   const target = event.targetUser?.name ?? "Someone";
   const previous = event.previousUser?.name ?? "someone";
   const actor = event.actor?.name ?? "An admin";

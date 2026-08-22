@@ -7,10 +7,10 @@
 // Org comes from the x-org-id header (requireOrgAdmin); everything is scoped to
 // sets in that org.
 import { NextRequest, NextResponse } from "next/server";
+import { roleLabel } from "@/lib/teamRoles";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { notifySetChange } from "@/lib/slack";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
 
 const setSelect = {
   select: {
@@ -154,7 +154,7 @@ async function handleCover(
     });
     await notifySetChange(
       a.setId,
-      `\u{1F501} ${INSTRUMENT_LABELS[a.role]}: ${a.user.name} is now covering for ` +
+      `\u{1F501} ${roleLabel(a.role)}: ${a.user.name} is now covering for ` +
         `${previous?.name ?? "someone"}.`
     );
   } else {
@@ -228,12 +228,12 @@ async function handleSwap(
     ]);
     await notifySetChange(
       from.setId,
-      `\u{1F501} ${INSTRUMENT_LABELS[from.role]}: ${fromUser?.user.name ?? "Someone"} ` +
+      `\u{1F501} ${roleLabel(from.role)}: ${fromUser?.user.name ?? "Someone"} ` +
         `is now on this set (approved swap).`
     );
     await notifySetChange(
       to.setId,
-      `\u{1F501} ${INSTRUMENT_LABELS[to.role]}: ${toUser?.user.name ?? "Someone"} ` +
+      `\u{1F501} ${roleLabel(to.role)}: ${toUser?.user.name ?? "Someone"} ` +
         `is now on this set (approved swap).`
     );
   } else {

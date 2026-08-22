@@ -16,11 +16,8 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
 import { fetchJsonArray } from "@/lib/api";
-import {
-  ALL_INSTRUMENTS,
-  INSTRUMENT_LABELS,
-  type Instrument,
-} from "@/lib/constants";
+import { type Instrument } from "@/lib/constants";
+import { DEFAULT_TEAM_ROLES, orderedRoles } from "@/lib/teamRoles";
 import type { ApiTeam, ApiTeamRole } from "@/lib/types";
 
 type Membership = {
@@ -491,17 +488,38 @@ export default function ProfilePage() {
                     you.
                   </p>
                 )}
+                {/* This team's own roles — every team defines its own list.
+                    Admin-only roles are left out entirely: an admin grants
+                    those from the Team page, the way MD has always worked. A
+                    role you already hold still shows (greyed) so you can see
+                    it, even though only an admin can take it away. */}
                 <div className="grid grid-cols-2 gap-2">
-                  {ALL_INSTRUMENTS.map((inst) => (
-                    <Checkbox
-                      key={inst}
-                      label={INSTRUMENT_LABELS[inst]}
-                      checked={selectedTeam.roles.includes(inst)}
-                      onChange={() =>
-                        toggleRole(selectedTeam.id, inst, selectedTeam.roles)
-                      }
-                    />
-                  ))}
+                  {orderedRoles(selectedTeam.catalog ?? DEFAULT_TEAM_ROLES)
+                    .filter(
+                      (role) =>
+                        !role.adminOnly || selectedTeam.roles.includes(role.key)
+                    )
+                    .map((role) => (
+                      <Checkbox
+                        key={role.key}
+                        label={role.label}
+                        // Granted by an admin — yours to see, not to change.
+                        // The reason lives in the tooltip rather than a suffix
+                        // on the name: only a role you already hold can even
+                        // appear here, so it's one greyed row, not a pattern
+                        // worth labelling.
+                        disabled={role.adminOnly}
+                        title={
+                          role.adminOnly
+                            ? "An admin manages this role for you."
+                            : undefined
+                        }
+                        checked={selectedTeam.roles.includes(role.key)}
+                        onChange={() =>
+                          toggleRole(selectedTeam.id, role.key, selectedTeam.roles)
+                        }
+                      />
+                    ))}
                 </div>
                 <button
                   type="button"

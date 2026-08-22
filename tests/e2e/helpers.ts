@@ -14,7 +14,7 @@ function ymd(d: Date): string {
  *
  * Prefer this over `.filter({ hasText })` for page sections: several headings
  * are also mentioned in neighbouring prose (the Availabilities page name-drops
- * "Block out times" inside the Admin Requests card), and hasText matches any
+ * "Block out times" inside a request card), and hasText matches any
  * descendant text — so it silently resolves to two sections and the call fails
  * on strict mode. Matching on the heading element pins it to the real one.
  */

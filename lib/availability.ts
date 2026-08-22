@@ -55,6 +55,26 @@ export function dayBlockLevel(
 }
 
 /**
+ * Does a WEEKLY repeat cover this day? Worth marking on its own: a repeat
+ * can't be cleared for a single date (you have to delete the rule), so a day
+ * blocked by one behaves differently from a day blocked by hand. Drives the
+ * hatch on the week strip, the same distinction the calendar's ↻ makes.
+ */
+export function dayIsRepeating(
+  entries: ApiUnavailability[],
+  ymd: string
+): boolean {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return entries.some((e) => {
+    if (e.type !== "RECURRING" || date.getDay() !== e.dayOfWeek) return false;
+    if (!e.endDate) return true; // repeats forever
+    const stop = new Date(e.endDate);
+    return date <= new Date(stop.getFullYear(), stop.getMonth(), stop.getDate());
+  });
+}
+
+/**
  * Every blocked day inside [startIso, endIso] (a request's window), with a
  * short "Wed, Jul 8" label and its full/partial level — what the
  * submit-confirmation modal lists. Days iterate in the local zone so the
@@ -133,12 +153,19 @@ function rangesFromDays(days: Set<string>): [string, string][] {
 }
 
 // An all-day SPECIFIC block covers whole days (00:00 → 24:00) — the only kind
-// click/drag on the calendar creates or clears.
+// a left click/drag on the calendar creates.
 function isAllDaySpecific(e: ApiUnavailability): boolean {
   if (e.type !== "SPECIFIC" || !e.startDate) return false;
   const s = e.startMinute ?? 0;
   const en = e.endMinute ?? FULL_DAY_MIN;
   return s <= 0 && en >= FULL_DAY_MIN;
+}
+
+// Any DATED block, whatever its time window. Clearing days ("I'm free all of
+// these" — the right-click gesture) sweeps every one of these, unlike blocking,
+// which only ever deals in all-day blocks.
+function isDated(e: ApiUnavailability): boolean {
+  return (e.type === "SPECIFIC" || e.type === "DATE_RANGE") && !!e.startDate;
 }
 
 // Optimistic (not-yet-saved) entries carry a throwaway id with this prefix so
@@ -150,13 +177,29 @@ export function isOptimisticId(id: string): boolean {
 }
 
 let optimisticCounter = 0;
-// Build a synthetic all-day SPECIFIC entry for [startYmd, endYmd]. The `id` is a
-// throwaway (unique for React keys); the reload replaces it with the real row.
+// Build a synthetic entry for [startYmd, endYmd]. All-day SPECIFIC by default;
+// pass `like` to inherit an existing block's type, time window and note, which
+// is what keeps a split morning block a morning block. The `id` is a throwaway
+// (unique for React keys); the reload replaces it with the real row.
 function synthBlock(
   startYmd: string,
   endYmd: string,
-  requestId: string | null
+  requestId: string | null,
+  like?: ApiUnavailability
 ): ApiUnavailability {
+  if (like) {
+    return {
+      id: `${OPTIMISTIC_ID_PREFIX}${optimisticCounter++}`,
+      type: like.type,
+      dayOfWeek: null,
+      startMinute: like.startMinute,
+      endMinute: like.endMinute,
+      startDate: parseYmd(startYmd).toISOString(),
+      endDate: startYmd === endYmd ? null : parseYmd(endYmd).toISOString(),
+      requestId,
+      note: like.note,
+    };
+  }
   return {
     id: `${OPTIMISTIC_ID_PREFIX}${optimisticCounter++}`,
     type: "SPECIFIC",
@@ -171,10 +214,14 @@ function synthBlock(
 }
 
 /**
- * Apply a whole-day block (or unblock) of [startYmd, endYmd] to `entries`,
- * returning a NEW array — the same merge/split the block-days endpoint performs,
- * so the optimistic calendar matches what the server will save (no flash on
- * reload). Returns the original array unchanged when there's nothing to do.
+ * Apply a whole-day block (`blocked`) or a full clear (`!blocked`) of
+ * [startYmd, endYmd] to `entries`, returning a NEW array — the same merge/split
+ * the block-days endpoint performs, so the optimistic calendar matches what the
+ * server will save (no flash on reload). Returns the original array unchanged
+ * when there's nothing to do.
+ *
+ * Blocking only ever creates all-day blocks; clearing removes every dated block
+ * on those days, whatever its time window.
  */
 export function applyDayEdit(
   entries: ApiUnavailability[],
@@ -208,10 +255,14 @@ export function applyDayEdit(
     ];
   }
 
-  // Unblock: split every overlapping all-day block around the target days,
-  // preserving each block's requestId so a request-tied block stays tied.
+  // Clear: sweep EVERY dated block off the target days — partial-day ones
+  // included — splitting each around the days it still covers and preserving
+  // its window, requestId and note. Weekly recurring rules are left alone
+  // (they have no per-date exception; see the block-days route).
+  const dated = entries.filter(isDated);
+  const untouchable = entries.filter((e) => !isDated(e));
   const survivors: ApiUnavailability[] = [];
-  for (const b of allDay) {
+  for (const b of dated) {
     const days = daysOfEntry(b);
     const kept = new Set(days.filter((d) => !targetDays.has(d)));
     if (kept.size === days.length) {
@@ -219,10 +270,10 @@ export function applyDayEdit(
       continue;
     }
     for (const [s, e] of rangesFromDays(kept)) {
-      survivors.push(synthBlock(s, e, b.requestId));
+      survivors.push(synthBlock(s, e, b.requestId, b));
     }
   }
-  return [...others, ...survivors];
+  return [...untouchable, ...survivors];
 }
 
 // One weekly recurring block: a weekday plus a time-of-day window, and

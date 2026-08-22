@@ -3,10 +3,11 @@
 // member's per-team roles + per-team active flag, and the per-org "always in
 // group chats" flag. Org comes from the x-org-id header; the target must be a
 // member of that org.
+// DELETE /api/admin/users/:id — an org admin removes a member from THIS org.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { ALL_INSTRUMENTS } from "@/lib/constants";
+import { getTeamCatalog } from "@/lib/teamRoleStore";
 import { isOrgSlackConnected } from "@/lib/slack";
 
 export async function PATCH(
@@ -81,8 +82,12 @@ export async function PATCH(
       if (!team) {
         return NextResponse.json({ error: "Unknown team" }, { status: 400 });
       }
+      // Valid roles are whatever THIS team's catalog offers — including its
+      // admin-only ones, since an admin is exactly who may grant those.
+      const catalog = await getTeamCatalog(entry.teamId);
+      const offered = new Set(catalog.map((r) => r.key));
       const roles = Array.isArray(entry.roles)
-        ? entry.roles.filter((r: string) => (ALL_INSTRUMENTS as string[]).includes(r))
+        ? entry.roles.filter((r: string) => offered.has(r))
         : [];
       await prisma.teamMember.upsert({
         where: { teamId_userId: { teamId: entry.teamId, userId: id } },
@@ -198,4 +203,78 @@ export async function PATCH(
       active: tm.active,
     })),
   });
+}
+
+/**
+ * DELETE /api/admin/users/:id — remove a member from the admin's org.
+ *
+ * This unwinds them from everything FORWARD-LOOKING while leaving the record of
+ * what they already did intact:
+ *   • their upcoming assignments in this org are deleted (those slots re-open),
+ *     and any swap proposals on them cascade away with them;
+ *   • past assignments stay, so rosters, serve counts, and the set history keep
+ *     reading correctly;
+ *   • SetHistoryEvent rows are never touched — they point at the User, which
+ *     still exists;
+ *   • they're dropped from this org's teams, so the scheduler can't seat them;
+ *   • they lose the org membership itself (admin flag, Slack link, and all).
+ *
+ * The User row itself survives: a person can belong to several orgs, and this
+ * is one org's door, not the account's.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const admin = await requireOrgAdmin(req);
+  if (!admin) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const { id } = await params;
+
+  // No removing yourself — an org would be one click away from having no admin
+  // at all, with nobody left who could undo it.
+  if (id === admin.user.id) {
+    return NextResponse.json(
+      { error: "You can't remove yourself from the org." },
+      { status: 400 }
+    );
+  }
+
+  const membership = await prisma.orgMembership.findUnique({
+    where: { userId_orgId: { userId: id, orgId: admin.orgId } },
+    select: { id: true },
+  });
+  if (!membership) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const now = new Date();
+  await prisma.$transaction([
+    // Upcoming sets only — a set that already happened keeps its roster.
+    prisma.assignment.deleteMany({
+      where: {
+        userId: id,
+        set: { orgId: admin.orgId, startsAt: { gte: now } },
+      },
+    }),
+    // Stop them being this set's MD going forward (the FK is SetNull, but that
+    // only fires on deleting the User, which we don't do here).
+    prisma.set.updateMany({
+      where: { orgId: admin.orgId, mdUserId: id, startsAt: { gte: now } },
+      data: { mdUserId: null },
+    }),
+    prisma.teamMember.deleteMany({
+      where: { userId: id, team: { orgId: admin.orgId } },
+    }),
+    // Their answers to this org's availability requests: they're no longer on
+    // the hook for any of them.
+    prisma.availabilityResponse.deleteMany({
+      where: { userId: id, request: { orgId: admin.orgId } },
+    }),
+    prisma.orgMembership.delete({ where: { id: membership.id } }),
+  ]);
+
+  return NextResponse.json({ ok: true });
 }

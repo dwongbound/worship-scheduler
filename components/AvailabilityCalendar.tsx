@@ -8,7 +8,6 @@
 // block them out (an all-day specific block, not tied to any request). The
 // scrollable list beside it handles deleting.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { minutesToTimeLabel } from "@/lib/dates";
 import { toYmd } from "@/components/common/DateSelect";
 import InfoTooltip from "@/components/common/InfoTooltip";
 import type { ApiUnavailability } from "@/lib/types";
@@ -16,22 +15,16 @@ import type { ApiUnavailability } from "@/lib/types";
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const FULL_DAY_END = 24 * 60; // minutes — a block reaching this covers the day
 
-// Times of day, each with a glanceable icon: sunrise = morning, sun =
-// afternoon, sunset = night. A blocked window renders the icon(s) for the
-// period(s) it touches instead of hard-to-read time text. Night wraps
-// midnight, so it carries two ranges.
-type Period = "morning" | "afternoon" | "night";
-const PERIODS: { key: Period; ranges: [number, number][] }[] = [
-  { key: "morning", ranges: [[300, 720]] }, // 5am–12pm → sunrise
-  { key: "afternoon", ranges: [[720, 1020]] }, // 12pm–5pm → sun
-  { key: "night", ranges: [[1020, 1440], [0, 300]] }, // 5pm–5am → sunset
-];
-
-// Which periods a [start, end) minute window overlaps, in day order.
-function periodsFor(start: number, end: number): Period[] {
-  return PERIODS.filter((p) =>
-    p.ranges.some(([s, e]) => start < e && end > s)
-  ).map((p) => p.key);
+// A blocked window, written the way you'd say it: "6a", "9:30a", "5p". Short
+// enough to sit in a day cell, unlike "6:00 AM", and unambiguous — unlike the
+// sunrise/sun/sunset icons this replaced, which couldn't tell 6a–5p apart from
+// 7–8a without hovering for the tooltip.
+function compactTime(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const suffix = h < 12 || h === 24 ? "a" : "p";
+  const hour12 = h % 12 || 12;
+  return m ? `${hour12}:${String(m).padStart(2, "0")}${suffix}` : `${hour12}${suffix}`;
 }
 
 function addDays(d: Date, n: number): Date {
@@ -45,13 +38,16 @@ function startOfDay(d: Date): Date {
 }
 
 // The blocks that fall on one calendar day, reduced to what we render: whether
-// any of them covers the whole day, plus the distinct day-parts the partial
-// windows touch. `periods` is deduped — a day shows at most one icon per
-// day-part no matter how many blocks land on it.
+// any of them covers the whole day, the blocked windows as readable times, and
+// whether the day is covered ONLY by a weekly rule. That last one matters more
+// than anything else on the cell: a repeat applies forever and can't be cleared
+// for one date, so it's marked (↻ + hatch) rather than left to be inferred from
+// three identical-looking Tuesdays. A date blocked by hand overrides the
+// pattern and renders as an ordinary block.
 interface DayBlocks {
   fullDay: boolean;
-  periods: Period[]; // distinct day-parts to show icons for, in day order
-  labels: string[]; // each blocked time window — one tooltip line apiece
+  labels: string[]; // blocked windows, compact ("6a–5p"), deduped
+  repeating: boolean; // any of them comes from a weekly rule
 }
 
 // Does `rule` block `day`? RECURRING matches by weekday, until its endDate if
@@ -72,6 +68,9 @@ function ruleAppliesOn(rule: ApiUnavailability, day: Date): boolean {
 export default function AvailabilityCalendar({
   entries,
   onEditDays,
+  initialMonth,
+  highlightRange,
+  compact = false,
   busy = false,
 }: {
   entries: ApiUnavailability[];
@@ -80,12 +79,32 @@ export default function AvailabilityCalendar({
   // A drag always blocks; a single click on an already-blocked day unblocks it
   // (a toggle). Omit to render the calendar read-only.
   onEditDays?: (startYmd: string, endYmd: string, blocked: boolean) => void;
+  // Which month to open on (defaults to this one). The admin's read-only view
+  // seeds it with the availability request's first month, which is usually not
+  // the current one. Only the INITIAL month — remount (via `key`) to re-seed.
+  initialMonth?: Date;
+  // Lens the calendar onto one date range (YYYY-MM-DD, inclusive) — the window
+  // of the availability request being answered. Days inside are ringed, days
+  // outside are dimmed, and the view jumps to the range's first month. This is
+  // what makes answering a request the SAME calendar rather than a second one.
+  highlightRange?: { start: string; end: string } | null;
+  // Shorter day cells, for the read-only calendar inside a narrow modal.
+  compact?: boolean;
   busy?: boolean;
 }) {
   const today = new Date();
-  const [viewMonth, setViewMonth] = useState(
-    () => new Date(today.getFullYear(), today.getMonth(), 1)
-  );
+  const [viewMonth, setViewMonth] = useState(() => {
+    const seed = initialMonth ?? today;
+    return new Date(seed.getFullYear(), seed.getMonth(), 1);
+  });
+
+  // Selecting a request pulls the view to its window — the whole point of the
+  // lens is that you're looking at the month being asked about.
+  useEffect(() => {
+    if (!highlightRange) return;
+    const [y, m] = highlightRange.start.split("-").map(Number);
+    if (y && m) setViewMonth(new Date(y, m - 1, 1));
+  }, [highlightRange?.start]);
 
   // Click/drag-to-block is driven entirely by refs + direct DOM styling — never
   // React state — so dragging across days does NOT re-render the calendar. The
@@ -93,6 +112,10 @@ export default function AvailabilityCalendar({
   // the cell elements imperatively, and cleared + committed on pointer-up.
   const startRef = useRef<Date | null>(null);
   const endRef = useRef<Date | null>(null);
+  // Which gesture is in flight. Left button paints days BLOCKED; right button
+  // paints them CLEAR — "I'm free all of these" — wiping every dated block on
+  // them, partial-day ones included. Set on pointer-down and read on pointer-up.
+  const modeRef = useRef<"block" | "clear">("block");
   const gridRef = useRef<HTMLDivElement>(null);
   const interactive = !!onEditDays && !busy;
   const todayStart = startOfDay(today);
@@ -133,15 +156,19 @@ export default function AvailabilityCalendar({
     const e = endRef.current;
     const lo = s && e ? (s <= e ? toYmd(s) : toYmd(e)) : null;
     const hi = s && e ? (s <= e ? toYmd(e) : toYmd(s)) : null;
+    const clearing = modeRef.current === "clear";
+    const tint = clearing ? "rgba(16, 185, 129, 0.18)" : "rgba(99, 102, 241, 0.18)";
+    const edge = clearing ? "#10b981" : "#6366f1";
     grid.querySelectorAll<HTMLElement>("[data-date]").forEach((el) => {
       const ymd = el.dataset.date!;
       const on = lo !== null && hi !== null && ymd >= lo && ymd <= hi;
-      el.style.backgroundColor = on ? "rgba(99, 102, 241, 0.18)" : "";
-      el.style.boxShadow = on ? "inset 0 0 0 2px #6366f1" : "";
+      el.style.backgroundColor = on ? tint : "";
+      el.style.boxShadow = on ? `inset 0 0 0 2px ${edge}` : "";
     });
   };
 
-  const beginDrag = (date: Date) => {
+  const beginDrag = (date: Date, mode: "block" | "clear") => {
+    modeRef.current = mode;
     startRef.current = date;
     endRef.current = date;
     paintSelection();
@@ -163,12 +190,18 @@ export default function AvailabilityCalendar({
       if (s && e && onEditDays) {
         const lo = s <= e ? s : e;
         const hi = s <= e ? e : s;
-        // A single click on an already-blocked day unblocks it (toggle); any
-        // other click/drag blocks the run.
-        const singleDay = toYmd(lo) === toYmd(hi);
-        const blocked = !(singleDay && blockedDaysRef.current.has(toYmd(lo)));
-        onEditDays(toYmd(lo), toYmd(hi), blocked);
+        if (modeRef.current === "clear") {
+          // Right-drag always clears, however many days it covers.
+          onEditDays(toYmd(lo), toYmd(hi), false);
+        } else {
+          // A single left-click on an already-blocked day unblocks it
+          // (toggle); any other click/drag blocks the run.
+          const singleDay = toYmd(lo) === toYmd(hi);
+          const blocked = !(singleDay && blockedDaysRef.current.has(toYmd(lo)));
+          onEditDays(toYmd(lo), toYmd(hi), blocked);
+        }
       }
+      modeRef.current = "block";
     };
     window.addEventListener("pointerup", onUp);
     return () => window.removeEventListener("pointerup", onUp);
@@ -194,27 +227,30 @@ export default function AvailabilityCalendar({
     const map = new Map<string, DayBlocks>();
     for (const date of cells) {
       const day = startOfDay(date);
+      // A day you marked by hand WINS over the weekly pattern underneath it:
+      // it's the more specific statement, and the one you can act on here
+      // (right-click frees a date; it can't punch a hole in a repeat). So when
+      // both land on a day, only the dated blocks are drawn — no hatch, no ↻.
+      const applying = entries.filter((rule) => ruleAppliesOn(rule, day));
+      const dated = applying.filter((rule) => rule.type !== "RECURRING");
+      const shown = dated.length > 0 ? dated : applying;
+
       let fullDay = false;
-      const periodSet = new Set<Period>(); // dedupe day-parts across blocks
       const labels = new Set<string>(); // dedupe identical time windows
-      for (const rule of entries) {
-        if (!ruleAppliesOn(rule, day)) continue;
+      for (const rule of shown) {
         // DATE_RANGE carries no time → always a full-day block.
         const start = rule.startMinute ?? 0;
         const end = rule.endMinute ?? FULL_DAY_END;
         if (rule.type === "DATE_RANGE" || (start <= 0 && end >= FULL_DAY_END)) {
           fullDay = true;
         } else {
-          for (const p of periodsFor(start, end)) periodSet.add(p);
-          labels.add(`${minutesToTimeLabel(start)} – ${minutesToTimeLabel(end)}`);
+          labels.add(`${compactTime(start)}–${compactTime(end)}`);
         }
       }
-      // Keep periods in canonical day order (morning → afternoon → night).
-      const periods = PERIODS.map((p) => p.key).filter((k) => periodSet.has(k));
       map.set(date.toISOString(), {
         fullDay,
-        periods,
         labels: [...labels],
+        repeating: dated.length === 0 && applying.length > 0,
       });
     }
     return map;
@@ -246,7 +282,7 @@ export default function AvailabilityCalendar({
           {onEditDays && (
             <InfoTooltip
               side="bottom"
-              text="Click a day — or drag across several — to block it out (all day). Click a blocked day again to clear it."
+              text="Click a day — or drag across several — to block it out (all day). Click a blocked day again to clear it. Right-click (or right-drag) marks days fully free, wiping every dated block on them."
             />
           )}
         </div>
@@ -279,7 +315,9 @@ export default function AvailabilityCalendar({
         {WEEKDAYS.map((w) => (
           <div
             key={w}
-            className="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400"
+            className={`px-2 py-2 text-center font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 ${
+              compact ? "text-xs" : "text-[13px]"
+            }`}
           >
             {w}
           </div>
@@ -287,16 +325,31 @@ export default function AvailabilityCalendar({
       </div>
 
       {/* Day grid */}
-      <div className="grid grid-cols-7" ref={gridRef}>
+      {/* Right-click is a real gesture here (clear these days), so the browser's
+          own menu has to stay out of the way. */}
+      <div
+        className="grid grid-cols-7"
+        ref={gridRef}
+        onContextMenu={(e) => {
+          if (interactive) e.preventDefault();
+        }}
+      >
         {cells.map((date) => {
           const inMonth = date.getMonth() === month;
           const isToday = sameDay(date, today);
           const blocks = blocksByDay.get(date.toISOString())!;
-          const blocked = blocks.fullDay || blocks.periods.length > 0;
+          const blocked = blocks.fullDay || blocks.labels.length > 0;
           const blockable = canBlock(date);
           // Past days (this month, before today) can't be blocked — render them
           // muted like out-of-month cells so they don't look clickable.
           const isPast = inMonth && startOfDay(date) < todayStart;
+          // Lens state: inside the request's window, or dimmed outside it.
+          const ymd = toYmd(date);
+          const lensed = !!highlightRange;
+          const inWindow =
+            lensed &&
+            ymd >= highlightRange!.start &&
+            ymd <= highlightRange!.end;
 
           return (
             <div
@@ -304,13 +357,23 @@ export default function AvailabilityCalendar({
               data-date={toYmd(date)}
               onPointerDown={(e) => {
                 if (!blockable) return;
+                // Ignore the middle button and anything exotic.
+                if (e.button !== 0 && e.button !== 2) return;
                 e.preventDefault(); // don't start a text selection
-                beginDrag(date);
+                beginDrag(date, e.button === 2 ? "clear" : "block");
               }}
               onPointerEnter={() => {
                 if (startRef.current && blockable) extendDrag(date);
               }}
-              className={`min-h-[84px] select-none border-b border-r border-gray-100 p-1.5 dark:border-gray-700/60 ${
+              className={`relative ${
+                compact ? "min-h-[54px] p-1" : "min-h-[92px] p-1.5"
+              } select-none border-b border-r border-gray-100 dark:border-gray-700/60 ${
+                lensed && !inWindow ? "opacity-40" : ""
+              } ${
+                inWindow
+                  ? "ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/60"
+                  : ""
+              } ${
                 blockable
                   ? // Outline the cell on hover instead of washing it in
                     // indigo: the wash sat on top of the rose/amber "blocked"
@@ -324,13 +387,33 @@ export default function AvailabilityCalendar({
                     ? "bg-rose-50 dark:bg-rose-950/40"
                     : blocked
                       ? "bg-amber-50 dark:bg-amber-950/30"
-                      : "bg-white dark:bg-gray-800"
+                      : // Free and still to come: faintly green, so an empty
+                        // grid reads as "I'm available" rather than "no data".
+                        "bg-emerald-50/60 dark:bg-emerald-950/20"
               }`}
             >
-              {/* Date number; today gets a filled indigo pill */}
-              <div className="mb-1 flex justify-end">
+              {/* Anything from a weekly rule gets a diagonal hatch. It reads
+                  from across the room, unlike a glyph, and it's deliberately
+                  a TEXTURE rather than another colour so it layers over the
+                  rose/amber "how much is blocked" fill instead of fighting it.
+                  Low-alpha slate works on both grounds. */}
+              {inMonth && blocks.repeating && (
                 <span
-                  className={`flex h-6 min-w-6 items-center justify-center rounded-full px-1 text-xs font-medium ${
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    backgroundImage:
+                      "repeating-linear-gradient(-45deg, rgba(120,113,120,0.20) 0 4px, transparent 4px 9px)",
+                  }}
+                />
+              )}
+
+              {/* Date number; today gets a filled indigo pill */}
+              <div className="relative mb-1 flex justify-end">
+                <span
+                  className={`flex items-center justify-center rounded-full px-1 font-medium ${
+                    compact ? "h-6 min-w-6 text-xs" : "h-7 min-w-7 text-sm"
+                  } ${
                     isToday
                       ? "bg-indigo-600 text-white"
                       : inMonth && !isPast
@@ -342,70 +425,101 @@ export default function AvailabilityCalendar({
                 </span>
               </div>
 
+              {/* What's blocked, in words. The ↻ marks anything coming from a
+                  weekly rule — the one distinction the old day-part icons
+                  couldn't make, and the one that changes what you can do about
+                  it (a repeat can't be cleared for a single date). */}
               {inMonth && blocks.fullDay && (
-                <div className="rounded bg-rose-100 px-1.5 py-0.5 text-[11px] font-medium text-rose-700 dark:bg-rose-900/50 dark:text-rose-300">
-                  All day
+                <div
+                  className={`relative flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 font-medium text-rose-700 dark:bg-rose-900/50 dark:text-rose-300 ${
+                    compact ? "text-[11px]" : "text-xs"
+                  }`}
+                >
+                  <span className="truncate">All day</span>
+                  {blocks.repeating && <RepeatIcon />}
                 </div>
               )}
-              {inMonth && !blocks.fullDay && blocks.periods.length > 0 && (
-                <div className="group/chip relative mx-auto w-max">
-                  <div className="mt-0.5 inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300">
-                    {blocks.periods.map((p) => (
-                      <PeriodIcon key={p} period={p} />
-                    ))}
-                  </div>
-                  {/* Instant tooltip (no native title delay) with the actual
-                      blocked time window(s). */}
-                  <div className="pointer-events-none absolute left-0 top-full z-30 mt-1 hidden w-max max-w-[12rem] space-y-0.5 rounded-md bg-gray-900 px-2 py-1 text-[11px] font-medium text-white shadow-lg group-hover/chip:block dark:bg-gray-700">
-                    {blocks.labels.map((l) => (
-                      <div key={l}>{l}</div>
-                    ))}
-                  </div>
+              {inMonth && !blocks.fullDay && blocks.labels.length > 0 && (
+                <div className="relative space-y-0.5">
+                  {blocks.labels.slice(0, 2).map((label) => (
+                    <div
+                      key={label}
+                      className={`flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium leading-tight text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 ${
+                        compact ? "text-[10px]" : "text-xs"
+                      }`}
+                    >
+                      <span className="truncate tabular-nums">{label}</span>
+                      {blocks.repeating && <RepeatIcon />}
+                    </div>
+                  ))}
+                  {blocks.labels.length > 2 && (
+                    <div
+                      className={`px-1 text-amber-700 dark:text-amber-400 ${
+                        compact ? "text-[10px]" : "text-xs"
+                      }`}
+                    >
+                      +{blocks.labels.length - 2} more
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           );
         })}
       </div>
+
+      {/* Three states, named. Cheaper than making people infer them from
+          colour, and it's where the ↻ gets explained. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-200 px-4 py-2.5 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded-sm bg-emerald-100 ring-1 ring-emerald-300 dark:bg-emerald-900/50 dark:ring-emerald-700" />
+          Free
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded-sm bg-amber-100 ring-1 ring-amber-300 dark:bg-amber-900/60 dark:ring-amber-700" />
+          Part of the day blocked
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-3 w-3 rounded-sm bg-rose-100 ring-1 ring-rose-300 dark:bg-rose-900/60 dark:ring-rose-700" />
+          All day blocked
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span
+            className="h-3 w-3 rounded-sm bg-gray-100 ring-1 ring-gray-300 dark:bg-gray-700 dark:ring-gray-600"
+            style={{
+              backgroundImage:
+                "repeating-linear-gradient(-45deg, rgba(120,113,120,0.45) 0 2px, transparent 2px 5px)",
+            }}
+          />
+          <RepeatIcon />
+          Repeats every week
+        </span>
+      </div>
     </div>
   );
 }
 
-// A small day-part glyph: sunrise (morning), sun (afternoon), sunset (night).
-// Drawn at 14px, inheriting the chip's text color.
-function PeriodIcon({ period }: { period: Period }) {
-  const common = {
-    viewBox: "0 0 24 24",
-    className: "h-3.5 w-3.5 shrink-0",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 2,
-    strokeLinecap: "round" as const,
-    strokeLinejoin: "round" as const,
-    "aria-label": period,
-    role: "img" as const,
-  };
-  switch (period) {
-    case "morning": // sunrise
-      return (
-        <svg {...common}>
-          <path d="M17 18a5 5 0 0 0-10 0M12 2v4M4.9 10.9l1.4 1.4M2 18h2M20 18h2M17.7 12.3l1.4-1.4M22 22H2M8 6l4-4 4 4" />
-        </svg>
-      );
-    case "afternoon": // sun
-      return (
-        <svg {...common}>
-          <circle cx="12" cy="12" r="4" />
-          <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-        </svg>
-      );
-    case "night": // sunset
-      return (
-        <svg {...common}>
-          <path d="M17 18a5 5 0 0 0-10 0M12 9V2M4.9 10.9l1.4 1.4M2 18h2M20 18h2M17.7 12.3l1.4-1.4M22 22H2M16 5l-4 4-4-4" />
-        </svg>
-      );
-  }
+// Marks a block that comes from a WEEKLY rule rather than this one date — the
+// distinction that decides whether you can clear it here at all.
+function RepeatIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-3 w-3 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-label="repeats weekly"
+      role="img"
+    >
+      <path d="M17 2l4 4-4 4" />
+      <path d="M3 11v-1a4 4 0 0 1 4-4h14" />
+      <path d="M7 22l-4-4 4-4" />
+      <path d="M21 13v1a4 4 0 0 1-4 4H3" />
+    </svg>
+  );
 }
 
 function Chevron({ dir }: { dir: "left" | "right" }) {

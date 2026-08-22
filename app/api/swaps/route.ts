@@ -1,6 +1,6 @@
 // GET /api/swaps — open swap requests the current user could take:
 // upcoming, someone else's, for an instrument the user plays, within the
-// user's orgs (?orgId= narrows to one — the Set Manager org filter), and on
+// user's orgs (?orgId= narrows to one — the My Sets org filter), and on
 // the set's own team (a team-less set is open to the whole org).
 // Also powers the navbar red dot (it just checks the count, all orgs).
 import { NextRequest, NextResponse } from "next/server";

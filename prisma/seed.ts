@@ -16,7 +16,12 @@
 // The e2e suite depends on the first "Sunday Morning" set (admin=leader,
 // bob=drums, carol=keys) and on kate being a free drummer, so keep those.
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient, Instrument } from "../lib/generated/prisma/client";
+import { PrismaClient } from "../lib/generated/prisma/client";
+import { DEFAULT_TEAM_ROLES } from "../lib/teamRoles";
+
+// A role key. Roles are per-team data now — every seeded team gets the built-in
+// catalog below, and these are its keys.
+type Instrument = string;
 import bcrypt from "bcryptjs";
 import { parseOrgKeys } from "../lib/orgKeys";
 import { normalizeDatabaseUrl } from "../lib/dbUrl";
@@ -63,6 +68,10 @@ const USERS: {
   { username: "paul", name: "Paul Park", instruments: ["WORSHIP_LEADER", "ACOUSTIC_GUITAR", "VOCALS", "KEYS"], isAdmin: true, isMD: true, completed: true, prayer: true, college: true },
   { username: "quinn", name: "Quinn Quezada", instruments: ["STRINGS", "VOCALS", "CHOIR"] },
   { username: "ruth", name: "Ruth Rivera", instruments: ["DRUMS", "BASS"], prayer: true, college: true },
+  // A/V (sound + slides) — a tech role, so these two play no instrument. Two
+  // of them so a week with both a Sunday and a Prayer Room set can staff each.
+  { username: "sam", name: "Sam Silva", instruments: ["AV"], completed: true },
+  { username: "tess", name: "Tess Tran", instruments: ["AV"], prayer: true },
   // A brand-new member who has joined an org but not yet finished their
   // profile: no instruments/roles picked. Drives the "finish setup" reminder
   // dot + banner (see Navbar) — leave this account's instruments empty.
@@ -104,6 +113,7 @@ async function main() {
   await prisma.setTemplate.deleteMany();
   await prisma.orgMembership.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.teamRole.deleteMany();
   await prisma.team.deleteMany();
   await prisma.org.deleteMany();
 
@@ -128,6 +138,14 @@ async function main() {
   });
   const collegeTeam = await prisma.team.create({
     data: { name: "College Team", orgId: org2.id },
+  });
+
+  // Each team starts with the built-in role catalog — the same list an admin
+  // then edits per team under Teams → (a team) → Roles.
+  await prisma.teamRole.createMany({
+    data: [sundayTeam, prayerTeam, collegeTeam].flatMap((team) =>
+      DEFAULT_TEAM_ROLES.map((role) => ({ ...role, teamId: team.id }))
+    ),
   });
 
   const id: Record<string, string> = {};
@@ -307,6 +325,7 @@ async function main() {
       { setId: sunday.id, userId: id.frank, role: "ACOUSTIC_GUITAR", status: "CONFIRMED" },
       { setId: sunday.id, userId: id.erin, role: "ELECTRIC_GUITAR", status: "PENDING" },
       { setId: sunday.id, userId: id.henry, role: "STRINGS", status: "PENDING" },
+      { setId: sunday.id, userId: id.sam, role: "AV", status: "CONFIRMED" },
 
       // Wednesday Night. Kate's drums slot is left PENDING so she always has a
       // set to confirm — backs the swaps e2e "confirm all pending" test, which
@@ -317,6 +336,7 @@ async function main() {
       { setId: wednesday.id, userId: id.omar, role: "BASS", status: "PENDING" },
       { setId: wednesday.id, userId: id.quinn, role: "STRINGS", status: "CONFIRMED" },
       { setId: wednesday.id, userId: id.grace, role: "VOCALS", status: "CONFIRMED" },
+      { setId: wednesday.id, userId: id.tess, role: "AV", status: "PENDING" },
 
       // Saturday Prayer (small team). paul (an MD) leads AND covers keys, so the
       // MD requirement is met from an MD-eligible role.

@@ -1,13 +1,24 @@
 // POST /api/availability/block-days — paint or erase a run of whole days on
 // the availability calendar, keeping stored blocks clean.
 //   { start, end, blocked: true }  → block every day in [start, end]
-//   { start, end, blocked: false } → unblock every day in [start, end]
+//   { start, end, blocked: false } → mark every day in [start, end] fully free
 //
-// Only all-day SPECIFIC blocks are touched (recurring + timed blocks are left
-// alone). Painting merges into the fewest ranges and never double-blocks a day
-// (so clicking the same date twice can't pile up duplicates); erasing splits a
-// covering range into the pieces that survive — preserving each block's
-// requestId so a request-tied block stays tied after a split.
+// PAINTING only ever creates all-day blocks, merges them into the fewest
+// ranges, and never double-blocks a day (so clicking the same date twice can't
+// pile up duplicates).
+//
+// ERASING is "I'm free all of these days" — the right-click gesture on the
+// calendar — so it removes EVERY dated block touching them, partial-day ones
+// included, not just the all-day ones. A block that only partly overlaps is
+// split into the pieces that survive, keeping its own time window, requestId
+// and note, so a request-tied morning block stays a request-tied morning block
+// on the days it still covers.
+//
+// Weekly RECURRING rules are deliberately untouched: they have no per-date
+// exception in the schema, so clearing one Monday would have to kill every
+// Monday. The response reports how many of the days a recurring rule still
+// covers (`recurringDays`) so the caller can say so rather than leaving the
+// day mysteriously still blocked.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -36,6 +47,16 @@ function startOfDay(d: Date): Date {
 // A block covers whole days when its window runs 0 → end-of-day.
 function isAllDay(b: { startMinute: number | null; endMinute: number | null }) {
   return (b.startMinute ?? 0) <= 0 && (b.endMinute ?? FULL_DAY_END) >= FULL_DAY_END;
+}
+
+// Does a weekly recurring rule still apply on this day? (Mirrors the calendar's
+// own reading: matching weekday, and not past the rule's stop date.)
+function recurringCovers(
+  rule: { dayOfWeek: number | null; endDate: Date | null },
+  day: Date
+): boolean {
+  if (day.getDay() !== rule.dayOfWeek) return false;
+  return !rule.endDate || day <= startOfDay(rule.endDate);
 }
 
 // Every YYYY-MM-DD a block touches (endDate defaults to startDate). SPECIFIC
@@ -86,8 +107,10 @@ export async function POST(req: NextRequest) {
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
     targetDays.add(ymd(d));
   }
+  // Every DATED block (all-day or timed). Painting only cares about the all-day
+  // ones; erasing sweeps the lot.
   const specific = await prisma.unavailability.findMany({
-    where: { userId: user.id, type: "SPECIFIC" },
+    where: { userId: user.id, type: { in: ["SPECIFIC", "DATE_RANGE"] } },
   });
   const allDay = specific.filter(isAllDay);
 
@@ -124,30 +147,45 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // Erase. For every all-day block overlapping the target days, drop it and
-  // recreate the surviving days as ranges — keeping its requestId so a
-  // request-tied block that gets split stays tied.
+  // Erase — "these days are fully free". Every dated block touching them goes,
+  // whatever its time window; a block that only partly overlaps is rebuilt from
+  // the days it still covers, keeping its own window, requestId and note.
   const ops = [];
-  for (const b of allDay) {
-    const survivors = new Set(daysOf(b).filter((d) => !targetDays.has(d)));
-    if (survivors.size === daysOf(b).length) continue; // untouched
+  for (const b of specific) {
+    const days = daysOf(b);
+    const survivors = new Set(days.filter((d) => !targetDays.has(d)));
+    if (survivors.size === days.length) continue; // untouched
     ops.push(
       prisma.unavailability.delete({ where: { id: b.id } }),
       ...rangesFromDays(survivors).map(([s, e]) =>
         prisma.unavailability.create({
           data: {
             userId: user.id,
-            type: "SPECIFIC",
+            type: b.type,
             startDate: s,
             endDate: ymd(s) === ymd(e) ? null : e,
-            startMinute: 0,
-            endMinute: FULL_DAY_END,
+            startMinute: b.startMinute,
+            endMinute: b.endMinute,
             requestId: b.requestId,
+            note: b.note,
           },
         })
       )
     );
   }
   if (ops.length > 0) await prisma.$transaction(ops);
-  return NextResponse.json({ ok: true });
+
+  // A weekly rule can't be punched out for one date, so count what's left
+  // standing on those days and let the caller explain it.
+  const recurring = await prisma.unavailability.findMany({
+    where: { userId: user.id, type: "RECURRING" },
+    select: { dayOfWeek: true, endDate: true },
+  });
+  let recurringDays = 0;
+  for (const key of targetDays) {
+    const day = parseLocalDate(key)!;
+    if (recurring.some((r) => recurringCovers(r, day))) recurringDays++;
+  }
+
+  return NextResponse.json({ ok: true, recurringDays });
 }

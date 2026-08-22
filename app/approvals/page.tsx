@@ -4,6 +4,7 @@
 // handoff; reject undoes it (a swap snaps back to the original owners, a cover
 // re-opens for someone else to take). Scoped to the admin org in the switcher.
 import { useCallback, useEffect, useState } from "react";
+import { roleLabel } from "@/lib/teamRoles";
 import { useSession } from "next-auth/react";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -13,7 +14,6 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
 import type { ApiApproval, SwapSetRef } from "@/lib/types";
 
@@ -87,7 +87,7 @@ export default function ApprovalsPage() {
                       <p className="flex flex-wrap items-center gap-2 font-semibold">
                         <Badge tone="indigo">Cover</Badge>
                         {item.set.label ?? "Worship Set"} —{" "}
-                        {INSTRUMENT_LABELS[item.role]}
+                        {roleLabel(item.role)}
                       </p>
                       <p className="text-sm text-gray-600 dark:text-gray-400">
                         {when(item.set)} · <strong>{item.taker.name}</strong>{" "}
@@ -99,7 +99,7 @@ export default function ApprovalsPage() {
                     <>
                       <p className="flex flex-wrap items-center gap-2 font-semibold">
                         <Badge tone="blue">Swap</Badge>
-                        {INSTRUMENT_LABELS[item.role]}
+                        {roleLabel(item.role)}
                       </p>
                       <p className="text-sm text-gray-600 dark:text-gray-400">
                         <strong>{item.recipient.name}</strong> takes{" "}

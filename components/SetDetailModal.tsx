@@ -29,20 +29,32 @@ import Button from "./common/Button";
 import Dropdown from "./common/Dropdown";
 import InfoTooltip from "./common/InfoTooltip";
 import LoadingDots from "./common/LoadingDots";
+import Checkbox from "./common/Checkbox";
 import SlackIcon from "./common/SlackIcon";
 import Toast, { type ToastMessage } from "./common/Toast";
+import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
   CHOIR,
   GROUP_CHAT_LEAD_OPTIONS,
   INSTRUMENT_LABELS,
+  MAX_SONGS_PER_SET,
+  MAX_SONG_TITLE_LENGTH,
   MD_ROLES,
   ROLE_ORDER,
   SONG_KEYS,
-  resolveCapacities,
+  normalizeSongKey,
+  type BandRole,
   type Instrument,
 } from "@/lib/constants";
+import {
+  DEFAULT_TEAM_ROLES,
+  bandRoles,
+  resolveTeamCapacities,
+  roleLabel,
+  teamSupportsMD,
+} from "@/lib/teamRoles";
 import { formatDay, formatTime } from "@/lib/dates";
 import { eligibleMDIds, isValidMD } from "@/lib/md";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
@@ -121,6 +133,15 @@ export default function SetDetailModal({
     { id: string; title: string; key: string }[]
   >([]);
 
+  // "Change Roles": the stacked modal for editing this set's team shape (how
+  // many of each role it wants) plus the two flags that shape it — MD and
+  // choir. Null = closed; opening seeds the draft from the set.
+  const [rolesDraft, setRolesDraft] = useState<{
+    capacities: Record<BandRole, number>;
+    requiresMD: boolean;
+    choirEnabled: boolean;
+  } | null>(null);
+
   // The set's activity log (History section, bottom of the modal).
   const [history, setHistory] = useState<ApiSetHistoryEvent[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -150,29 +171,47 @@ export default function SetDetailModal({
   // actually differs from what's saved on the server. `runEdit` refetches the
   // set afterwards so the Spotify/history sections stay current. The row ids are
   // stripped — only { title, key } (in order) is persisted or compared.
+  //
+  // What we send AND compare is the draft run through the same cleaning the
+  // server does (drop blank titles, trim, normalize the key — see the songs
+  // PUT route). Comparing the raw draft made an unsaveable row (an empty
+  // "+ Add song" row, a key with no title, a title that only trims down) look
+  // like a pending change forever: we'd PUT, the server would drop it, the
+  // refetch would come back without it, and the effect would fire again —
+  // re-saving in a loop every 800ms for as long as the row sat there.
+  const savedSongs = JSON.stringify(
+    (set?.songs ?? []).map((s) => ({ title: s.title, key: s.key ?? "" }))
+  );
+  const draftSongs = JSON.stringify(
+    songDraft
+      .map((r) => ({
+        title: r.title.trim().slice(0, MAX_SONG_TITLE_LENGTH),
+        key: normalizeSongKey(r.key) ?? "",
+      }))
+      .filter((r) => r.title !== "")
+  );
+  const currentSongSetId = set?.id;
   useEffect(() => {
-    if (!set) return;
-    const saved = (set.songs ?? []).map((s) => ({ title: s.title, key: s.key ?? "" }));
-    const draft = songDraft.map((r) => ({ title: r.title, key: r.key }));
-    if (JSON.stringify(saved) === JSON.stringify(draft)) return;
+    if (!currentSongSetId || savedSongs === draftSongs) return;
     const timer = setTimeout(() => {
       runEdit(() =>
-        fetch(`/api/sets/${set.id}/songs`, {
+        fetch(`/api/sets/${currentSongSetId}/songs`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ songs: draft }),
+          body: JSON.stringify({ songs: JSON.parse(draftSongs) }),
         })
       );
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [songDraft, set]);
+  }, [currentSongSetId, savedSongs, draftSongs]);
 
   // Reset the delete confirmations + Slack feedback whenever a different set
   // opens (or the modal closes) — a toast about set A shouldn't outlive it.
   useEffect(() => {
     setConfirmingDelete(false);
     setSlotToDelete(null);
+    setRolesDraft(null);
     setToast(null);
   }, [set?.id]);
 
@@ -204,7 +243,12 @@ export default function SetDetailModal({
 
   const setId = set?.id;
   useEffect(() => {
-    if (setId) refetchHistory(setId);
+    if (!setId) return;
+    // A DIFFERENT set: drop the old log outright, so another set's rows can't
+    // linger while this one's load is in flight. (In-place refreshes of the
+    // same set deliberately keep theirs — see the History section below.)
+    setHistory([]);
+    refetchHistory(setId);
   }, [setId]);
 
   // Flatten every user's unavailability into scheduler rules once, so the
@@ -262,7 +306,22 @@ export default function SetDetailModal({
   const currentSetId = set.id;
 
   // The set's own team shape (falls back to the global default per role).
-  const capacities = resolveCapacities(set.slotCapacities);
+  // This set's roles come from ITS TEAM's catalog — two teams can offer
+  // entirely different ones. A team-less set falls back to the built-ins.
+  const catalog = set.team?.roles?.length ? set.team.roles : DEFAULT_TEAM_ROLES;
+  const rosterRoles = bandRoles(catalog);
+  const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
+  // What to call a role here — this team's own label, with the built-in name
+  // (then a humanized key) as the fallback for a role it has since dropped.
+  const labelFor = (role: string) => roleLabel(role, catalog);
+  // How many people already stand in each role. The "Change Roles" editor
+  // floors each count here, so shrinking the shape can never orphan someone.
+  const assignedByRole = Object.fromEntries(
+    rosterRoles.map((role) => [
+      role.key,
+      set.assignments.filter((a) => a.role === role.key).length,
+    ])
+  ) as Record<BandRole, number>;
 
   // The set's choir roster (its dropdown options are computed after eligibleFor
   // is defined, below). Choir is a role with no fixed slot count — see the
@@ -276,12 +335,18 @@ export default function SetDetailModal({
     role: a.role,
     isMD: a.user.isMD,
   }));
+  // MD is a catalog role now, so a team can simply not have one — and then no
+  // MD surface appears on its sets at all: no picker, no "* (MD)" marker, no
+  // warning, and no "Require MD" in Change Roles. A leftover requiresMD flag on
+  // such a set is ignored rather than acted on.
+  const supportsMD = teamSupportsMD(catalog);
   const eligibleMdIds = new Set(eligibleMDIds(mdAssignments));
   // The chosen MD, but only if still valid for the current roster (a stale id
   // — e.g. after their slot was removed — reads as "no MD").
-  const mdUserId = isValidMD(set.mdUserId, mdAssignments) ? set.mdUserId : null;
+  const mdUserId =
+    supportsMD && isValidMD(set.mdUserId, mdAssignments) ? set.mdUserId : null;
   // A required-MD set is "unclosed" until one is chosen.
-  const missingMD = set.requiresMD && !mdUserId;
+  const missingMD = supportsMD && set.requiresMD && !mdUserId;
   // Distinct assignees, for the MD dropdown (a person with several slots once).
   const distinctAssignees = Array.from(
     new Map(set.assignments.map((a) => [a.user.id, a.user])).values()
@@ -441,27 +506,41 @@ export default function SetDetailModal({
       })
     );
 
-  // Turn this set's choir on/off (admin only). Off = no choir section to edit
-  // and "Auto schedule" skips choir; on = admins can add/auto-schedule singers.
-  const toggleChoir = (choirEnabled: boolean) =>
-    runEdit(() =>
-      fetch(`/api/sets/${currentSetId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ choirEnabled }),
-      })
-    );
-
-  // Toggle whether this set needs a musical director (admin only). On surfaces
-  // the MD picker + the "needs an MD" warning; off hides both.
-  const toggleRequiresMD = (requiresMD: boolean) =>
-    runEdit(() =>
-      fetch(`/api/sets/${currentSetId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requiresMD }),
-      })
-    );
+  // Save the "Change Roles" draft. The PATCH route takes one field per call, so
+  // this fires up to three — but only for what actually changed, and in one
+  // runEdit so the modal refetches (and the history reloads) exactly once.
+  const saveRoles = async () => {
+    const draft = rolesDraft;
+    if (!draft || !set) return;
+    const patches: Record<string, unknown>[] = [];
+    if (JSON.stringify(draft.capacities) !== JSON.stringify(capacities)) {
+      // A shape that matches the default is stored as null (no override), so
+      // the set keeps tracking the default if it ever changes.
+      const isDefault =
+        JSON.stringify(draft.capacities) ===
+        JSON.stringify(resolveTeamCapacities(catalog, null));
+      patches.push({ slotCapacities: isDefault ? null : draft.capacities });
+    }
+    if (draft.requiresMD !== set.requiresMD) {
+      patches.push({ requiresMD: draft.requiresMD });
+    }
+    if (draft.choirEnabled !== set.choirEnabled) {
+      patches.push({ choirEnabled: draft.choirEnabled });
+    }
+    setRolesDraft(null);
+    if (patches.length === 0) return;
+    await runEdit(async () => {
+      let last: Response | undefined;
+      for (const body of patches) {
+        last = await fetch(`/api/sets/${currentSetId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+      }
+      return last!;
+    });
+  };
 
   // Set (or clear, with "") this set's designated MD.
   const setMD = (userId: string) =>
@@ -691,27 +770,27 @@ export default function SetDetailModal({
           >
             {canEditTeam && (
               <>
-                <MenuToggle
-                  label="Require MD"
-                  on={set.requiresMD}
+                {/* The team shape lives in its own modal — a role-by-role
+                    editor is far too much for a menu row, and the MD/choir
+                    flags belong with it since they're the other two things
+                    that decide who a set has room for. */}
+                <button
+                  type="button"
                   disabled={busy}
-                  onClick={() => toggleRequiresMD(!set.requiresMD)}
-                />
-                <MenuToggle
-                  label="Include choir in set"
-                  on={set.choirEnabled}
-                  // Can't turn choir OFF while singers are on it (they'd be
-                  // silently dropped) — matches the Choir section's own rule.
-                  disabled={
-                    busy || (set.choirEnabled && choirMembers.length > 0)
+                  onClick={() =>
+                    setRolesDraft({
+                      capacities,
+                      requiresMD: set.requiresMD,
+                      choirEnabled: set.choirEnabled,
+                    })
                   }
-                  title={
-                    set.choirEnabled && choirMembers.length > 0
-                      ? "Remove the choir members first."
-                      : undefined
-                  }
-                  onClick={() => toggleChoir(!set.choirEnabled)}
-                />
+                  className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
+                    text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50
+                    dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  <span aria-hidden className="w-4" />
+                  Change Roles
+                </button>
                 <MenuToggle
                   label="Private"
                   on={set.isPrivate}
@@ -750,14 +829,14 @@ export default function SetDetailModal({
 
       {/* Amber warning while a required-MD set still has no musical director;
           nothing once an MD is on the team (the * MD marker says enough). */}
-      {set.requiresMD && missingMD && (
+      {missingMD && (
         <p className="mb-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
           ⚠ This set requires an MD but none is assigned yet.
         </p>
       )}
 
       <ul className="space-y-3">
-        {ROLE_ORDER.map((role) => {
+        {rosterRoles.map(({ key: role }) => {
           const filled = set.assignments.filter((a) => a.role === role);
           const capacity = capacities[role];
           const openSlots = Math.max(0, capacity - filled.length);
@@ -770,7 +849,7 @@ export default function SetDetailModal({
           return (
             <li key={role} className="text-sm">
               <span className="font-medium">
-                {INSTRUMENT_LABELS[role]}
+                {labelFor(role)}
                 {capacity > 1 && (
                   <span className="ml-1 text-xs text-gray-500">
                     ({filled.length}/{capacity})
@@ -787,7 +866,7 @@ export default function SetDetailModal({
                     // person goes with it.
                     <li key={a.id} className="flex items-center gap-2">
                       <SlotDeleteButton
-                        label={`Remove ${INSTRUMENT_LABELS[role]} slot (${a.user.name})`}
+                        label={`Remove ${labelFor(role)} slot (${a.user.name})`}
                         disabled={busy}
                         onClick={() => setSlotToDelete(a)}
                       />
@@ -836,7 +915,7 @@ export default function SetDetailModal({
                     // is affected, so no confirm step).
                     <li key={`add-${i}`} className="flex items-center gap-2">
                       <SlotDeleteButton
-                        label={`Remove empty ${INSTRUMENT_LABELS[role]} slot`}
+                        label={`Remove empty ${labelFor(role)} slot`}
                         disabled={busy}
                         onClick={() => deleteSlot(role)}
                       />
@@ -868,13 +947,15 @@ export default function SetDetailModal({
         })}
       </ul>
 
-      {/* Choir: opt-in PER SET. An admin flips it on (below) before anyone can
-          be added or auto-scheduled into it. A special role with no fixed slot
+      {/* Choir: opt-in PER SET, turned on where the rest of the set's shape is
+          decided — the create form, or "Change Roles" in the (⋮) menu. A set
+          without choir has no choir section at all, the same way it has no
+          slots for a role it set to zero. A special role with no fixed slot
           count — an unbounded, admin-managed list rather than a fixed set of
           slots. When on, "Auto schedule" (above) seats every available singer;
-          admins can also add/remove people by hand. The section is hidden for
-          non-admins unless the set actually has a choir with people on it. */}
-      {(canEditTeam || (set.choirEnabled && choirMembers.length > 0)) && (
+          admins can also add/remove people by hand. Non-admins additionally
+          need the choir to actually have people on it. */}
+      {set.choirEnabled && (canEditTeam || choirMembers.length > 0) && (
         <div
           data-testid="choir-section"
           className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
@@ -883,111 +964,83 @@ export default function SetDetailModal({
             <span className="flex items-center gap-1.5 font-medium">
               <span>
                 Choir
-                {set.choirEnabled && choirMembers.length > 0 && (
+                {choirMembers.length > 0 && (
                   <span className="ml-1 text-xs text-gray-500">
                     ({choirMembers.length})
                   </span>
                 )}
               </span>
               {canEditTeam && (
-                <InfoTooltip text="Choir is opt-in per set. Turn it on to add singers and include them when you auto-schedule — it's an unbounded, admin-managed list." />
+                <InfoTooltip text="An unbounded, admin-managed list — everyone here is included when you auto-schedule. Turn choir off again under Change Roles in the (⋮) menu." />
               )}
             </span>
-            {/* Admins can turn choir off again, but only while it's empty so no
-                one is silently dropped off the roster. */}
-            {canEditTeam && set.choirEnabled && choirMembers.length === 0 && (
-              <button
-                type="button"
-                onClick={() => toggleChoir(false)}
-                disabled={busy}
-                className="text-xs font-medium text-gray-500 hover:text-gray-700 disabled:opacity-50 dark:text-gray-400 dark:hover:text-gray-200"
-              >
-                Turn off
-              </button>
-            )}
           </div>
 
-          {canEditTeam && !set.choirEnabled ? (
-            // Off: a single enable button (only admins reach this — non-admins
-            // never see the section while choir is off). The what/why now lives
-            // in the header's (i) tooltip.
-            <div className="mt-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => toggleChoir(true)}
-                disabled={busy}
-              >
-                Enable choir
-              </Button>
-            </div>
-          ) : (
-            <ul className="mt-1 space-y-1 pl-4">
-              {choirMembers.map((a) =>
-                canEditTeam ? (
-                  // Picking "None" removes them from the choir; picking someone
-                  // else reassigns this slot (resets it to PENDING). The "✕"
-                  // matches the band roles — it removes this singer directly.
-                  // Choir has no fixed slot shape, so (unlike band roles) there's
-                  // nothing to confirm: it just drops the person, like "None".
-                  <li key={a.id} className="flex items-center gap-2">
-                    <SlotDeleteButton
-                      label={`Remove ${a.user.name} from choir`}
-                      disabled={busy}
-                      onClick={() => removeAssignment(a.id)}
-                    />
-                    <PlayerSelect
-                      selected={{ id: a.user.id, name: a.user.name }}
-                      options={choirOptions}
-                      disabled={busy}
-                      onChange={(userId) =>
-                        userId ? reassign(a.id, userId) : removeAssignment(a.id)
-                      }
-                    />
-                    <StatusBadge status={a.status} />
-                  </li>
-                ) : (
-                  // Same read-only box as the band roles above, so the choir
-                  // list matches the rest of the roster.
-                  <li key={a.id} className="flex items-center gap-2">
-                    <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
-                      <span className="truncate">{a.user.name}</span>
-                    </div>
-                    <StatusBadge status={a.status} />
-                  </li>
-                )
-              )}
-
-              {/* Admins get one always-present "add someone" row (the list is
-                  unbounded, so unlike band roles there's no slot count to derive).
-                  It has no "✕" (nothing to remove), so a matching-width spacer
-                  keeps its dropdown aligned with the member rows above. */}
-              {canEditTeam && (
-                <li className="flex items-center gap-2">
-                  <span
-                    aria-hidden
-                    className="invisible rounded p-0.5 text-xs leading-none"
-                  >
-                    ✕
-                  </span>
+          <ul className="mt-1 space-y-1 pl-4">
+            {choirMembers.map((a) =>
+              canEditTeam ? (
+                // Picking "None" removes them from the choir; picking someone
+                // else reassigns this slot (resets it to PENDING). The "✕"
+                // matches the band roles — it removes this singer directly.
+                // Choir has no fixed slot shape, so (unlike band roles) there's
+                // nothing to confirm: it just drops the person, like "None".
+                <li key={a.id} className="flex items-center gap-2">
+                  <SlotDeleteButton
+                    label={`Remove ${a.user.name} from choir`}
+                    disabled={busy}
+                    onClick={() => removeAssignment(a.id)}
+                  />
                   <PlayerSelect
-                    selected={null}
+                    selected={{ id: a.user.id, name: a.user.name }}
                     options={choirOptions}
                     disabled={busy}
-                    dashed
-                    onChange={(userId) => userId && addAssignment(CHOIR, userId)}
+                    onChange={(userId) =>
+                      userId ? reassign(a.id, userId) : removeAssignment(a.id)
+                    }
                   />
+                  <StatusBadge status={a.status} />
                 </li>
-              )}
-            </ul>
-          )}
+              ) : (
+                // Same read-only box as the band roles above, so the choir
+                // list matches the rest of the roster.
+                <li key={a.id} className="flex items-center gap-2">
+                  <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                    <span className="truncate">{a.user.name}</span>
+                  </div>
+                  <StatusBadge status={a.status} />
+                </li>
+              )
+            )}
+
+            {/* Admins get one always-present "add someone" row (the list is
+                unbounded, so unlike band roles there's no slot count to derive).
+                It has no "✕" (nothing to remove), so a matching-width spacer
+                keeps its dropdown aligned with the member rows above. */}
+            {canEditTeam && (
+              <li className="flex items-center gap-2">
+                <span
+                  aria-hidden
+                  className="invisible rounded p-0.5 text-xs leading-none"
+                >
+                  ✕
+                </span>
+                <PlayerSelect
+                  selected={null}
+                  options={choirOptions}
+                  disabled={busy}
+                  dashed
+                  onChange={(userId) => userId && addAssignment(CHOIR, userId)}
+                />
+              </li>
+            )}
+          </ul>
         </div>
       )}
 
       {/* MD picker (only for sets that require one). One MD per set, chosen from
           the assignees — clickable only for those who qualify (an MD playing
           keys/electric/bass, never the worship leader). */}
-      {set.requiresMD && (
+      {supportsMD && set.requiresMD && (
         <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
           {canEditTeam ? (
             <div className="space-y-1.5">
@@ -1079,9 +1132,13 @@ export default function SetDetailModal({
                 ))}
               </SortableContext>
             </DndContext>
+            {/* Capped at what the server accepts. Past the cap the PUT 400s,
+                which — with an auto-save that retries whenever draft and saved
+                disagree — would mean re-POSTing a doomed list forever. */}
             <Button
               size="sm"
               variant="secondary"
+              disabled={songDraft.length >= MAX_SONGS_PER_SET}
               onClick={() =>
                 setSongDraft((rows) => [
                   ...rows,
@@ -1161,7 +1218,11 @@ export default function SetDetailModal({
         <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
           History
         </p>
-        {historyLoading ? (
+        {/* "Loading…" only on a FIRST load. A refresh (after any edit here)
+            keeps the existing rows on screen and swaps them in place — blanking
+            a 12rem list down to one line and back moved everything under it and
+            yanked the modal's scroll position out from under the reader. */}
+        {historyLoading && history.length === 0 ? (
           <p className="text-sm text-gray-400">Loading…</p>
         ) : history.length === 0 ? (
           <p className="text-sm text-gray-400">No activity yet.</p>
@@ -1212,16 +1273,108 @@ export default function SetDetailModal({
         </div>
       )}
 
+      {/* Stacked "Change Roles": this set's team shape, plus the MD and choir
+          flags. Each role's count floors at the people already standing in it,
+          so an edit here can never quietly drop someone from the set. */}
+      {rolesDraft && (
+        <Modal
+          open
+          onClose={() => setRolesDraft(null)}
+          title="Change roles"
+          subtitle="How many of each role this set wants"
+          footer={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setRolesDraft(null)}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={saveRoles} disabled={busy}>
+                {busy ? <LoadingDots size="sm" /> : "Save"}
+              </Button>
+            </>
+          }
+        >
+          <SlotCapacityEditor
+            catalog={catalog}
+            value={rolesDraft.capacities}
+            mins={assignedByRole}
+            disabled={busy}
+            onChange={(next) =>
+              setRolesDraft((d) => (d ? { ...d, capacities: next } : d))
+            }
+          />
+
+          <div className="mt-4 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+            {/* Only where the team's catalog still has MD — delete the role
+                and the whole notion goes with it. */}
+            {supportsMD && (
+              <Checkbox
+                label="Require MD"
+                checked={rolesDraft.requiresMD}
+                disabled={busy}
+                onChange={(e) =>
+                  setRolesDraft((d) =>
+                    d ? { ...d, requiresMD: e.target.checked } : d
+                  )
+                }
+              />
+            )}
+            {/* Choir can't be turned OFF while singers are on it (they'd be
+                silently dropped) — the same rule the Choir section enforces. */}
+            <Checkbox
+              label="Include choir in set"
+              checked={rolesDraft.choirEnabled}
+              disabled={
+                busy || (set.choirEnabled && choirMembers.length > 0)
+              }
+              title={
+                set.choirEnabled && choirMembers.length > 0
+                  ? "Remove the choir members first."
+                  : undefined
+              }
+              onChange={(e) =>
+                setRolesDraft((d) =>
+                  d ? { ...d, choirEnabled: e.target.checked } : d
+                )
+              }
+            />
+          </div>
+
+          {/* Back to the org's default shape — only offered while this set
+              actually carries an override. */}
+          {set.slotCapacities && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                setRolesDraft((d) =>
+                  d
+                    ? { ...d, capacities: resolveTeamCapacities(catalog, null) }
+                    : d
+                )
+              }
+              className="mt-4 text-sm font-medium text-indigo-600 hover:underline disabled:opacity-60 dark:text-indigo-400"
+            >
+              Reset to the default team shape
+            </button>
+          )}
+        </Modal>
+      )}
+
       {/* Stacked confirm for removing a slot that still has a person in it. */}
       {slotToDelete && (
         <Modal
           open
           onClose={() => setSlotToDelete(null)}
-          title={`Remove ${INSTRUMENT_LABELS[slotToDelete.role]} slot?`}
+          title={`Remove ${labelFor(slotToDelete.role)} slot?`}
         >
           <p className="text-sm text-gray-600 dark:text-gray-400">
             {slotToDelete.user.name} is assigned to this{" "}
-            {INSTRUMENT_LABELS[slotToDelete.role]} slot. Removing the slot also
+            {labelFor(slotToDelete.role)} slot. Removing the slot also
             removes them from this set.
           </p>
           <div className="mt-4 flex justify-end gap-2">
@@ -1299,6 +1452,9 @@ function GroupChatLeadMenu({
   onSelect: (days: number | null) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Like the menus it lives inside: hover reveals the flyout, but a click
+  // LATCHES it open so the pointer can leave the row without it snapping shut.
+  const latched = useRef(false);
 
   // "No Auto GC" when off, otherwise "Auto GC " + the matching option label
   // ("3 days before" / "1 week before"). A lead time set outside this menu
@@ -1313,17 +1469,21 @@ function GroupChatLeadMenu({
     <div
       className="relative border-t border-gray-200 dark:border-gray-700"
       onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseLeave={() => {
+        if (!latched.current) setOpen(false);
+      }}
     >
       <button
         type="button"
         disabled={disabled}
-        // Touch devices have no hover, so a tap opens the flyout. The
-        // stopPropagation keeps that tap from closing the whole (⋮) menu,
+        // A tap/click latches the flyout open (and the next one closes it) —
+        // which is also what makes this work on touch, where there's no hover.
+        // The stopPropagation keeps that tap from closing the whole (⋮) menu,
         // which closes on any click inside it.
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((o) => !o);
+          latched.current = !latched.current;
+          setOpen(latched.current);
         }}
         className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
           text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50

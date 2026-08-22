@@ -2,19 +2,19 @@
 // The "Upcoming sets" card: lists upcoming sets, soonest first. By default it
 // shows EVERY upcoming set (in view); the "Show" filter narrows it to just the
 // sets I'm on. Sets I'm on carry the same confirm / request-swap actions as the
-// Set Manager tab; sets I'm not on are just clickable (open the roster modal).
+// My Sets tab; sets I'm not on are just clickable (open the roster modal).
 //   - Desktop (a `width` is given): a fixed-width, sticky sidebar the page
 //     resizes via the draggable divider (PanelDivider) to its left.
 //   - Mobile (no `width`): the whole Calendar tab on phones — its own heading +
 //     controls, then one standalone card per set (no wrapper panel).
 import { useMemo, useState } from "react";
+import { roleLabel } from "@/lib/teamRoles";
 import Button from "./common/Button";
 import LoadingDots from "./common/LoadingDots";
 import Select from "./common/Select";
 import RequestCoverModal from "./RequestCoverModal";
 import StatusBadge from "./StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "./Navbar";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
 import { selectUpcomingSets } from "@/lib/sets";
 import type { ApiSet } from "@/lib/types";
@@ -149,7 +149,7 @@ export default function MySetsPanel({
                 className="mt-2 flex flex-wrap items-center gap-2"
               >
                 <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
-                  {INSTRUMENT_LABELS[a.role]}
+                  {roleLabel(a.role)}
                 </span>
                 <StatusBadge status={a.status} />
                 {busyId === a.id ? (

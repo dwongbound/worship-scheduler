@@ -14,15 +14,17 @@ import InfoTooltip from "@/components/common/InfoTooltip";
 import Select from "@/components/common/Select";
 import LoadingDots from "@/components/common/LoadingDots";
 import Modal from "@/components/common/Modal";
+import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import { usePageLoading } from "@/components/LoadingProvider";
 import TemplateModal from "@/components/TemplateModal";
 import StagedScheduleModal from "@/components/StagedScheduleModal";
+import { DAY_LABELS } from "@/lib/constants";
 import {
-  DAY_LABELS,
-  INSTRUMENT_LABELS,
-  ROLE_ORDER,
-  resolveCapacities,
-} from "@/lib/constants";
+  DEFAULT_TEAM_ROLES,
+  bandRoles,
+  resolveTeamCapacities,
+  type TeamRoleDef,
+} from "@/lib/teamRoles";
 import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { requestTargetsTeams } from "@/lib/availabilityTargets";
@@ -42,15 +44,19 @@ const TEMPLATES_PER_PAGE = 4;
 
 // One-line "team shape" summary for the templates list, e.g.
 // "2× Electric Guitar, no Acoustic Guitar". Only lists roles that differ from
-// the default so common templates stay uncluttered; "" when all-default.
-function capacitiesSummary(caps: ApiSetTemplate["slotCapacities"]): string {
+// the TEAM's own default so common templates stay uncluttered; "" when
+// all-default. Roles are per-team, so the comparison needs that team's catalog.
+function capacitiesSummary(
+  caps: ApiSetTemplate["slotCapacities"],
+  catalog: TeamRoleDef[]
+): string {
   if (!caps) return "";
-  const defaults = resolveCapacities(null);
+  const defaults = resolveTeamCapacities(catalog, null);
   const parts: string[] = [];
-  for (const role of ROLE_ORDER) {
-    const n = caps[role];
-    if (n === undefined || n === defaults[role]) continue;
-    parts.push(n === 0 ? `no ${INSTRUMENT_LABELS[role]}` : `${n}× ${INSTRUMENT_LABELS[role]}`);
+  for (const role of bandRoles(catalog)) {
+    const n = caps[role.key];
+    if (n === undefined || n === defaults[role.key]) continue;
+    parts.push(n === 0 ? `no ${role.label}` : `${n}× ${role.label}`);
   }
   return parts.join(", ");
 }
@@ -381,20 +387,33 @@ export default function CreatePage() {
   const selectedUser = sortedUsers.find((u) => u.id === selectedUserId) ?? null;
   // The teams the selected request asked (empty = it went to the whole org).
   const selectedRequestTeams = selectedRequest?.teams ?? [];
+  // Everything of this person's that TOUCHES the request's window — matched by
+  // DATE, not by requestId. Days painted on the availability calendar are saved
+  // standalone (requestId null — see /api/availability/block-days), so the old
+  // `requestId === selected` test on SPECIFIC blocks hid exactly the individual
+  // dates an admin opens this modal to see. Sorted for reading: the weekly
+  // blocks first (in weekday order), then the one-off dates in date order.
   const visibleUnavailability: AdminUnavailabilityEntry[] = selectedUser && selectedRequest
-    ? selectedUser.unavailability.filter((entry) => {
-        if (entry.type === "SPECIFIC") {
-          return entry.requestId === selectedRequestId;
-        }
-        if (entry.type === "DATE_RANGE") {
-          const entryStart = entry.startDate ? new Date(entry.startDate) : null;
-          const entryEnd = entry.endDate ? new Date(entry.endDate) : null;
+    ? selectedUser.unavailability
+        .filter((entry) => {
           const reqStart = new Date(selectedRequest.startDate);
           const reqEnd = new Date(selectedRequest.endDate);
-          return entryStart && entryEnd && entryStart <= reqEnd && entryEnd >= reqStart;
-        }
-        return true;
-      })
+          if (entry.type === "RECURRING") {
+            // Repeats forever unless it was given a stop date.
+            return !entry.endDate || new Date(entry.endDate) >= reqStart;
+          }
+          if (!entry.startDate) return false;
+          const start = new Date(entry.startDate);
+          const end = entry.endDate ? new Date(entry.endDate) : start;
+          return start <= reqEnd && end >= reqStart;
+        })
+        .sort((a, b) => {
+          if (a.type === "RECURRING" || b.type === "RECURRING") {
+            if (a.type !== b.type) return a.type === "RECURRING" ? -1 : 1;
+            return (a.dayOfWeek ?? 0) - (b.dayOfWeek ?? 0);
+          }
+          return (a.startDate ?? "").localeCompare(b.startDate ?? "");
+        })
     : [];
 
   // The availability request chosen as the "Generate" scope (null unless the
@@ -458,12 +477,19 @@ export default function CreatePage() {
                           {t.team.name}
                         </span>
                       )}
-                      {capacitiesSummary(t.slotCapacities) && (
-                        // Non-default team shape, e.g. "3× Electric Guitar".
-                        <span className="block text-xs font-normal text-gray-500 dark:text-gray-400">
-                          {capacitiesSummary(t.slotCapacities)}
-                        </span>
-                      )}
+                      {(() => {
+                        // Compared against the template's own team's roles.
+                        const catalog =
+                          teams.find((x) => x.id === t.teamId)?.roles ??
+                          DEFAULT_TEAM_ROLES;
+                        const summary = capacitiesSummary(t.slotCapacities, catalog);
+                        return summary ? (
+                          // Non-default team shape, e.g. "3× Electric Guitar".
+                          <span className="block text-xs font-normal text-gray-500 dark:text-gray-400">
+                            {summary}
+                          </span>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="py-2 pr-4">
                       {/* Plural — it recurs every week (e.g. "Thursdays"). */}
@@ -871,21 +897,33 @@ export default function CreatePage() {
                   They haven&apos;t entered any unavailability blocks for this range.
                 </p>
               ) : (
-                <ul className="space-y-2">
-                  {visibleUnavailability.map((entry) => (
-                    <li
-                      key={`${entry.type}-${entry.startDate ?? ""}-${entry.startMinute ?? ""}-${entry.endMinute ?? ""}`}
-                      className="rounded-md bg-gray-50 px-3 py-2 text-sm dark:bg-gray-800/60"
-                    >
-                      <div>{formatUnavailability(entry)}</div>
-                      {entry.note && (
-                        <div className="mt-1 text-xs text-gray-500">
-                          {entry.note}
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
+                <>
+                  {/* Which DAYS are out, at a glance — a wall of "every Monday
+                      from…" lines never answered that. Read-only, opened on the
+                      request's first month, and keyed on the request so picking
+                      another one re-seeds the month instead of keeping this. */}
+                  <AvailabilityCalendar
+                    key={selectedRequest.id}
+                    entries={visibleUnavailability}
+                    initialMonth={new Date(selectedRequest.startDate)}
+                    compact
+                  />
+                  <ul className="space-y-2">
+                    {visibleUnavailability.map((entry) => (
+                      <li
+                        key={entry.id}
+                        className="rounded-md bg-gray-50 px-3 py-2 text-sm dark:bg-gray-800/60"
+                      >
+                        <div>{formatUnavailability(entry)}</div>
+                        {entry.note && (
+                          <div className="mt-1 text-xs text-gray-500">
+                            {entry.note}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )
             ) : (
               <p className="text-sm text-gray-500">
@@ -982,6 +1020,7 @@ export default function CreatePage() {
       <StagedScheduleModal
         plan={stagedPlan}
         users={users}
+        teams={teams}
         busy={busyAction === "apply"}
         onApply={applyPlan}
         onClose={() => setStagedPlan(null)}

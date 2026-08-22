@@ -5,7 +5,7 @@
 // them — so the trade is deterministic (erin has exactly one candidate: omar).
 //
 //   erin proposes to trade her set for omar's → both freeze at "Pending swap"
-//   → omar sees it in Cover Requests and accepts → both slots swap owners and
+//   → omar sees it under Covers / Swaps and accepts → both slots swap owners and
 //   land Confirmed. Finally we assert the team-stats counts moved: erin's
 //   "swaps requested" +1 and omar's "swaps taken" +1.
 import { expect, test, type Page } from "@playwright/test";
@@ -94,7 +94,7 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
     erinCard.getByRole("button", { name: "Cancel swap" })
   ).toBeVisible();
 
-  // ── omar accepts from his Cover Requests. ───────────────────────────────
+  // ── omar accepts from his Covers / Swaps section. ───────────────────────────────
   await login(page, "omar");
   await page.goto("/swaps");
   const incoming = page.locator("li").filter({ hasText: "Erin Evans" }).first();

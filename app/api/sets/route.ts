@@ -5,7 +5,7 @@
 // ?from=YYYY-MM-DD&to=YYYY-MM-DD pick the window; each side defaults to today ±
 // SETS_WINDOW_DEFAULT_DAYS, so callers that pass nothing behave exactly as this
 // endpoint always did. The calendar widens `to` as you page into later months
-// and the Set Manager passes its horizon, so nothing is ever created outside
+// and My Sets passes its horizon, so nothing is ever created outside
 // what some view can reach (see lib/sets.ts resolveSetsWindow).
 // POST /api/sets — an org admin creates a one-off ("ad-hoc") set from the
 // calendar's inline "+" button. Org comes from the set's team.
@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { resolveOrgScope, requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 import { resolveSetsWindow, visibleSetsFilter } from "@/lib/sets";
 
@@ -49,7 +50,15 @@ export async function GET(req: NextRequest) {
     orderBy: { startsAt: "asc" },
     include: {
       org: { select: { id: true, name: true } },
-      team: { select: { id: true, name: true } },
+      // The team's role catalog rides along: the roster, capacity editor and
+      // auto-fill all read a set's roles from ITS team, never a fixed list.
+      team: {
+        select: {
+          id: true,
+          name: true,
+          roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
+        },
+      },
       assignments: {
         include: { user: { select: { id: true, name: true, isMD: true } } },
       },

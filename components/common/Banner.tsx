@@ -32,7 +32,7 @@ export default function Banner({
 }) {
   return (
     <div className={`w-full ${TONE_CLASSES[tone]}`}>
-      <div className="mx-auto flex max-w-5xl items-center justify-between gap-3 px-4 py-2.5 text-sm">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-2.5 text-sm sm:px-6 lg:px-8">
         <span>
           {children}
           {/* Trailing call-to-action arrow, right after the text and bold. */}

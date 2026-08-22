@@ -43,10 +43,12 @@ export async function GET(req: NextRequest) {
         select: { requestId: true, completedAt: true, edited: true },
       },
       // The assignment dropdowns (SetDetailModal) use these to flag people who
-      // are unavailable at a given set's time. Busy blocks are global to the
-      // person by design (they apply to every org).
+      // are unavailable at a given set's time, and the Create tab's
+      // availability modal draws them as a read-only month. Busy blocks are
+      // global to the person by design (they apply to every org).
       unavailability: {
         select: {
+          id: true,
           type: true,
           dayOfWeek: true,
           startMinute: true,

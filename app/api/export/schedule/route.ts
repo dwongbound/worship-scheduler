@@ -5,13 +5,16 @@
 // re-load them scoped to the caller's orgs + private-set rules, so ids the
 // caller can't see are silently dropped.
 import { NextResponse } from "next/server";
+import { roleLabel } from "@/lib/teamRoles";
 import ExcelJS from "exceljs";
 import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { resolveOrgScope } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { buildIcs } from "@/lib/ics";
 import { buildScheduleGrid, type GridSet } from "@/lib/scheduleGrid";
-import { INSTRUMENT_LABELS, type Instrument } from "@/lib/constants";
+import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
+import type { TeamRoleDef } from "@/lib/teamRoles";
+import { type Instrument } from "@/lib/constants";
 import { visibleSetsFilter } from "@/lib/sets";
 
 // Pastel fill cycled per service day (header shade + lighter body shade),
@@ -59,7 +62,13 @@ export async function POST(req: Request) {
     },
     orderBy: { startsAt: "asc" },
     include: {
-      team: { select: { name: true } },
+      // The team's catalog decides which role rows the grid has — teams differ.
+      team: {
+        select: {
+          name: true,
+          roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
+        },
+      },
       assignments: {
         include: { user: { select: { name: true } } },
         orderBy: { role: "asc" },
@@ -84,7 +93,7 @@ export async function POST(req: Request) {
       id: set.id,
       title: set.label?.trim() || set.team?.name || "Worship Set",
       description: set.assignments
-        .map((a) => `${INSTRUMENT_LABELS[a.role as Instrument]}: ${a.user.name}`)
+        .map((a) => `${roleLabel(a.role as Instrument)}: ${a.user.name}`)
         .join("\n"),
       start: set.startsAt,
       durationMinutes: set.durationMinutes,
@@ -105,6 +114,7 @@ type LoadedSet = {
   notes: string | null;
   startsAt: Date;
   slotCapacities: unknown;
+  team: { roles: TeamRoleDef[] } | null;
   assignments: { role: string; user: { name: string } }[];
 };
 
@@ -117,6 +127,7 @@ async function buildWorkbook(sets: LoadedSet[]): Promise<ArrayBuffer> {
         notes: s.notes,
         startsAt: s.startsAt,
         slotCapacities: s.slotCapacities as GridSet["slotCapacities"],
+        roles: s.team?.roles ?? null,
         assignments: s.assignments.map((a) => ({
           role: a.role as Instrument,
           userName: a.user.name,

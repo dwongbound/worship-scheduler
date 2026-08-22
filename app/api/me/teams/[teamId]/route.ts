@@ -1,15 +1,17 @@
 // PUT /api/me/teams/:teamId — join a team (if not already on it) and/or set MY
-// roles on it. Body: { roles: Instrument[] }. Roles are per-team, and users
-// manage their own — no admin needed.
+// roles on it. Body: { roles: string[] } of TeamRole keys. Roles are per-team,
+// and users manage their own — with one exception: a role marked ADMIN-ONLY is
+// an admin's to grant (the same rule MD has always had), so this route ignores
+// any attempt to add one and preserves whatever an admin already gave you.
 // DELETE /api/me/teams/:teamId — leave the team (drops my roles there too).
 //
 // Both validate that the team belongs to one of the caller's orgs, so nobody can
 // join a team in an org they haven't joined.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { ALL_INSTRUMENTS } from "@/lib/constants";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { getTeamCatalog } from "@/lib/teamRoleStore";
 
 // The team must exist AND sit in an org the caller belongs to.
 async function assertJoinable(userId: string, teamId: string) {
@@ -34,9 +36,27 @@ export async function PUT(
   if (!team) return NextResponse.json({ error: "Unknown team" }, { status: 404 });
 
   const body = await req.json().catch(() => ({}));
-  const roles = Array.isArray(body.roles)
-    ? body.roles.filter((r: unknown) => (ALL_INSTRUMENTS as string[]).includes(r as string))
+  const catalog = await getTeamCatalog(teamId);
+  // Only roles this team actually offers, and only the ones I'm allowed to pick
+  // for myself.
+  const selfServe = new Set(
+    catalog.filter((r) => !r.adminOnly).map((r) => r.key)
+  );
+  const asked: string[] = Array.isArray(body.roles)
+    ? body.roles.filter((r: unknown) => typeof r === "string")
     : [];
+  const roles = [...new Set(asked.filter((r) => selfServe.has(r)))];
+
+  // Admin-only roles I already hold are kept: this route can neither grant them
+  // nor take them away, so they pass through untouched.
+  const existing = await prisma.teamMember.findUnique({
+    where: { teamId_userId: { teamId, userId: user.id } },
+    select: { roles: true },
+  });
+  const adminGranted = (existing?.roles ?? []).filter(
+    (r) => !selfServe.has(r) && catalog.some((c) => c.key === r)
+  );
+  roles.push(...adminGranted);
 
   // Upsert: joining creates the row (roles default to []), editing overwrites.
   const member = await prisma.teamMember.upsert({

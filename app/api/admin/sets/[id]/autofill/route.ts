@@ -17,6 +17,7 @@ import { prisma } from "@/lib/prisma";
 import { CHOIR, type Instrument, type SlotCapacityMap } from "@/lib/constants";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import { availableChoirMembers, buildSchedule } from "@/lib/scheduler";
+import { getTeamCatalog } from "@/lib/teamRoleStore";
 import { defaultMDId, isValidMD } from "@/lib/md";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -101,6 +102,8 @@ export async function POST(
     id: set.id,
     startsAt: set.startsAt,
     durationMinutes: set.durationMinutes,
+    // Which roles this set has at all, and their default counts — its team's.
+    roles: await getTeamCatalog(set.teamId),
     capacities: set.slotCapacities as SlotCapacityMap | null,
     requiresMD: set.requiresMD,
     // Only this set's team members are eligible for the fill.

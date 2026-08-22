@@ -5,8 +5,11 @@
 // role (keys / electric guitar / bass — see MD_ROLES), and NOT be the worship
 // leader. These helpers are the single source of that rule, reused by the detail
 // modal, the generate preview, the API, and the Slack summary.
-import type { Instrument } from "@/lib/generated/prisma/client";
-import { MD_ROLES, ROLE_ORDER } from "@/lib/constants";
+//
+// MD eligibility is pinned to the BUILT-IN role keys. Now that a team owns its
+// catalog, a team that renames or drops keys/electric/bass simply has nobody
+// eligible to MD — deliberately, since custom roles carry no MD semantics.
+import { MD_ROLES, ROLE_ORDER, type Instrument } from "@/lib/constants";
 
 // The minimal per-assignment shape these helpers need. `isMD` is the assignee's
 // global musical-director flag (User.isMD); it may be absent on client refs, in

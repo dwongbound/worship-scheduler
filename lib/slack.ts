@@ -10,6 +10,7 @@
 // This module is server-only (it imports prisma). The client talks to it via
 // the API routes, never by importing it directly.
 import { prisma } from "./prisma";
+import { orderedRoles, roleLabel, type TeamRoleDef } from "./teamRoles";
 import type { Prisma } from "./generated/prisma/client";
 import { decryptSecret } from "./crypto";
 import { createOrSyncSetPlaylist, isOrgSpotifyConnected } from "./spotify";
@@ -254,14 +255,15 @@ export async function postDirectMessageTo(
 }
 
 // Create a PRIVATE channel and return its id. Channel names must be lowercase
-// and unique in the workspace, so on a name clash we retry once with a short
-// random suffix. Needs the groups:write scope (added at install).
+// and unique in the workspace (archived channels keep theirs), so on a name
+// clash we retry with a counted "-2"/"-3" suffix — people read these names, so
+// a readable tiebreaker beats a random hash. Needs groups:write (added at
+// install).
 export async function createPrivateChannel(
   token: string | null,
   name: string
 ): Promise<string | null> {
-  const suffix = Math.random().toString(36).slice(2, 6);
-  for (const candidate of [name, `${name}-${suffix}`]) {
+  for (const candidate of [name, `${name}-2`, `${name}-3`]) {
     const data = await slackApi(
       "conversations.create",
       { name: candidate, is_private: true },
@@ -358,9 +360,10 @@ function setTopicName(set: SetLike): string {
 }
 
 // A Slack channel name from a set: lowercase, only a-z/0-9/hyphen, ≤72 chars
-// (leaving room for the collision-retry suffix). e.g. "jul-12-sunday-worship".
+// (leaving room for the collision-retry suffix). Name first, date second —
+// e.g. "large-group-9-4-26" — so the channel list sorts by set, not by date.
 function channelNameForSet(set: SetLike): string {
-  return `${shortDateLabel(set.startsAt)}-${set.label ?? "worship-set"}`
+  return `${set.label ?? "worship-set"}-${shortDateLabel(set.startsAt)}`
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
@@ -370,7 +373,10 @@ function channelNameForSet(set: SetLike): string {
 // "Worship Leader: Alice\nVocals: Bob, Carol\n…" in scarce-first role order,
 // skipping roles nobody is filling.
 export function teamRosterText(
-  assignments: { role: Instrument; user: { name: string } }[]
+  assignments: { role: Instrument; user: { name: string } }[],
+  // The set's team catalog, so roles read in that team's own names and order.
+  // Omitted → the built-in ordering, with unknown keys humanized by roleLabel.
+  catalog?: TeamRoleDef[]
 ): string {
   const namesByRole = new Map<Instrument, string[]>();
   for (const a of assignments) {
@@ -378,8 +384,15 @@ export function teamRosterText(
     names.push(a.user.name);
     namesByRole.set(a.role, names);
   }
-  return ALL_INSTRUMENTS.filter((role) => namesByRole.has(role))
-    .map((role) => `*${INSTRUMENT_LABELS[role]}:* ${namesByRole.get(role)!.join(", ")}`)
+  const order = catalog?.length
+    ? orderedRoles(catalog).map((r) => r.key)
+    : ALL_INSTRUMENTS;
+  // Anything the catalog doesn't mention (a role the team has since dropped)
+  // still gets listed, after the roles it does.
+  const extras = [...namesByRole.keys()].filter((r) => !order.includes(r));
+  return [...order, ...extras]
+    .filter((role) => namesByRole.has(role))
+    .map((role) => `*${roleLabel(role, catalog)}:* ${namesByRole.get(role)!.join(", ")}`)
     .join("\n");
 }
 
@@ -481,7 +494,7 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
 
   const url = appUrl("/swaps");
   const text =
-    `🎚️ A ${INSTRUMENT_LABELS[assignment.role]} slot on ` +
+    `🎚️ A ${roleLabel(assignment.role)} slot on ` +
     `${setLabel(assignment.set)} just opened up for swap.` +
     (url ? ` Take it here: ${url}` : "");
 
@@ -518,7 +531,7 @@ export async function notifySwapTaken(
   if (!owner?.slackUserId) return;
 
   const text =
-    `✅ ${takerName} took your ${INSTRUMENT_LABELS[assignment.role]} slot on ` +
+    `✅ ${takerName} took your ${roleLabel(assignment.role)} slot on ` +
     `${setLabel(assignment.set)}. You're off the hook!`;
   await postDirectMessageTo(token, owner, text);
 }
@@ -574,7 +587,7 @@ export async function notifySwapProposed(proposalId: string): Promise<void> {
   const url = appUrl("/swaps");
   const text =
     `🔁 ${p.requestedBy.name} wants to swap their ` +
-    `${INSTRUMENT_LABELS[p.fromAssignment.role]} slot on ` +
+    `${roleLabel(p.fromAssignment.role)} slot on ` +
     `${setLabel(p.fromAssignment.set)} for yours on ` +
     `${setLabel(p.toAssignment.set)}.` +
     (url ? ` Accept or decline here: ${url}` : "");
@@ -665,7 +678,7 @@ export async function notifyAdminsPendingApproval(
   const url = appUrl("/approvals");
   const what = info.kind === "cover" ? "cover" : "swap";
   const text =
-    `🛎️ A ${INSTRUMENT_LABELS[info.role]} ${what} on ${setLabel(info.set)} ` +
+    `🛎️ A ${roleLabel(info.role)} ${what} on ${setLabel(info.set)} ` +
     `is awaiting your approval.` +
     (url ? ` Review it here: ${url}` : "");
 
@@ -693,6 +706,9 @@ export async function messageSetTeamOnSlack(
       startsAt: true,
       orgId: true,
       groupChatChannelId: true,
+      // The team's catalog, so the roster reads in this team's own role names
+      // and order rather than the built-in ones.
+      team: { select: { roles: { orderBy: { order: "asc" } } } },
       assignments: {
         select: { userId: true, role: true, user: { select: { name: true } } },
       },
@@ -746,7 +762,7 @@ export async function messageSetTeamOnSlack(
 
   const text =
     `🙏 Thanks for serving! Your upcoming set is ${setLabel(set)}.\n\n` +
-    `Here's everyone playing in it:\n${teamRosterText(set.assignments)}`;
+    `Here's everyone playing in it:\n${teamRosterText(set.assignments, set.team?.roles)}`;
   const posted = await postToChannel(token, channelId, text);
 
   // Auto-build the set's collaborative Spotify playlist alongside the group chat
@@ -935,14 +951,17 @@ export function weeklySummaryText(
     const header = `*${set.label ?? "Worship set"}* — ${formatDay(set.startsAt)} · ${formatTime(set.startsAt)}`;
     // Sort into display order (band roles then choir), keeping the original
     // order within a role.
+    // Built-in display order, with anything custom after it (indexOf gives -1
+    // for a role that isn't built in, which would otherwise sort it first).
+    const rank = (role: string) => {
+      const i = ALL_INSTRUMENTS.indexOf(role);
+      return i === -1 ? ALL_INSTRUMENTS.length : i;
+    };
     const lines = [...set.assignments]
-      .sort(
-        (a, b) =>
-          ALL_INSTRUMENTS.indexOf(a.role) - ALL_INSTRUMENTS.indexOf(b.role)
-      )
+      .sort((a, b) => rank(a.role) - rank(b.role))
       .map(
         (a) =>
-          `• ${a.user.name} — ${INSTRUMENT_LABELS[a.role]}${a.user.id === set.mdUserId ? " (MD)" : ""}`
+          `• ${a.user.name} — ${roleLabel(a.role)}${a.user.id === set.mdUserId ? " (MD)" : ""}`
       );
     if (lines.length === 0) lines.push("• _No one assigned yet_");
     return [header, ...lines].join("\n");

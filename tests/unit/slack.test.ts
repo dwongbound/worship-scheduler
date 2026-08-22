@@ -118,7 +118,7 @@ describe("createPrivateChannel", () => {
     });
   });
 
-  it("retries once with a suffix when the name is taken", async () => {
+  it("retries with a counted suffix when the name is taken", async () => {
     const fetchMock = mockFetchSequence(
       { ok: false, error: "name_taken" }, // first candidate clashes
       { ok: true, channel: { id: "C99" } } // suffixed candidate succeeds
@@ -126,19 +126,17 @@ describe("createPrivateChannel", () => {
     const channel = await createPrivateChannel("xoxb-test-token", "jul-12-sunday");
     expect(channel).toBe("C99");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    // The retry uses a different (suffixed) name.
-    const firstName = JSON.parse(
-      (fetchMock.mock.calls[0][1] as RequestInit).body as string
-    ).name;
-    const secondName = JSON.parse(
-      (fetchMock.mock.calls[1][1] as RequestInit).body as string
-    ).name;
-    expect(secondName).not.toBe(firstName);
-    expect(secondName.startsWith("jul-12-sunday-")).toBe(true);
+    // The retry appends a readable counter — never a random hash, since people
+    // read these channel names in Slack.
+    const nameAt = (i: number) =>
+      JSON.parse((fetchMock.mock.calls[i][1] as RequestInit).body as string).name;
+    expect(nameAt(0)).toBe("jul-12-sunday");
+    expect(nameAt(1)).toBe("jul-12-sunday-2");
   });
 
-  it("returns null when both attempts fail", async () => {
+  it("returns null when every attempt fails", async () => {
     mockFetchSequence(
+      { ok: false, error: "name_taken" },
       { ok: false, error: "name_taken" },
       { ok: false, error: "name_taken" }
     );

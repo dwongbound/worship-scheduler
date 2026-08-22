@@ -10,7 +10,9 @@ import { ReactNode, useEffect } from "react";
 interface ModalProps {
   open: boolean;
   onClose: () => void;
-  title: string;
+  // Usually a string, but any node works — CreateSetModal passes an input so
+  // the heading itself is the set's name.
+  title: ReactNode;
   // Optional muted text rendered inline after the title (e.g. a set's date).
   subtitle?: ReactNode;
   // Optional element pinned to the right of the title itself (e.g. an org
