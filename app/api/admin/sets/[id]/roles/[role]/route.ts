@@ -10,28 +10,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import {
-  SLOT_CAPACITIES,
-  resolveCapacities,
-  type SlotCapacityMap,
-} from "@/lib/constants";
+import type { SlotCapacityMap } from "@/lib/constants";
+import { getTeamCatalog } from "@/lib/teamRoleStore";
+import { resolveTeamCapacities } from "@/lib/teamRoles";
 
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string; role: string }> }
 ) {
-  const { id, role } = await params;
-  if (!(role in SLOT_CAPACITIES)) {
-    return NextResponse.json({ error: "Unknown role" }, { status: 400 });
-  }
-  const instrument = role as keyof typeof SLOT_CAPACITIES;
+  const { id, role: instrument } = await params;
 
   const set = await prisma.set.findUnique({
     where: { id },
-    select: { slotCapacities: true, orgId: true },
+    select: { slotCapacities: true, orgId: true, teamId: true },
   });
   if (!set) {
     return NextResponse.json({ error: "Set not found" }, { status: 404 });
+  }
+  // A role only exists relative to a team's catalog now.
+  const catalog = await getTeamCatalog(set.teamId);
+  if (!catalog.some((r) => r.key === instrument)) {
+    return NextResponse.json({ error: "Unknown role" }, { status: 400 });
   }
   const admin = await requireOrgAdminFor(set.orgId);
   if (!admin) {
@@ -58,7 +57,10 @@ export async function DELETE(
   const stored = set.slotCapacities as SlotCapacityMap | null;
   const capacities: SlotCapacityMap = {
     ...(stored ?? {}),
-    [instrument]: Math.max(0, resolveCapacities(stored)[instrument] - 1),
+    [instrument]: Math.max(
+      0,
+      (resolveTeamCapacities(catalog, stored)[instrument] ?? 0) - 1
+    ),
   };
 
   await prisma.$transaction([

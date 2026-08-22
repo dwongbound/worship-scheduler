@@ -1,5 +1,6 @@
 "use client";
-// Members modal for one team: the current roster (with a per-person active
+// Management modal for one team: its ROLE CATALOG (what roles this team has and
+// how many of each a set wants), the current roster (with a per-person active
 // toggle + remove), an autocomplete input to add people, the team's Slack
 // channel + weekly-summary send button, and the team's delete button. Fully prop-driven so both the
 // Team tab and the Org settings page can drive it with their own state.
@@ -8,9 +9,11 @@ import Button from "@/components/common/Button";
 import Checkbox from "@/components/common/Checkbox";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
+import TeamRolesEditor from "@/components/TeamRolesEditor";
 import Select from "@/components/common/Select";
 import { orgHeaders } from "@/lib/api";
 import { DAY_LABELS } from "@/lib/constants";
+import { DEFAULT_TEAM_ROLES } from "@/lib/teamRoles";
 import { minutesToTimeLabel, timeStringToMinutes } from "@/lib/dates";
 import type { ApiAdminUser, ApiTeam, ApiWeeklyReminder } from "@/lib/types";
 
@@ -203,6 +206,16 @@ export default function TeamMembersModal({
         </>
       }
     >
+      {/* This team's role catalog. It sits above the roster on purpose: the
+          roles decide what the members can even be assigned to. */}
+      <div className="mb-5 border-b border-gray-200 pb-4 dark:border-gray-700">
+        <TeamRolesEditor
+          teamId={team.id}
+          roles={team.roles ?? DEFAULT_TEAM_ROLES}
+          onSaved={onSaved}
+        />
+      </div>
+
       {/* Current roster */}
       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400">
         Members ({members.length})

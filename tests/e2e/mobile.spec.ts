@@ -19,15 +19,14 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   await login(page, "bob");
 
   // The desktop tab strip is display:none on phones (getByRole ignores hidden),
-  // so its full "Set Manager" label isn't reachable...
-  await expect(page.getByRole("link", { name: "Set Manager" })).toHaveCount(0);
-  // ...while the bottom bar's short "My Sets" label is, and it navigates.
+  // so only the bottom bar's copy of each tab is reachable — and it navigates.
   const setsTab = page.getByRole("link", { name: "My Sets", exact: true });
+  await expect(setsTab).toHaveCount(1);
   await expect(setsTab).toBeVisible();
   await setsTab.click();
 
   await expect(page).toHaveURL(/\/swaps/);
-  await expect(page.getByRole("heading", { name: "My Sets" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Confirmed" })).toBeVisible();
 });
 
 test("phone calendar shows the My sets list, not the month grid", async ({ page }) => {
@@ -111,11 +110,11 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
   await expect(page.getByText("Prayer Cover Mobile")).toHaveCount(0);
 });
 
-test("phone Set Manager hides the desktop-only .ics export", async ({ page }) => {
+test("phone My Sets hides the desktop-only .ics export", async ({ page }) => {
   await login(page, "bob");
   await page.goto("/swaps");
 
-  await expect(page.getByRole("heading", { name: "My Sets" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Confirmed" })).toBeVisible();
   // The export button is desktop-only (hidden sm:block) — present but not shown.
   await expect(page.getByText("Export all my sets (.ics)")).toBeHidden();
 });
@@ -126,23 +125,48 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
   await login(page, "carol");
   await page.goto("/schedule");
 
-  // The click-to-block calendar is desktop-only (hidden below lg), so on a
-  // phone "Block out times" is the only way to add a block. It needs no admin
-  // request, unlike the Admin Requests form above it.
+  // The month calendar is desktop-only (hidden below lg); the phone gets the
+  // week strip instead, and the form below it still works either way. Neither
+  // needs an availability request, unlike the request cards above them.
   await expect(page.locator("[data-tour='avail-calendar']")).toBeHidden();
 
   const blockOutTimes = sectionByHeading(page, "Block out times");
-  await blockOutTimes.getByRole("button", { name: "Specific date(s)" }).click();
+  await blockOutTimes.getByRole("button", { name: "Specific times" }).click();
   await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
   await pickSingleDay(page);
-  await blockOutTimes.getByRole("button", { name: "Block these dates" }).click();
+  await blockOutTimes.getByRole("button", { name: "Block these times" }).click();
 
-  // It lands in the Busy Blocks list as an all-day entry.
+  // It lands in the My availability list as an all-day entry.
   const blockEntry = page.getByRole("listitem").filter({ hasText: "All day" });
   await expect(blockEntry.first()).toBeVisible();
 
   // Clean up so the block doesn't leak into later specs.
   await page.getByRole("button", { name: "Delete" }).first().click();
+  await expect(blockEntry).toHaveCount(0);
+});
+
+test("phone week strip blocks a day with one tap", async ({ page }) => {
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  // The strip replaces the desktop calendar below lg: today is always in the
+  // week it opens on, and tapping a free day blocks it all day.
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const todayYmd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
+    now.getDate()
+  )}`;
+  const todayCell = page.locator(`[data-date="${todayYmd}"]`);
+  await expect(todayCell).toBeVisible();
+  await todayCell.click();
+
+  // It lands in the My availability list, and the cell now reads as blocked.
+  const blockEntry = page.getByRole("listitem").filter({ hasText: "All day" });
+  await expect(blockEntry.first()).toBeVisible();
+  await expect(todayCell).toHaveAttribute("aria-pressed", "true");
+
+  // Tapping it again clears it — the same toggle the calendar's click has.
+  await todayCell.click();
   await expect(blockEntry).toHaveCount(0);
 });
 
@@ -158,13 +182,14 @@ test("phone: adds and deletes a recurring weekly block via the single-panel adde
   // column instead of the sm two-column grid.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  // Days and times are multi-select chips: Tuesday is on by default, so just
+  // Days are a multi-select strip and times a checkbox list: Tuesday is on
+  // by default, so just
   // swap the default "All day" window for Morning.
   await expect(
     blockOutTimes.getByRole("button", { name: "Tuesday" })
   ).toHaveAttribute("aria-pressed", "true");
-  await blockOutTimes.getByRole("button", { name: "All day" }).click();
-  await blockOutTimes.getByRole("button", { name: "Morning (6am–12pm)" }).click();
+  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
+  await blockOutTimes.getByRole("checkbox", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
     .click();
@@ -185,8 +210,8 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   await page.goto("/schedule");
 
   // The submit-confirmation modal is viewport-independent; make sure the whole
-  // "Submit Response" → confirm → "Make changes" loop works on a phone too.
-  await page.getByRole("button", { name: "Submit Response" }).click();
+  // "Submit response" → confirm → "Make changes" loop works on a phone too.
+  await page.getByRole("button", { name: "Submit response" }).click();
   const modal = page
     .getByRole("dialog")
     .filter({ hasText: "Submit your response?" });
@@ -194,12 +219,13 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByText(/Submitted on|Updated on/)).toBeVisible();
+  // The card flips to a "Sent" badge.
+  await expect(page.getByText("Sent", { exact: true })).toBeVisible();
 
-  // "Make changes" re-opens the form (unsubmits) so the response can be edited.
+  // "Make changes" re-opens it (unsubmits) so the response can be edited.
   await page.getByRole("button", { name: "Make changes" }).click();
   await expect(
-    page.getByRole("button", { name: "Submit Response" })
+    page.getByRole("button", { name: "Submit response" })
   ).toBeVisible();
 });
 
@@ -210,16 +236,16 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
   await login(page, "carol");
   await page.goto("/schedule");
 
-  const adminRequests = sectionByHeading(page, "Admin Requests");
-
-  // Block today (an all-day block, the form's default preset) within the
-  // active request's window.
-  await adminRequests.getByLabel("Dates to block", { exact: true }).click();
+  // No calendar on a phone, so the general "Block out times" form is the only
+  // way to block a day inside the active request's window.
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Specific times" }).click();
+  await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
   await pickSingleDay(page);
-  await adminRequests.getByRole("button", { name: "Block these dates" }).click();
+  await blockOutTimes.getByRole("button", { name: "Block these times" }).click();
 
   // Re-opening the picker shows a red "full day" dot on today (the dayMarker).
-  await adminRequests.getByLabel("Dates to block", { exact: true }).click();
+  await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
   const todayCell = page
     .getByRole("dialog")
     .getByRole("button", { name: String(new Date().getDate()), exact: true });
@@ -228,7 +254,7 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
 
   // The submit-confirmation modal breaks the blocked day out instead of
   // claiming full availability.
-  await page.getByRole("button", { name: "Submit Response" }).click();
+  await page.getByRole("button", { name: "Submit response" }).click();
   const modal = page
     .getByRole("dialog")
     .filter({ hasText: "Submit your response?" });
@@ -242,7 +268,7 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
   await page.getByRole("button", { name: "Delete" }).first().click();
 });
 
-// ── Cover Requests: accepting / rejecting a targeted swap by TAP. ───────────
+// ── Covers / Swaps: accepting / rejecting a targeted swap by TAP. ──────────
 // Reported symptom: on a phone, tapping "Accept" appeared to freeze the page.
 // These use page.tap() rather than .click() on purpose — a tap dispatches real
 // touch events, which is the only way SwipePager's window-level touchstart /

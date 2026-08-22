@@ -15,10 +15,11 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { roleLabel } from "@/lib/teamRoles";
 import Link from "next/link";
 import StatusBadge from "./StatusBadge";
 import LoadingDots from "./common/LoadingDots";
-import { INSTRUMENT_LABELS, type AssignmentStatus } from "@/lib/constants";
+import { type AssignmentStatus } from "@/lib/constants";
 import { formatTime } from "@/lib/dates";
 import { setStatus } from "@/lib/setStatus";
 import type { ApiSet, ApiSwapRequest } from "@/lib/types";
@@ -508,7 +509,7 @@ function SlotChip({
                         key={a.id}
                         className="flex items-center justify-between gap-3 whitespace-nowrap text-gray-700 dark:text-gray-300"
                       >
-                        <span>{INSTRUMENT_LABELS[a.role]}</span>
+                        <span>{roleLabel(a.role)}</span>
                         <ConfirmControl
                           status={a.status}
                           busy={busyId === a.id}
@@ -532,7 +533,7 @@ function SlotChip({
                   >
                     <p className="mb-1 text-gray-500 dark:text-gray-400">
                       Cover needed — you can take{" "}
-                      {covers.map((c) => INSTRUMENT_LABELS[c.role]).join(", ")}.
+                      {covers.map((c) => roleLabel(c.role)).join(", ")}.
                     </p>
                     {/* The requesters' optional notes, if any. */}
                     {covers.some((c) => c.reason) && (

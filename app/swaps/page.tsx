@@ -1,12 +1,16 @@
 "use client";
-// Swaps tab ("Set Manager" in the navbar):
-//   1. My sets — confirm (individually or all at once) or request a swap.
-//      A horizon dropdown picks how far ahead the list reaches (default 3
-//      months); it also sizes the /api/sets fetch, so every row shown can
-//      always open its Details modal.
-//   2. Open swap requests from teammates who play my instrument(s) —
-//      one click takes over their slot (which then needs MY confirmation).
-import { useCallback, useEffect, useMemo, useState } from "react";
+// "My Sets" tab — everything I'm on, split by what each set is waiting on:
+//   1. Covers / Swaps — cover requests I could take, targeted swaps proposed
+//      to me, and my own slots mid-handoff (cover offered, swap in progress,
+//      or taken and awaiting an admin's approval). Everything in flight.
+//   2. Pending — sets needing MY confirmation, individually or all at once.
+//   3. Confirmed — settled sets, with the .ics exports.
+// One horizon dropdown at the top governs all three (default 3 months); it
+// also sizes the /api/sets fetch, so every row shown can open its Details
+// modal. Anything past it is counted next to the dropdown, never silently
+// dropped.
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { roleLabel } from "@/lib/teamRoles";
 import { useSession } from "next-auth/react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
@@ -21,7 +25,7 @@ import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import Select from "@/components/common/Select";
-import { INSTRUMENT_LABELS, SET_MANAGER_HORIZONS } from "@/lib/constants";
+import { SET_MANAGER_HORIZONS } from "@/lib/constants";
 import { formatDay, formatTime, toYmd } from "@/lib/dates";
 import type {
   ApiAdminUser,
@@ -34,7 +38,7 @@ import type {
 export default function SwapsPage() {
   const [mine, setMine] = useState<ApiMyAssignment[] | null>(null);
   const [openSwaps, setOpenSwaps] = useState<ApiSwapRequest[] | null>(null);
-  // Targeted trades awaiting MY accept/reject (shown in Cover Requests).
+  // Targeted trades awaiting MY accept/reject (shown under Covers / Swaps).
   const [incoming, setIncoming] = useState<ApiIncomingSwap[] | null>(null);
   // The assignment I'm offering in the swap picker (null = picker closed).
   // The assignment whose "Request cover" reason modal is open, or null.
@@ -205,42 +209,96 @@ export default function SwapsPage() {
   usePageLoading(!mine || !openSwaps || !allSets || !incoming);
   if (!mine || !openSwaps || !allSets || !incoming) return null;
 
-  // Rows past the chosen horizon are hidden here rather than server-side —
-  // /api/assignments has no window and the payload is one person's own sets,
-  // so trimming in the client keeps the API surface unchanged.
-  const visibleMine = mine.filter(
-    (a) => new Date(a.set.startsAt).getTime() <= horizonEnd.getTime()
+  // The horizon, as one test every list on the page runs through. Rows are
+  // trimmed here rather than server-side — only /api/sets takes a window; the
+  // other three payloads are small and already scoped to upcoming rows, so
+  // filtering in the client keeps the API surface unchanged.
+  const withinHorizon = (startsAt: string) =>
+    new Date(startsAt).getTime() <= horizonEnd.getTime();
+
+  const visibleIncoming = incoming.filter((s) =>
+    withinHorizon(s.receive.startsAt)
   );
-  const hiddenCount = mine.length - visibleMine.length;
-  // Counted over ALL my sets, not just the visible ones: /api/assignments/
-  // confirm-all confirms every pending assignment server-side, so scoping this
-  // to the horizon would advertise a smaller number than the button performs.
-  const pendingCount = mine.filter((a) => a.status === "PENDING").length;
+  const visibleOpenSwaps = openSwaps.filter((s) => withinHorizon(s.set.startsAt));
+  // My assignments, split by what each is waiting on — every status lands in
+  // exactly one section, so no set is listed twice or not at all.
+  const visibleMine = mine.filter((a) => withinHorizon(a.set.startsAt));
+  const inFlight = visibleMine.filter(
+    (a) =>
+      a.status === "SWAP_REQUESTED" ||
+      a.status === "PENDING_SWAP" ||
+      a.status === "PENDING_APPROVAL"
+  );
+  const pending = visibleMine.filter((a) => a.status === "PENDING");
+  // Counted over ALL my sets, not just the visible ones: confirm-all confirms
+  // every pending assignment server-side, so scoping this number to the
+  // horizon would advertise less than the button performs. The "further out"
+  // note above accounts for the gap when the two differ.
+  const pendingTotal = mine.filter((a) => a.status === "PENDING").length;
+  const confirmed = visibleMine.filter((a) => a.status === "CONFIRMED");
+  // Everything the horizon is holding back, across all three sections — said
+  // out loud next to the dropdown so a short window never looks like an empty
+  // schedule.
+  const hiddenCount =
+    mine.length -
+    visibleMine.length +
+    (incoming.length - visibleIncoming.length) +
+    (openSwaps.length - visibleOpenSwaps.length);
   // The full set behind the open Details modal (null = closed / not found).
   const detailSet = allSets.find((s) => s.id === detailSetId) ?? null;
 
   return (
     <div className="space-y-8">
-      {/* ── Cover requests I could take + swaps proposed to me ───────── */}
-      <section>
-        <h1 className="mb-3 text-2xl font-bold">Cover Requests</h1>
-        {openSwaps.length === 0 && incoming.length === 0 && (
-          <p className="text-gray-500">
-            No open cover requests or swaps for your instruments.
-          </p>
+      {/* How far ahead the whole page looks. It sits above the sections rather
+          than inside one because it governs all three — and it sizes the
+          /api/sets fetch too, so widening it loads the sets behind the newly
+          shown rows. */}
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        {hiddenCount > 0 && (
+          <span className="text-sm text-gray-500 dark:text-gray-400">
+            {hiddenCount} further out — widen to see {hiddenCount === 1 ? "it" : "them"}
+          </span>
         )}
+        <div className="w-40">
+          <Select
+            label="How far ahead"
+            hideLabel
+            data-testid="horizon-select"
+            value={horizonMonths}
+            onChange={(e) => setHorizonMonths(Number(e.target.value))}
+          >
+            {SET_MANAGER_HORIZONS.map((h) => (
+              <option key={h.months} value={h.months}>
+                {h.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+      </div>
+
+      {/* ── 1. Covers / swaps — everything mid-handoff ───────────────── */}
+      <section>
+        <SectionHeading title="Covers / Swaps" />
+        {visibleOpenSwaps.length === 0 &&
+          visibleIncoming.length === 0 &&
+          inFlight.length === 0 && (
+            <p className="text-sm text-gray-500">
+              Nothing in flight — no open cover requests, swaps, or approvals
+              waiting.
+            </p>
+          )}
 
         {/* Targeted swaps someone proposed to me — accept takes their set and
             hands them mine; reject leaves both unchanged. */}
-        {incoming.length > 0 && (
+        {visibleIncoming.length > 0 && (
           <ul className="mb-3 space-y-3">
-            {incoming.map((s) => (
+            {visibleIncoming.map((s) => (
               <li key={s.id}>
                 <Card className="flex flex-wrap items-center justify-between gap-3 border-indigo-200 dark:border-indigo-800">
                   <div>
                     <p className="flex flex-wrap items-center gap-2 font-semibold">
                       Swap: take {s.receive.label ?? "Worship Set"} —{" "}
-                      {INSTRUMENT_LABELS[s.role]}
+                      {roleLabel(s.role)}
                       {showOrgChips && <OrgChip name={s.receive.org.name} />}
                     </p>
                     <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -282,202 +340,146 @@ export default function SwapsPage() {
           </ul>
         )}
 
-        <ul className="space-y-3">
-          {openSwaps.map((swap) => (
-            // id anchors the calendar's "Take this set →" link (#cover-<id>);
-            // scroll-mt keeps it clear of the sticky navbar when jumped to.
-            <li key={swap.id} id={`cover-${swap.id}`} className="scroll-mt-24">
-              <Card className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="flex flex-wrap items-center gap-2 font-semibold">
-                    {swap.set.label ?? "Worship Set"} —{" "}
-                    {INSTRUMENT_LABELS[swap.role]}
-                    {showOrgChips && swap.set.org && (
-                      <OrgChip name={swap.set.org.name} />
-                    )}
-                  </p>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    {formatDay(swap.set.startsAt)} ·{" "}
-                    {formatTime(swap.set.startsAt)} · requested by{" "}
-                    {swap.user.name}
-                  </p>
-                  {swap.reason && (
-                    <p className="mt-1 text-sm italic text-gray-500 dark:text-gray-400">
-                      “{swap.reason}”
+        {visibleOpenSwaps.length > 0 && (
+          <ul className="space-y-3">
+            {visibleOpenSwaps.map((swap) => (
+              // id anchors the calendar's "Take this set →" link (#cover-<id>);
+              // scroll-mt keeps it clear of the sticky navbar when jumped to.
+              <li key={swap.id} id={`cover-${swap.id}`} className="scroll-mt-24">
+                <Card className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="flex flex-wrap items-center gap-2 font-semibold">
+                      {swap.set.label ?? "Worship Set"} — {roleLabel(swap.role)}
+                      {showOrgChips && swap.set.org && (
+                        <OrgChip name={swap.set.org.name} />
+                      )}
                     </p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setDetailSetId(swap.set.id)}
-                  >
-                    Details
-                  </Button>
-                  {busyId === swap.id ? (
-                    <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
-                  ) : (
-                    <Button size="sm" onClick={() => takeSwap(swap.id)}>
-                      Take this set
-                    </Button>
-                  )}
-                </div>
-              </Card>
-            </li>
-          ))}
-        </ul>
-      </section>
-      {/* ── My sets ─────────────────────────────────────────────────── */}
-      <section>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold">My Sets</h1>
-          <div className="flex items-center gap-2">
-            {/* How far ahead to look. Also sizes the /api/sets fetch, so
-                widening it loads the sets behind the newly shown rows. */}
-            <div className="w-40">
-              <Select
-                label="How far ahead"
-                hideLabel
-                data-testid="horizon-select"
-                value={horizonMonths}
-                onChange={(e) => setHorizonMonths(Number(e.target.value))}
-              >
-                {SET_MANAGER_HORIZONS.map((h) => (
-                  <option key={h.months} value={h.months}>
-                    {h.label}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            {/* Plain link download: the browser sends session cookies along.
-                Hidden on phones — no .ics export on narrow screens. */}
-            <a href="/api/export" download className="hidden sm:block">
-              <Button variant="secondary">Export all my sets (.ics)</Button>
-            </a>
-            {pendingCount > 0 && (
-              <Button
-                onClick={confirmAll}
-                disabled={confirmingAll}
-                aria-label="Confirm all pending"
-              >
-                {confirmingAll ? (
-                  <LoadingDots size="sm" label="Confirming" />
-                ) : (
-                  `Confirm all pending (${pendingCount})`
-                )}
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {visibleMine.length === 0 && (
-          <p className="text-gray-500">
-            {hiddenCount > 0
-              ? `No sets in the next ${horizonMonths} months — you have ${hiddenCount} further out.`
-              : "You're not on any upcoming sets."}
-          </p>
-        )}
-        <ul className="space-y-3">
-          {visibleMine.map((a) => (
-            <li key={a.id}>
-              <Card className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  {/* Status chip rides up here next to the team/org chip so the
-                      action row below can't overflow the card on phones. */}
-                  <p className="flex flex-wrap items-center gap-2 font-semibold">
-                    {a.set.label ?? "Worship Set"} —{" "}
-                    {INSTRUMENT_LABELS[a.role]}
-                    {showOrgChips && a.set.org && (
-                      <OrgChip name={a.set.org.name} />
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {formatDay(swap.set.startsAt)} ·{" "}
+                      {formatTime(swap.set.startsAt)} · requested by{" "}
+                      {swap.user.name}
+                    </p>
+                    {swap.reason && (
+                      <p className="mt-1 text-sm italic text-gray-500 dark:text-gray-400">
+                        “{swap.reason}”
+                      </p>
                     )}
-                    <StatusBadge status={a.status} />
-                  </p>
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    {formatDay(a.set.startsAt)} · {formatTime(a.set.startsAt)}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setDetailSetId(a.set.id)}
-                  >
-                    Details
-                  </Button>
-                  {busyId === a.id ? (
-                    <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
-                  ) : a.status === "PENDING_APPROVAL" ? (
-                    // Taken/accepted, now frozen until an admin approves it.
-                    <span className="text-xs text-gray-500 dark:text-gray-400">
-                      Waiting for admin approval
-                    </span>
-                  ) : a.status === "PENDING_SWAP" ? (
-                    // Frozen mid-trade: the requester can withdraw; the
-                    // recipient acts from Cover Requests above.
-                    a.pendingSwap?.isRequester ? (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => cancelSwap(a.pendingSwap!.proposalId)}
-                      >
-                        Cancel swap
-                      </Button>
-                    ) : (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Respond in Cover Requests ↑
-                      </span>
-                    )
-                  ) : (
-                    <>
-                      {a.status !== "SWAP_REQUESTED" ? (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setCoverForId(a.id)}
-                          >
-                            Request cover
-                          </Button>
-                          {/* Targeted trade with a specific person's set. */}
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => setSwapAssignment(a)}
-                          >
-                            Swap
-                          </Button>
-                        </>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => act(a.id, "cancelSwap")}
-                        >
-                          Cancel cover request
-                        </Button>
-                      )}
-                      {/* Confirm sits last so the primary action is rightmost. */}
-                      {a.status === "PENDING" && (
-                        <Button size="sm" onClick={() => act(a.id, "confirm")}>
-                          Confirm
-                        </Button>
-                      )}
-                    </>
-                  )}
-                  {/* Per-set .ics download (confirmed sets only). */}
-                  {a.status === "CONFIRMED" && (
-                    <ExportIcsButton
-                      href={`/api/export/${a.set.id}`}
-                      label="Export this set (.ics)"
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
                       size="sm"
-                    />
-                  )}
-                </div>
-              </Card>
-            </li>
-          ))}
-        </ul>
+                      variant="secondary"
+                      onClick={() => setDetailSetId(swap.set.id)}
+                    >
+                      Details
+                    </Button>
+                    {busyId === swap.id ? (
+                      <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+                    ) : (
+                      <Button size="sm" onClick={() => takeSwap(swap.id)}>
+                        Take this set
+                      </Button>
+                    )}
+                  </div>
+                </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {/* My OWN slots mid-handoff: cover offered, swap in progress, or taken
+            and waiting on an admin. They sit here rather than under Pending
+            because none of them is waiting on me. */}
+        {inFlight.length > 0 && (
+          <ul className="mt-3 space-y-3">
+            {inFlight.map((a) => (
+              <li key={a.id}>
+                <AssignmentRow
+                  a={a}
+                  busy={busyId === a.id}
+                  showOrgChips={showOrgChips}
+                  onDetails={() => setDetailSetId(a.set.id)}
+                  onRequestCover={() => setCoverForId(a.id)}
+                  onSwap={() => setSwapAssignment(a)}
+                  onAct={act}
+                  onCancelSwap={cancelSwap}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* ── 2. Pending — waiting on me ───────────────────────────────── */}
+      <section>
+        <SectionHeading title="Pending" count={pending.length}>
+          {pendingTotal > 0 && (
+            <Button
+              onClick={confirmAll}
+              disabled={confirmingAll}
+              aria-label="Confirm all pending"
+            >
+              {confirmingAll ? (
+                <LoadingDots size="sm" label="Confirming" />
+              ) : (
+                `Confirm all pending (${pendingTotal})`
+              )}
+            </Button>
+          )}
+        </SectionHeading>
+        {pending.length === 0 ? (
+          <p className="text-sm text-gray-500">
+            Nothing to confirm — you&rsquo;re all caught up.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {pending.map((a) => (
+              <li key={a.id}>
+                <AssignmentRow
+                  a={a}
+                  busy={busyId === a.id}
+                  showOrgChips={showOrgChips}
+                  onDetails={() => setDetailSetId(a.set.id)}
+                  onRequestCover={() => setCoverForId(a.id)}
+                  onSwap={() => setSwapAssignment(a)}
+                  onAct={act}
+                  onCancelSwap={cancelSwap}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* ── 3. Confirmed — settled, and exportable ───────────────────── */}
+      <section>
+        <SectionHeading title="Confirmed" count={confirmed.length}>
+          {/* Plain link download: the browser sends session cookies along.
+              Hidden on phones — no .ics export on narrow screens. */}
+          <a href="/api/export" download className="hidden sm:block">
+            <Button variant="secondary">Export all my sets (.ics)</Button>
+          </a>
+        </SectionHeading>
+        {confirmed.length === 0 ? (
+          <p className="text-sm text-gray-500">No confirmed sets in this window.</p>
+        ) : (
+          <ul className="space-y-3">
+            {confirmed.map((a) => (
+              <li key={a.id}>
+                <AssignmentRow
+                  a={a}
+                  busy={busyId === a.id}
+                  showOrgChips={showOrgChips}
+                  onDetails={() => setDetailSetId(a.set.id)}
+                  onRequestCover={() => setCoverForId(a.id)}
+                  onSwap={() => setSwapAssignment(a)}
+                  onAct={act}
+                  onCancelSwap={cancelSwap}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       {/* Roster modal opened by any "Details" button. Admin powers are per set
@@ -513,6 +515,141 @@ export default function SwapsPage() {
         }}
       />
     </div>
+  );
+}
+
+// A section label plus whatever controls belong to that section. Deliberately
+// quiet — these divide one page into three, so they're a small uppercase tag
+// over a rule rather than three competing page titles.
+function SectionHeading({
+  title,
+  count,
+  children,
+}: {
+  title: string;
+  // Omit where a count would be noise (Covers / Swaps mixes three kinds of
+  // row, so one number wouldn't describe it).
+  count?: number;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+      {/* The rule underlines the label itself rather than running the width of
+          the page — it belongs to the heading, not to the section. */}
+      <h2 className="flex items-center gap-2 border-b border-gray-200 pb-1.5 text-sm font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-700 dark:text-gray-400">
+        {title}
+        {count !== undefined && count > 0 && (
+          <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+            {count}
+          </span>
+        )}
+      </h2>
+      {children && <div className="flex items-center gap-2">{children}</div>}
+    </div>
+  );
+}
+
+// One of my assignments. Its actions come from its STATUS, not from the
+// section it's listed in, so a row means the same thing wherever it lands.
+function AssignmentRow({
+  a,
+  busy,
+  showOrgChips,
+  onDetails,
+  onRequestCover,
+  onSwap,
+  onAct,
+  onCancelSwap,
+}: {
+  a: ApiMyAssignment;
+  busy: boolean;
+  showOrgChips: boolean;
+  onDetails: () => void;
+  onRequestCover: () => void;
+  onSwap: () => void;
+  onAct: (assignmentId: string, action: string) => void;
+  onCancelSwap: (proposalId: string) => void;
+}) {
+  return (
+    <Card className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        {/* Status chip rides up here next to the team/org chip so the action
+            row below can't overflow the card on phones. */}
+        <p className="flex flex-wrap items-center gap-2 font-semibold">
+          {a.set.label ?? "Worship Set"} — {roleLabel(a.role)}
+          {showOrgChips && a.set.org && <OrgChip name={a.set.org.name} />}
+          <StatusBadge status={a.status} />
+        </p>
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          {formatDay(a.set.startsAt)} · {formatTime(a.set.startsAt)}
+        </p>
+      </div>
+      <div className="flex items-center gap-2">
+        <Button size="sm" variant="secondary" onClick={onDetails}>
+          Details
+        </Button>
+        {busy ? (
+          <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+        ) : a.status === "PENDING_APPROVAL" ? (
+          // Taken/accepted, now frozen until an admin approves it.
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            Waiting for admin approval
+          </span>
+        ) : a.status === "PENDING_SWAP" ? (
+          // Frozen mid-trade: the requester can withdraw; the recipient acts
+          // from the proposal card in this same section.
+          a.pendingSwap?.isRequester ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onCancelSwap(a.pendingSwap!.proposalId)}
+            >
+              Cancel swap
+            </Button>
+          ) : (
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Respond above ↑
+            </span>
+          )
+        ) : (
+          <>
+            {a.status !== "SWAP_REQUESTED" ? (
+              <>
+                <Button size="sm" variant="secondary" onClick={onRequestCover}>
+                  Request cover
+                </Button>
+                {/* Targeted trade with a specific person's set. */}
+                <Button size="sm" variant="secondary" onClick={onSwap}>
+                  Swap
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onAct(a.id, "cancelSwap")}
+              >
+                Cancel cover request
+              </Button>
+            )}
+            {/* Confirm sits last so the primary action is rightmost. */}
+            {a.status === "PENDING" && (
+              <Button size="sm" onClick={() => onAct(a.id, "confirm")}>
+                Confirm
+              </Button>
+            )}
+          </>
+        )}
+        {/* Per-set .ics download (confirmed sets only). */}
+        {a.status === "CONFIRMED" && (
+          <ExportIcsButton
+            href={`/api/export/${a.set.id}`}
+            label="Export this set (.ics)"
+            size="sm"
+          />
+        )}
+      </div>
+    </Card>
   );
 }
 

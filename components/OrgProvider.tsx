@@ -1,7 +1,7 @@
 "use client";
 // Client-side org state: which orgs I belong to, plus the two independent
 // navbar selections —
-//   viewOrgId  — the Calendar / Set Manager filter ("all" or one orgId)
+//   viewOrgId  — the Calendar / My Sets filter ("all" or one orgId)
 //   adminOrgId — the single org the admin tabs (Create / Team) operate on
 // Both persist in localStorage (lib/orgPrefs.ts) and are re-validated against
 // the real membership list every load, so a stale/foreign stored id can never
@@ -32,7 +32,7 @@ export const ORGS_CHANGED_EVENT = "orgs-changed";
 interface OrgContextValue {
   // My orgs (oldest first); null while the first fetch is in flight.
   orgs: ApiOrg[] | null;
-  // Calendar / Set Manager scope: "all" or one of my org ids.
+  // Calendar / My Sets scope: "all" or one of my org ids.
   viewOrgId: string;
   setViewOrg: (orgId: string) => void;
   // The admin tabs' org (always one of my admin orgs; "" when I admin none).

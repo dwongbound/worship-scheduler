@@ -1,20 +1,27 @@
 "use client";
 // Availabilities tab: tell the scheduler when you're NOT free.
-//   • Admin Requests — respond to an admin's request by blocking dates inside
-//     its window, then submit.
-//   • Block out times — the general form: a one-off specific date/range OR
-//     weekly recurring blocks (pick any weekdays × any time-of-day windows,
-//     e.g. Mon–Fri mornings, added in one go).
-// The "Busy Blocks" column is the single source of truth for viewing/deleting:
-// the union of every block as a calendar (desktop) plus one scrollable,
-// deletable list.
-//   Desktop: editors (Admin Requests, Block out times) LEFT, Busy Blocks RIGHT.
-//   Mobile:  Admin Requests → Busy Blocks list → Block out times.
+//
+// Two stacked sections, in the order the questions actually arrive:
+//   1. Requests — one card per availability request across every org, each
+//      showing whether you still owe an answer. Picking one doesn't navigate:
+//      it LENSES the calendar below onto that request's window (rings its days,
+//      dims the rest) and puts Submit on the card.
+//   2. My availability — the standing picture that ANSWERS those requests: the
+//      calendar (click/drag to block whole days), the deletable list of blocks,
+//      and the only form that creates them (a specific date/range, or weekly
+//      recurring — any weekdays × any time windows in one go).
+//
+// The two are one page rather than two tabs on purpose: a request is answered
+// out of the same blocks section 2 manages, so separating them would mean
+// flipping back and forth to answer confidently. Blocks are global to the
+// person — they apply to every org and every request.
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
+import WeekStrip from "@/components/WeekStrip";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
+import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import InfoTooltip from "@/components/common/InfoTooltip";
 import Input from "@/components/common/Input";
@@ -28,6 +35,7 @@ import {
   blockedDaysInRange,
   dayBlockLevel,
   expandRecurringBlocks,
+  mergeWindows,
   isOptimisticId,
   weeksFromToday,
 } from "@/lib/availability";
@@ -56,18 +64,24 @@ const TIME_PRESETS = [
   { label: "Morning (6am–12pm)", start: 360, end: 720 },
   { label: "Afternoon (12pm–5pm)", start: 720, end: 1020 },
   { label: "Evening (5pm–10pm)", start: 1020, end: 1320 },
-  { label: "Custom…", start: -1, end: -1 },
+  { label: "Custom", start: -1, end: -1 },
 ];
 
-// "Custom…" is exclusive: it defines the one window by hand, so the presets
-// are switched off (and disabled) while it's picked.
+// The two exclusive presets. Each already defines the whole window on its own
+// — "All day" IS every hour, "Custom" is one span picked by hand — so ticking
+// either switches the rest off (and disables them) until it's unticked.
+// Morning/Afternoon/Evening are the ones that stack with each other.
 const CUSTOM_PRESET = TIME_PRESETS.findIndex((p) => p.start === -1);
+const ALL_DAY_PRESET = TIME_PRESETS.findIndex(
+  (p) => p.start === 0 && p.end === 24 * 60
+);
+const EXCLUSIVE_PRESETS = [ALL_DAY_PRESET, CUSTOM_PRESET];
 
 // How long a recurring block keeps repeating. "Forever" is the default — the
 // other two stamp a stop date (endDate) on each block.
 const REPEAT_OPTIONS: { value: "forever" | "weeks" | "until"; label: string }[] = [
   { value: "forever", label: "Forever" },
-  { value: "weeks", label: "For N weeks" },
+  { value: "weeks", label: "For a number of weeks" },
   { value: "until", label: "Until a date" },
 ];
 
@@ -87,26 +101,26 @@ function requestOptionLabel(r: ApiAvailabilityRequest): string {
   return r.org ? `${r.org.name} — ${base}` : base;
 }
 
-// Segmented-toggle button styling for the "Block out times" specific/recurring
-// switch — filled when active, plain otherwise.
+// Tab styling for the "Block out times" recurring/specific switch. An underline
+// rather than a filled pill: it sits directly under the panel's own title, so
+// it should read as chrome the way the calendar's header does, not as a control
+// competing with the chips below it.
 function blockKindClass(active: boolean): string {
-  return `rounded-md px-3 py-1.5 font-medium transition-colors ${
+  return `-mb-px whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
     active
-      ? "bg-indigo-600 text-white"
-      : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+      ? "border-indigo-600 text-indigo-700 dark:border-indigo-400 dark:text-indigo-300"
+      : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-200"
   }`;
 }
 
-// Multi-select chip styling for the recurring day/time pickers.
-function chipClass(active: boolean, disabled = false): string {
-  const base = "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors";
-  if (disabled) {
-    return `${base} cursor-not-allowed border-gray-200 text-gray-400 opacity-60 dark:border-gray-700 dark:text-gray-500`;
-  }
-  return `${base} ${
+// One cell of the weekday strip. The seven live inside a single bordered box
+// with hairline dividers, so the control reads as one field in a form of
+// fields — and echoes the calendar's day grid — instead of seven loose pills.
+function dayCellClass(active: boolean): string {
+  return `flex-1 border-l border-gray-300 py-2 text-sm font-medium transition-colors first:border-l-0 dark:border-gray-600 ${
     active
-      ? "border-indigo-600 bg-indigo-600 text-white"
-      : "border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+      ? "bg-indigo-600 text-white"
+      : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
   }`;
 }
 
@@ -115,6 +129,84 @@ function toggled(values: number[], value: number): number[] {
   return values.includes(value)
     ? values.filter((v) => v !== value)
     : [...values, value];
+}
+
+// The time-of-day picker, shared by both block kinds. These are independent
+// windows you tick — a checkbox list says that plainly, where a row of pills
+// left "All day" looking like a peer of "Morning" instead of the superset it
+// is. Custom carries its own From/To inline on its row.
+function TimeWindowPicker({
+  selected,
+  onToggle,
+  customStart,
+  customEnd,
+  onCustomStart,
+  onCustomEnd,
+}: {
+  selected: number[];
+  onToggle: (index: number) => void;
+  customStart: string;
+  customEnd: string;
+  onCustomStart: (value: string) => void;
+  onCustomEnd: (value: string) => void;
+}) {
+  // Whichever exclusive preset is ticked, if any, is the only one selectable.
+  // (indexOf, not a truthiness check — "All day" is index 0.)
+  const locked = selected.find((i) => EXCLUSIVE_PRESETS.includes(i));
+  return (
+    <fieldset>
+      <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+        Times
+      </legend>
+      <div className="space-y-2">
+        {TIME_PRESETS.map((preset, i) => {
+          const off = locked !== undefined && i !== locked;
+          const isCustom = i === CUSTOM_PRESET;
+          return (
+            <div
+              key={preset.label}
+              // Wraps so Custom's From/To drop to their own line on a narrow
+              // phone rather than squeezing the two fields to nothing.
+              className="flex flex-wrap items-center gap-x-3 gap-y-2"
+            >
+              <Checkbox
+                label={preset.label}
+                checked={selected.includes(i)}
+                disabled={off}
+                onChange={() => onToggle(i)}
+              />
+              {isCustom && locked === CUSTOM_PRESET && (
+                // type="time" is what hands a phone its native time picker
+                // (iOS's wheel, Android's dial) — nothing here overrides it.
+                // The 16px font on small screens is the other half of that:
+                // iOS Safari zooms the whole page in on focusing any input
+                // under 16px, and never zooms back out.
+                <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+                  <Input
+                    label="From"
+                    hideLabel
+                    type="time"
+                    value={customStart}
+                    onChange={(e) => onCustomStart(e.target.value)}
+                    className="w-auto py-1.5 text-base sm:py-1 sm:text-sm"
+                  />
+                  to
+                  <Input
+                    label="To"
+                    hideLabel
+                    type="time"
+                    value={customEnd}
+                    onChange={(e) => onCustomEnd(e.target.value)}
+                    className="w-auto py-1.5 text-base sm:py-1 sm:text-sm"
+                  />
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
 }
 
 export default function SchedulePage() {
@@ -134,6 +226,9 @@ export default function SchedulePage() {
 
   // Inline error for the "Block out times" form (e.g. duplicate recurring).
   const [blockError, setBlockError] = useState<string | null>(null);
+  // Explains a right-click "clear these days" that couldn't fully free them
+  // because a weekly repeat still covers some (see editDays).
+  const [clearNote, setClearNote] = useState<string | null>(null);
 
   // Unified "Block out times" form: a one-off specific date/range OR a weekly
   // recurring block. Both share the time-of-day picker.
@@ -141,7 +236,7 @@ export default function SchedulePage() {
   // Recurring is multi-select on both axes: any set of weekdays crossed with
   // any set of time windows, so "Mon–Fri mornings + afternoons" is one submit.
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([2]); // Tuesday
-  const [presetIndexes, setPresetIndexes] = useState<number[]>([0]); // All day
+  const [presetIndexes, setPresetIndexes] = useState<number[]>([ALL_DAY_PRESET]);
   // How long the recurring blocks keep repeating: forever (default), a number
   // of weeks from today, or up to a date you pick.
   const [repeats, setRepeats] = useState<"forever" | "weeks" | "until">("forever");
@@ -152,14 +247,6 @@ export default function SchedulePage() {
   const [blockStart, setBlockStart] = useState(""); // specific range start
   const [blockEnd, setBlockEnd] = useState(""); // "" = single day
 
-  // Admin-request response form: its own start/end date + time window, kept
-  // separate from the general block form above.
-  const [specDate, setSpecDate] = useState("");
-  const [specEndDate, setSpecEndDate] = useState(""); // "" = single day
-  const [specPresetIndex, setSpecPresetIndex] = useState(0); // All day
-  const [specCustomStart, setSpecCustomStart] = useState("09:00");
-  const [specCustomEnd, setSpecCustomEnd] = useState("12:00");
-
   const reload = useCallback(async () => {
     // On any error, fall back to empty state so the page renders instead of
     // hanging on the loader forever.
@@ -169,9 +256,18 @@ export default function SchedulePage() {
       setEntries(data.entries ?? []);
       const reqs: ApiAvailabilityRequest[] = data.requests ?? [];
       setRequests(reqs);
-      setResponses(data.responses ?? []);
-      // Default the dropdown to the newest request (list is newest-first).
-      setSelectedRequestId((prev) => prev || reqs[0]?.id || "");
+      const resps: AvailabilityResponse[] = data.responses ?? [];
+      setResponses(resps);
+      // Open on the first request that still owes an answer — that's what
+      // someone came here to do. Everything already sent (or nothing asked)
+      // means no filter at all: the calendar shows the whole picture.
+      setSelectedRequestId((prev) => {
+        if (prev) return prev; // keep whatever the user picked
+        const owed = reqs.find(
+          (r) => !resps.some((x) => x.requestId === r.id && x.completedAt)
+        );
+        return owed?.id ?? "";
+      });
     } catch {
       setEntries([]);
       setRequests([]);
@@ -183,16 +279,12 @@ export default function SchedulePage() {
     reload();
   }, [reload]);
 
-  // Is the hand-picked window in play? It's exclusive, so it's also what
-  // disables the preset chips.
-  const customWindow = presetIndexes.includes(CUSTOM_PRESET);
-
-  // Pick/unpick one time window. Custom replaces whatever was picked (it
-  // defines the window by hand); the presets stack with each other.
+  // Pick/unpick one time window. An exclusive preset replaces whatever was
+  // picked; the part-of-day ones stack with each other.
   function toggleWindow(index: number) {
     setPresetIndexes((prev) => {
       if (prev.includes(index)) return prev.filter((v) => v !== index);
-      return index === CUSTOM_PRESET ? [index] : [...prev, index];
+      return EXCLUSIVE_PRESETS.includes(index) ? [index] : [...prev, index];
     });
   }
 
@@ -272,22 +364,45 @@ export default function SchedulePage() {
       return;
     }
 
-    // Specific: a standalone (request-independent) single day or range, blocked
-    // all day (0 → end of day). Leave endDate off for a single day.
+    // Specific: a standalone (request-independent) day or range, blocked for
+    // the chosen time windows — one block per window, with touching windows
+    // merged the same way the recurring branch does ("morning + afternoon" is
+    // one 6am–5pm block, not two). Leave endDate off for a single day.
     if (!blockStart) return;
+    const specWindows = mergeWindows(
+      presetIndexes.map((i) => {
+        const preset = TIME_PRESETS[i];
+        return preset.start === -1
+          ? {
+              startMinute: timeStringToMinutes(customStart),
+              endMinute: timeStringToMinutes(customEnd),
+            }
+          : { startMinute: preset.start, endMinute: preset.end };
+      })
+    );
+    if (specWindows.length === 0) {
+      setBlockError("Pick at least one time window.");
+      return;
+    }
+    if (specWindows.some((w) => w.startMinute >= w.endMinute)) {
+      setBlockError("The custom end time must be after the start time.");
+      return;
+    }
     setBusyAction("block");
     try {
-      await fetch("/api/availability", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "SPECIFIC",
-          date: blockStart,
-          endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
-          startMinute: 0,
-          endMinute: 24 * 60,
-        }),
-      });
+      for (const w of specWindows) {
+        await fetch("/api/availability", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            type: "SPECIFIC",
+            date: blockStart,
+            endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
+            startMinute: w.startMinute,
+            endMinute: w.endMinute,
+          }),
+        });
+      }
       setBlockStart("");
       setBlockEnd("");
       await reload();
@@ -299,49 +414,12 @@ export default function SchedulePage() {
 
   // A specific block: a start date (+ optional end date for a range) and a time
   // window, tied to the selected TimeRange.
-  async function addSpecific(e: FormEvent) {
-    e.preventDefault();
-    if (!specDate || !selectedRequestId) return;
-    setBusyAction("specific");
-    try {
-      const preset = TIME_PRESETS[specPresetIndex];
-      const isCustom = preset.start === -1;
-      await fetch("/api/availability", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: "SPECIFIC",
-          requestId: selectedRequestId,
-          date: specDate,
-          // Only send endDate when it's a real, different day (a range).
-          endDate: specEndDate && specEndDate !== specDate ? specEndDate : undefined,
-          startMinute: isCustom
-            ? timeStringToMinutes(specCustomStart)
-            : preset.start,
-          endMinute: isCustom ? timeStringToMinutes(specCustomEnd) : preset.end,
-        }),
-      });
-      setSpecDate("");
-      setSpecEndDate("");
-      await reload();
-    } finally {
-      setBusyAction(null);
-    }
-  }
-
-  // Edit a run of whole days straight from the calendar. `blocked` true paints
-  // an all-day block over them (merging, never duplicating); false clears them
-  // (splitting a covering range as needed). Handled server-side so it's atomic.
-  //
-  // Optimistic: apply the same merge/split locally so the calendar updates the
-  // instant you release the drag (no request-latency lag, and the calendar stays
-  // interactive for the next edit). The reload reconciles with the server's
-  // canonical rows; on failure we roll back to what we had.
   async function editDays(startYmd: string, endYmd: string, blocked: boolean) {
     const previous = entries;
     setEntries((cur) =>
       cur ? applyDayEdit(cur, startYmd, endYmd, blocked) : cur
     );
+    setClearNote(null);
     try {
       const res = await fetch("/api/availability/block-days", {
         method: "POST",
@@ -349,6 +427,16 @@ export default function SchedulePage() {
         body: JSON.stringify({ start: startYmd, end: endYmd, blocked }),
       });
       if (!res.ok) throw new Error("block-days failed");
+      // Clearing days can't punch a hole in a weekly rule, so those days stay
+      // blocked. Say why, rather than letting the gesture look broken.
+      const data = await res.json().catch(() => ({}));
+      if (!blocked && data.recurringDays > 0) {
+        setClearNote(
+          `${data.recurringDays} of those ${
+            data.recurringDays === 1 ? "days is" : "days are"
+          } still blocked by a weekly repeat — remove it below to free them.`
+        );
+      }
       await reload();
       window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
     } catch {
@@ -457,22 +545,20 @@ export default function SchedulePage() {
   // Submitted = a response row with a completedAt (a null one is "unsubmitted").
   const submitted = !!selectedResponse?.completedAt;
 
+  // The selected request's window, as the day pickers want it: rings its days
+  // (and dims the rest, on the calendar). Null = showing everything.
+  const lensRange = selectedRequest
+    ? {
+        start: toYmd(new Date(selectedRequest.startDate)),
+        end: toYmd(new Date(selectedRequest.endDate)),
+      }
+    : null;
+
   // The days I'll be marked unavailable for the selected request — shown in the
   // submit-confirmation modal.
   const confirmDays = selectedRequest
     ? blockedDaysInRange(entries, selectedRequest.startDate, selectedRequest.endDate)
     : [];
-
-  // Bounds for the specific-block date pickers: stay inside the selected
-  // request's window, and never allow marking a date in the past.
-  const windowEnd = selectedRequest
-    ? toYmd(new Date(selectedRequest.endDate))
-    : undefined;
-  const windowStart = selectedRequest
-    ? toYmd(new Date(selectedRequest.startDate))
-    : toYmd(new Date());
-  const rangeMin =
-    windowStart > toYmd(new Date()) ? windowStart : toYmd(new Date());
 
   // The Busy Blocks list: dated (specific) blocks first — only ones ending
   // today or later, so past blocks drop off — in chronological order, then the
@@ -502,185 +588,270 @@ export default function SchedulePage() {
 
   return (
     <div className="space-y-6">
-      {/* Layout: desktop is two independent columns — editors (Admin Requests,
-          then Block out times) on the left, Busy Blocks (calendar + list) on
-          the right. Mobile is one column ordered Admin Requests → Busy Blocks →
-          Block out times. The editors wrapper is `display: contents` on mobile
-          so its two sections flatten into the parent and can be ordered around
-          Busy Blocks; on desktop it's a normal column, so the two columns keep
-          independent heights (no calendar-driven gap). */}
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        <div className="contents lg:block lg:min-w-0 lg:flex-1 lg:space-y-6">
-          {/* ── 1. Admin Requests — respond to an admin's availability request ── */}
-          <section data-tour="avail-editors" className="order-1 min-w-0 space-y-3">
-            <div className="flex items-center gap-1.5">
-              <h2 className="text-xl font-bold">Admin Requests</h2>
-              <InfoTooltip
-                side="bottom"
-                text="Block out the dates you can't serve within the request window, then submit so the team knows you're done. Times you've already blocked below apply here too — if everything's already correct, just submit."
-              />
-            </div>
-          {requests.length === 0 ? (
-            <Card>
-              <p className="text-sm text-gray-500">
-                No one has requested availability yet. You can still block out
-                any dates in <strong>Block out times</strong> below (or the
-                calendar on desktop).
-              </p>
-            </Card>
-          ) : (
-            <Card className="space-y-4">
-              <Select
-                label="Responding to request"
-                value={selectedRequestId}
-                onChange={(e) => {
-                  setSelectedRequestId(e.target.value);
-                  setConfirmOpen(false);
-                }}
-              >
-                {requests.map((r) => (
-                  <option key={r.id} value={r.id}>
-                    {requestOptionLabel(r)}
-                  </option>
-                ))}
-              </Select>
+      {/* ── 1. What you've been asked for ─────────────────────────────────
+          The job that brings people here is "do I owe anyone an answer?", so
+          it's the first thing on the page — one card per request, across every
+          org, with its state on the face of it. Picking one doesn't navigate
+          anywhere: it LENSES the calendar below onto that request's window, so
+          the ask and the schedule that answers it are never separated. */}
+      <section data-tour="avail-editors" className="space-y-3">
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-xl font-bold">Requests</h2>
+          <InfoTooltip
+            side="bottom"
+            text="Pick a request to see its dates on the calendar below, block the days you can't serve, then submit. Times you've already blocked count automatically."
+          />
+        </div>
 
-              {selectedRequest && (
-                <>
-                  {/* Which org is asking — the request list spans them all. */}
-                  {selectedRequest.org && (
-                    <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
-                      {selectedRequest.org.name}
-                    </span>
-                  )}
-
-                  {submitted ? (
-                    /* Submitted: a clear confirmation + a way back to editing. */
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-green-50 px-3 py-2 dark:bg-green-900/30">
-                      <p className="text-sm font-medium text-green-700 dark:text-green-300">
-                        ✓ {selectedResponse!.edited ? "Updated" : "Submitted"} on{" "}
-                        {new Date(
-                          selectedResponse!.completedAt!
-                        ).toLocaleDateString()}
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={toggleComplete}
-                        disabled={busyAction === "complete"}
-                      >
-                        {busyAction === "complete" ? (
-                          <LoadingDots size="sm" />
+        {requests.length === 0 ? (
+          <Card>
+            <p className="text-sm text-gray-500">
+              No one has asked for your availability yet. You can still block
+              out any dates below.
+            </p>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {requests.map((r) => {
+              const response = responses.find((x) => x.requestId === r.id);
+              const done = !!response?.completedAt;
+              const active = r.id === selectedRequestId;
+              return (
+                <Card
+                  key={r.id}
+                  // The whole card is the target — clicking anywhere lenses the
+                  // calendar. Selected gets a left rail + ring so you can tell
+                  // at a glance which window the calendar is showing.
+                  className={`cursor-pointer border-l-4 transition-colors ${
+                    active
+                      ? // The one driving the calendar: accent ground + ring, so
+                        // it reads as selected at a glance rather than by a
+                        // hairline that disappears against a dark card.
+                        "border-l-indigo-500 bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10"
+                      : done
+                        ? "border-l-green-500/60 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                        : "border-l-amber-400 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+                  }`}
+                  // Clicking the active card again drops the filter, so the
+                  // calendar goes back to showing everything.
+                  onClick={() =>
+                    setSelectedRequestId((cur) => (cur === r.id ? "" : r.id))
+                  }
+                >
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold">{requestLabel(r)}</span>
+                        {/* Which org is asking — requests span them all. */}
+                        {r.org && (
+                          <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
+                            {r.org.name}
+                          </span>
+                        )}
+                        {done ? (
+                          <Badge tone="green">
+                            {response!.edited ? "Updated" : "Sent"}
+                          </Badge>
                         ) : (
-                          "Make changes"
+                          <Badge tone="amber">Not sent</Badge>
                         )}
-                      </Button>
+                      </div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {shortDateLabel(r.startDate)} –{" "}
+                        {shortDateLabel(r.endDate)}
+                        {done && response!.completedAt && (
+                          <>
+                            {" · sent "}
+                            {new Date(response!.completedAt).toLocaleDateString()}
+                          </>
+                        )}
+                      </p>
                     </div>
-                  ) : (
-                    <>
-                      {/* Add a block within this request's window. "Block these
-                          dates" is intentionally softer (secondary) so the
-                          primary "Submit Response" below stands out. */}
-                      <form
-                        onSubmit={addSpecific}
-                        className="grid gap-3 sm:grid-cols-2 sm:items-end"
-                      >
-                        <DateSelect
-                          range
-                          highlightToday={false}
-                          label="Dates to block"
-                          value={specDate}
-                          endValue={specEndDate}
-                          min={rangeMin}
-                          max={windowEnd}
-                          dayMarker={(ymd) => dayBlockLevel(entries, ymd)}
-                          onRangeChange={(start, end) => {
-                            setSpecDate(start);
-                            setSpecEndDate(end);
-                          }}
-                          required
-                        />
-                        <Select
-                          label="Time"
-                          value={specPresetIndex}
-                          onChange={(e) =>
-                            setSpecPresetIndex(Number(e.target.value))
-                          }
-                        >
-                          {TIME_PRESETS.map((p, i) => (
-                            <option key={i} value={i}>
-                              {p.label}
-                            </option>
-                          ))}
-                        </Select>
-                        {TIME_PRESETS[specPresetIndex].start === -1 && (
-                          <div className="grid grid-cols-2 gap-3 sm:col-span-2">
-                            <Input
-                              label="From"
-                              type="time"
-                              value={specCustomStart}
-                              onChange={(e) => setSpecCustomStart(e.target.value)}
-                            />
-                            <Input
-                              label="To"
-                              type="time"
-                              value={specCustomEnd}
-                              onChange={(e) => setSpecCustomEnd(e.target.value)}
-                            />
-                          </div>
-                        )}
-                        <div className="sm:col-span-2">
-                          <Button
-                            type="submit"
-                            variant="secondary"
-                            disabled={!specDate || busyAction === "specific"}
-                          >
-                            {busyAction === "specific" ? (
-                              <LoadingDots size="sm" />
-                            ) : (
-                              "Block these dates"
-                            )}
-                          </Button>
-                        </div>
-                      </form>
 
-                      {/* Primary CTA — opens a confirmation modal summarizing
-                          the days you'll be marked unavailable. */}
-                      <div className="border-t border-gray-200 pt-4 dark:border-gray-700">
+                    {/* The action lives on the selected card only, so there's
+                        exactly one submit button on screen at a time. */}
+                    {active &&
+                      (done ? (
                         <Button
-                          className="w-full"
-                          onClick={() => setConfirmOpen(true)}
+                          size="sm"
+                          variant="secondary"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleComplete();
+                          }}
                           disabled={busyAction === "complete"}
                         >
                           {busyAction === "complete" ? (
                             <LoadingDots size="sm" />
                           ) : (
-                            "Submit Response"
+                            "Make changes"
                           )}
                         </Button>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-            </Card>
-          )}
-          </section>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmOpen(true);
+                          }}
+                          disabled={busyAction === "complete"}
+                        >
+                          {busyAction === "complete" ? (
+                            <LoadingDots size="sm" />
+                          ) : (
+                            "Submit response"
+                          )}
+                        </Button>
+                      ))}
+                  </div>
 
-          {/* Block out times — a one-off specific date/range OR a weekly
-              recurring block, in one form. (Admin Requests above is only for
-              responding to a request's window.) */}
-          <section className="order-3 min-w-0 space-y-3">
-            <div className="flex items-center gap-1.5">
-              <h2 className="text-xl font-bold">Block out times</h2>
-              <InfoTooltip text="Block times you can't serve — a specific date or range, or a weekly repeat." />
+                  {/* The active card says so in words — and carries the way
+                      out. Plus a running count of what submitting would send,
+                      so "it's already correct, just submit" is visible rather
+                      than something you have to work out. */}
+                  {active && (
+                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-indigo-500/30 pt-2 text-sm">
+                      <span className="inline-flex items-center gap-1.5 font-medium text-indigo-700 dark:text-indigo-300">
+                        <EyeIcon />
+                        Shown on the calendar below
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedRequestId("");
+                        }}
+                        className="rounded text-indigo-600 underline underline-offset-2 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200"
+                      >
+                        Show all dates
+                      </button>
+                      {!done && (
+                        <span className="text-gray-500 dark:text-gray-400">
+                          ·{" "}
+                          {confirmDays.length === 0
+                            ? "You're available every day in this window."
+                            : `Unavailable on ${confirmDays.length} ${
+                                confirmDays.length === 1 ? "day" : "days"
+                              }.`}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── 2. My availability ────────────────────────────────────────────
+          The standing picture: one calendar (lensed to the selected request),
+          the list of blocks, and the form that creates them. Every request
+          above is answered out of THIS data — which is why it's one calendar
+          on one page rather than a second copy behind a tab. */}
+      <section className="space-y-3">
+        <div className="flex items-center gap-1.5">
+          <h2 className="text-xl font-bold">My availability</h2>
+          <InfoTooltip text="Blocks here apply to every org and every request. Click or drag the calendar to block whole days; use the form for a repeating block or a specific time window." />
+        </div>
+
+        <div className="flex flex-col gap-6">
+          <div className="min-w-0 space-y-3">
+            {/* What the calendar is currently showing, stated at the calendar
+                rather than only up on the card — the filter and its effect are
+                far enough apart on screen to need saying in both places. */}
+            <div className="hidden items-center gap-2 lg:flex">
+              {selectedRequest ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-100 px-2.5 py-1 text-sm font-medium text-indigo-800 dark:bg-indigo-500/20 dark:text-indigo-200">
+                    <EyeIcon />
+                    Filtered to {requestLabel(selectedRequest)}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRequestId("")}
+                      aria-label="Show all dates"
+                      title="Show all dates"
+                      className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-full text-indigo-600 transition-colors hover:bg-indigo-200 hover:text-indigo-900 dark:text-indigo-300 dark:hover:bg-indigo-500/40 dark:hover:text-white"
+                    >
+                      <svg
+                        viewBox="0 0 14 14"
+                        className="h-2.5 w-2.5"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M3.5 3.5l7 7M10.5 3.5l-7 7" />
+                      </svg>
+                    </button>
+                  </span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    Days outside it are dimmed.
+                  </span>
+                </>
+              ) : (
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing all your dates.
+                  {requests.length > 0 && " Pick a request above to focus on its window."}
+                </span>
+              )}
             </div>
-            <Card className="space-y-4">
-              {/* Recurring (left) vs. specific (right) toggle. */}
-              <div className="inline-flex rounded-lg border border-gray-300 p-0.5 text-sm dark:border-gray-600">
+
+            {/* Calendar and the list of what's behind it, side by side on
+                desktop: the grid answers "which days", the list names the
+                blocks producing them and is where you delete one. On a phone
+                the grid gives way to WeekStrip — a week at a time, so each day
+                is still a thumb-sized target. */}
+            {/* Calendar and the editor beside it, stretched to the same
+                height so the panel never trails empty space next to a
+                six-week month. The list of blocks runs full width underneath,
+                where it can breathe. */}
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
+            {/* Phone: a week of tappable days, standing above the form the way
+                the calendar stands beside it. */}
+            <div className="lg:hidden">
+              <WeekStrip
+                entries={entries}
+                onEditDays={editDays}
+                busy={busyAction === "specific"}
+                highlightRange={lensRange}
+              />
+            </div>
+            <div
+              data-tour="avail-calendar"
+              className="hidden min-w-0 lg:block lg:flex-[2]"
+            >
+              <AvailabilityCalendar
+                entries={entries}
+                onEditDays={editDays}
+                busy={busyAction === "specific"}
+                // Selecting a request above rings its days and dims the rest,
+                // and pulls the view to the month it starts in.
+                highlightRange={lensRange}
+              />
+            </div>
+          <div className="flex min-w-0 flex-col lg:flex-1">
+          {/* Block out times — a one-off specific date/range OR a weekly
+              recurring block, in one form. This is the ONLY place blocks are
+              created; a request above is answered by clicking the calendar. */}
+          <section className="flex min-w-0 flex-1 flex-col">
+            {/* Built like the calendar beside it — titled header, a rule, then
+                the body — rather than a floating heading over a card. */}
+            <div className="flex flex-1 flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+              <div className="flex items-center gap-1.5 px-4 pb-2 pt-3">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Block out times
+                </h2>
+                <InfoTooltip text="Block times you can't serve — specific dates and times, or a weekly repeat." />
+              </div>
+
+              {/* Recurring vs. specific. */}
+              <div className="flex gap-1 border-b border-gray-200 px-4 dark:border-gray-700">
                 <button
                   type="button"
                   onClick={() => setBlockKind("recurring")}
+                  aria-pressed={blockKind === "recurring"}
                   className={blockKindClass(blockKind === "recurring")}
                 >
                   Every week
@@ -688,131 +859,101 @@ export default function SchedulePage() {
                 <button
                   type="button"
                   onClick={() => setBlockKind("specific")}
+                  aria-pressed={blockKind === "specific"}
                   className={blockKindClass(blockKind === "specific")}
                 >
-                  Specific date(s)
+                  Specific times
                 </button>
               </div>
 
+              {/* A column, so each form can pin its submit to the foot of the
+                  panel rather than leaving it stranded mid-card. */}
+              <div className="flex flex-1 flex-col p-4">
               {blockKind === "recurring" ? (
                 // Weekly recurring: any weekdays × any time windows, stored as
                 // one block per weekday per (merged) window.
-                <form
-                  onSubmit={addBlock}
-                  className="grid gap-3 sm:grid-cols-2 sm:items-end"
-                >
-                  {/* Weekdays — multi-select chips, so "Mon–Fri" is five taps
+                <form onSubmit={addBlock} className="flex flex-1 flex-col gap-4">
+                  {/* Weekdays — multi-select, so "Mon–Fri" is five taps
                       instead of five separate blocks. */}
-                  <fieldset className="sm:col-span-2">
-                    <legend className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <fieldset>
+                    <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
                       Days of week
                     </legend>
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex overflow-hidden rounded-lg border border-gray-300 dark:border-gray-600">
                       {DAY_LABELS.map((label, i) => (
                         <button
-                          key={i}
+                          key={label}
                           type="button"
                           aria-label={label}
                           aria-pressed={daysOfWeek.includes(i)}
                           onClick={() => setDaysOfWeek(toggled(daysOfWeek, i))}
-                          className={chipClass(daysOfWeek.includes(i))}
+                          className={dayCellClass(daysOfWeek.includes(i))}
                         >
-                          {label.slice(0, 3)}
+                          {/* One letter on a phone, where seven three-letter
+                              cells don't fit; "Tue" from sm up. */}
+                          <span className="sm:hidden">{label.slice(0, 1)}</span>
+                          <span className="hidden sm:inline">{label.slice(0, 3)}</span>
                         </button>
                       ))}
                     </div>
                   </fieldset>
-                  {/* Time windows — also multi-select; touching windows merge
-                      into one block when saved. */}
-                  <fieldset className="sm:col-span-2">
-                    <legend className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Times
-                    </legend>
-                    <div className="flex flex-wrap gap-1.5">
-                      {TIME_PRESETS.map((p, i) => {
-                        // While Custom is on it's the only window, so the
-                        // presets are off limits until you switch it back off.
-                        const off = customWindow && i !== CUSTOM_PRESET;
-                        return (
-                          <button
-                            key={i}
-                            type="button"
-                            disabled={off}
-                            aria-pressed={presetIndexes.includes(i)}
-                            onClick={() => toggleWindow(i)}
-                            className={chipClass(presetIndexes.includes(i), off)}
-                          >
-                            {p.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </fieldset>
-                  {/* The custom window's own From/To, right under the chip
-                      that turned it on. */}
-                  {customWindow && (
-                    <div className="grid grid-cols-2 gap-3 sm:col-span-2">
-                      <Input
-                        label="From"
-                        type="time"
-                        value={customStart}
-                        onChange={(e) => setCustomStart(e.target.value)}
-                      />
-                      <Input
-                        label="To"
-                        type="time"
-                        value={customEnd}
-                        onChange={(e) => setCustomEnd(e.target.value)}
-                      />
-                    </div>
-                  )}
-                  {/* How long it repeats. Forever is the default; the other
-                      two set a stop date on every block being added. */}
-                  <fieldset className="sm:col-span-2">
-                    <legend className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Repeats
-                    </legend>
-                    <div className="flex flex-wrap items-center gap-1.5">
+                  <TimeWindowPicker
+                    selected={presetIndexes}
+                    onToggle={toggleWindow}
+                    customStart={customStart}
+                    customEnd={customEnd}
+                    onCustomStart={setCustomStart}
+                    onCustomEnd={setCustomEnd}
+                  />
+                  {/* How long it repeats — one choice out of three, so a real
+                      dropdown; whatever it needs next appears under it. */}
+                  <div className="space-y-2">
+                    <Select
+                      label="Repeats"
+                      value={repeats}
+                      onChange={(e) =>
+                        setRepeats(e.target.value as typeof repeats)
+                      }
+                    >
                       {REPEAT_OPTIONS.map(({ value, label }) => (
-                        <button
-                          key={value}
-                          type="button"
-                          aria-pressed={repeats === value}
-                          onClick={() => setRepeats(value)}
-                          className={chipClass(repeats === value)}
-                        >
+                        <option key={value} value={value}>
                           {label}
-                        </button>
+                        </option>
                       ))}
-                      {repeats === "weeks" && (
-                        <span className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                          <Input
-                            label="Number of weeks"
-                            hideLabel
-                            type="number"
-                            min={1}
-                            max={52}
-                            value={repeatWeeks}
-                            onChange={(e) => setRepeatWeeks(e.target.value)}
-                            className="w-20 py-1.5"
-                          />
-                          weeks
-                        </span>
-                      )}
-                    </div>
-                    {repeats === "until" && (
-                      <div className="mt-2 max-w-xs">
-                        <DateSelect
-                          label="Last day it repeats"
-                          value={repeatUntil}
-                          min={toYmd(new Date())}
-                          onChange={setRepeatUntil}
-                          required
+                    </Select>
+                    {repeats === "weeks" && (
+                      <span className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                        <Input
+                          label="Number of weeks"
+                          hideLabel
+                          type="number"
+                          min={1}
+                          max={52}
+                          value={repeatWeeks}
+                          onChange={(e) => setRepeatWeeks(e.target.value)}
+                          className="w-20 py-1.5"
                         />
-                      </div>
+                        weeks
+                      </span>
                     )}
-                  </fieldset>
-                  <div className="sm:col-span-2">
+                    {repeats === "until" && (
+                      <DateSelect
+                        label="Last day it repeats"
+                        value={repeatUntil}
+                        min={toYmd(new Date())}
+                        onChange={setRepeatUntil}
+                        required
+                      />
+                    )}
+                  </div>
+                  {/* mt-auto drops the submit to the bottom of the panel
+                      however tall the fields above it end up. */}
+                  <div className="mt-auto space-y-2 pt-3">
+                    {blockError && (
+                      <p className="text-sm text-rose-600 dark:text-rose-400">
+                        {blockError}
+                      </p>
+                    )}
                     <Button
                       type="submit"
                       disabled={
@@ -828,15 +969,12 @@ export default function SchedulePage() {
                       )}
                     </Button>
                   </div>
-                  {blockError && (
-                    <p className="text-sm text-rose-600 sm:col-span-2 dark:text-rose-400">
-                      {blockError}
-                    </p>
-                  )}
                 </form>
               ) : (
-                // Specific: a single day or a range, blocked all day (no time).
-                <form onSubmit={addBlock} className="space-y-3">
+                // Specific: a day or range, blocked for the chosen windows —
+                // the same time picker the recurring side uses, so "block
+                // Thursday afternoon" doesn't mean losing the whole day.
+                <form onSubmit={addBlock} className="flex flex-1 flex-col gap-4">
                   <DateSelect
                     range
                     highlightToday={false}
@@ -851,35 +989,54 @@ export default function SchedulePage() {
                     }}
                     required
                   />
-                  <Button
-                    type="submit"
-                    disabled={!blockStart || busyAction === "block"}
-                  >
-                    {busyAction === "block" ? (
-                      <LoadingDots size="sm" />
-                    ) : (
-                      "Block these dates"
+                  <TimeWindowPicker
+                    selected={presetIndexes}
+                    onToggle={toggleWindow}
+                    customStart={customStart}
+                    customEnd={customEnd}
+                    onCustomStart={setCustomStart}
+                    onCustomEnd={setCustomEnd}
+                  />
+                  <div className="mt-auto space-y-2 pt-3">
+                    {blockError && (
+                      <p className="text-sm text-rose-600 dark:text-rose-400">
+                        {blockError}
+                      </p>
                     )}
-                  </Button>
+                    <Button
+                      type="submit"
+                      disabled={
+                        !blockStart ||
+                        busyAction === "block" ||
+                        presetIndexes.length === 0
+                      }
+                    >
+                      {busyAction === "block" ? (
+                        <LoadingDots size="sm" />
+                      ) : (
+                        "Block these times"
+                      )}
+                    </Button>
+                  </div>
                 </form>
               )}
-            </Card>
+              </div>
+            </div>
           </section>
-        </div>
-
-        {/* Busy Blocks — single source of truth for viewing/deleting.
-            Desktop: calendar + list; mobile: list only (no calendar). */}
-        <div className="order-2 min-w-0 space-y-3 lg:flex-1">
-          <h2 className="text-xl font-bold">Busy Blocks</h2>
-          {/* Calendar is desktop-only — too cramped on a phone. */}
-          <div data-tour="avail-calendar" className="hidden lg:block">
-            <AvailabilityCalendar
-              entries={entries}
-              onEditDays={editDays}
-              busy={busyAction === "specific"}
-            />
           </div>
-          <Card className="max-h-80 overflow-y-auto">
+            </div>
+            {clearNote && (
+              <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                {clearNote}
+              </p>
+            )}
+          </div>
+
+
+          {/* Every block behind the calendar, full width — one row apiece with
+              its kind, its window and a Delete. */}
+          <div className="min-w-0">
+          <Card className="max-h-[26rem] overflow-y-auto">
             {listEntries.length === 0 ? (
               <p className="text-sm text-gray-500">
                 Nothing blocked yet — you&rsquo;re available anytime.
@@ -935,9 +1092,9 @@ export default function SchedulePage() {
               </ul>
             )}
           </Card>
+          </div>
         </div>
-      </div>
-
+      </section>
       {/* Submit-response confirmation modal: summarizes the days you'll be
           marked unavailable before actually sending. Modify (left) closes it;
           Confirm (right) submits. */}
@@ -1006,5 +1163,25 @@ export default function SchedulePage() {
         </Modal>
       )}
     </div>
+  );
+}
+
+// "This is what you're looking at" — marks the request the calendar is
+// currently filtered to, on the card and on the calendar's own status line.
+function EyeIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="h-3.5 w-3.5 shrink-0"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
   );
 }

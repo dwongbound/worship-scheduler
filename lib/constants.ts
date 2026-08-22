@@ -16,54 +16,55 @@ export const SLOT_CAPACITIES = {
   STRINGS: 0,
   DRUMS: 1,
   BASS: 1,
+  // A/V — sound + slides. Every set needs one person on it.
+  AV: 1,
 } as const;
 
-// The capacity-bearing "band" roles — the ones that make up a team's shape.
-// These are exactly the keys of SLOT_CAPACITIES.
-export type BandRole = keyof typeof SLOT_CAPACITIES;
+// The built-in role keys — exactly the keys of SLOT_CAPACITIES. These are what
+// a brand-new team's catalog STARTS with, not what it's limited to.
+export type BuiltInRole = keyof typeof SLOT_CAPACITIES;
 
-// Choir is a real Instrument (people list it as a skill, and it fills slots on a
-// set) but it is NOT a band role: it has no fixed slot count and never appears
-// in SLOT_CAPACITIES / ROLE_ORDER / the capacity editor. Instead it's an
-// unbounded, admin-managed list on a set — the set-detail modal's "Auto
-// schedule" seats everyone available, and admins add the rest by hand.
+// A role key. Roles are per-team data now (the TeamRole table — see
+// lib/teamRoles.ts), so a key is any string: the built-ins above are defaults a
+// team may rename, re-count, drop, or add to. `Instrument` and `BandRole` are
+// kept as names because they read well at the call sites, but neither is a
+// closed set any more.
+export type Instrument = string;
+export type BandRole = string;
+
+// Choir is a real role (people list it as a skill, and it fills slots on a set)
+// but it carries no slot count: it's an unbounded, admin-managed list on a set —
+// the set-detail modal's "Auto schedule" seats everyone available, and admins
+// add the rest by hand. That behaviour is pinned to this built-in key; custom
+// roles never inherit it.
 export const CHOIR = "CHOIR" as const;
 
-// Every schedulable role: the band roles plus choir. `Instrument` mirrors the
-// Prisma enum of the same name.
-export type Instrument = BandRole | typeof CHOIR;
-
-// A per-set/-template override of the team shape: how many of each band role to
-// fill. Partial — any role omitted falls back to the SLOT_CAPACITIES default.
-// (Choir has no capacity, so it's intentionally excluded from this map.)
-export type SlotCapacityMap = Partial<Record<BandRole, number>>;
+// A per-set/-template override of the team shape: how many of each role to
+// fill. Partial — any role omitted falls back to that role's defaultCount in
+// the team's catalog. (Choir has no capacity, so it's never in this map.)
+export type SlotCapacityMap = Record<string, number>;
 
 // Largest number of one instrument we allow on a single set — a sanity cap
 // on the capacity editor + API validation.
 export const MAX_SLOTS_PER_ROLE = 20;
 
 /**
- * Resolve a stored (possibly partial or null) capacity map into a full
- * team shape, filling any missing role from the global default. This is THE
- * way to read a set's team shape everywhere — never index SLOT_CAPACITIES
- * directly once a set may carry its own override.
- */
-export function resolveCapacities(
-  stored?: SlotCapacityMap | null
-): Record<BandRole, number> {
-  return { ...SLOT_CAPACITIES, ...(stored ?? {}) };
-}
-
-/**
  * Validate a capacity map arriving from an API request body. Returns the
- * cleaned map (keys limited to real instruments, values integers in
- * [0, MAX_SLOTS_PER_ROLE]), or null if anything is malformed.
+ * cleaned map (values integers in [0, MAX_SLOTS_PER_ROLE]), or null if anything
+ * is malformed.
+ *
+ * `allowedKeys` is the team's catalog — a shape may only speak about roles that
+ * team actually has. Omit it only where no team is in scope.
  */
-export function validateSlotCapacities(raw: unknown): SlotCapacityMap | null {
+export function validateSlotCapacities(
+  raw: unknown,
+  allowedKeys?: string[]
+): SlotCapacityMap | null {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const allowed = allowedKeys ? new Set(allowedKeys) : null;
   const out: SlotCapacityMap = {};
   for (const [key, value] of Object.entries(raw)) {
-    if (!(key in SLOT_CAPACITIES)) return null;
+    if (allowed && !allowed.has(key)) return null;
     if (
       typeof value !== "number" ||
       !Number.isInteger(value) ||
@@ -72,7 +73,7 @@ export function validateSlotCapacities(raw: unknown): SlotCapacityMap | null {
     ) {
       return null;
     }
-    out[key as BandRole] = value;
+    out[key] = value;
   }
   return out;
 }
@@ -122,7 +123,7 @@ export type AssignmentStatus =
 
 // Order roles are displayed in AND filled in by the scheduler.
 // Scarce/critical roles first so they get first pick of people.
-export const ROLE_ORDER: BandRole[] = [
+export const ROLE_ORDER: BuiltInRole[] = [
   "WORSHIP_LEADER",
   "DRUMS",
   "BASS",
@@ -131,18 +132,23 @@ export const ROLE_ORDER: BandRole[] = [
   "ELECTRIC_GUITAR",
   "STRINGS",
   "VOCALS",
+  // A/V sits last on purpose. It's tech rather than music, so it neither
+  // competes with the band for people nor leads the roster when a set is read
+  // top to bottom — and A/V never doubles up with an instrument anyway (it's
+  // absent from OVERLAP_ALLOWED_PAIRS), so filling it late costs nothing.
+  "AV",
 ];
 
-// Every selectable role, in display order: the band roles (scarce-first) then
-// choir. Used for the user instrument picker, instrument/role validation, and
-// anywhere a roster is listed for display (Slack summaries, .ics titles) — i.e.
-// the places that must include choir, unlike the capacity-only ROLE_ORDER.
+// The BUILT-IN roles in display order — band roles (scarce-first) then choir.
+// This is the list a new team's catalog is seeded from, and the fallback
+// ordering for display where no team catalog is in scope. It is NOT "every
+// role that exists": ask the team for that (lib/teamRoles.ts orderedRoles).
 export const ALL_INSTRUMENTS: Instrument[] = [...ROLE_ORDER, CHOIR];
 
 // The only roles a musical director can lead from. A required-MD set is only
 // "covered" when an MD is assigned to one of these; the auto-scheduler seats a
 // reserved MD into one of them (never drums/vocals/etc.).
-export const MD_ROLES: BandRole[] = ["KEYS", "ELECTRIC_GUITAR", "BASS"];
+export const MD_ROLES: string[] = ["KEYS", "ELECTRIC_GUITAR", "BASS"];
 
 // A person normally fills at most one role on a set. The only sanctioned
 // double-ups are these unordered pairs: worship leader + acoustic guitar, and
@@ -160,7 +166,7 @@ export const OVERLAP_ALLOWED_PAIRS: [Instrument, Instrument][] = [
 // or a vocalist who also plays acoustic. If none of them play it, the slot is
 // left empty rather than seating a dedicated acoustic-only player. (These are
 // exactly the roles acoustic guitar may overlap with — see OVERLAP_ALLOWED_PAIRS.)
-export const ACOUSTIC_HOST_ROLES: BandRole[] = ["WORSHIP_LEADER", "VOCALS"];
+export const ACOUSTIC_HOST_ROLES: string[] = ["WORSHIP_LEADER", "VOCALS"];
 
 // True if two distinct roles may be held by the same person on one set.
 export function rolesMayOverlap(a: Instrument, b: Instrument): boolean {
@@ -169,7 +175,9 @@ export function rolesMayOverlap(a: Instrument, b: Instrument): boolean {
   );
 }
 
-export const INSTRUMENT_LABELS: Record<Instrument, string> = {
+// Built-in labels only — a team's own labels live on its TeamRole rows. Read a
+// role's name through lib/teamRoles.ts roleLabel(), which prefers the team's.
+export const INSTRUMENT_LABELS: Record<string, string> = {
   WORSHIP_LEADER: "Worship Leader",
   VOCALS: "Vox",
   ACOUSTIC_GUITAR: "Acoustic Guitar",
@@ -178,6 +186,7 @@ export const INSTRUMENT_LABELS: Record<Instrument, string> = {
   STRINGS: "Strings",
   DRUMS: "Drums",
   BASS: "Bass",
+  AV: "A/V",
   CHOIR: "Choir",
 };
 

@@ -3,7 +3,13 @@
 // tests/unit/stagedPlan.test.ts) and can be shared by the UI.
 import type { StagedSet } from "./types";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
-import { ROLE_ORDER, resolveCapacities, type Instrument } from "./constants";
+import type { Instrument } from "./constants";
+import {
+  DEFAULT_TEAM_ROLES,
+  bandRoles,
+  resolveTeamCapacities,
+  type TeamRoleDef,
+} from "./teamRoles";
 
 // Just the user shape the fill checks need (avoids importing the fat Api type).
 interface RosterUser {
@@ -122,13 +128,16 @@ export function conflictedUserIds(
 export function unfillableRoles(
   set: StagedSet,
   users: RosterUser[],
-  rules: UnavailabilityRule[]
+  rules: UnavailabilityRule[],
+  // The catalog of this set's team. Omitted → the built-in defaults, which is
+  // what a team-less set uses.
+  catalog: TeamRoleDef[] = DEFAULT_TEAM_ROLES
 ): Set<Instrument> {
-  const caps = resolveCapacities(set.slotCapacities);
+  const caps = resolveTeamCapacities(catalog, set.slotCapacities);
   const onSet = new Set(set.assignments.map((a) => a.userId));
   const cs = calcSet(set);
   const bad = new Set<Instrument>();
-  for (const role of ROLE_ORDER) {
+  for (const { key: role } of bandRoles(catalog)) {
     const filled = set.assignments.filter((a) => a.role === role).length;
     if (caps[role] - filled <= 0) continue; // no open slot for this role
     const hasCandidate = users.some(
@@ -150,10 +159,17 @@ export function unfillableRoles(
 export function totalUnfillable(
   sets: StagedSet[],
   users: RosterUser[],
-  rules: UnavailabilityRule[]
+  rules: UnavailabilityRule[],
+  // teamId → that team's catalog. Sets span teams in one plan, so each is
+  // judged against its own roles; a team not in the map uses the defaults.
+  catalogs?: Map<string, TeamRoleDef[]>
 ): number {
   let total = 0;
-  for (const set of sets) total += unfillableRoles(set, users, rules).size;
+  for (const set of sets) {
+    const catalog =
+      (set.teamId ? catalogs?.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
+    total += unfillableRoles(set, users, rules, catalog).size;
+  }
   return total;
 }
 

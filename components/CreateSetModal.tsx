@@ -1,7 +1,8 @@
 "use client";
 // Admin-only "create a one-off set" form, opened from the calendar's inline
-// "+" button on a day cell. Pre-fills the clicked date; the admin picks a
-// time, duration, optional label, and (optionally) a custom team shape.
+// "+" button on a day cell. Pre-fills the clicked date; the admin types the
+// set's name over the modal heading and picks a time, duration, and
+// (optionally) a custom team shape.
 // The set is created empty — to staff it, open it and use "Auto schedule"
 // (or assign people by hand) in the set detail modal.
 // Shares its body with the Create tab's TemplateModal via SetFormFields.
@@ -102,7 +103,27 @@ export default function CreateSetModal({
   };
 
   return (
-    <Modal open onClose={onClose} title="New set">
+    <Modal
+      open
+      onClose={onClose}
+      // The heading IS the name field. A separate "Label" input below read as a
+      // second, mysterious name for the set — here you just type over the
+      // title. Left blank, the placeholder is what the set is actually called.
+      title={
+        <input
+          value={form.label}
+          onChange={(e) => setForm({ ...form, label: e.target.value })}
+          placeholder="New set"
+          aria-label="Set name"
+          disabled={busy}
+          autoComplete="off"
+          className="w-64 rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-lg
+            font-semibold placeholder:text-gray-400 hover:border-gray-300 focus:border-indigo-500
+            focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-60
+            dark:placeholder:text-gray-500 dark:hover:border-gray-600 sm:w-80"
+        />
+      }
+    >
       <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
         {formatDay(date)}
       </p>
@@ -114,7 +135,7 @@ export default function CreateSetModal({
           teams={teams}
           disabled={busy}
           allowPrivate
-          labelPlaceholder="e.g. Special Prayer Night"
+          showLabel={false}
         />
 
         <div className="flex flex-wrap justify-end gap-2 pt-1">

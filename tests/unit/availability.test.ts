@@ -6,6 +6,7 @@ import {
   applyDayEdit,
   blockedDaysInRange,
   dayBlockLevel,
+  dayIsRepeating,
   expandRecurringBlocks,
   mergeWindows,
   weeksFromToday,
@@ -149,6 +150,29 @@ describe("dayBlockLevel", () => {
   });
 });
 
+describe("dayIsRepeating", () => {
+  it("is true only on the weekday a RECURRING rule covers", () => {
+    const entries = [recurring(jul8Weekday)];
+    expect(dayIsRepeating(entries, "2026-07-08")).toBe(true); // Wed
+    expect(dayIsRepeating(entries, "2026-07-15")).toBe(true); // next Wed
+    expect(dayIsRepeating(entries, "2026-07-09")).toBe(false); // Thu
+  });
+
+  it("stops at the rule's endDate — the last day it repeats", () => {
+    const entries = [recurring(jul8Weekday, { endDate: isoDay(2026, 7, 15) })];
+    expect(dayIsRepeating(entries, "2026-07-15")).toBe(true); // inclusive
+    expect(dayIsRepeating(entries, "2026-07-22")).toBe(false);
+  });
+
+  it("ignores dated blocks — only a weekly repeat counts", () => {
+    const entries = [
+      specific(isoDay(2026, 7, 8), { startMinute: 0, endMinute: FULL_DAY_MIN }),
+      dateRange(isoDay(2026, 7, 8), isoDay(2026, 7, 9)),
+    ];
+    expect(dayIsRepeating(entries, "2026-07-08")).toBe(false);
+  });
+});
+
 describe("blockedDaysInRange", () => {
   it("lists only blocked days, in ascending order, with a level and label", () => {
     const entries = [
@@ -256,17 +280,38 @@ describe("applyDayEdit", () => {
     expect(next.every((e) => e.requestId === "req1")).toBe(true);
   });
 
-  it("leaves recurring and timed blocks untouched", () => {
+  it("clears timed blocks too, but leaves weekly rules alone", () => {
     const entries = [
       recurring(jul8Weekday), // all-day recurring
       specific(isoDay(2026, 7, 8), { startMinute: 9 * 60, endMinute: 12 * 60 }),
     ];
     const next = applyDayEdit(entries, "2026-07-08", "2026-07-08", false);
-    // The recurring + timed blocks still apply (unblock only touches all-day
-    // SPECIFIC), so the day stays full (recurring wins).
+    // Clearing a day means "I'm free all of it", so the timed block goes.
+    expect(next).not.toContain(entries[1]);
+    // A weekly rule has no per-date exception in the schema, so it survives —
+    // and keeps the day blocked. The UI says so rather than leaving it a
+    // mystery (see the block-days route's recurringDays count).
     expect(next).toContain(entries[0]);
-    expect(next).toContain(entries[1]);
     expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+  });
+
+  it("clearing a partly-overlapped timed block keeps its window on the rest", () => {
+    // A 9am–12pm block across Jul 8–10; clear only the 9th.
+    const entries = [
+      specific(isoDay(2026, 7, 8), {
+        endDate: isoDay(2026, 7, 10),
+        startMinute: 9 * 60,
+        endMinute: 12 * 60,
+      }),
+    ];
+    const next = applyDayEdit(entries, "2026-07-09", "2026-07-09", false);
+    expect(dayBlockLevel(next, "2026-07-09")).toBeNull();
+    // The 8th and 10th survive as morning blocks, not flattened to all-day.
+    expect(dayBlockLevel(next, "2026-07-08")).toBe("partial");
+    expect(dayBlockLevel(next, "2026-07-10")).toBe("partial");
+    expect(next.every((e) => e.startMinute === 9 * 60 && e.endMinute === 12 * 60)).toBe(
+      true
+    );
   });
 });
 

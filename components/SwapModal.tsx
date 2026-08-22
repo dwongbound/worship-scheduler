@@ -4,11 +4,11 @@
 // Each row shows the set, who holds it now + their status, and both-direction
 // availability, then a "Request swap" that proposes the trade.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { roleLabel } from "@/lib/teamRoles";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
 import LoadingDots from "./common/LoadingDots";
 import StatusBadge from "./StatusBadge";
-import { INSTRUMENT_LABELS } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
 import type { ApiMyAssignment, ApiSwapCandidate } from "@/lib/types";
 
@@ -115,7 +115,7 @@ export default function SwapModal({
       title="Swap this set"
       subtitle={
         <>
-          {INSTRUMENT_LABELS[assignment.role]} ·{" "}
+          {roleLabel(assignment.role)} ·{" "}
           {assignment.set.label ?? "Worship Set"} ·{" "}
           {formatDay(assignment.set.startsAt)}
         </>
@@ -149,9 +149,7 @@ export default function SwapModal({
       >
         {items.length === 0 && !loading ? (
           <p className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-            No sets to swap with — nobody else plays {INSTRUMENT_LABELS[
-              assignment.role
-            ].toLowerCase()}{" "}
+            No sets to swap with — nobody else plays {roleLabel(assignment.role).toLowerCase()}{" "}
             on upcoming sets for this team.
           </p>
         ) : (

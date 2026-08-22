@@ -2,7 +2,8 @@
 // tests/unit/ics.test.ts. Hand-rolled instead of a dependency because we
 // only need simple VEVENTs; RFC 5545 is easy to satisfy for this subset.
 
-import { ALL_INSTRUMENTS, INSTRUMENT_LABELS, type Instrument } from "./constants";
+import { ALL_INSTRUMENTS, type Instrument } from "./constants";
+import { roleLabel } from "./teamRoles";
 
 /**
  * The calendar title for a set: its name followed by one "(Role)" per role
@@ -16,8 +17,15 @@ export function setEventTitle(
   roles: Instrument[]
 ): string {
   const base = label?.trim() || "Worship Set";
-  const parens = ALL_INSTRUMENTS.filter((r) => roles.includes(r))
-    .map((r) => `(${INSTRUMENT_LABELS[r]})`)
+  // Built-in roles first, in their usual order, then anything custom (a role
+  // the team invented) in the order it arrived — so a title never silently
+  // drops a role just because it isn't one of the originals.
+  const ordered = [
+    ...ALL_INSTRUMENTS.filter((r) => roles.includes(r)),
+    ...roles.filter((r) => !ALL_INSTRUMENTS.includes(r)),
+  ];
+  const parens = [...new Set(ordered)]
+    .map((r) => `(${roleLabel(r)})`)
     .join(" ");
   return parens ? `${base} ${parens}` : base;
 }

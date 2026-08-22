@@ -21,8 +21,6 @@ import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import Select from "./common/Select";
 import {
   INSTRUMENT_LABELS,
-  ROLE_ORDER,
-  resolveCapacities,
   type Instrument,
 } from "@/lib/constants";
 import { formatDay, formatTime } from "@/lib/dates";
@@ -39,11 +37,21 @@ import {
   totalUnfillable,
   unfillableRoles,
 } from "@/lib/stagedPlan";
-import type { ApiAdminUser, StagedPlan, StagedSet } from "@/lib/types";
+import {
+  DEFAULT_TEAM_ROLES,
+  bandRoles,
+  resolveTeamCapacities,
+  teamSupportsMD,
+  type TeamRoleDef,
+} from "@/lib/teamRoles";
+import type { ApiAdminUser, ApiTeam, StagedPlan, StagedSet } from "@/lib/types";
 
 interface StagedScheduleModalProps {
   plan: StagedPlan | null; // null = closed
   users: ApiAdminUser[]; // for the reassignment dropdowns + name lookups
+  // Every team in scope, each carrying its role catalog — a plan spans teams,
+  // and each set's roster is drawn from ITS team's roles.
+  teams: ApiTeam[];
   busy: boolean; // an apply is in flight
   onApply: (sets: StagedSet[]) => void;
   onClose: () => void; // discard the staged plan
@@ -52,6 +60,7 @@ interface StagedScheduleModalProps {
 export default function StagedScheduleModal({
   plan,
   users,
+  teams,
   busy,
   onApply,
   onClose,
@@ -90,6 +99,15 @@ export default function StagedScheduleModal({
     [users]
   );
 
+  // teamId → that team's role catalog, so each staged set is measured against
+  // the roles its own team actually has.
+  const catalogs = useMemo(
+    () => new Map(teams.map((t) => [t.id, t.roles ?? DEFAULT_TEAM_ROLES])),
+    [teams]
+  );
+  const catalogFor = (set: StagedSet): TeamRoleDef[] =>
+    (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
+
   // Load stats, recomputed on every edit — the "who's playing often" signal.
   const counts = useMemo(() => countAssignments(sets), [sets]);
   const rows = useMemo(() => loadRows(sets), [sets]);
@@ -97,8 +115,8 @@ export default function StagedScheduleModal({
   const conflicts = useMemo(() => totalConflicts(sets, rules), [sets, rules]);
   // Roles with an open slot nobody available can fill (structural holes).
   const unfillable = useMemo(
-    () => totalUnfillable(sets, users, rules),
-    [sets, users, rules]
+    () => totalUnfillable(sets, users, rules, catalogs),
+    [sets, users, rules, catalogs]
   );
 
   if (!plan) return null;
@@ -327,14 +345,18 @@ export default function StagedScheduleModal({
             </p>
             <div className="flex gap-3 overflow-x-auto pb-2">
               {entries.map(({ set, idx }) => {
-            const capacities = resolveCapacities(set.slotCapacities);
+            const catalog = catalogFor(set);
+            const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
             // The set's MD (only if still eligible) and who could take the role.
             const { eligibleIds: mdEligibleIds, mdUserId } = mdInfo(set);
+            // A team without the MD role has no MD logic at all, so a leftover
+            // requiresMD on one of its sets isn't something to flag.
+            const supportsMD = teamSupportsMD(catalog);
             // Required-MD set with no eligible MD chosen → couldn't close it.
-            const missingMD = set.requiresMD && !mdUserId;
+            const missingMD = supportsMD && set.requiresMD && !mdUserId;
             const conflicted = conflictedUserIds(set, rules);
             // Roles on this set no available person can fill — flagged in red.
-            const cantFill = unfillableRoles(set, users, rules);
+            const cantFill = unfillableRoles(set, users, rules, catalog);
             return (
               <div
                 key={set.startsAt}
@@ -357,7 +379,7 @@ export default function StagedScheduleModal({
                     <Badge tone={set.existing ? "amber" : "green"}>
                       {set.existing ? "Already exists" : "New set"}
                     </Badge>
-                    {set.requiresMD && (
+                    {supportsMD && set.requiresMD && (
                       <Badge tone={missingMD ? "amber" : "blue"}>
                         {missingMD ? "⚠ No MD" : "MD ✓"}
                       </Badge>
@@ -373,7 +395,7 @@ export default function StagedScheduleModal({
                 )}
 
                 <ul className="space-y-2">
-                  {ROLE_ORDER.map((role) => {
+                  {bandRoles(catalog).map(({ key: role, label: roleName }) => {
                     const capacity = capacities[role];
                     const filled = set.assignments.filter(
                       (a) => a.role === role
@@ -394,7 +416,7 @@ export default function StagedScheduleModal({
                               : "text-gray-600 dark:text-gray-400"
                           }`}
                         >
-                          {INSTRUMENT_LABELS[role]}
+                          {roleName}
                           {capacity > 1 && (
                             <span className="ml-1 text-gray-400">
                               ({filled.length}/{capacity})
@@ -457,8 +479,9 @@ export default function StagedScheduleModal({
 
                 {/* MD picker: one per set, chosen from the assignees; only those
                     who qualify (an MD on keys/electric/bass, not the WL) are
-                    clickable. Empty when nobody qualifies. */}
-                {set.requiresMD && (
+                    clickable. Empty when nobody qualifies. Absent entirely for
+                    a team whose catalog has no MD role. */}
+                {supportsMD && set.requiresMD && (
                   <div className="mt-2 border-t border-gray-100 pt-2 dark:border-gray-700">
                     {mdEligibleIds.size === 0 ? (
                       <p className="text-xs text-gray-500 dark:text-gray-400">

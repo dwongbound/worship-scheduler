@@ -1,16 +1,20 @@
 // PATCH /api/sets/:id — edit a set's notes (org admins + the set's worship
 // leader, who runs it), its designated MD (org admins only), its private flag
-// (org admins only), its choir opt-in flag (org admins only), or whether it
-// requires an MD (org admins only). Send { notes }, { mdUserId } (null clears
-// the MD), { isPrivate }, { choirEnabled }, or { requiresMD }.
+// (org admins only), its choir opt-in flag (org admins only), whether it
+// requires an MD (org admins only), or its team shape (org admins only).
+// Send { notes }, { mdUserId } (null clears the MD), { isPrivate },
+// { choirEnabled }, { requiresMD }, or { slotCapacities } (null = go back to
+// the default shape).
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+// Value import (not `import type`) — Prisma.DbNull is a runtime sentinel.
+import { Prisma } from "@/lib/generated/prisma/client";
 import { isValidMD } from "@/lib/md";
-import { parseGroupChatLeadDays } from "@/lib/constants";
+import { parseGroupChatLeadDays, validateSlotCapacities } from "@/lib/constants";
 
 export async function PATCH(
   req: NextRequest,
@@ -28,14 +32,16 @@ export async function PATCH(
   const editingChoir = "choirEnabled" in body;
   const editingRequiresMD = "requiresMD" in body;
   const editingGroupChatLead = "groupChatLeadDays" in body;
-  // Only a plain notes edit (not MD/privacy/choir/requiresMD/group-chat) needs a
-  // notes string.
+  const editingCapacities = "slotCapacities" in body;
+  // Only a plain notes edit (not MD/privacy/choir/requiresMD/group-chat/shape)
+  // needs a notes string.
   if (
     !editingMD &&
     !editingPrivate &&
     !editingChoir &&
     !editingRequiresMD &&
     !editingGroupChatLead &&
+    !editingCapacities &&
     typeof body.notes !== "string"
   ) {
     return NextResponse.json({ error: "notes is required" }, { status: 400 });
@@ -59,7 +65,8 @@ export async function PATCH(
     !editingPrivate &&
     !editingChoir &&
     !editingRequiresMD &&
-    !editingGroupChatLead
+    !editingGroupChatLead &&
+    !editingCapacities
   ) {
     const leaderSlot = await prisma.assignment.findFirst({
       where: { setId: id, userId: user.id, role: "WORSHIP_LEADER" },
@@ -80,6 +87,34 @@ export async function PATCH(
     const updated = await prisma.set.update({
       where: { id },
       data: { requiresMD: body.requiresMD },
+    });
+    return NextResponse.json(updated);
+  }
+
+  if (editingCapacities) {
+    // The set's own team shape. null = clear the override and fall back to the
+    // global default (Prisma.DbNull writes a real SQL NULL into the Json
+    // column; a bare `null` would store the JSON literal `null` instead).
+    // Lowering a role below the people already standing in it is allowed — the
+    // roster keeps showing them, it just stops offering new slots — so nobody
+    // is silently dropped by a shape edit.
+    if (body.slotCapacities === null) {
+      const updated = await prisma.set.update({
+        where: { id },
+        data: { slotCapacities: Prisma.DbNull },
+      });
+      return NextResponse.json(updated);
+    }
+    const capacities = validateSlotCapacities(body.slotCapacities);
+    if (!capacities) {
+      return NextResponse.json(
+        { error: "Invalid slot capacities" },
+        { status: 400 }
+      );
+    }
+    const updated = await prisma.set.update({
+      where: { id },
+      data: { slotCapacities: capacities },
     });
     return NextResponse.json(updated);
   }

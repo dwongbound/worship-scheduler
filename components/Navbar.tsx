@@ -223,8 +223,7 @@ export default function Navbar() {
     { href: "/calendar", label: "Calendar", icon: CALENDAR_ICON },
     {
       href: "/swaps",
-      label: "Set Manager",
-      mobileLabel: "My Sets",
+      label: "My Sets",
       icon: SWAP_ICON,
       dot: openSwapCount > 0,
       dotTestId: "swap-dot",
@@ -318,7 +317,7 @@ export default function Navbar() {
     <nav className="fixed inset-x-0 top-0 z-30 h-16 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
       {/* h-full (rather than py-3) centers the row inside the bar's fixed
           h-16 — the padding alone would leave it a few px off-centre. */}
-      <div className="mx-auto flex h-full max-w-5xl items-center justify-between gap-2 px-4">
+      <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-2 px-4 sm:px-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-4">
           {/* Page logo, far left */}
           <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
@@ -360,63 +359,54 @@ export default function Navbar() {
           </div>
 
             {/* Admin dropdown: collapses the amber admin tabs into one "Admin"
-                trigger that reveals them on hover (or keyboard focus). The
-                `group` + `group-hover` CSS drives both the reveal and the
-                chevron flip. `pt-2` on the panel bridges the gap to the trigger
-                so the pointer can travel into the menu without dropping hover. */}
+                trigger. Opens on hover and LATCHES open on click — the shared
+                Dropdown handles both, so this menu behaves like the profile and
+                overflow menus instead of vanishing the moment you steer off it. */}
             {adminTabs.length > 0 && (
-              <div className="group relative">
-                <button
-                  type="button"
-                  data-tour="/admin"
-                  aria-haspopup="menu"
-                  // The menu is hover-driven; a mouse click on the trigger
-                  // shouldn't focus it, since group-focus-within would then
-                  // latch the panel open after the pointer leaves. Preventing
-                  // the mousedown default keeps focus off on click while still
-                  // allowing keyboard Tab focus to reveal the menu.
-                  onMouseDown={(e) => e.preventDefault()}
-                  className={adminTriggerClassName(adminGroupActive)}
-                >
-                  <ShieldIcon />
-                  Admin
-                  {adminHasDot && (
-                    <span
-                      data-testid="admin-dot"
-                      className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500"
+              <Dropdown
+                hover
+                align="left"
+                widthClassName="min-w-[11rem]"
+                trigger={(open) => (
+                  <span
+                    data-tour="/admin"
+                    className={adminTriggerClassName(adminGroupActive)}
+                  >
+                    <ShieldIcon />
+                    Admin
+                    {adminHasDot && (
+                      <span
+                        data-testid="admin-dot"
+                        className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500"
+                      />
+                    )}
+                    <ChevronIcon
+                      className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                        open ? "rotate-180" : ""
+                      }`}
                     />
-                  )}
-                  <ChevronIcon className="h-3.5 w-3.5 transition-transform duration-200 group-hover:rotate-180 group-focus-within:rotate-180" />
-                </button>
-                <div className="invisible absolute left-0 top-full z-40 pt-2 opacity-0 transition-opacity duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100">
-                  <div className="flex min-w-[11rem] flex-col overflow-hidden rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
-                    {adminTabs.map((tab) => (
-                      <Link
-                        key={tab.href}
-                        href={tab.href}
-                        data-tour={tab.href}
-                        onClick={(e) => {
-                          handleTabClick(tab.href);
-                          // Drop focus so the group-focus-within reveal
-                          // releases and the menu closes on navigation
-                          // instead of staying latched open.
-                          e.currentTarget.blur();
-                        }}
-                        className={adminMenuItemClassName(isActive(tab.href))}
-                      >
-                        <TabIcon d={tab.icon} className="h-4 w-4 shrink-0" />
-                        {tab.label}
-                        {"dot" in tab && tab.dot && (
-                          <span
-                            data-testid={"dotTestId" in tab ? tab.dotTestId : undefined}
-                            className="ml-auto h-2 w-2 rounded-full bg-red-500"
-                          />
-                        )}
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              </div>
+                  </span>
+                )}
+              >
+                {adminTabs.map((tab) => (
+                  <Link
+                    key={tab.href}
+                    href={tab.href}
+                    data-tour={tab.href}
+                    onClick={() => handleTabClick(tab.href)}
+                    className={adminMenuItemClassName(isActive(tab.href))}
+                  >
+                    <TabIcon d={tab.icon} className="h-4 w-4 shrink-0" />
+                    {tab.label}
+                    {"dot" in tab && tab.dot && (
+                      <span
+                        data-testid={"dotTestId" in tab ? tab.dotTestId : undefined}
+                        className="ml-auto h-2 w-2 rounded-full bg-red-500"
+                      />
+                    )}
+                  </Link>
+                ))}
+              </Dropdown>
             )}
           </div>
         </div>

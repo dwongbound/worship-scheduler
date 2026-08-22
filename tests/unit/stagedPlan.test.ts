@@ -133,6 +133,7 @@ describe("unfillableRoles / totalUnfillable", () => {
     ru("el", ["ELECTRIC_GUITAR"]),
     ru("st", ["STRINGS"]),
     ru("vo", ["VOCALS"]),
+    ru("av", ["AV"]),
   ];
 
   it("flags a role no one plays", () => {
@@ -157,7 +158,7 @@ describe("unfillableRoles / totalUnfillable", () => {
     // even though no other keys player exists.
     const onlyKeys = {
       WORSHIP_LEADER: 0, VOCALS: 0, ACOUSTIC_GUITAR: 0, ELECTRIC_GUITAR: 0,
-      KEYS: 1, STRINGS: 0, DRUMS: 0, BASS: 0,
+      KEYS: 1, STRINGS: 0, DRUMS: 0, BASS: 0, AV: 0,
     } as Record<Instrument, number>;
     const set: StagedSet = {
       ...stagedSet(week1, [{ userId: "k", role: "KEYS" }]),

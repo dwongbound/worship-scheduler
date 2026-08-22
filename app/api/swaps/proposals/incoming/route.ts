@@ -1,5 +1,5 @@
 // GET /api/swaps/proposals/incoming?orgId=  — pending targeted trades awaiting
-// MY response (I own the toAssignment). These render in the Cover Requests
+// MY response (I own the toAssignment). These render in the Covers / Swaps
 // area with Accept / Reject, and also power the navbar swap dot.
 //   • the set I'd GIVE UP (mine / toAssignment) and the set I'd RECEIVE
 //     (theirs / fromAssignment), each with date + role,

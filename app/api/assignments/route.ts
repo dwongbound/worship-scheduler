@@ -1,5 +1,5 @@
 // GET /api/assignments — the current user's upcoming assignments with set
-// details (?orgId= narrows to one org — the Set Manager's org filter).
+// details (?orgId= narrows to one org — the My Sets org filter).
 // Powers the "My Sets" list on the Swaps tab.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";

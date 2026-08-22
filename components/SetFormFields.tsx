@@ -1,5 +1,6 @@
 "use client";
-// The fields shared by every "create a set" form: a label, a start time +
+// The fields shared by every "create a set" form: a label (optional — the
+// ad-hoc form types the name into the modal heading instead), a start time +
 // duration, and an optional custom team shape. Used by both the calendar's
 // ad-hoc CreateSetModal and the Create tab's TemplateModal — whatever differs
 // between them (a fixed date vs. a recurring day-of-week) is passed in as the
@@ -9,7 +10,12 @@ import Input from "./common/Input";
 import Select from "./common/Select";
 import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
-import { resolveCapacities, type BandRole } from "@/lib/constants";
+import type { BandRole } from "@/lib/constants";
+import {
+  DEFAULT_TEAM_ROLES,
+  resolveTeamCapacities,
+  teamSupportsMD,
+} from "@/lib/teamRoles";
 import type { ApiTeam } from "@/lib/types";
 
 // Set durations, offered in half-hour steps (0.5h–8h) but stored as minutes.
@@ -56,6 +62,7 @@ export default function SetFormFields({
   onChange,
   scheduleField,
   teams,
+  showLabel = true,
   labelRequired = false,
   labelPlaceholder = "e.g. Sunday Morning Service",
   allowPrivate = false,
@@ -65,6 +72,10 @@ export default function SetFormFields({
   onChange: (next: SetFormState) => void;
   scheduleField?: ReactNode; // date (calendar) or day-of-week (template)
   teams: ApiTeam[]; // the set is created FOR one of these (empty = loading)
+  // Render the "Label" field. Off for the ad-hoc set form, where the modal's
+  // own heading is the name field (see CreateSetModal) — two places to type a
+  // name for the same set read as two different things.
+  showLabel?: boolean;
   labelRequired?: boolean;
   labelPlaceholder?: string;
   // Show the "Private" checkbox (ad-hoc sets only — templates don't have it).
@@ -73,17 +84,23 @@ export default function SetFormFields({
 }) {
   const patch = (p: Partial<SetFormState>) => onChange({ ...state, ...p });
   const customizing = state.capacities !== null;
+  // The shape editor speaks the SELECTED team's roles — different teams offer
+  // different ones, so switching teams changes what's on offer here.
+  const catalog =
+    teams.find((t) => t.id === state.teamId)?.roles ?? DEFAULT_TEAM_ROLES;
 
   return (
     <div className="space-y-3">
-      <Input
-        label="Label"
-        value={state.label}
-        onChange={(e) => patch({ label: e.target.value })}
-        placeholder={labelPlaceholder}
-        required={labelRequired}
-        disabled={disabled}
-      />
+      {showLabel && (
+        <Input
+          label="Label"
+          value={state.label}
+          onChange={(e) => patch({ label: e.target.value })}
+          placeholder={labelPlaceholder}
+          required={labelRequired}
+          disabled={disabled}
+        />
+      )}
 
       {scheduleField}
 
@@ -91,7 +108,9 @@ export default function SetFormFields({
       <Select
         label="Team"
         value={state.teamId}
-        onChange={(e) => patch({ teamId: e.target.value })}
+        // Switching teams drops any custom shape: its keys belong to the old
+        // team's roles and would mean nothing against the new one's.
+        onChange={(e) => patch({ teamId: e.target.value, capacities: null })}
         required
         disabled={disabled || teams.length === 0}
       >
@@ -150,13 +169,16 @@ export default function SetFormFields({
 
       {/* On: this set wants a musical director — the auto-scheduler seats one
           and the set detail modal shows the MD picker. Off: no MD is tracked
-          for this set. (MDs can still play any role on any set either way.) */}
-      <Checkbox
-        label="Add MD"
-        checked={state.requiresMD}
-        onChange={(e) => patch({ requiresMD: e.target.checked })}
-        disabled={disabled}
-      />
+          for this set. (MDs can still play any role on any set either way.)
+          Hidden entirely for a team whose catalog has no MD role. */}
+      {teamSupportsMD(catalog) && (
+        <Checkbox
+          label="Add MD"
+          checked={state.requiresMD}
+          onChange={(e) => patch({ requiresMD: e.target.checked })}
+          disabled={disabled}
+        />
+      )}
 
       {/* Private ad-hoc set: hidden from everyone except org admins and the
           people assigned to it. Offered only when creating a one-off set. */}
@@ -177,7 +199,11 @@ export default function SetFormFields({
           type="button"
           disabled={disabled}
           onClick={() =>
-            patch({ capacities: customizing ? null : resolveCapacities(null) })
+            patch({
+              capacities: customizing
+                ? null
+                : resolveTeamCapacities(catalog, null),
+            })
           }
           className="text-sm font-medium text-indigo-600 hover:underline disabled:opacity-60 dark:text-indigo-400"
         >
@@ -186,6 +212,7 @@ export default function SetFormFields({
         {customizing && state.capacities && (
           <div className="mt-2">
             <SlotCapacityEditor
+              catalog={catalog}
               value={state.capacities}
               onChange={(c) => patch({ capacities: c })}
               disabled={disabled}
