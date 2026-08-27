@@ -8,7 +8,8 @@
 //      candidate who (a) plays that instrument, (b) is available, (c) isn't
 //      already on this set, then prefer (d) people who did NOT serve within
 //      the past week (soft — see SPACING below), and among those (e) whoever
-//      has the FEWEST assignments so far.
+//      has the FEWEST assignments so far, and among THOSE (f) whoever has done
+//      the fewest sets FOR THIS TEAM (see PER-TEAM BALANCE).
 //   3. Ties break on user id so results are deterministic (nice for tests).
 // Slots with no viable candidate stay empty rather than blocking the run.
 //
@@ -17,6 +18,15 @@
 // also plays acoustic — the acoustic guitarist should double as the leader/a
 // singer. If none of them play it, the slot is left empty (never a dedicated
 // acoustic-only player). See ACOUSTIC_HOST_ROLES.
+//
+// PER-TEAM BALANCE: overall load alone can seat someone on all four of one
+// team's sets and none of another's — both teams' sets are just "a set" to a
+// global tally, so which team a slot belongs to never enters the choice. A
+// per-(user, team) tally breaks ties that user id used to break arbitrarily,
+// steering each pick toward whoever has served THIS team least. It sits BELOW
+// the global count on purpose: it re-orders only people who are already
+// equally loaded, so it can never make overall balance worse by handing a set
+// to someone who's already stretched across three teams.
 //
 // SPACING: someone who served (or is being scheduled) within MIN_GAP_DAYS of
 // a set is deprioritized for it, not excluded — with enough people this makes
@@ -174,22 +184,40 @@ export function isUserAvailable(
 }
 
 /**
+ * Map key for one person's tally on one team. A team-less set ("open to the
+ * whole org") gets its own bucket rather than being merged into any team's.
+ */
+export function teamKey(userId: string, teamId: string | null | undefined): string {
+  return `${userId}|${teamId ?? ""}`;
+}
+
+/**
  * Fill every set's slots from the pool of users.
  * `existingCounts` lets callers pre-load how many assignments each user
  * already has (so re-runs stay balanced against prior schedules).
  * `existingAssignments` are dates people are already booked on in the DB, so
  * the spacing rule can also steer new sets away from them.
+ * `existingTeamCounts` does the same per team, keyed by `teamKey(userId,
+ * teamId)` — without it a re-run starts every team tally at zero while the
+ * global one carries over, and the two signals disagree.
  */
 export function buildSchedule(
   sets: SchedulerSet[],
   users: SchedulerUser[],
   rules: UnavailabilityRule[],
   existingCounts: Map<string, number> = new Map(),
-  existingAssignments: ExistingAssignment[] = []
+  existingAssignments: ExistingAssignment[] = [],
+  existingTeamCounts: Map<string, number> = new Map()
 ): ProposedAssignment[] {
   // Running tally of assignments per user — the load-balancing signal.
   const counts = new Map<string, number>();
   for (const u of users) counts.set(u.id, existingCounts.get(u.id) ?? 0);
+
+  // The same tally split by team — see PER-TEAM BALANCE above. Seeded from the
+  // caller's DB counts so a re-run continues where the last one left off.
+  const teamCounts = new Map<string, number>(existingTeamCounts);
+  const teamCountOf = (userId: string, teamId: string | null | undefined) =>
+    teamCounts.get(teamKey(userId, teamId)) ?? 0;
 
   // Every date each person is booked on (DB bookings + picks made during this
   // run) — the spacing signal. See tooClose below.
@@ -235,8 +263,13 @@ export function buildSchedule(
       const held = rolesOnSet.get(p.userId) ?? new Set<Instrument>();
       held.add(p.role);
       rolesOnSet.set(p.userId, held);
-      // Their presence here counts for spacing on the surrounding sets too.
+      // Their presence here counts for spacing on the surrounding sets too —
+      // and toward this team's tally, so a hand-picked roster steers the rest
+      // of the run the same way an auto-filled one does. (Deliberately NOT the
+      // global tally; see the note on `preAssigned`.)
       recordBooking(p.userId, setTime);
+      const preKey = teamKey(p.userId, set.teamId);
+      teamCounts.set(preKey, (teamCounts.get(preKey) ?? 0) + 1);
     }
     // This set's role catalog and its resulting shape. Both come from the
     // team now, so two teams can fill genuinely different rosters.
@@ -269,6 +302,8 @@ export function buildSchedule(
       held.add(role);
       rolesOnSet.set(userId, held);
       counts.set(userId, (counts.get(userId) ?? 0) + 1);
+      const tk = teamKey(userId, set.teamId);
+      teamCounts.set(tk, (teamCounts.get(tk) ?? 0) + 1);
       recordBooking(userId, setTime);
       remaining[role]--;
       proposals.push({ setId: set.id, userId, role });
@@ -302,6 +337,7 @@ export function buildSchedule(
           (a, b) =>
             Number(tooClose(a.id, setTime)) - Number(tooClose(b.id, setTime)) ||
             counts.get(a.id)! - counts.get(b.id)! ||
+            teamCountOf(a.id, set.teamId) - teamCountOf(b.id, set.teamId) ||
             a.id.localeCompare(b.id)
         )[0];
 

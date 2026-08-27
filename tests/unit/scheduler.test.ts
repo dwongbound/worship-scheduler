@@ -6,6 +6,7 @@ import {
   isUserAvailable,
   type SchedulerSet,
   type SchedulerUser,
+  teamKey,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
 import { SLOT_CAPACITIES } from "@/lib/constants";
@@ -656,5 +657,76 @@ describe("availableChoirMembers", () => {
       user("c2", ["CHOIR"], false, "team-B"),
     ];
     expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+  });
+});
+
+// ── Per-team balance ────────────────────────────────────────────────────────
+// Overall load alone treats every set as interchangeable, so two people on two
+// teams could end up owning one team's rotation each. The per-team tiebreak
+// splits each team's sets between them instead.
+describe("buildSchedule per-team balance", () => {
+  // A drums-only shape, so nothing but the balancing rule decides who plays.
+  const DRUMS_ONLY = Object.fromEntries(
+    Object.keys(SLOT_CAPACITIES).map((role) => [role, role === "DRUMS" ? 1 : 0])
+  );
+
+  // Two teams, four weekly sets each: team A on Sundays, team B on the
+  // Wednesday after — far enough apart that spacing doesn't pin the answer.
+  function twoTeamSets(): SchedulerSet[] {
+    const sets: SchedulerSet[] = [];
+    for (let week = 0; week < 4; week++) {
+      sets.push(
+        {
+          id: `a${week}`,
+          startsAt: new Date(2026, 0, 4 + week * 7, 10, 0),
+          durationMinutes: 60,
+          teamId: "teamA",
+          capacities: DRUMS_ONLY,
+        },
+        {
+          id: `b${week}`,
+          startsAt: new Date(2026, 0, 7 + week * 7, 19, 0),
+          durationMinutes: 60,
+          teamId: "teamB",
+          capacities: DRUMS_ONLY,
+        }
+      );
+    }
+    return sets;
+  }
+
+  // Both people play drums on both teams.
+  const bothTeams = (id: string) => user(id, ["DRUMS"], false, ["teamA", "teamB"]);
+  const countOn = (
+    result: { setId: string; userId: string }[],
+    team: string,
+    userId: string
+  ) => result.filter((x) => x.setId.startsWith(team) && x.userId === userId).length;
+
+  it("splits each team's sets between people who are on both", () => {
+    const result = buildSchedule(
+      twoTeamSets(),
+      [bothTeams("p"), bothTeams("q")],
+      []
+    );
+    for (const team of ["a", "b"]) {
+      for (const person of ["p", "q"]) {
+        expect(countOn(result, team, person), `${person} on ${team}`).toBe(2);
+      }
+    }
+  });
+
+  it("seeds from the caller's existing per-team counts", () => {
+    // p has already done three of team A's sets in the db, so team A's slots
+    // should now favour q even though the two are level overall.
+    const result = buildSchedule(
+      twoTeamSets(),
+      [bothTeams("p"), bothTeams("q")],
+      [],
+      new Map(),
+      [],
+      new Map([[teamKey("p", "teamA"), 3]])
+    );
+    expect(countOn(result, "a", "q")).toBeGreaterThan(countOn(result, "a", "p"));
   });
 });

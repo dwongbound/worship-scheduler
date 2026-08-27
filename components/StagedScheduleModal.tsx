@@ -7,11 +7,17 @@
 //
 // Layout: a near-full-screen workspace. A "Team load" panel across the top
 // shows who is playing how often (so the admin can spot over/under-used
-// people at a glance); below it, each recurring set type (grouped by label)
-// gets its own horizontally-scrolling row of occurrence cards. Every roster
-// dropdown is availability-aware — people who can't serve at a set's time are
-// flagged and sorted last (same PlayerSelect the calendar's SetDetailModal
-// uses).
+// people at a glance); below it, the occurrence cards, grouped either way:
+//   • By set type — one horizontally-scrolling row per recurring set, so you
+//     read one set type's rotation across the weeks.
+//   • Chronological — one row per WEEK, weeks running down the page, so you
+//     read the calendar as it actually happens: everything in that week side
+//     by side (Tuesday morning, Tuesday evening, Thursday…), then the next
+//     week below. The date axis pivots from "across the weeks" to "down the
+//     weeks".
+// Every roster dropdown is availability-aware — people who can't serve at a
+// set's time are flagged and sorted last (same PlayerSelect the calendar's
+// SetDetailModal uses).
 import { useEffect, useMemo, useState } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
@@ -26,7 +32,12 @@ import {
 import { formatDay, formatTime } from "@/lib/dates";
 import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
 import { buildPlayerOptions } from "@/lib/playerOptions";
-import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
+import { schedulableRolesByTeam } from "@/lib/roster";
+import {
+  buildSchedule,
+  isUserAvailable,
+  type UnavailabilityRule,
+} from "@/lib/scheduler";
 import {
   conflictedUserIds,
   countAssignments,
@@ -57,6 +68,20 @@ interface StagedScheduleModalProps {
   onClose: () => void; // discard the staged plan
 }
 
+/**
+ * The week a set falls in, as a heading: "Week of Aug 24". Weeks run Sun–Sat,
+ * matching the calendar grid, so a Sunday service and the Thursday rehearsal
+ * after it group together the way a paper schedule would.
+ */
+function weekLabel(startsAt: string): string {
+  const d = new Date(startsAt);
+  const sunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay());
+  return `Week of ${sunday.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  })}`;
+}
+
 export default function StagedScheduleModal({
   plan,
   users,
@@ -67,8 +92,17 @@ export default function StagedScheduleModal({
 }: StagedScheduleModalProps) {
   // Editable copy of the proposal — reset whenever a fresh plan arrives.
   const [sets, setSets] = useState<StagedSet[]>([]);
+  // How the cards are grouped (see the header comment). Per-session, not
+  // persisted — it's a reading preference for this one review.
+  const [view, setView] = useState<"type" | "chrono">("type");
+  // Guard on the way out: the plan only exists in this component, so closing
+  // is the one action here that destroys work. Asked for both exits (Discard
+  // and the ✕/backdrop), which is why it wraps onClose rather than sitting on
+  // the button.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   useEffect(() => {
     setSets(plan?.sets ?? []);
+    setConfirmDiscard(false);
   }, [plan]);
 
   const nameOf = useMemo(() => {
@@ -121,20 +155,21 @@ export default function StagedScheduleModal({
 
   if (!plan) return null;
 
-  // Group the staged sets by label ("recurring set type") for the row layout:
-  // each label gets one horizontally-scrolling row of its occurrences, in date
-  // order (sets are already sorted). Entries keep their index into `sets` so
-  // the edit callbacks still address the master list.
+  // Group the staged sets for the card layout — by set type, or by the day
+  // they fall on. Either way sets are already in date order, so insertion
+  // order gives chronological groups for free. Entries keep their index into
+  // `sets` so the edit callbacks still address the master list.
   const groupedSets: [string, { set: StagedSet; idx: number }[]][] = [];
   {
-    const byLabel = new Map<string, { set: StagedSet; idx: number }[]>();
+    const groups = new Map<string, { set: StagedSet; idx: number }[]>();
     sets.forEach((set, idx) => {
-      const label = set.label ?? "Worship Set";
-      const group = byLabel.get(label) ?? [];
+      const key =
+        view === "chrono" ? weekLabel(set.startsAt) : set.label ?? "Worship Set";
+      const group = groups.get(key) ?? [];
       group.push({ set, idx });
-      byLabel.set(label, group);
+      groups.set(key, group);
     });
-    groupedSets.push(...byLabel.entries());
+    groupedSets.push(...groups.entries());
   }
 
   const totalAssignments = sets.reduce((n, s) => n + s.assignments.length, 0);
@@ -176,6 +211,89 @@ export default function StagedScheduleModal({
       ...s,
       assignments: [...s.assignments, { userId, role }],
     }));
+
+  // Empty every roster in one go: the plan keeps its sets, dates and shapes but
+  // nobody on them — placeholder sets an admin fills in later. The MD goes with
+  // them, since an MD has to be one of the assignees.
+  const clearAllPeople = () =>
+    setSets((prev) =>
+      prev.map((s) => ({ ...s, assignments: [], mdUserId: null }))
+    );
+
+  // Re-run the fill over the CURRENT plan. This is the same pure function the
+  // server ran (lib/scheduler.ts), fed the same starting tallies via
+  // plan.baseline — so on an emptied plan it reproduces the original proposal
+  // exactly, which is what makes "Clear all people" safe to click. Anyone
+  // still on a set rides along as `preAssigned`: hand-picks are kept and only
+  // the holes get filled.
+  const autoScheduleAll = () => {
+    const proposals = buildSchedule(
+      sets.map((s) => ({
+        // The staging identity, matching what the server keyed rosters by.
+        id: s.startsAt,
+        startsAt: new Date(s.startsAt),
+        durationMinutes: s.durationMinutes,
+        roles: catalogFor(s),
+        capacities: s.slotCapacities,
+        requiresMD: s.requiresMD,
+        teamId: s.teamId,
+        preAssigned: s.assignments.map((a) => ({
+          userId: a.userId,
+          role: a.role,
+          isMD: isMdOf(a.userId),
+        })),
+      })),
+      users.map((u) => ({
+        id: u.id,
+        isMD: u.isMD,
+        // Inactive memberships are dropped, so the fill can't propose someone
+        // paused on that team — the same rule the server's callers apply.
+        rolesByTeam: schedulableRolesByTeam(
+          u.teams.map((t) => ({
+            teamId: t.id,
+            roles: t.roles,
+            active: t.active,
+          }))
+        ),
+      })),
+      rules,
+      new Map(Object.entries(plan?.baseline?.counts ?? {})),
+      (plan?.baseline?.booked ?? []).map((b) => ({
+        userId: b.userId,
+        startsAt: new Date(b.startsAt),
+      })),
+      new Map(Object.entries(plan?.baseline?.teamCounts ?? {}))
+    );
+
+    const bySet = new Map<string, StagedSet["assignments"]>();
+    for (const pr of proposals) {
+      const roster = bySet.get(pr.setId) ?? [];
+      roster.push({ userId: pr.userId, role: pr.role });
+      bySet.set(pr.setId, roster);
+    }
+
+    setSets((prev) =>
+      prev.map((s) => {
+        const merged = [...s.assignments, ...(bySet.get(s.startsAt) ?? [])];
+        return {
+          ...s,
+          assignments: merged,
+          // Re-derive the MD the way the server does — a kept pick that's
+          // still eligible survives, otherwise the best of the new roster.
+          mdUserId: s.requiresMD
+            ? (() => {
+                const a = merged.map((x) => ({
+                  userId: x.userId,
+                  role: x.role,
+                  isMD: isMdOf(x.userId),
+                }));
+                return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
+              })()
+            : null,
+        };
+      })
+    );
+  };
 
   // Pick (or clear, with "") a staged set's designated MD.
   const setMD = (idx: number, userId: string) =>
@@ -253,14 +371,19 @@ export default function StagedScheduleModal({
   }
 
   return (
+    <>
     <Modal
       open
-      onClose={onClose}
+      onClose={() => setConfirmDiscard(true)}
       title="Review generated schedule"
       size="full"
       footer={
         <>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button
+            variant="secondary"
+            onClick={() => setConfirmDiscard(true)}
+            disabled={busy}
+          >
             Discard
           </Button>
           <Button onClick={() => onApply(applySets())} disabled={busy}>
@@ -306,7 +429,7 @@ export default function StagedScheduleModal({
         </p>
       )}
 
-      {/* ── Team load: who's playing how often (top, full width) ─────── */}
+      {/* ── Team load: who's playing how often, full width ───────────── */}
       <div className="mt-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
           Team load
@@ -332,8 +455,66 @@ export default function StagedScheduleModal({
         </p>
       </div>
 
-      {/* ── One row per recurring set (grouped by label): the row scrolls
-          sideways through that set's occurrences in date order. ────────── */}
+      {/* Plan-wide controls: how to read the cards, and the one-click empty.
+          They sit between the stats and the cards because that's what they act
+          on — the load panel is what tells you whether to clear and start over. */}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        {/* One toggle: empty the plan, or fill it back up. An emptied plan
+            refills to exactly what the server proposed (same algorithm, same
+            baseline), so clearing is never a one-way door. */}
+        {totalAssignments === 0 ? (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={autoScheduleAll}
+            disabled={busy}
+            title="Run the scheduler over every set again"
+          >
+            Auto schedule all
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={clearAllPeople}
+            disabled={busy}
+            // Placeholder sets: the dates and shapes are what's wanted now,
+            // the people can come later. Nobody is notified about a set with
+            // an empty roster, so applying these is silent.
+            title="Empty every roster — the sets are still created, just with nobody on them"
+          >
+            Clear all people
+          </Button>
+        )}
+        <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-0.5 dark:border-gray-700">
+          {(
+            [
+              ["type", "By set type"],
+              ["chrono", "Chronological"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setView(value)}
+              aria-pressed={view === value}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                view === value
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── The cards. By set type: one sideways-scrolling row per label,
+          reading a rotation across the weeks. Chronological: one section per
+          day, days stacked down the page, each day's sets wrapping in a grid
+          — so a Tuesday with a morning, noon and evening set reads together
+          and the next day follows below. ─────────────────────────────────── */}
       <div className="mt-4 space-y-5">
         {groupedSets.map(([groupLabel, entries]) => (
           <section key={groupLabel}>
@@ -521,6 +702,35 @@ export default function StagedScheduleModal({
         ))}
       </div>
     </Modal>
+
+    {/* Nothing here has touched the database, so leaving loses the whole
+        proposal — worth one question rather than one stray click. A sibling
+        of the review modal, so the two overlays stack cleanly. Escape hits
+        both listeners: this one wins (registered last), so Escape backs out
+        of the confirmation rather than out of the review. */}
+    <Modal
+      open={confirmDiscard}
+      onClose={() => setConfirmDiscard(false)}
+      title="Discard this preview?"
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => setConfirmDiscard(false)}>
+            Keep reviewing
+          </Button>
+          <Button variant="danger" onClick={onClose}>
+            Discard
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        This preview was never saved — {sets.length} staged set
+        {sets.length === 1 ? "" : "s"} and any changes you&rsquo;ve made here
+        will be lost, and you&rsquo;ll need to auto schedule again to get them
+        back. Nothing on the calendar changes either way.
+      </p>
+    </Modal>
+    </>
   );
 }
 

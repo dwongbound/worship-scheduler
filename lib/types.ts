@@ -364,6 +364,19 @@ export interface StagedPlan {
   sets: StagedSet[];
   // Sets in the window we left untouched because they're already staffed.
   skipped: number;
+  // The balancing state the server's fill started from, shipped so the review
+  // modal's "Auto schedule all" can re-run the SAME pure algorithm over the
+  // SAME inputs (see lib/scheduler.ts). Without it a client-side re-fill would
+  // start every tally at zero and quietly undo the load balancing.
+  // Optional so older plans and test fixtures keep type-checking.
+  baseline?: {
+    // userId → assignments already on the books (upcoming, cross-org).
+    counts: Record<string, number>;
+    // teamKey(userId, teamId) → the same, split by team.
+    teamCounts: Record<string, number>;
+    // Dates people are already booked on, for the spacing rule.
+    booked: { userId: string; startsAt: string }[];
+  };
 }
 
 // One membership row as GET /api/me returns it — the per-org fields the
