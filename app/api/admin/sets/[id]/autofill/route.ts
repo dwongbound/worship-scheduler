@@ -16,7 +16,7 @@ import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { CHOIR, type Instrument, type SlotCapacityMap } from "@/lib/constants";
 import { schedulableRolesByTeam } from "@/lib/roster";
-import { availableChoirMembers, buildSchedule } from "@/lib/scheduler";
+import { availableChoirMembers, buildSchedule, teamKey } from "@/lib/scheduler";
 import { getTeamCatalog } from "@/lib/teamRoleStore";
 import { defaultMDId, isValidMD } from "@/lib/md";
 
@@ -75,10 +75,13 @@ export async function POST(
       select: { startsAt: true, assignments: { select: { userId: true } } },
     }),
     // Upcoming load per user, so ties still favor the least-scheduled.
-    prisma.assignment.groupBy({
-      by: ["userId"],
+    // Upcoming load per user, plus the same rows split by team — the second
+    // is what keeps a one-off autofill honouring the per-team balance the
+    // generate run works to. One findMany: prisma can't group by a field on
+    // the related Set, so the team split has to be tallied here anyway.
+    prisma.assignment.findMany({
       where: { set: { startsAt: { gte: new Date() } } },
-      _count: true,
+      select: { userId: true, set: { select: { teamId: true } } },
     }),
   ]);
 
@@ -87,7 +90,13 @@ export async function POST(
     isMD: u.isMD,
     rolesByTeam: schedulableRolesByTeam(u.teamMembers),
   }));
-  const existingCounts = new Map(existing.map((e) => [e.userId, e._count]));
+  const existingCounts = new Map<string, number>();
+  const existingTeamCounts = new Map<string, number>();
+  for (const a of existing) {
+    existingCounts.set(a.userId, (existingCounts.get(a.userId) ?? 0) + 1);
+    const key = teamKey(a.userId, a.set.teamId);
+    existingTeamCounts.set(key, (existingTeamCounts.get(key) ?? 0) + 1);
+  }
 
   // Who's booked on the neighboring sets, and when — the spacing signal.
   const booked = neighbors.flatMap((n) =>
@@ -123,7 +132,8 @@ export async function POST(
     eligible,
     rules,
     existingCounts,
-    booked
+    booked,
+    existingTeamCounts
   );
 
   // Choir: seat everyone on the team who's free at this time and isn't already

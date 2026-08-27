@@ -86,7 +86,9 @@ test("super-admin manages the platform and administers every org", async ({
   // 2) Admin of EVERY org: the Create admin UI works despite no admin
   // membership, and the switcher lists an org they never joined.
   await page.goto("/create");
-  await expect(page.getByLabel("Schedule for")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Auto schedule…" })
+  ).toBeVisible();
   await page.getByTestId("org-switcher").click();
   await expect(page.getByText(orgName(1), { exact: true })).toBeVisible();
 });

@@ -27,7 +27,9 @@ test("admin can generate for an availability request's date range", async ({
   // Pick a request (the seed ships "Fall 2026") as the generate scope. The
   // option value is "req:<id>"; select the first such option regardless of its
   // (date-dependent) label.
-  const scope = page.getByLabel("Schedule for");
+  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  const options = page.getByRole("dialog");
+  const scope = options.getByLabel("Schedule for");
   const reqValue = await scope
     .locator('option[value^="req:"]')
     .first()
@@ -36,15 +38,20 @@ test("admin can generate for an availability request's date range", async ({
   await scope.selectOption(reqValue!);
 
   // A summary of the resolved range appears, then generating stages a preview.
-  await expect(page.getByText(/^Scheduling /)).toBeVisible();
-  await page.getByRole("button", { name: "Generate preview" }).click();
+  await expect(options.getByText(/^Scheduling /)).toBeVisible();
+  await options.getByRole("button", { name: "Generate preview" }).click();
 
   const review = page.getByRole("dialog");
   await expect(
     review.getByRole("heading", { name: "Review generated schedule" })
   ).toBeVisible();
-  // Discard so we don't commit anything from this scope test.
+  // Discard so we don't commit anything from this scope test. Leaving the
+  // preview asks first, since the plan lives only in the browser.
   await review.getByRole("button", { name: "Discard" }).click();
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard this preview?" });
+  await confirm.getByRole("button", { name: "Discard" }).click();
 });
 
 test("admin can add a weekly template and generate a schedule", async ({ page }) => {
@@ -72,10 +79,13 @@ test("admin can add a weekly template and generate a schedule", async ({ page })
   await expect(page.getByText(/Sundays · 9:00 AM/)).toBeVisible();
 
   // Run the scheduler for 4 weeks — this stages a preview, it doesn't save yet.
+  // The scope + template picks live in the "Auto schedule" dialog now.
   // (Target the number input by role: "Weeks ahead" also appears as an option
   // in the "Schedule for" select, so getByLabel alone is ambiguous.)
-  await page.getByRole("spinbutton", { name: "Weeks ahead" }).fill("4");
-  await page.getByRole("button", { name: "Generate preview" }).click();
+  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  const options = page.getByRole("dialog");
+  await options.getByRole("spinbutton", { name: "Weeks ahead" }).fill("4");
+  await options.getByRole("button", { name: "Generate preview" }).click();
 
   // The review modal opens; it shows the Team load panel (the "who plays
   // often" rehaul) and set cards. Applying it commits the sets + assignments.
@@ -99,8 +109,10 @@ test("review dropdowns flag people who are unavailable at a set's time", async (
   // listed) option in a Thursday set's roster dropdowns. Use a large window so
   // there are always fresh (unstaffed) Thursdays to review, even if an earlier
   // test already staffed the nearest few weeks.
-  await page.getByRole("spinbutton", { name: "Weeks ahead" }).fill("16");
-  await page.getByRole("button", { name: "Generate preview" }).click();
+  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  const options = page.getByRole("dialog");
+  await options.getByRole("spinbutton", { name: "Weeks ahead" }).fill("16");
+  await options.getByRole("button", { name: "Generate preview" }).click();
 
   const review = page.getByRole("dialog");
   await expect(

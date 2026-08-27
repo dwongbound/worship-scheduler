@@ -21,24 +21,33 @@ import StatusBadge from "./StatusBadge";
 import LoadingDots from "./common/LoadingDots";
 import { type AssignmentStatus } from "@/lib/constants";
 import { formatTime } from "@/lib/dates";
-import { setStatus } from "@/lib/setStatus";
+import { setStatus, type SetStatus } from "@/lib/setStatus";
 import type { ApiSet, ApiSwapRequest } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-// A set's overall confirmation state → dot color (see lib/setStatus). Red for
-// a cover request, amber if anyone's still pending, green once all confirmed,
-// null when the set has no one yet.
-function setStatusDot(set: ApiSet): string | null {
+// A set's overall state → dot color (see lib/setStatus). Red means the roster
+// needs an admin — either a cover request or an unfilled slot (an emptied
+// placeholder set is all unfilled slots, so it reads red too). Amber if
+// everyone's aboard but someone hasn't confirmed; green once all confirmed.
+// What each dot colour means, in words — colour alone can't say whether a red
+// dot is an open slot or a cover request.
+const STATUS_TITLES: Record<SetStatus, string> = {
+  cover: "Cover requested",
+  understaffed: "Needs people — open slots",
+  unconfirmed: "Waiting on confirmations",
+  confirmed: "Fully confirmed",
+};
+
+function setStatusDot(set: ApiSet): string {
   switch (setStatus(set)) {
     case "cover":
+    case "understaffed":
       return "bg-red-500";
     case "unconfirmed":
       return "bg-amber-500";
-    case "confirmed":
-      return "bg-green-500";
     default:
-      return null; // empty
+      return "bg-green-500";
   }
 }
 
@@ -473,9 +482,11 @@ function SlotChip({
           past ? "opacity-50 grayscale-[35%] hover:opacity-100" : ""
         }`}
       >
-        {dot && (
-          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
-        )}
+        <span
+          title={STATUS_TITLES[setStatus(set)]}
+          aria-label={STATUS_TITLES[setStatus(set)]}
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
+        />
         <span className="truncate">
           <span className={mine ? "opacity-90" : "opacity-70"}>
             {formatTime(set.startsAt)}
