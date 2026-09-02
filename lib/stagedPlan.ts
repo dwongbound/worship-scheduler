@@ -6,7 +6,7 @@ import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
 import type { Instrument } from "./constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   type TeamRoleDef,
 } from "./teamRoles";
@@ -70,6 +70,29 @@ export function countAssignments(sets: StagedSet[]): Map<string, number> {
     }
   }
   return counts;
+}
+
+// How many LOCKED (admin-picked) assignments each user holds across the plan.
+// A re-run of "Auto schedule" hands the locked slots to the scheduler as
+// `preAssigned`, whose load it deliberately leaves out of the global tally —
+// so the modal folds this count into the baseline instead, and a person the
+// admin pinned onto three sets isn't treated as free for three more.
+export function lockedCounts(sets: StagedSet[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const set of sets) {
+    for (const a of set.assignments) {
+      if (!a.locked) continue;
+      counts.set(a.userId, (counts.get(a.userId) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+// Total locked slots in the plan — the "N locked" hint in the review header.
+export function totalLocked(sets: StagedSet[]): number {
+  let total = 0;
+  for (const c of lockedCounts(sets).values()) total += c;
+  return total;
 }
 
 export interface LoadRow {
@@ -137,7 +160,7 @@ export function unfillableRoles(
   const onSet = new Set(set.assignments.map((a) => a.userId));
   const cs = calcSet(set);
   const bad = new Set<Instrument>();
-  for (const { key: role } of bandRoles(catalog)) {
+  for (const { key: role } of slottedRoles(catalog)) {
     const filled = set.assignments.filter((a) => a.role === role).length;
     if (caps[role] - filled <= 0) continue; // no open slot for this role
     const hasCandidate = users.some(

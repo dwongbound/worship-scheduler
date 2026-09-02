@@ -27,7 +27,7 @@ export interface TeamRoleDef {
 }
 
 /**
- * Musical director. Like choir, MD keeps its long-standing special behaviour
+ * Musical director. MD keeps its long-standing special behaviour
  * pinned to this one built-in key — a custom role never becomes MD-capable.
  * What's new is that it's a catalog row: a team that deletes MD has the whole
  * feature switched off (no "Require MD" on its sets, no picker, no warning, no
@@ -74,8 +74,10 @@ export const DEFAULT_TEAM_ROLES: TeamRoleDef[] = [
     adminOnly: true,
     order: ROLE_ORDER.length,
   },
-  // Choir has never had a slot count — it's an unbounded, admin-managed list
-  // (see CHOIR_KEY below), so it sits at the end with a count of 0.
+  // Choir is an ordinary counted role, but most sets don't want one, so it
+  // starts at zero and sits at the end of the catalog. A team that regularly
+  // sings with a choir raises the count; a set borrowing another team's choir
+  // does it through a guest team instead (lib/guestTeams.ts).
   {
     key: CHOIR,
     label: INSTRUMENT_LABELS[CHOIR],
@@ -86,22 +88,18 @@ export const DEFAULT_TEAM_ROLES: TeamRoleDef[] = [
 ];
 
 /**
- * Choir stays special: it's an unbounded list on a set rather than a fixed
- * number of slots, and the set-detail modal manages it in its own section. That
- * behaviour is pinned to this one built-in key on purpose — a custom role never
- * inherits it (nor MD eligibility; see MD_ROLES).
+ * Roles that carry a slot count, in fill order. Only MD is left out: it's a
+ * designation on top of someone who is already playing, not a row on the
+ * roster.
+ *
+ * Choir USED to be excluded here too — it was an unbounded, admin-managed list
+ * hardcoded to the CHOIR key. That special case is gone: choir is an ordinary
+ * counted role, and "an unbounded list of whoever is free" is now a property a
+ * set asks for per role when it borrows a guest team (lib/guestTeams.ts
+ * `allAvailable`), available to any team's any role rather than one built-in.
  */
-export const CHOIR_KEY: string = CHOIR;
-
-/**
- * Roles that carry a slot count, in fill order. Choir and MD are both left out:
- * choir is an unbounded list, and MD is a designation on top of someone who is
- * already playing — neither is a row on the roster.
- */
-export function bandRoles(catalog: TeamRoleDef[]): TeamRoleDef[] {
-  return orderedRoles(catalog).filter(
-    (r) => r.key !== CHOIR_KEY && r.key !== MD_KEY
-  );
+export function slottedRoles(catalog: TeamRoleDef[]): TeamRoleDef[] {
+  return orderedRoles(catalog).filter((r) => r.key !== MD_KEY);
 }
 
 /** The catalog in display + fill order (scarce-first), ties broken on key. */
@@ -163,7 +161,7 @@ export function resolveTeamCapacities(
   stored?: Record<string, number> | null
 ): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const role of bandRoles(catalog)) {
+  for (const role of slottedRoles(catalog)) {
     const override = stored?.[role.key];
     out[role.key] = typeof override === "number" ? override : role.defaultCount;
   }

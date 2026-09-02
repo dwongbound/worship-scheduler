@@ -32,16 +32,16 @@ export type BuiltInRole = keyof typeof SLOT_CAPACITIES;
 export type Instrument = string;
 export type BandRole = string;
 
-// Choir is a real role (people list it as a skill, and it fills slots on a set)
-// but it carries no slot count: it's an unbounded, admin-managed list on a set —
-// the set-detail modal's "Auto schedule" seats everyone available, and admins
-// add the rest by hand. That behaviour is pinned to this built-in key; custom
-// roles never inherit it.
+// Choir is an ordinary role: people list it as a skill and it fills counted
+// slots on a set like any other. (It used to be special — an unbounded,
+// admin-managed list gated by sets.choirEnabled. That behaviour is generic now:
+// a set borrowing another team's people can mark a role "allAvailable" — see
+// lib/guestTeams.ts — which works for any team's any role, not just this key.)
 export const CHOIR = "CHOIR" as const;
 
 // A per-set/-template override of the team shape: how many of each role to
 // fill. Partial — any role omitted falls back to that role's defaultCount in
-// the team's catalog. (Choir has no capacity, so it's never in this map.)
+// the team's catalog.
 export type SlotCapacityMap = Record<string, number>;
 
 // Largest number of one instrument we allow on a single set — a sanity cap
@@ -139,7 +139,8 @@ export const ROLE_ORDER: BuiltInRole[] = [
   "AV",
 ];
 
-// The BUILT-IN roles in display order — band roles (scarce-first) then choir.
+// The BUILT-IN roles in display order — the slotted roles (scarce-first), then
+// choir, which most teams keep at zero seats.
 // This is the list a new team's catalog is seeded from, and the fallback
 // ordering for display where no team catalog is in scope. It is NOT "every
 // role that exists": ask the team for that (lib/teamRoles.ts orderedRoles).

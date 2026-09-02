@@ -8,7 +8,7 @@
 // resolveTeamCapacities so it never has holes). 0 means "we don't want any of
 // this role" (e.g. no acoustic guitar on a Tuesday).
 import { MAX_SLOTS_PER_ROLE, type BandRole } from "@/lib/constants";
-import { bandRoles, type TeamRoleDef } from "@/lib/teamRoles";
+import { slottedRoles, type TeamRoleDef } from "@/lib/teamRoles";
 
 export default function SlotCapacityEditor({
   catalog,
@@ -41,7 +41,7 @@ export default function SlotCapacityEditor({
 
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-      {bandRoles(catalog).map((role) => (
+      {slottedRoles(catalog).map((role) => (
         <label
           key={role.key}
           className="flex items-center justify-between gap-2 text-sm"

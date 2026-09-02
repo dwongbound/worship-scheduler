@@ -36,7 +36,6 @@ import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
-  CHOIR,
   GROUP_CHAT_LEAD_OPTIONS,
   INSTRUMENT_LABELS,
   MAX_SONGS_PER_SET,
@@ -50,7 +49,7 @@ import {
 } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   roleLabel,
   teamSupportsMD,
@@ -59,12 +58,17 @@ import { formatDay, formatTime } from "@/lib/dates";
 import { eligibleMDIds, isValidMD } from "@/lib/md";
 import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
 import { buildPlayerOptions } from "@/lib/playerOptions";
+import { fetchJsonArray } from "@/lib/api";
+import { isUnbounded, openSeats } from "@/lib/guestTeams";
+import GuestTeamsModal, { type GuestTeamDraft } from "./GuestTeamsModal";
 import SetHistoryEntry from "./SetHistoryEntry";
 import type {
   ApiAdminUser,
   ApiAssignment,
   ApiSet,
+  ApiSetGuestTeam,
   ApiSetHistoryEvent,
+  ApiTeam,
 } from "@/lib/types";
 
 interface SetDetailModalProps {
@@ -97,9 +101,10 @@ export default function SetDetailModal({
   const [busy, setBusy] = useState(false);
   // Two-step delete: the button flips to "Confirm delete" before firing.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  // "Auto schedule" in flight (busy also goes true; this picks which button
-  // shows the dots).
-  const [autofilling, setAutofilling] = useState(false);
+  // Which "Auto schedule" is in flight (busy also goes true; this picks which
+  // button shows the dots). There's one per roster: "own" for the set's team,
+  // and a guest row's id for each other team's block.
+  const [autofilling, setAutofilling] = useState<string | null>(null);
   // Filled slot whose "✕" was clicked — a confirm modal asks before removing
   // the person along with their slot. (Empty slots are removed right away.)
   const [slotToDelete, setSlotToDelete] = useState<ApiAssignment | null>(null);
@@ -134,13 +139,18 @@ export default function SetDetailModal({
   >([]);
 
   // "Change Roles": the stacked modal for editing this set's team shape (how
-  // many of each role it wants) plus the two flags that shape it — MD and
-  // choir. Null = closed; opening seeds the draft from the set.
+  // many of each role it wants) plus the Require-MD flag. Null = closed;
+  // opening seeds the draft from the set.
   const [rolesDraft, setRolesDraft] = useState<{
     capacities: Record<BandRole, number>;
     requiresMD: boolean;
-    choirEnabled: boolean;
   } | null>(null);
+
+  // "Other teams": the stacked editor for which OTHER teams lend people to this
+  // set. Null = closed. The org's teams are fetched lazily the first time an
+  // admin opens it — most set views never need them.
+  const [guestDraft, setGuestDraft] = useState<GuestTeamDraft[] | null>(null);
+  const [orgTeams, setOrgTeams] = useState<ApiTeam[] | null>(null);
 
   // The set's activity log (History section, bottom of the modal).
   const [history, setHistory] = useState<ApiSetHistoryEvent[]>([]);
@@ -212,8 +222,23 @@ export default function SetDetailModal({
     setConfirmingDelete(false);
     setSlotToDelete(null);
     setRolesDraft(null);
+    setGuestDraft(null);
     setToast(null);
   }, [set?.id]);
+
+  // The org's teams, for the guest-team picker. Fetched once the editor is
+  // first opened (not on every calendar load) and only for the set's own org,
+  // so another tenant's teams can never be offered as guests.
+  useEffect(() => {
+    if (!guestDraft || orgTeams || !set?.org?.id) return;
+    let cancelled = false;
+    fetchJsonArray<ApiTeam>(`/api/teams?orgId=${set.org.id}`)
+      .then((teams) => !cancelled && setOrgTeams(teams))
+      .catch(() => !cancelled && setOrgTeams([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [guestDraft, orgTeams, set?.org?.id]);
 
   // Is the Slack bot configured for this org? Drives whether the "Slack Team"
   // button is enabled (it's shown to everyone regardless).
@@ -309,7 +334,11 @@ export default function SetDetailModal({
   // This set's roles come from ITS TEAM's catalog — two teams can offer
   // entirely different ones. A team-less set falls back to the built-ins.
   const catalog = set.team?.roles?.length ? set.team.roles : DEFAULT_TEAM_ROLES;
-  const rosterRoles = bandRoles(catalog);
+  const rosterRoles = slottedRoles(catalog);
+  // The roster above is the OWNING team's. Seats borrowed from a guest team
+  // are rendered in their own blocks lower down and must not be counted here —
+  // a visiting choir doesn't fill this team's own choir slots.
+  const ownAssignments = set.assignments.filter((a) => !a.guestTeamId);
   const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
   // What to call a role here — this team's own label, with the built-in name
   // (then a humanized key) as the fallback for a role it has since dropped.
@@ -319,14 +348,9 @@ export default function SetDetailModal({
   const assignedByRole = Object.fromEntries(
     rosterRoles.map((role) => [
       role.key,
-      set.assignments.filter((a) => a.role === role.key).length,
+      ownAssignments.filter((a) => a.role === role.key).length,
     ])
   ) as Record<BandRole, number>;
-
-  // The set's choir roster (its dropdown options are computed after eligibleFor
-  // is defined, below). Choir is a role with no fixed slot count — see the
-  // Choir section in the JSX.
-  const choirMembers = set.assignments.filter((a) => a.role === CHOIR);
 
   // MD picker data. Eligible = an assignee who is an MD, plays an MD-capable
   // role (keys/electric/bass), and isn't the worship leader (see lib/md.ts).
@@ -400,7 +424,7 @@ export default function SetDetailModal({
       // Whoever already fills this exact role here (a person may hold several
       // roles on one set, so only this role's occupants are excluded).
       exclude: new Set(
-        set.assignments.filter((a) => a.role === role).map((a) => a.user.id)
+        ownAssignments.filter((a) => a.role === role).map((a) => a.user.id)
       ),
       serveCounts,
       isMDHere: (u) =>
@@ -410,9 +434,28 @@ export default function SetDetailModal({
     });
   };
 
-  // Choir dropdown options — same shared eligibility/availability logic as the
-  // band roles (see the Choir section in the JSX).
-  const choirOptions = eligibleFor(CHOIR);
+  // Options for ONE borrowed seat. Same availability/load logic as the roster
+  // above, but drawn from the GUEST team's members rather than this set's own —
+  // that's the whole point of a guest team.
+  //
+  // Anyone already on the set in any seat is excluded, not just sunk: a person
+  // playing keys for the host team can't also stand in the visiting choir, and
+  // offering them would only invite a double-booking. (Contrast the roster's
+  // own dropdowns, where an unavailable person stays pickable so an admin can
+  // deliberately override.)
+  const guestOptionsFor = (
+    guest: ApiSetGuestTeam,
+    role: Instrument
+  ): PlayerOption[] =>
+    buildPlayerOptions({
+      users,
+      role,
+      teamId: guest.teamId,
+      set: calcSet,
+      rules,
+      exclude: new Set(set.assignments.map((a) => a.user.id)),
+      serveCounts,
+    });
 
   async function runEdit(fn: () => Promise<Response>) {
     setBusy(true);
@@ -439,25 +482,40 @@ export default function SetDetailModal({
       fetch(`/api/admin/assignments/${assignmentId}`, { method: "DELETE" })
     );
 
-  const addAssignment = (role: Instrument, userId: string) =>
+  // `guestTeamId` marks the new seat as borrowed from that guest row; omitting
+  // it (the roster's own dropdowns) creates an ordinary owning-team seat.
+  const addAssignment = (
+    role: Instrument,
+    userId: string,
+    guestTeamId?: string
+  ) =>
     runEdit(() =>
       fetch("/api/admin/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ setId: set.id, userId, role }),
+        body: JSON.stringify({ setId: set.id, userId, role, guestTeamId }),
       })
     );
 
   // Fill the empty slots server-side, keeping everyone already assigned in
-  // place (their slots are constraints the fill works around).
-  const autoSchedule = async () => {
-    setAutofilling(true);
+  // place (their slots are constraints the fill works around). Never removes or
+  // moves anyone, so there's nothing to confirm.
+  //
+  // Scoped to ONE roster: omit `guestTeamId` for the set's own team, or pass a
+  // guest row's id to fill just that other team's borrowed seats. Each has its
+  // own button, and neither touches the other's people.
+  const autoSchedule = async (guestTeamId?: string) => {
+    setAutofilling(guestTeamId ?? "own");
     try {
       await runEdit(() =>
-        fetch(`/api/admin/sets/${currentSetId}/autofill`, { method: "POST" })
+        fetch(`/api/admin/sets/${currentSetId}/autofill`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ guestTeamId }),
+        })
       );
     } finally {
-      setAutofilling(false);
+      setAutofilling(null);
     }
   };
 
@@ -524,9 +582,6 @@ export default function SetDetailModal({
     if (draft.requiresMD !== set.requiresMD) {
       patches.push({ requiresMD: draft.requiresMD });
     }
-    if (draft.choirEnabled !== set.choirEnabled) {
-      patches.push({ choirEnabled: draft.choirEnabled });
-    }
     setRolesDraft(null);
     if (patches.length === 0) return;
     await runEdit(async () => {
@@ -540,6 +595,34 @@ export default function SetDetailModal({
       }
       return last!;
     });
+  };
+
+  // The current guest config as the editor's draft shape.
+  const guestDraftFromSet = (): GuestTeamDraft[] =>
+    (set.guestTeams ?? []).map((g) => ({ teamId: g.teamId, roles: g.roles }));
+
+  // How many people already sit in one borrowed seat — the editor floors each
+  // count here so shrinking a guest role can't orphan someone.
+  const seatedInGuestRole = (teamId: string, role: string) => {
+    const guest = (set.guestTeams ?? []).find((g) => g.teamId === teamId);
+    if (!guest) return 0;
+    return set.assignments.filter(
+      (a) => a.guestTeamId === guest.id && a.role === role
+    ).length;
+  };
+
+  // Save the whole guest list in one PATCH (the server diffs it against what
+  // the set already has, so seats people are standing in keep their ids).
+  const saveGuestTeams = async (next: GuestTeamDraft[]) => {
+    setGuestDraft(null);
+    if (JSON.stringify(next) === JSON.stringify(guestDraftFromSet())) return;
+    await runEdit(() =>
+      fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guestTeams: next }),
+      })
+    );
   };
 
   // Set (or clear, with "") this set's designated MD.
@@ -616,6 +699,7 @@ export default function SetDetailModal({
     // outer modal only dismiss the confirm (both modals listen for Escape).
     <Modal
       open
+      size="xl"
       onClose={slotToDelete ? () => setSlotToDelete(null) : onClose}
       title={set.label ?? "Worship Set"}
       titleAccessory={
@@ -663,10 +747,14 @@ export default function SetDetailModal({
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={autoSchedule}
+                onClick={() => autoSchedule()}
                 disabled={busy}
               >
-                {autofilling ? <LoadingDots size="sm" /> : "Auto schedule"}
+                {autofilling === "own" ? (
+                  <LoadingDots size="sm" />
+                ) : (
+                  "Auto schedule"
+                )}
               </Button>
               <InfoTooltip
                 side="bottom"
@@ -675,7 +763,9 @@ export default function SetDetailModal({
                     Fills this set&apos;s <strong>empty slots</strong>{" "}
                     with available team members, preferring people who aren&apos;t
                     already serving in the surrounding week. People already
-                    assigned keep their roles — the fill works around them. In
+                    assigned keep their roles — the fill works around them.
+                    Seats borrowed from other teams have their own Auto schedule
+                    button, on their block below. In
                     the assignment dropdowns, the ×N badge is how many times
                     that person is already scheduled within ±2 weeks of this
                     set; the least-scheduled, available people are listed first.
@@ -771,9 +861,11 @@ export default function SetDetailModal({
             {canEditTeam && (
               <>
                 {/* The team shape lives in its own modal — a role-by-role
-                    editor is far too much for a menu row, and the MD/choir
-                    flags belong with it since they're the other two things
-                    that decide who a set has room for. */}
+                    editor is far too much for a menu row, and the Require-MD
+                    flag belongs with it since it's the other thing that
+                    decides who a set has room for. Borrowing another team's
+                    people is its own modal (below) — it's about WHO may sit
+                    here, not how many seats this team wants. */}
                 <button
                   type="button"
                   disabled={busy}
@@ -781,7 +873,6 @@ export default function SetDetailModal({
                     setRolesDraft({
                       capacities,
                       requiresMD: set.requiresMD,
-                      choirEnabled: set.choirEnabled,
                     })
                   }
                   className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
@@ -790,6 +881,27 @@ export default function SetDetailModal({
                 >
                   <span aria-hidden className="w-4" />
                   Change Roles
+                </button>
+                {/* Other teams: borrow another team's people for this set only
+                    (the choir team joining a Sunday set). Separate from Change
+                    Roles because it edits a different question — not "how many
+                    seats does this team want" but "who else may fill seats
+                    here". */}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setGuestDraft(guestDraftFromSet())}
+                  className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
+                    text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50
+                    dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  <span aria-hidden className="w-4" />
+                  Other teams
+                  {(set.guestTeams ?? []).length > 0 && (
+                    <span className="ml-auto rounded-full bg-purple-100 px-1.5 text-xs font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                      {(set.guestTeams ?? []).length}
+                    </span>
+                  )}
                 </button>
                 <MenuToggle
                   label="Private"
@@ -837,7 +949,7 @@ export default function SetDetailModal({
 
       <ul className="space-y-3">
         {rosterRoles.map(({ key: role }) => {
-          const filled = set.assignments.filter((a) => a.role === role);
+          const filled = ownAssignments.filter((a) => a.role === role);
           const capacity = capacities[role];
           const openSlots = Math.max(0, capacity - filled.length);
           const options = eligibleFor(role);
@@ -947,95 +1059,167 @@ export default function SetDetailModal({
         })}
       </ul>
 
-      {/* Choir: opt-in PER SET, turned on where the rest of the set's shape is
-          decided — the create form, or "Change Roles" in the (⋮) menu. A set
-          without choir has no choir section at all, the same way it has no
-          slots for a role it set to zero. A special role with no fixed slot
-          count — an unbounded, admin-managed list rather than a fixed set of
-          slots. When on, "Auto schedule" (above) seats every available singer;
-          admins can also add/remove people by hand. Non-admins additionally
-          need the choir to actually have people on it. */}
-      {set.choirEnabled && (canEditTeam || choirMembers.length > 0) && (
-        <div
-          data-testid="choir-section"
-          className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 font-medium">
-              <span>
-                Choir
-                {choirMembers.length > 0 && (
-                  <span className="ml-1 text-xs text-gray-500">
-                    ({choirMembers.length})
-                  </span>
+      {/* Other teams: teams lending people to this set (e.g. the choir
+          team joining a Sunday-team set). Each borrowed team gets its own
+          block, because a role key only means something within its team's
+          catalog — a guest "Choir" and this team's own "Choir" are different
+          seats, told apart by the assignment's guestTeamId.
+
+          A role with a count renders fixed slots like the roster above; one
+          marked "as many as available" renders whoever is on it plus a single
+          spare add row, since there's no target to derive empty slots from.
+          That unbounded seat is what the hardcoded choir section used to be. */}
+      {(set.guestTeams ?? []).map((guest) => {
+        const guestCatalog = guest.team.roles?.length
+          ? guest.team.roles
+          : DEFAULT_TEAM_ROLES;
+        // Only show a guest block that has something to show: any seat, or an
+        // admin who can add one.
+        const seats = guest.roles.filter(
+          (spec) =>
+            canEditTeam ||
+            set.assignments.some(
+              (a) => a.guestTeamId === guest.id && a.role === spec.role
+            )
+        );
+        if (seats.length === 0) return null;
+
+        return (
+          <div
+            key={guest.id}
+            data-testid={`guest-team-${guest.teamId}`}
+            className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
+          >
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="flex items-center gap-1.5 font-medium">
+                {guest.team.name}
+                {canEditTeam && (
+                  <InfoTooltip text="People borrowed from another team for this set only. Manage which teams and roles under Other teams in the (⋮) menu." />
                 )}
               </span>
+              {/* This block's own fill, deliberately separate from the action
+                  bar's: it seats only the borrowed roles above, and the main
+                  button leaves them alone. Same non-destructive rule — it fills
+                  empty seats and never moves anyone already here. */}
               {canEditTeam && (
-                <InfoTooltip text="An unbounded, admin-managed list — everyone here is included when you auto-schedule. Turn choir off again under Change Roles in the (⋮) menu." />
-              )}
-            </span>
-          </div>
-
-          <ul className="mt-1 space-y-1 pl-4">
-            {choirMembers.map((a) =>
-              canEditTeam ? (
-                // Picking "None" removes them from the choir; picking someone
-                // else reassigns this slot (resets it to PENDING). The "✕"
-                // matches the band roles — it removes this singer directly.
-                // Choir has no fixed slot shape, so (unlike band roles) there's
-                // nothing to confirm: it just drops the person, like "None".
-                <li key={a.id} className="flex items-center gap-2">
-                  <SlotDeleteButton
-                    label={`Remove ${a.user.name} from choir`}
-                    disabled={busy}
-                    onClick={() => removeAssignment(a.id)}
-                  />
-                  <PlayerSelect
-                    selected={{ id: a.user.id, name: a.user.name }}
-                    options={choirOptions}
-                    disabled={busy}
-                    onChange={(userId) =>
-                      userId ? reassign(a.id, userId) : removeAssignment(a.id)
-                    }
-                  />
-                  <StatusBadge status={a.status} />
-                </li>
-              ) : (
-                // Same read-only box as the band roles above, so the choir
-                // list matches the rest of the roster.
-                <li key={a.id} className="flex items-center gap-2">
-                  <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
-                    <span className="truncate">{a.user.name}</span>
-                  </div>
-                  <StatusBadge status={a.status} />
-                </li>
-              )
-            )}
-
-            {/* Admins get one always-present "add someone" row (the list is
-                unbounded, so unlike band roles there's no slot count to derive).
-                It has no "✕" (nothing to remove), so a matching-width spacer
-                keeps its dropdown aligned with the member rows above. */}
-            {canEditTeam && (
-              <li className="flex items-center gap-2">
-                <span
-                  aria-hidden
-                  className="invisible rounded p-0.5 text-xs leading-none"
-                >
-                  ✕
-                </span>
-                <PlayerSelect
-                  selected={null}
-                  options={choirOptions}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => autoSchedule(guest.id)}
                   disabled={busy}
-                  dashed
-                  onChange={(userId) => userId && addAssignment(CHOIR, userId)}
-                />
-              </li>
-            )}
-          </ul>
-        </div>
-      )}
+                  title={`Fill ${guest.team.name}'s empty seats on this set — the rest of the roster is left alone`}
+                >
+                  {autofilling === guest.id ? (
+                    <LoadingDots size="sm" />
+                  ) : (
+                    "Auto schedule"
+                  )}
+                </Button>
+              )}
+            </div>
+
+            <ul className="mt-1 space-y-3 pl-1">
+              {seats.map((spec) => {
+                const filled = set.assignments.filter(
+                  (a) => a.guestTeamId === guest.id && a.role === spec.role
+                );
+                const unbounded = isUnbounded(spec);
+                // Unbounded seats show one spare row to add into; counted ones
+                // show exactly the slots still open.
+                const openRows = unbounded
+                  ? canEditTeam
+                    ? 1
+                    : 0
+                  : openSeats(spec, filled.length);
+                const options = guestOptionsFor(guest, spec.role);
+
+                return (
+                  <li key={spec.role}>
+                    <span className="font-medium">
+                      {roleLabel(spec.role, guestCatalog)}
+                      <span className="ml-1 text-xs text-gray-500">
+                        {unbounded
+                          ? `(${filled.length} · as many as available)`
+                          : spec.count > 1
+                            ? `(${filled.length}/${spec.count})`
+                            : ""}
+                      </span>
+                    </span>
+
+                    <ul className="mt-1 space-y-1 pl-4">
+                      {filled.map((a) =>
+                        canEditTeam ? (
+                          <li key={a.id} className="flex items-center gap-2">
+                            <SlotDeleteButton
+                              label={`Remove ${a.user.name} from ${guest.team.name}`}
+                              disabled={busy}
+                              onClick={() => removeAssignment(a.id)}
+                            />
+                            <PlayerSelect
+                              selected={{ id: a.user.id, name: a.user.name }}
+                              options={options}
+                              disabled={busy}
+                              onChange={(userId) =>
+                                userId
+                                  ? reassign(a.id, userId)
+                                  : removeAssignment(a.id)
+                              }
+                            />
+                            <StatusBadge status={a.status} />
+                          </li>
+                        ) : (
+                          <li key={a.id} className="flex items-center gap-2">
+                            <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                              <span className="truncate">{a.user.name}</span>
+                            </div>
+                            <StatusBadge status={a.status} />
+                          </li>
+                        )
+                      )}
+
+                      {/* Open seats. The add row has no "✕" (there's nothing to
+                          remove yet), so an invisible spacer keeps its dropdown
+                          in line with the filled rows above. */}
+                      {canEditTeam &&
+                        Array.from({ length: openRows }).map((_, i) => (
+                          <li
+                            key={`guest-add-${i}`}
+                            className="flex items-center gap-2"
+                          >
+                            <span
+                              aria-hidden
+                              className="invisible rounded p-0.5 text-xs leading-none"
+                            >
+                              ✕
+                            </span>
+                            <PlayerSelect
+                              selected={null}
+                              options={options}
+                              disabled={busy}
+                              dashed
+                              onChange={(userId) =>
+                                userId &&
+                                addAssignment(spec.role, userId, guest.id)
+                              }
+                            />
+                          </li>
+                        ))}
+                      {!canEditTeam &&
+                        Array.from({ length: openRows }).map((_, i) => (
+                          <li key={`guest-empty-${i}`}>
+                            <div className="w-48 rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+                              Unfilled
+                            </div>
+                          </li>
+                        ))}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
 
       {/* MD picker (only for sets that require one). One MD per set, chosen from
           the assignees — clickable only for those who qualify (an MD playing
@@ -1273,8 +1457,8 @@ export default function SetDetailModal({
         </div>
       )}
 
-      {/* Stacked "Change Roles": this set's team shape, plus the MD and choir
-          flags. Each role's count floors at the people already standing in it,
+      {/* Stacked "Change Roles": this set's team shape, plus the Require-MD
+          flag. Each role's count floors at the people already standing in it,
           so an edit here can never quietly drop someone from the set. */}
       {rolesDraft && (
         <Modal
@@ -1323,25 +1507,6 @@ export default function SetDetailModal({
                 }
               />
             )}
-            {/* Choir can't be turned OFF while singers are on it (they'd be
-                silently dropped) — the same rule the Choir section enforces. */}
-            <Checkbox
-              label="Include choir in set"
-              checked={rolesDraft.choirEnabled}
-              disabled={
-                busy || (set.choirEnabled && choirMembers.length > 0)
-              }
-              title={
-                set.choirEnabled && choirMembers.length > 0
-                  ? "Remove the choir members first."
-                  : undefined
-              }
-              onChange={(e) =>
-                setRolesDraft((d) =>
-                  d ? { ...d, choirEnabled: e.target.checked } : d
-                )
-              }
-            />
           </div>
 
           {/* Back to the org's default shape — only offered while this set
@@ -1363,6 +1528,20 @@ export default function SetDetailModal({
             </button>
           )}
         </Modal>
+      )}
+
+      {/* Stacked "Other teams" editor. Teams offered exclude the set's own —
+          a set can't borrow from itself. */}
+      {guestDraft && (
+        <GuestTeamsModal
+          open
+          onClose={() => setGuestDraft(null)}
+          teams={(orgTeams ?? []).filter((t) => t.id !== (set.teamId ?? set.team?.id))}
+          value={guestDraft}
+          seatedCount={seatedInGuestRole}
+          onSave={saveGuestTeams}
+          busy={busy}
+        />
       )}
 
       {/* Stacked confirm for removing a slot that still has a person in it. */}

@@ -6,7 +6,9 @@ import {
   isActiveForSet,
   countAssignments,
   loadRows,
+  lockedCounts,
   maxLoad,
+  totalLocked,
   totalConflicts,
   totalUnfillable,
   unfillableRoles,
@@ -36,6 +38,36 @@ function stagedSet(
 // Two Tuesday-evening sets a week apart, 7pm local.
 const week1 = "2026-01-06T19:00:00"; // Tue Jan 6 2026
 const week2 = "2026-01-13T19:00:00"; // Tue Jan 13 2026
+
+describe("lockedCounts / totalLocked", () => {
+  // Only the hand-picked (locked) slots count — the auto-filled ones are the
+  // ones a re-run is allowed to re-roll.
+  const sets = [
+    stagedSet(week1, [
+      { userId: "a", role: "DRUMS", locked: true },
+      { userId: "b", role: "BASS" },
+      { userId: "a", role: "KEYS", locked: true },
+    ]),
+    stagedSet(week2, [
+      { userId: "a", role: "DRUMS", locked: true },
+      { userId: "c", role: "BASS" },
+    ]),
+  ];
+
+  it("tallies locked slots per user", () => {
+    expect(lockedCounts(sets)).toEqual(new Map([["a", 3]]));
+  });
+
+  it("totals the locked slots across the plan", () => {
+    expect(totalLocked(sets)).toBe(3);
+  });
+
+  it("is zero for a plan nobody has touched", () => {
+    const untouched = [stagedSet(week1, [{ userId: "a", role: "DRUMS" }])];
+    expect(lockedCounts(untouched).size).toBe(0);
+    expect(totalLocked(untouched)).toBe(0);
+  });
+});
 
 describe("countAssignments / loadRows / maxLoad", () => {
   const sets = [

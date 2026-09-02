@@ -30,6 +30,70 @@ function full(drums: AssignmentStatus, bass: AssignmentStatus) {
   return set(["DRUMS", drums], ["BASS", bass]);
 }
 
+// ── Guest teams ─────────────────────────────────────────────────────────────
+// A set can borrow another team's people. Counted guest seats are holes like
+// any other; an "as many as available" seat has no target, so it never is.
+describe("openSlotCount with guest teams", () => {
+  // The two-role team above, fully staffed, plus one guest team's seats.
+  const withGuest = (
+    roles: { role: string; count?: number; allAvailable?: true }[],
+    guests: string[] = []
+  ) => ({
+    assignments: [
+      { role: "DRUMS", status: "CONFIRMED" as AssignmentStatus },
+      { role: "BASS", status: "CONFIRMED" as AssignmentStatus },
+      ...guests.map((role) => ({
+        role,
+        status: "CONFIRMED" as AssignmentStatus,
+        guestTeamId: "g1",
+      })),
+    ],
+    slotCapacities: null,
+    team: { roles: CATALOG },
+    guestTeams: [
+      { id: "g1", teamId: "team-guest", roles: roles as never },
+    ],
+  });
+
+  it("counts a counted guest role's unfilled seats", () => {
+    expect(openSlotCount(withGuest([{ role: "CHOIR", count: 3 }]))).toBe(3);
+    expect(
+      openSlotCount(withGuest([{ role: "CHOIR", count: 3 }], ["CHOIR", "CHOIR"]))
+    ).toBe(1);
+  });
+
+  it("never counts an 'as many as available' guest role as a hole", () => {
+    // The behaviour the old opt-in choir had, now generic: no target number,
+    // so an empty one can't make the set read understaffed.
+    expect(
+      openSlotCount(withGuest([{ role: "CHOIR", allAvailable: true }]))
+    ).toBe(0);
+    expect(
+      openSlotCount(withGuest([{ role: "CHOIR", allAvailable: true }], ["CHOIR"]))
+    ).toBe(0);
+  });
+
+  it("doesn't let a guest seat fill the owning team's same-named slot", () => {
+    // Both teams have DRUMS; a guest drummer must not satisfy the host's slot.
+    const set = {
+      assignments: [
+        { role: "DRUMS", status: "CONFIRMED" as AssignmentStatus, guestTeamId: "g1" },
+      ],
+      slotCapacities: null,
+      team: { roles: CATALOG },
+      guestTeams: [
+        { id: "g1", teamId: "team-guest", roles: [{ role: "DRUMS", count: 1 }] as never },
+      ],
+    };
+    // The host's own drums + bass are both still open; the guest seat is full.
+    expect(openSlotCount(set)).toBe(2);
+  });
+
+  it("is unchanged for a set with no guest teams", () => {
+    expect(openSlotCount({ ...full("CONFIRMED", "CONFIRMED"), guestTeams: [] })).toBe(0);
+  });
+});
+
 describe("openSlotCount", () => {
   it("counts every unfilled slot in the team's shape", () => {
     expect(openSlotCount(set())).toBe(2);

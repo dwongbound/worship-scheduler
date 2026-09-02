@@ -8,11 +8,12 @@
 // though the dot doesn't — and because they need different fixes.
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   type TeamRoleDef,
 } from "./teamRoles";
 import type { AssignmentStatus, SlotCapacityMap } from "./constants";
+import { openSeats, type GuestTeamConfig } from "./guestTeams";
 
 export type SetStatus = "understaffed" | "confirmed" | "unconfirmed" | "cover";
 
@@ -21,23 +22,40 @@ export type SetStatus = "understaffed" | "confirmed" | "unconfirmed" | "cover";
 // without its team's catalog falls back to the built-in roles, which is also
 // what a team-less ("open to the whole org") set uses.
 export type StatusSet = {
-  assignments: { role: string; status: AssignmentStatus }[];
+  assignments: { role: string; status: AssignmentStatus; guestTeamId?: string | null }[];
   slotCapacities?: SlotCapacityMap | null;
   team?: { roles?: TeamRoleDef[] } | null;
+  // Borrowed seats from other teams, if the caller loaded them. Absent = none.
+  guestTeams?: GuestTeamConfig[] | null;
 };
 
 /**
- * How many roster slots this set still has open — its team shape minus who's
- * on it. Choir is excluded (bandRoles drops it), so an opt-in choir never
- * reads as a hole.
+ * How many roster slots this set still has open — its shape minus who's on it.
+ *
+ * Counts the owning team's slots plus every guest team's COUNTED seats. A
+ * guest role marked `allAvailable` is skipped: it has no target number, so it
+ * can't be short, and a set that borrows "however many singers are free" never
+ * reads as understaffed on that account.
  */
 export function openSlotCount(set: StatusSet): number {
   const catalog = set.team?.roles ?? DEFAULT_TEAM_ROLES;
   const caps = resolveTeamCapacities(catalog, set.slotCapacities);
   let open = 0;
-  for (const { key } of bandRoles(catalog)) {
-    const filled = set.assignments.filter((a) => a.role === key).length;
+  // The owning team's own seats — assignments borrowed from a guest team don't
+  // fill them, so only non-guest assignments count here.
+  for (const { key } of slottedRoles(catalog)) {
+    const filled = set.assignments.filter(
+      (a) => a.role === key && !a.guestTeamId
+    ).length;
     open += Math.max(0, (caps[key] ?? 0) - filled);
+  }
+  for (const guest of set.guestTeams ?? []) {
+    for (const spec of guest.roles) {
+      const filled = set.assignments.filter(
+        (a) => a.role === spec.role && a.guestTeamId === guest.id
+      ).length;
+      open += openSeats(spec, filled);
+    }
   }
   return open;
 }

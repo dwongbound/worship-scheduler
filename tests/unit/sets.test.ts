@@ -40,7 +40,6 @@ function set(id: string, startsAt: string, assignments: ApiAssignment[]): ApiSet
     notes: null,
     requiresMD: false,
     isPrivate: false,
-    choirEnabled: false,
     mdUserId: null,
     slotCapacities: null,
     assignments,

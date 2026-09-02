@@ -1,10 +1,10 @@
 // PATCH /api/sets/:id — edit a set's notes (org admins + the set's worship
 // leader, who runs it), its designated MD (org admins only), its private flag
-// (org admins only), its choir opt-in flag (org admins only), whether it
-// requires an MD (org admins only), or its team shape (org admins only).
+// (org admins only), whether it requires an MD (org admins only), its team
+// shape (org admins only), or its guest teams (org admins only).
 // Send { notes }, { mdUserId } (null clears the MD), { isPrivate },
-// { choirEnabled }, { requiresMD }, or { slotCapacities } (null = go back to
-// the default shape).
+// { requiresMD }, { slotCapacities } (null = go back to the default shape), or
+// { guestTeams } (the full replacement list — see lib/guestTeams.ts).
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
@@ -15,6 +15,11 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { isValidMD } from "@/lib/md";
 import { parseGroupChatLeadDays, validateSlotCapacities } from "@/lib/constants";
+import {
+  MAX_GUEST_TEAMS_PER_SET,
+  validateGuestRoles,
+  type GuestRoleSpec,
+} from "@/lib/guestTeams";
 
 export async function PATCH(
   req: NextRequest,
@@ -29,16 +34,16 @@ export async function PATCH(
   const body = await req.json();
   const editingMD = "mdUserId" in body;
   const editingPrivate = "isPrivate" in body;
-  const editingChoir = "choirEnabled" in body;
+  const editingGuestTeams = "guestTeams" in body;
   const editingRequiresMD = "requiresMD" in body;
   const editingGroupChatLead = "groupChatLeadDays" in body;
   const editingCapacities = "slotCapacities" in body;
-  // Only a plain notes edit (not MD/privacy/choir/requiresMD/group-chat/shape)
+  // Only a plain notes edit (not MD/privacy/requiresMD/group-chat/shape/guests)
   // needs a notes string.
   if (
     !editingMD &&
     !editingPrivate &&
-    !editingChoir &&
+    !editingGuestTeams &&
     !editingRequiresMD &&
     !editingGroupChatLead &&
     !editingCapacities &&
@@ -49,7 +54,9 @@ export async function PATCH(
 
   const set = await prisma.set.findUnique({
     where: { id },
-    select: { orgId: true },
+    // teamId comes along for the guest-team edit: a set's OWN team may never
+    // also be listed as a guest on it.
+    select: { orgId: true, teamId: true },
   });
   if (!set) {
     return NextResponse.json({ error: "Set not found" }, { status: 404 });
@@ -63,7 +70,7 @@ export async function PATCH(
     !allowed &&
     !editingMD &&
     !editingPrivate &&
-    !editingChoir &&
+    !editingGuestTeams &&
     !editingRequiresMD &&
     !editingGroupChatLead &&
     !editingCapacities
@@ -135,16 +142,102 @@ export async function PATCH(
     return NextResponse.json(updated);
   }
 
-  if (editingChoir) {
-    if (typeof body.choirEnabled !== "boolean") {
+  // Guest teams: the full list, replacing whatever the set had. Each entry is
+  // { teamId, roles } where roles are keys from THAT team's catalog.
+  //
+  // Rows are diffed rather than wiped and recreated, because assignments point
+  // at SetGuestTeam.id — deleting a row a guest is standing in would blank
+  // their guestTeamId (onDelete: SetNull) and silently demote them to an
+  // owning-team seat. Only teams actually dropped by this edit get deleted,
+  // which is the one case where losing the link is what the admin asked for.
+  if (editingGuestTeams) {
+    if (!Array.isArray(body.guestTeams)) {
       return NextResponse.json(
-        { error: "choirEnabled must be a boolean" },
+        { error: "guestTeams must be an array" },
         { status: 400 }
       );
     }
-    const updated = await prisma.set.update({
-      where: { id },
-      data: { choirEnabled: body.choirEnabled },
+    if (body.guestTeams.length > MAX_GUEST_TEAMS_PER_SET) {
+      return NextResponse.json(
+        { error: `At most ${MAX_GUEST_TEAMS_PER_SET} guest teams per set` },
+        { status: 400 }
+      );
+    }
+
+    // Every guest must be a real team in THIS set's org (never another
+    // tenant's), and must not be the set's own team — that's not a guest.
+    const teamIds: string[] = [];
+    for (const entry of body.guestTeams) {
+      if (!entry || typeof entry.teamId !== "string") {
+        return NextResponse.json({ error: "Invalid guest team" }, { status: 400 });
+      }
+      if (teamIds.includes(entry.teamId)) {
+        return NextResponse.json(
+          { error: "Duplicate guest team" },
+          { status: 400 }
+        );
+      }
+      teamIds.push(entry.teamId);
+    }
+    if (teamIds.includes(set.teamId ?? "")) {
+      return NextResponse.json(
+        { error: "A set's own team can't also be a guest on it" },
+        { status: 400 }
+      );
+    }
+    const teams = await prisma.team.findMany({
+      where: { id: { in: teamIds }, orgId: set.orgId },
+      select: {
+        id: true,
+        roles: { select: { key: true } },
+      },
+    });
+    if (teams.length !== teamIds.length) {
+      return NextResponse.json(
+        { error: "Unknown team for this org" },
+        { status: 400 }
+      );
+    }
+
+    // Validate each team's borrowed roles against that team's own catalog.
+    const cleaned: { teamId: string; roles: GuestRoleSpec[] }[] = [];
+    for (const entry of body.guestTeams) {
+      const catalogKeys = teams
+        .find((t) => t.id === entry.teamId)!
+        .roles.map((r) => r.key);
+      const roles = validateGuestRoles(entry.roles, catalogKeys);
+      if (!roles) {
+        return NextResponse.json(
+          { error: "Invalid roles for a guest team" },
+          { status: 400 }
+        );
+      }
+      cleaned.push({ teamId: entry.teamId, roles });
+    }
+
+    const existing = await prisma.setGuestTeam.findMany({
+      where: { setId: id },
+      select: { id: true, teamId: true },
+    });
+    const keep = new Set(cleaned.map((c) => c.teamId));
+    await prisma.$transaction([
+      prisma.setGuestTeam.deleteMany({
+        where: {
+          setId: id,
+          teamId: { in: existing.filter((e) => !keep.has(e.teamId)).map((e) => e.teamId) },
+        },
+      }),
+      ...cleaned.map((c) =>
+        prisma.setGuestTeam.upsert({
+          where: { setId_teamId: { setId: id, teamId: c.teamId } },
+          create: { setId: id, teamId: c.teamId, roles: c.roles },
+          update: { roles: c.roles },
+        })
+      ),
+    ]);
+    const updated = await prisma.setGuestTeam.findMany({
+      where: { setId: id },
+      select: { id: true, teamId: true, roles: true },
     });
     return NextResponse.json(updated);
   }

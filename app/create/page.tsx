@@ -22,7 +22,7 @@ import StagedScheduleModal from "@/components/StagedScheduleModal";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   type TeamRoleDef,
 } from "@/lib/teamRoles";
@@ -54,7 +54,7 @@ function capacitiesSummary(
   if (!caps) return "";
   const defaults = resolveTeamCapacities(catalog, null);
   const parts: string[] = [];
-  for (const role of bandRoles(catalog)) {
+  for (const role of slottedRoles(catalog)) {
     const n = caps[role.key];
     if (n === undefined || n === defaults[role.key]) continue;
     parts.push(n === 0 ? `no ${role.label}` : `${n}× ${role.label}`);
