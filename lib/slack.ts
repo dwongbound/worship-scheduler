@@ -949,8 +949,7 @@ export function weeklySummaryText(
     `${shortDateLabel(range.start)} – ${shortDateLabel(range.end)}`;
   const blocks = sets.map((set) => {
     const header = `*${set.label ?? "Worship set"}* — ${formatDay(set.startsAt)} · ${formatTime(set.startsAt)}`;
-    // Sort into display order (band roles then choir), keeping the original
-    // order within a role.
+    // Sort into display order, keeping the original order within a role.
     // Built-in display order, with anything custom after it (indexOf gives -1
     // for a role that isn't built in, which would otherwise sort it first).
     const rank = (role: string) => {

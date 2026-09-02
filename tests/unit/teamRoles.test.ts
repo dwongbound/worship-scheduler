@@ -10,12 +10,11 @@ import {
   SLOT_CAPACITIES,
 } from "@/lib/constants";
 import {
-  CHOIR_KEY,
   DEFAULT_TEAM_ROLES,
   MAX_MDS_PER_SET,
   MD_KEY,
   teamSupportsMD,
-  bandRoles,
+  slottedRoles,
   orderedRoles,
   resolveTeamCapacities,
   roleKeyFromLabel,
@@ -34,7 +33,7 @@ const catalog: TeamRoleDef[] = [
     adminOnly: true,
     order: 1,
   },
-  { key: CHOIR_KEY, label: "Choir", defaultCount: 0, adminOnly: false, order: 2 },
+  { key: CHOIR, label: "Choir", defaultCount: 0, adminOnly: false, order: 2 },
 ];
 
 describe("DEFAULT_TEAM_ROLES", () => {
@@ -68,7 +67,7 @@ describe("MD as a catalog role", () => {
   });
 
   it("carries no slot of its own — the MD is already playing something", () => {
-    expect(bandRoles(DEFAULT_TEAM_ROLES).map((r) => r.key)).not.toContain(MD_KEY);
+    expect(slottedRoles(DEFAULT_TEAM_ROLES).map((r) => r.key)).not.toContain(MD_KEY);
     expect(resolveTeamCapacities(DEFAULT_TEAM_ROLES, null)).not.toHaveProperty(
       MD_KEY
     );
@@ -104,7 +103,7 @@ describe("MD as a catalog role", () => {
   });
 });
 
-describe("orderedRoles / bandRoles", () => {
+describe("orderedRoles / slottedRoles", () => {
   it("sorts by order, then key for a stable tie-break", () => {
     const scrambled: TeamRoleDef[] = [
       { key: "B", label: "B", defaultCount: 1, adminOnly: false, order: 1 },
@@ -114,10 +113,12 @@ describe("orderedRoles / bandRoles", () => {
     expect(orderedRoles(scrambled).map((r) => r.key)).toEqual(["C", "A", "B"]);
   });
 
-  it("drops choir from the capacity-bearing roles", () => {
-    expect(bandRoles(catalog).map((r) => r.key)).toEqual([
+  it("drops only MD — choir is a counted role like any other", () => {
+    // Choir used to be excluded here too, back when it was an unbounded list.
+    expect(slottedRoles(catalog).map((r) => r.key)).toEqual([
       "DRUMS",
       "SOUND_BOOTH",
+      CHOIR,
     ]);
   });
 });
@@ -127,6 +128,7 @@ describe("resolveTeamCapacities", () => {
     expect(resolveTeamCapacities(catalog, null)).toEqual({
       DRUMS: 1,
       SOUND_BOOTH: 2,
+      [CHOIR]: 0,
     });
   });
 
@@ -141,8 +143,11 @@ describe("resolveTeamCapacities", () => {
     expect(resolveTeamCapacities(catalog, { KEYS: 3 })).not.toHaveProperty("KEYS");
   });
 
-  it("never includes choir — it has no slot count", () => {
-    expect(resolveTeamCapacities(catalog, null)).not.toHaveProperty(CHOIR_KEY);
+  it("includes choir, at the team's default of zero seats", () => {
+    // Most sets don't want a choir, so it defaults to none — but it IS in the
+    // shape, so a set that wants one just raises the count.
+    expect(resolveTeamCapacities(catalog, null)[CHOIR]).toBe(0);
+    expect(resolveTeamCapacities(catalog, { [CHOIR]: 6 })[CHOIR]).toBe(6);
   });
 });
 

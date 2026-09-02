@@ -36,7 +36,6 @@
 
 import {
   ACOUSTIC_HOST_ROLES,
-  CHOIR,
   MD_ROLES,
   rolesMayOverlap,
   type BandRole,
@@ -45,7 +44,7 @@ import {
 } from "./constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   teamSupportsMD,
   type TeamRoleDef,
@@ -249,12 +248,12 @@ export function buildSchedule(
 
   for (const set of chronological) {
     const setTime = set.startsAt.getTime();
-    // Only band roles are slot-filled here. Choir has no capacity, so a
-    // pre-assigned choir member is NOT a fill constraint — dropping them keeps
-    // them free to also take a band role and out of the spacing tally.
-    const preAssigned = (set.preAssigned ?? []).filter(
-      (p): p is typeof p & { role: BandRole } => p.role !== CHOIR
-    );
+    // Every pre-assigned seat is a fill constraint, choir included. (Choir was
+    // dropped here while it was an unbounded list — seating every available
+    // singer would otherwise have blocked them all from their band roles. Now
+    // that a choir seat is deliberate and counted, standing in one means you
+    // aren't also playing bass, which is what the rest of the fill assumes.)
+    const preAssigned = set.preAssigned ?? [];
     // Roles each person already holds on this set — seeded with the pre-assigned
     // people. Normally one slot per person, but one person may hold BOTH worship
     // leader and acoustic guitar (OVERLAP_ALLOWED_ROLES); see canTakeRole.
@@ -274,7 +273,7 @@ export function buildSchedule(
     // This set's role catalog and its resulting shape. Both come from the
     // team now, so two teams can fill genuinely different rosters.
     const catalog = set.roles?.length ? set.roles : DEFAULT_TEAM_ROLES;
-    const fillOrder = bandRoles(catalog);
+    const fillOrder = slottedRoles(catalog);
     // Remaining slots per role — starts at the set's shape, decremented as we
     // fill (the MD reservation below eats into it before the normal pass).
     const remaining = resolveTeamCapacities(catalog, set.capacities);
@@ -295,8 +294,7 @@ export function buildSchedule(
       return true;
     };
 
-    // Commit a pick: record it and update all running tallies. Only ever called
-    // with band roles (choir isn't slot-filled here — see availableChoirMembers).
+    // Commit a pick: record it and update all running tallies.
     const assign = (userId: string, role: BandRole) => {
       const held = rolesOnSet.get(userId) ?? new Set<Instrument>();
       held.add(role);
@@ -366,9 +364,7 @@ export function buildSchedule(
     }
 
     // ── Normal greedy fill of the remaining slots ───────────────────────
-    // Only the band roles (ROLE_ORDER) are capacity-filled here. Choir is not a
-    // band role and has no slot count, so it's handled separately — see
-    // availableChoirMembers, called by the set-detail "Auto schedule".
+    // Every slotted role is capacity-filled here, choir included.
     // ACOUSTIC_GUITAR is skipped here and filled in its own pass afterward,
     // because its candidate must ALREADY be seated as the worship leader or a
     // vocalist (which VOCALS, filled last in ROLE_ORDER, only becomes after).
@@ -403,24 +399,36 @@ export function buildSchedule(
 }
 
 /**
- * Everyone who should join a set's choir on "Auto schedule": every singer who
- * lists CHOIR on the set's team and is free at the set's time. Unlike the band
- * roles, choir has no capacity — it's an unbounded list, so we don't balance or
- * space it, we simply seat all the available singers. Choir is team-scoped like
- * every other role now (rolesFor): a team-less set draws on anyone with CHOIR on
- * any team. Returns their userIds, excluding anyone already on this set's choir
- * (`alreadyOnChoir`). Pure + separate from buildSchedule so the modal's autofill
- * can layer choir on top.
+ * Who "Auto schedule" should seat in ONE guest-team role — the generalization
+ * of what the hardcoded choir fill used to do.
+ *
+ * Everyone on `guestTeamId` who plays `role` there and is free at the set's
+ * time, minus `alreadyOnSet`. That subtraction is the point: a guest seat is
+ * meant for someone who ISN'T otherwise busy on this set, so a singer already
+ * playing keys on the band isn't also dragged into the visiting choir.
+ *
+ * Ordered least-recently-booked first (via `bookings`) so a CAPPED guest role
+ * rotates like any other; an `allAvailable` role ignores the cap and seats the
+ * whole list. Pure + separate from buildSchedule so the autofill route can
+ * layer guests on top of a normal band fill.
  */
-export function availableChoirMembers(
+export function availableGuestMembers(
   set: SchedulerSet,
+  role: Instrument,
+  guestTeamId: string,
   users: SchedulerUser[],
   rules: UnavailabilityRule[],
-  alreadyOnChoir: Set<string> = new Set()
+  alreadyOnSet: Set<string> = new Set(),
+  // How many times each person is already booked nearby — same map the band
+  // fill uses. Absent = everyone ties and the order falls back to name/id.
+  loads: Map<string, number> = new Map()
 ): string[] {
   return users
-    .filter((u) => rolesFor(u, set).includes(CHOIR))
-    .filter((u) => !alreadyOnChoir.has(u.id))
+    .filter((u) => (u.rolesByTeam[guestTeamId] ?? []).includes(role))
+    .filter((u) => !alreadyOnSet.has(u.id))
     .filter((u) => isUserAvailable(u.id, set, rules))
+    .sort(
+      (a, b) => (loads.get(a.id) ?? 0) - (loads.get(b.id) ?? 0) || a.id.localeCompare(b.id)
+    )
     .map((u) => u.id);
 }

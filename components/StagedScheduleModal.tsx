@@ -18,11 +18,18 @@
 // Every roster dropdown is availability-aware — people who can't serve at a
 // set's time are flagged and sorted last (same PlayerSelect the calendar's
 // SetDetailModal uses).
+//
+// LOCKING: picking someone by hand LOCKS them into that slot (indigo box + a
+// 🔒 marker). Re-running "Auto schedule" keeps every locked slot exactly as it
+// is and re-proposes only the rest, so the admin can pin the two or three
+// people they care about and let the algorithm redo the rest around them.
+// Clearing a slot (picking "None") — or clicking its 🔒 — releases the lock.
 import { useEffect, useMemo, useState } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
 import Badge from "./common/Badge";
 import LoadingDots from "./common/LoadingDots";
+import ScrollRow from "./common/ScrollRow";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import Select from "./common/Select";
 import {
@@ -42,15 +49,17 @@ import {
   conflictedUserIds,
   countAssignments,
   loadRows,
+  lockedCounts,
   maxLoad,
   playsRoleForSet,
   totalConflicts,
+  totalLocked,
   totalUnfillable,
   unfillableRoles,
 } from "@/lib/stagedPlan";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   teamSupportsMD,
   type TeamRoleDef,
@@ -173,6 +182,9 @@ export default function StagedScheduleModal({
   }
 
   const totalAssignments = sets.reduce((n, s) => n + s.assignments.length, 0);
+  // Hand-picked slots a re-run must keep — drives the 🔒 hint and the button's
+  // tooltip.
+  const lockedTotal = totalLocked(sets);
   // How many staged sets already exist (get filled) vs. are created fresh —
   // shown in the summary so it's clear nothing existing is recreated.
   const existingCount = sets.filter((s) => s.existing).length;
@@ -182,7 +194,9 @@ export default function StagedScheduleModal({
   const updateSet = (idx: number, next: (s: StagedSet) => StagedSet) =>
     setSets((prev) => prev.map((s, i) => (i === idx ? next(s) : s)));
 
-  // Swap the person in a filled slot for someone else.
+  // Swap the person in a filled slot for someone else. A hand-picked slot is
+  // LOCKED: a later "Auto schedule" run works around it instead of re-rolling
+  // it (see autoScheduleAll).
   const reassign = (
     idx: number,
     oldUserId: string,
@@ -193,11 +207,13 @@ export default function StagedScheduleModal({
       ...s,
       assignments: s.assignments.map((a) =>
         a.userId === oldUserId && a.role === role
-          ? { userId: newUserId, role }
+          ? { userId: newUserId, role, locked: true }
           : a
       ),
     }));
 
+  // Clearing a slot ("None") drops the assignment — and with it its lock, so
+  // the next auto-schedule run is free to fill the slot again.
   const remove = (idx: number, userId: string, role: Instrument) =>
     updateSet(idx, (s) => ({
       ...s,
@@ -209,7 +225,17 @@ export default function StagedScheduleModal({
   const add = (idx: number, role: Instrument, userId: string) =>
     updateSet(idx, (s) => ({
       ...s,
-      assignments: [...s.assignments, { userId, role }],
+      assignments: [...s.assignments, { userId, role, locked: true }],
+    }));
+
+  // Release a lock without emptying the slot: the person stays for now, but the
+  // next auto-schedule run may replace them. The other way out is "None".
+  const unlock = (idx: number, userId: string, role: Instrument) =>
+    updateSet(idx, (s) => ({
+      ...s,
+      assignments: s.assignments.map((a) =>
+        a.userId === userId && a.role === role ? { userId, role } : a
+      ),
     }));
 
   // Empty every roster in one go: the plan keeps its sets, dates and shapes but
@@ -222,11 +248,29 @@ export default function StagedScheduleModal({
 
   // Re-run the fill over the CURRENT plan. This is the same pure function the
   // server ran (lib/scheduler.ts), fed the same starting tallies via
-  // plan.baseline — so on an emptied plan it reproduces the original proposal
-  // exactly, which is what makes "Clear all people" safe to click. Anyone
-  // still on a set rides along as `preAssigned`: hand-picks are kept and only
-  // the holes get filled.
+  // plan.baseline — so on a plan with no locks it reproduces the original
+  // proposal exactly, which is what makes both "Clear all people" and a
+  // re-run safe to click.
+  //
+  // Only LOCKED slots (the ones an admin hand-picked) survive a re-run: they
+  // ride along as scheduler `preAssigned`, so their people are never moved,
+  // never double-booked on that set, and their dates steer the spacing rule.
+  // Everything the algorithm chose last time is dropped and re-proposed
+  // around them.
   const autoScheduleAll = () => {
+    // Locked slots per set, keyed by the staging id (the ISO start time).
+    const keptBySet = new Map<string, StagedSet["assignments"]>(
+      sets.map((s) => [s.startsAt, s.assignments.filter((a) => a.locked)])
+    );
+    // The scheduler leaves pre-assigned people out of its GLOBAL load tally
+    // (see the note on SchedulerSet.preAssigned), so fold the locked slots
+    // into the baseline counts ourselves — otherwise someone pinned onto three
+    // sets still looks unloaded and gets handed three more.
+    const counts = new Map(Object.entries(plan?.baseline?.counts ?? {}));
+    for (const [userId, n] of lockedCounts(sets)) {
+      counts.set(userId, (counts.get(userId) ?? 0) + n);
+    }
+
     const proposals = buildSchedule(
       sets.map((s) => ({
         // The staging identity, matching what the server keyed rosters by.
@@ -237,7 +281,7 @@ export default function StagedScheduleModal({
         capacities: s.slotCapacities,
         requiresMD: s.requiresMD,
         teamId: s.teamId,
-        preAssigned: s.assignments.map((a) => ({
+        preAssigned: (keptBySet.get(s.startsAt) ?? []).map((a) => ({
           userId: a.userId,
           role: a.role,
           isMD: isMdOf(a.userId),
@@ -257,7 +301,7 @@ export default function StagedScheduleModal({
         ),
       })),
       rules,
-      new Map(Object.entries(plan?.baseline?.counts ?? {})),
+      counts,
       (plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
@@ -274,7 +318,11 @@ export default function StagedScheduleModal({
 
     setSets((prev) =>
       prev.map((s) => {
-        const merged = [...s.assignments, ...(bySet.get(s.startsAt) ?? [])];
+        // Locked picks first (they kept their slots), then the fresh proposals.
+        const merged = [
+          ...(keptBySet.get(s.startsAt) ?? []),
+          ...(bySet.get(s.startsAt) ?? []),
+        ];
         return {
           ...s,
           assignments: merged,
@@ -402,7 +450,10 @@ export default function StagedScheduleModal({
             existingCount === 1 ? "s" : ""
           } and will be filled — not recreated)`}
         . Adjust anyone below, then apply — nothing is saved (or announced)
-        until you do.
+        until you do. Anyone you pick by hand is{" "}
+        <span className="whitespace-nowrap">🔒 locked</span> and stays put if you
+        re-run auto schedule; set their slot back to “None” (or click the 🔒) to
+        release them.
         {plan.skipped > 0 &&
           ` ${plan.skipped} already-staffed set${
             plan.skipped === 1 ? "" : "s"
@@ -459,33 +510,47 @@ export default function StagedScheduleModal({
           They sit between the stats and the cards because that's what they act
           on — the load panel is what tells you whether to clear and start over. */}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        {/* One toggle: empty the plan, or fill it back up. An emptied plan
-            refills to exactly what the server proposed (same algorithm, same
-            baseline), so clearing is never a one-way door. */}
-        {totalAssignments === 0 ? (
+        {/* Re-run the fill, or empty the plan. Re-running always refills to
+            exactly what the server proposed (same algorithm, same baseline)
+            EXCEPT around the slots you locked, so neither button is a one-way
+            door. */}
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant="secondary"
             onClick={autoScheduleAll}
             disabled={busy}
-            title="Run the scheduler over every set again"
+            title={
+              lockedTotal > 0
+                ? `Re-run the scheduler — your ${lockedTotal} locked pick${
+                    lockedTotal === 1 ? "" : "s"
+                  } stay put, everyone else is re-proposed`
+                : "Run the scheduler over every set again"
+            }
           >
-            Auto schedule all
+            {totalAssignments === 0 ? "Auto schedule all" : "Re-run auto schedule"}
           </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={clearAllPeople}
-            disabled={busy}
-            // Placeholder sets: the dates and shapes are what's wanted now,
-            // the people can come later. Nobody is notified about a set with
-            // an empty roster, so applying these is silent.
-            title="Empty every roster — the sets are still created, just with nobody on them"
-          >
-            Clear all people
-          </Button>
-        )}
+          {totalAssignments > 0 && (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={clearAllPeople}
+              disabled={busy}
+              // Placeholder sets: the dates and shapes are what's wanted now,
+              // the people can come later. Nobody is notified about a set with
+              // an empty roster, so applying these is silent.
+              title="Empty every roster — the sets are still created, just with nobody on them"
+            >
+              Clear all people
+            </Button>
+          )}
+          {lockedTotal > 0 && (
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
+              a re-run
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-0.5 dark:border-gray-700">
           {(
             [
@@ -524,7 +589,12 @@ export default function StagedScheduleModal({
                 {entries.length} set{entries.length === 1 ? "" : "s"}
               </span>
             </p>
-            <div className="flex gap-3 overflow-x-auto pb-2">
+            {/* A row scrolls sideways through the weeks, and the fact that it
+                DOES is easy to miss — macOS fades its scrollbar out the moment
+                you stop. ScrollRow draws its own bar instead of relying on the
+                native one, so the "there's more to the right" cue is always
+                there (and draggable). */}
+            <ScrollRow className="flex gap-3 pb-1">
               {entries.map(({ set, idx }) => {
             const catalog = catalogFor(set);
             const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
@@ -576,7 +646,7 @@ export default function StagedScheduleModal({
                 )}
 
                 <ul className="space-y-2">
-                  {bandRoles(catalog).map(({ key: role, label: roleName }) => {
+                  {slottedRoles(catalog).map(({ key: role, label: roleName }) => {
                     const capacity = capacities[role];
                     const filled = set.assignments.filter(
                       (a) => a.role === role
@@ -623,6 +693,10 @@ export default function StagedScheduleModal({
                                 }}
                                 options={options}
                                 disabled={busy}
+                                // Locked = you chose this person; the box is
+                                // tinted so a hand-picked roster reads apart
+                                // from the auto-filled one at a glance.
+                                locked={a.locked}
                                 widthClass="w-full min-w-0 flex-1"
                                 onChange={(userId) =>
                                   userId
@@ -634,6 +708,8 @@ export default function StagedScheduleModal({
                                 count={counts.get(a.userId) ?? 0}
                                 isMD={a.userId === mdUserId}
                                 unavailable={conflicted.has(a.userId)}
+                                locked={!!a.locked}
+                                onUnlock={() => unlock(idx, a.userId, role)}
                               />
                             </div>
                           ))}
@@ -697,7 +773,7 @@ export default function StagedScheduleModal({
               </div>
               );
               })}
-            </div>
+            </ScrollRow>
           </section>
         ))}
       </div>
@@ -784,19 +860,36 @@ function LoadBar({
   );
 }
 
-// The little badges to the right of a filled slot: total load (×N), an MD tag,
-// and an "unavailable" warning when the person can't serve at this set's time.
+// The little badges to the right of a filled slot: a 🔒 when you picked this
+// person yourself, total load (×N), an MD tag, and an "unavailable" warning
+// when the person can't serve at this set's time. The lock is a button: click
+// it to hand the slot back to the scheduler without emptying it.
 function SlotMarkers({
   count,
   isMD,
   unavailable,
+  locked,
+  onUnlock,
 }: {
   count: number;
   isMD: boolean;
   unavailable: boolean;
+  locked: boolean;
+  onUnlock: () => void;
 }) {
   return (
     <span className="flex shrink-0 items-center gap-1 text-xs">
+      {locked && (
+        <button
+          type="button"
+          onClick={onUnlock}
+          aria-label="Unlock this slot"
+          title="You picked this person — auto schedule will keep them. Click to unlock."
+          className="leading-none text-indigo-600 hover:opacity-70 dark:text-indigo-400"
+        >
+          🔒
+        </button>
+      )}
       {unavailable && (
         <span
           className="font-medium text-amber-600 dark:text-amber-400"

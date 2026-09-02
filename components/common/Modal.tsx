@@ -19,20 +19,63 @@ interface ModalProps {
   // chip), center-aligned with it rather than dropping to the subtitle line.
   titleAccessory?: ReactNode;
   children: ReactNode;
-  // Panel width. "lg" (default) is the standard centered dialog; "full" is a
-  // near-full-screen workspace for review/editing flows (e.g. the staged
-  // schedule) where a single narrow column would be hard to scan.
-  size?: "lg" | "full";
+  // Panel width. "lg" (default) is the standard centered dialog; "xl" is the
+  // roomier dialog for content-heavy views (e.g. a set's roster + setlist);
+  // "full" is a near-full-screen workspace for review/editing flows (e.g. the
+  // staged schedule) where a single narrow column would be hard to scan.
+  size?: "lg" | "xl" | "full";
   // Optional action bar pinned to the bottom of the panel, outside the scroll
   // area (e.g. Apply / Discard). Buttons here stay put while the body scrolls.
   footer?: ReactNode;
 }
 
 // Panel classes per size. "full" trades the centered card for a tall, wide
-// workspace but keeps a small margin so the backdrop still reads as a modal.
+// workspace: no width cap at all, so it stretches to the viewport minus the
+// thin margin below — just enough for the backdrop to still read as a modal.
 const SIZE_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
   lg: "max-w-lg max-h-[85vh]",
-  full: "max-w-6xl h-[92vh]",
+  xl: "max-w-3xl max-h-[88vh]",
+  full: "max-w-none h-[96vh]",
+};
+
+// ── Background scroll lock ────────────────────────────────────────────────
+// Shared by every Modal, because more than one is open at a time all the time
+// (a confirm dialog over a workspace, the roles editor over a set).
+//
+// Each modal remembering the body's PREVIOUS overflow and restoring it on the
+// way out looks right and isn't: with two open, the second saw "hidden" on the
+// way in, so whichever unmounts LAST writes "hidden" back — with nothing open.
+// The page is then unscrollable until a reload. A count fixes the ordering: the
+// first lock records the real value, and only the last release restores it.
+let lockCount = 0;
+let overflowBeforeLock = "";
+
+// Locks background scrolling and returns the release. Safe to call twice (React
+// StrictMode double-invokes effects) — a release only counts once.
+function lockBodyScroll(): () => void {
+  if (lockCount === 0) {
+    overflowBeforeLock = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  lockCount++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    lockCount--;
+    if (lockCount <= 0) {
+      lockCount = 0;
+      document.body.style.overflow = overflowBeforeLock;
+    }
+  };
+}
+
+// Gap between the panel and the viewport edge. "full" wants nearly all of the
+// screen, so its margin is a hairline compared to a centered dialog's.
+const PADDING_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
+  lg: "p-4",
+  xl: "p-4",
+  full: "p-2 sm:p-3",
 };
 
 export default function Modal({
@@ -53,21 +96,20 @@ export default function Modal({
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  // Lock background scrolling while the modal is open (restore the previous
-  // value on close so nested/stacked modals don't clobber each other).
+  // Lock background scrolling while the modal is open. Counted across every
+  // open modal (see lockBodyScroll) so closing them in any order — including
+  // the underlying one first — always leaves the page scrollable.
   useEffect(() => {
     if (!open) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previous;
-    };
+    return lockBodyScroll();
   }, [open]);
 
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className={`fixed inset-0 z-50 flex items-center justify-center ${PADDING_CLASSES[size]}`}
+    >
       {/* backdrop */}
       <div
         className="absolute inset-0 bg-black/50"

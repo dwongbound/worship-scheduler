@@ -8,7 +8,7 @@ import { roleLabel } from "./teamRoles";
 /**
  * The calendar title for a set: its name followed by one "(Role)" per role
  * the person plays on it, e.g. "Thursday Night Set (Acoustic Guitar)". Roles
- * are de-duplicated and shown in display order (band roles then choir) so the
+ * are de-duplicated and shown in the catalog's display order so the
  * title is stable. Every .ics export routes through this so titles are
  * identical no matter the trigger (whole-calendar export or a single-set export).
  */

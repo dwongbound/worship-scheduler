@@ -1,7 +1,7 @@
 // Unit tests for the auto-scheduling algorithm (lib/scheduler.ts).
 import { describe, expect, it } from "vitest";
 import {
-  availableChoirMembers,
+  availableGuestMembers,
   buildSchedule,
   isUserAvailable,
   type SchedulerSet,
@@ -595,68 +595,118 @@ describe("buildSchedule spacing", () => {
     expect(who(result, "week-2")).toEqual(["d2"]);
   });
 
-  it("never fills CHOIR (it isn't a capacity band role)", () => {
-    // A pure choir member is ignored by the greedy fill — choir is seated
-    // separately, via availableChoirMembers.
+  it("fills CHOIR like any other counted role", () => {
+    // Choir used to be skipped by the greedy fill (it was an unbounded list
+    // seated separately). It's an ordinary slotted role now, so a set that
+    // asks for choir seats gets them filled.
     const singer = user("c1", ["CHOIR"]);
-    expect(buildSchedule([tuesdaySet], [singer], [])).toEqual([]);
+    const result = buildSchedule(
+      [{ ...tuesdaySet, capacities: { CHOIR: 1 } }],
+      [singer],
+      []
+    );
+    expect(result).toContainEqual({ setId: "set-1", userId: "c1", role: "CHOIR" });
   });
 
-  it("ignores a pre-assigned CHOIR slot so the singer stays free for a band role", () => {
-    // p1 is already on the set's choir AND plays drums. The choir slot must not
-    // count as a constraint that blocks them from the open drums slot.
+  it("treats a pre-assigned CHOIR slot as a constraint like any other role", () => {
+    // Standing in a choir seat means you aren't also playing drums. (This is
+    // the inverse of the old behaviour, which had to let choir members double
+    // up because EVERY available singer was seated automatically.)
     const player = user("p1", ["DRUMS", "CHOIR"]);
     const result = buildSchedule(
       [{ ...tuesdaySet, preAssigned: [{ userId: "p1", role: "CHOIR" }] }],
       [player],
       []
     );
-    expect(result).toContainEqual({ setId: "set-1", userId: "p1", role: "DRUMS" });
+    expect(result).not.toContainEqual({
+      setId: "set-1",
+      userId: "p1",
+      role: "DRUMS",
+    });
   });
 });
 
-describe("availableChoirMembers", () => {
-  it("returns every available singer who lists CHOIR", () => {
+describe("availableGuestMembers", () => {
+  // A guest seat draws on ANOTHER team's members — the generalization of what
+  // the hardcoded choir fill used to do for one built-in key.
+  const hostSet: SchedulerSet = { ...tuesdaySet, teamId: "team-host" };
+
+  it("returns every available member who plays that role on the guest team", () => {
     const users = [
-      user("c1", ["CHOIR"]),
-      user("c2", ["VOCALS", "CHOIR"]),
-      user("d1", ["DRUMS"]), // not a choir member
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["VOCALS", "CHOIR"], false, "team-guest"),
+      user("d1", ["DRUMS"], false, "team-guest"), // doesn't sing choir
     ];
-    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+    expect(
+      availableGuestMembers(hostSet, "CHOIR", "team-guest", users, [])
+    ).toEqual(["c1", "c2"]);
   });
 
   it("excludes people who are unavailable at the set's time", () => {
-    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
+    const users = [
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-guest"),
+    ];
     const rules: UnavailabilityRule[] = [
       // c2 is blocked Tuesday evening.
       { userId: "c2", type: "RECURRING", dayOfWeek: 2, startMinute: 1080, endMinute: 1260 },
     ];
-    expect(availableChoirMembers(tuesdaySet, users, rules)).toEqual(["c1"]);
+    expect(
+      availableGuestMembers(hostSet, "CHOIR", "team-guest", users, rules)
+    ).toEqual(["c1"]);
   });
 
-  it("excludes people already on the set's choir", () => {
-    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
-    const already = new Set(["c1"]);
-    expect(availableChoirMembers(tuesdaySet, users, [], already)).toEqual(["c2"]);
-  });
-
-  it("is team-scoped: only choir members of the set's team are seated", () => {
-    // Choir is a per-team role now — a set's choir draws only on people who
-    // list CHOIR on THAT team, not singers from another team.
-    const teamSet: SchedulerSet = { ...tuesdaySet, teamId: "team-A" };
+  it("excludes anyone already on the set, in ANY seat", () => {
+    // The point of the exclusion: someone playing keys for the host team is
+    // busy, so the visiting choir must not also seat them.
     const users = [
-      user("c1", ["CHOIR"], false, "team-A"),
-      user("c2", ["CHOIR"], false, "team-B"), // other team → excluded
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-guest"),
     ];
-    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1"]);
+    expect(
+      availableGuestMembers(
+        hostSet,
+        "CHOIR",
+        "team-guest",
+        users,
+        [],
+        new Set(["c1"])
+      )
+    ).toEqual(["c2"]);
   });
 
-  it("a team-less set draws choir from anyone with CHOIR on any team", () => {
+  it("is scoped to the named guest team, not the set's own or any other", () => {
     const users = [
-      user("c1", ["CHOIR"], false, "team-A"),
-      user("c2", ["CHOIR"], false, "team-B"),
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-other"), // different team → excluded
+      user("c3", ["CHOIR"], false, "team-host"), // the host team → excluded
     ];
-    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+    expect(
+      availableGuestMembers(hostSet, "CHOIR", "team-guest", users, [])
+    ).toEqual(["c1"]);
+  });
+
+  it("orders least-booked first, so a capped guest role rotates", () => {
+    const users = [
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-guest"),
+    ];
+    // c1 has served twice recently, c2 once — c2 should come first.
+    const loads = new Map([
+      ["c1", 2],
+      ["c2", 1],
+    ]);
+    expect(
+      availableGuestMembers(
+        hostSet,
+        "CHOIR",
+        "team-guest",
+        users,
+        [],
+        new Set(),
+        loads
+      )
+    ).toEqual(["c2", "c1"]);
   });
 });
 
