@@ -27,7 +27,7 @@ import { schedulableRolesByTeam } from "@/lib/roster";
 import { buildSchedule, teamKey } from "@/lib/scheduler";
 import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { defaultMDId } from "@/lib/md";
-import type { Instrument, SlotCapacityMap } from "@/lib/constants";
+import type { SlotCapacityMap } from "@/lib/constants";
 import { occurrencesInRange, parseLocalDate, upcomingOccurrences } from "@/lib/dates";
 import type { StagedPlan, StagedSet } from "@/lib/types";
 

@@ -261,6 +261,42 @@ describe("weeklySummaryText", () => {
     expect(lines[5]).toBe("• Bob — Keys (MD)");
   });
 
+  it("follows the team's own role order and labels when given a catalog", () => {
+    // The admin dragged Keys to the top and renamed Vox — the summary has to
+    // read the way their team's roster reads everywhere else.
+    const catalog = [
+      { key: "KEYS", label: "Piano", defaultCount: 1, adminOnly: false, order: 0 },
+      { key: "VOCALS", label: "Backing Vox", defaultCount: 2, adminOnly: false, order: 1 },
+      { key: "DRUMS", label: "Drums", defaultCount: 1, adminOnly: false, order: 2 },
+    ];
+    const text = weeklySummaryText(
+      "Sunday Team",
+      range,
+      [
+        {
+          label: "Sunday Worship",
+          startsAt: new Date("2026-07-12T10:00:00"),
+          mdUserId: null,
+          assignments: [
+            { role: "DRUMS", user: { id: "u-ryan", name: "Ryan" } },
+            { role: "VOCALS", user: { id: "u-cara", name: "Cara" } },
+            { role: "KEYS", user: { id: "u-bob", name: "Bob" } },
+            // A role the team has since dropped still gets listed — last.
+            { role: "BASS", user: { id: "u-dee", name: "Dee" } },
+          ],
+        },
+      ],
+      catalog
+    );
+    const lines = text.split("\n");
+    expect(lines.slice(3, 7)).toEqual([
+      "• Bob — Piano",
+      "• Cara — Backing Vox",
+      "• Ryan — Drums",
+      "• Dee — Bass",
+    ]);
+  });
+
   it("uses a fallback name and placeholder line for empty unnamed sets", () => {
     const text = weeklySummaryText("Sunday Team", range, [
       {

@@ -64,6 +64,11 @@ test("auto-scheduling a required-MD set from its detail modal seats an MD", asyn
     modal.getByText(/requires an MD but none is assigned/)
   ).toHaveCount(0);
   await expect(modal.getByText("* (MD)").first()).toBeVisible();
+
+  // The fill is staged; commit it so the set doesn't stay empty for the rest
+  // of the suite.
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal.getByText("* (MD)").first()).toBeVisible();
 });
 
 test("the set actions (⋮) menu lists the actions and Change Roles sets Require MD", async ({

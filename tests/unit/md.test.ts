@@ -26,21 +26,27 @@ describe("eligibleMDIds", () => {
     expect(eligibleMDIds(roster)).toEqual([]);
   });
 
-  it("returns distinct ids in scarce-first role order", () => {
-    // ROLE_ORDER puts BASS before KEYS before ELECTRIC_GUITAR.
+  it("returns distinct ids in MD-role preference order", () => {
+    // MD_ROLES is preference-ordered: electric guitar, then keys, then bass.
     const roster = [
-      a("e", "ELECTRIC_GUITAR", true),
-      a("k", "KEYS", true),
       a("b", "BASS", true),
+      a("k", "KEYS", true),
+      a("e", "ELECTRIC_GUITAR", true),
     ];
-    expect(eligibleMDIds(roster)).toEqual(["b", "k", "e"]);
+    expect(eligibleMDIds(roster)).toEqual(["e", "k", "b"]);
   });
 });
 
 describe("defaultMDId", () => {
-  it("picks the first eligible person (scarce-first)", () => {
-    const roster = [a("k", "KEYS", true), a("b", "BASS", true)];
-    expect(defaultMDId(roster)).toBe("b"); // bass outranks keys
+  it("picks the electric guitarist over other MD roles", () => {
+    const roster = [a("k", "KEYS", true), a("e", "ELECTRIC_GUITAR", true)];
+    expect(defaultMDId(roster)).toBe("e"); // electric outranks keys
+  });
+
+  it("falls back to another MD role when no electric guitarist can lead", () => {
+    // The seated electric guitarist isn't MD-eligible → keys leads instead.
+    const roster = [a("e", "ELECTRIC_GUITAR"), a("k", "KEYS", true)];
+    expect(defaultMDId(roster)).toBe("k");
   });
 
   it("is null when nobody qualifies", () => {

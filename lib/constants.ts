@@ -146,10 +146,13 @@ export const ROLE_ORDER: BuiltInRole[] = [
 // role that exists": ask the team for that (lib/teamRoles.ts orderedRoles).
 export const ALL_INSTRUMENTS: Instrument[] = [...ROLE_ORDER, CHOIR];
 
-// The only roles a musical director can lead from. A required-MD set is only
-// "covered" when an MD is assigned to one of these; the auto-scheduler seats a
-// reserved MD into one of them (never drums/vocals/etc.).
-export const MD_ROLES: string[] = ["KEYS", "ELECTRIC_GUITAR", "BASS"];
+// The only roles a musical director can lead from, IN PREFERENCE ORDER. A
+// required-MD set is only "covered" when an MD is assigned to one of these;
+// the auto-scheduler seats a reserved MD into one of them (never
+// drums/vocals/etc.), and lib/md.ts designates the set's MD by walking this
+// list. Electric guitar leads because that's who typically MDs — keys and bass
+// are the fallbacks, used only when no MD is seated on electric.
+export const MD_ROLES: string[] = ["ELECTRIC_GUITAR", "KEYS", "BASS"];
 
 // A person normally fills at most one role on a set. The only sanctioned
 // double-ups are these unordered pairs: worship leader + acoustic guitar, and

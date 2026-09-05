@@ -1,12 +1,17 @@
 "use client";
 // The fields shared by every "create a set" form: a label (optional — the
-// ad-hoc form types the name into the modal heading instead), a start time +
-// duration, and an optional custom team shape. Used by both the calendar's
+// ad-hoc form types the name into the modal heading instead), a start and END
+// time, and an optional custom team shape. Used by both the calendar's
 // ad-hoc CreateSetModal and the Create tab's TemplateModal — whatever differs
 // between them (a fixed date vs. a recurring day-of-week) is passed in as the
 // `scheduleField` slot, which renders right under the label.
 import { ReactNode } from "react";
 import Input from "./common/Input";
+import {
+  durationBetween,
+  minutesToTimeInput,
+  timeStringToMinutes,
+} from "@/lib/dates";
 import Select from "./common/Select";
 import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
@@ -18,11 +23,14 @@ import {
 } from "@/lib/teamRoles";
 import type { ApiTeam } from "@/lib/types";
 
-// Set durations, offered in half-hour steps (0.5h–8h) but stored as minutes.
-const DURATION_OPTIONS = Array.from({ length: 16 }, (_, i) => (i + 1) * 30);
+// A set's length, for the hint under the times. The form asks for a start and
+// an end; the minutes between them are what's actually stored/sent.
 function durationLabel(minutes: number): string {
-  const hours = minutes / 60;
-  return `${hours} ${hours === 1 ? "Hr" : "Hrs"}`;
+  const hrs = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hrs === 0) return `${mins} min`;
+  if (mins === 0) return `${hrs} hr${hrs === 1 ? "" : "s"}`;
+  return `${hrs} hr ${mins} min`;
 }
 
 // The controlled state every set form carries. `capacities` is null until the
@@ -31,6 +39,8 @@ function durationLabel(minutes: number): string {
 export interface SetFormState {
   label: string;
   startTime: string; // "09:00"
+  // Still stored as a length in minutes (that's what the API takes), but the
+  // form edits it as an END TIME — see the Start/End inputs below.
   duration: number; // minutes
   requiresMD: boolean; // set needs a musical director on its team
   isPrivate: boolean; // only admins + assigned people can see this set
@@ -125,6 +135,12 @@ export default function SetFormFields({
         )}
       </Select>
 
+      {/* Start + END time. The set still STORES a duration, so the end time is
+          derived from it: moving the start slides the end along and keeps the
+          set the same length, while editing the end re-measures it. An end at
+          or before the start reads as running past midnight (durationBetween);
+          typing the start time back over the end is ignored rather than
+          collapsing the set to nothing. */}
       <div className="grid grid-cols-2 gap-3">
         <Input
           label="Start time"
@@ -134,19 +150,23 @@ export default function SetFormFields({
           required
           disabled={disabled}
         />
-        <Select
-          label="Duration"
-          value={state.duration}
-          onChange={(e) => patch({ duration: Number(e.target.value) })}
+        <Input
+          label="End time"
+          type="time"
+          value={minutesToTimeInput(
+            timeStringToMinutes(state.startTime) + state.duration
+          )}
+          onChange={(e) => {
+            const duration = durationBetween(state.startTime, e.target.value);
+            if (duration !== null) patch({ duration });
+          }}
+          required
           disabled={disabled}
-        >
-          {DURATION_OPTIONS.map((minutes) => (
-            <option key={minutes} value={minutes}>
-              {durationLabel(minutes)}
-            </option>
-          ))}
-        </Select>
+        />
       </div>
+      <p className="-mt-1 text-xs text-gray-500 dark:text-gray-400">
+        {durationLabel(state.duration)} long
+      </p>
 
       {/* Auto-create the set's private Slack channel this many days before it
           starts. Blank = off (an admin can still make one by hand with the

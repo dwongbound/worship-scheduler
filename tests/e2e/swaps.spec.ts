@@ -15,7 +15,9 @@ test("bob requests a swap on his Sunday set", async ({ page }) => {
     .filter({ hasText: "Sunday Morning — Drums" })
     .first();
   await expect(card).toBeVisible();
-  await card.getByRole("button", { name: "Request cover" }).click();
+  // Exact: the whole card is itself a role="button" (tapping it opens the set),
+  // and its accessible name is all of its text — including this button's label.
+  await card.getByRole("button", { name: "Request cover", exact: true }).click();
 
   // A modal asks for an optional reason — leave a note, then confirm.
   const modal = page.getByRole("dialog");
@@ -50,7 +52,7 @@ test("kate takes the cover; it awaits admin approval, then an admin approves it"
   await page
     .locator("li")
     .filter({ hasText: "requested by Bob Baker" })
-    .getByRole("button", { name: "Take this set" })
+    .getByRole("button", { name: "Take this set", exact: true })
     .click();
 
   // Taking now hands the slot to kate but as PENDING_APPROVAL — an admin still
@@ -71,7 +73,7 @@ test("kate takes the cover; it awaits admin approval, then an admin approves it"
     .filter({ hasText: "Kate Kim" })
     .first();
   await expect(item).toBeVisible();
-  await item.getByRole("button", { name: "Approve" }).click();
+  await item.getByRole("button", { name: "Approve", exact: true }).click();
   await expect(item).not.toBeVisible();
 
   // Kate's slot is now confirmed.
@@ -144,7 +146,7 @@ test("a teammate can take the team-scoped cover", async ({ page }) => {
   await page
     .locator("li")
     .filter({ hasText: "Prayer Cover Test" })
-    .getByRole("button", { name: "Take this set" })
+    .getByRole("button", { name: "Take this set", exact: true })
     .click();
 
   // Lands under jack as PENDING_APPROVAL (awaiting an admin), and drops off the
@@ -169,7 +171,7 @@ test("an admin rejects the cover-take and it re-opens for others", async ({
     .filter({ hasText: "Jack Jones" })
     .first();
   await expect(item).toBeVisible();
-  await item.getByRole("button", { name: "Reject" }).click();
+  await item.getByRole("button", { name: "Reject", exact: true }).click();
   await expect(item).not.toBeVisible();
 
   // Reject re-opens the cover (back to the original owner as SWAP_REQUESTED),

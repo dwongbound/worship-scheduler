@@ -53,8 +53,8 @@ export async function GET() {
               id: true,
               name: true,
               orgId: true,
-              // The team's catalog — which roles it offers at all, and which of
-              // them are admin-only (hidden from the profile's own picker).
+              // The team's catalog — which roles it offers at all, and in what
+              // order the profile lists the ones I hold.
               roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
             },
           },
@@ -108,7 +108,8 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: "Name is required" }, { status: 400 });
   }
 
-  // Roles are per-team now — set them via PUT /api/me/teams/:teamId, not here.
+  // Roles aren't editable by their owner at all: they're per-team, and an admin
+  // grants them from the Team tab (PATCH /api/admin/users/:id).
 
   // Google (OAuth-only) accounts sign in with their Google email, so it's not
   // editable — ignore any email in the body and keep the existing value. The

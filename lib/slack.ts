@@ -11,6 +11,7 @@
 // the API routes, never by importing it directly.
 import { prisma } from "./prisma";
 import { orderedRoles, roleLabel, type TeamRoleDef } from "./teamRoles";
+import { getTeamCatalog } from "./teamRoleStore";
 import type { Prisma } from "./generated/prisma/client";
 import { decryptSecret } from "./crypto";
 import { createOrSyncSetPlaylist, isOrgSpotifyConnected } from "./spotify";
@@ -18,7 +19,6 @@ import {
   ALL_INSTRUMENTS,
   DIGEST_WINDOW_END_MINUTE,
   DIGEST_WINDOW_START_MINUTE,
-  INSTRUMENT_LABELS,
   type Instrument,
 } from "./constants";
 import { buildOrgDigest, renderDigestText } from "./digest";
@@ -942,25 +942,32 @@ type SummarySet = {
 export function weeklySummaryText(
   teamName: string,
   range: { start: Date; end: Date },
-  sets: SummarySet[]
+  sets: SummarySet[],
+  // The team's role catalog, so the roster lines come out in the order the
+  // admin arranged them in (TeamRolesEditor) and under that team's own names.
+  // Omitted → the built-in ordering, same as teamRosterText.
+  catalog?: TeamRoleDef[]
 ): string {
   const title =
     `📅 *${teamName}* — sets for ` +
     `${shortDateLabel(range.start)} – ${shortDateLabel(range.end)}`;
   const blocks = sets.map((set) => {
     const header = `*${set.label ?? "Worship set"}* — ${formatDay(set.startsAt)} · ${formatTime(set.startsAt)}`;
-    // Sort into display order, keeping the original order within a role.
-    // Built-in display order, with anything custom after it (indexOf gives -1
-    // for a role that isn't built in, which would otherwise sort it first).
+    // Sort into the team's display order, keeping the original order within a
+    // role. A role the order doesn't mention (one the team has since dropped)
+    // sorts last rather than first — indexOf would give it -1.
+    const order = catalog?.length
+      ? orderedRoles(catalog).map((r) => r.key)
+      : ALL_INSTRUMENTS;
     const rank = (role: string) => {
-      const i = ALL_INSTRUMENTS.indexOf(role);
-      return i === -1 ? ALL_INSTRUMENTS.length : i;
+      const i = order.indexOf(role);
+      return i === -1 ? order.length : i;
     };
     const lines = [...set.assignments]
       .sort((a, b) => rank(a.role) - rank(b.role))
       .map(
         (a) =>
-          `• ${a.user.name} — ${roleLabel(a.role)}${a.user.id === set.mdUserId ? " (MD)" : ""}`
+          `• ${a.user.name} — ${roleLabel(a.role, catalog)}${a.user.id === set.mdUserId ? " (MD)" : ""}`
       );
     if (lines.length === 0) lines.push("• _No one assigned yet_");
     return [header, ...lines].join("\n");
@@ -1008,7 +1015,8 @@ export async function sendTeamWeeklySummary(
   const posted = await postToChannel(
     token,
     team.slackChannelId,
-    weeklySummaryText(team.name, { start, end }, sets)
+    // Read the catalog so the summary lists roles in this team's own order.
+    weeklySummaryText(team.name, { start, end }, sets, await getTeamCatalog(teamId))
   );
   return posted
     ? { ok: true }

@@ -5,7 +5,11 @@ import {
   conflictedUserIds,
   isActiveForSet,
   countAssignments,
+  LOAD_METRICS,
+  loadMetricRange,
   loadRows,
+  metricToParam,
+  parseLoadMetric,
   lockedCounts,
   maxLoad,
   totalLocked,
@@ -91,21 +95,78 @@ describe("countAssignments / loadRows / maxLoad", () => {
 
   it("orders load rows busiest-first, ties broken on id", () => {
     expect(loadRows(sets)).toEqual([
-      { userId: "a", count: 3 },
-      { userId: "b", count: 1 },
-      { userId: "c", count: 1 },
+      { userId: "a", count: 3, planCount: 3 },
+      { userId: "b", count: 1, planCount: 1 },
+      { userId: "c", count: 1, planCount: 1 },
+    ]);
+  });
+
+  it("measures rows by `by` when given, keeping the plan's own tally", () => {
+    // The panel showing e.g. "past 6 months": the people are still the plan's,
+    // but the number (and the order) comes from the other tally. Someone with
+    // no history at all still shows, at 0.
+    const by = new Map([
+      ["b", 9],
+      ["a", 2],
+    ]);
+    expect(loadRows(sets, by)).toEqual([
+      { userId: "b", count: 9, planCount: 1 },
+      { userId: "a", count: 2, planCount: 3 },
+      { userId: "c", count: 0, planCount: 1 },
     ]);
   });
 
   it("reports the peak load (for scaling the bars)", () => {
-    expect(maxLoad(sets)).toBe(3);
+    expect(maxLoad(loadRows(sets))).toBe(3);
+    // Scales to whatever the rows were measured with, not the plan.
+    expect(maxLoad(loadRows(sets, new Map([["b", 9]])))).toBe(9);
   });
 
   it("returns empty/zero for a plan with no assignments", () => {
     const empty = [stagedSet(week1, [])];
     expect(countAssignments(empty).size).toBe(0);
     expect(loadRows(empty)).toEqual([]);
-    expect(maxLoad(empty)).toBe(0);
+    expect(maxLoad(loadRows(empty))).toBe(0);
+  });
+});
+
+describe("loadMetricRange / parseLoadMetric", () => {
+  const now = new Date(2026, 5, 15, 12, 0); // Mon Jun 15 2026, noon
+
+  it("asks for everything from now on for 'upcoming'", () => {
+    const range = loadMetricRange("upcoming", now)!;
+    expect(range.start).toEqual(now);
+    expect(range.end).toBeNull(); // open-ended
+  });
+
+  it("looks back exactly N days for a numeric window", () => {
+    const month = loadMetricRange(30, now)!;
+    expect(month.end).toEqual(now);
+    // 30 days before noon on Jun 15 is noon on May 16.
+    expect(month.start).toEqual(new Date(2026, 4, 16, 12, 0));
+
+    const year = loadMetricRange(365, now)!;
+    expect(year.start).toEqual(new Date(2025, 5, 15, 12, 0));
+  });
+
+  it("has no range for the plan itself — that's counted locally", () => {
+    expect(loadMetricRange("plan", now)).toBeNull();
+  });
+
+  it("only parses the windows the picker actually offers", () => {
+    expect(parseLoadMetric("plan")).toBe("plan");
+    expect(parseLoadMetric("upcoming")).toBe("upcoming");
+    expect(parseLoadMetric("182")).toBe(182);
+    // An arbitrary day count would let a caller ask for an unbounded scan.
+    expect(parseLoadMetric("99999")).toBeNull();
+    expect(parseLoadMetric("nonsense")).toBeNull();
+    expect(parseLoadMetric(null)).toBeNull();
+  });
+
+  it("round-trips a metric through its query-string form", () => {
+    for (const { metric } of LOAD_METRICS) {
+      expect(parseLoadMetric(metricToParam(metric))).toBe(metric);
+    }
   });
 });
 

@@ -18,7 +18,7 @@ import { formatDay, formatTime } from "@/lib/dates";
 import type { ApiApproval, SwapSetRef } from "@/lib/types";
 
 export default function ApprovalsPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const { adminOrgId, isAdminAny } = useOrgs();
   const [items, setItems] = useState<ApiApproval[] | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
