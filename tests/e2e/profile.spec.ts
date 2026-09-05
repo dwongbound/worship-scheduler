@@ -11,11 +11,12 @@ test("a user sees their per-team roles but can't change them", async ({ page }) 
   // Roles are per-team: pick Carol's team first.
   await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
 
-  // Carol plays Keys + Vocals — listed, not offered as checkboxes, and the
-  // roles she doesn't play (Strings) aren't shown at all.
+  // Her roles are listed as plain chips, not offered as checkboxes, and a role
+  // she doesn't play (Strings) isn't shown at all.
   const roles = page.getByTestId("profile-roles");
   await expect(roles).toContainText("Keys");
-  await expect(roles).toContainText("Vocals");
+  // The team calls VOCALS "Vox" — the chips use the team's own labels.
+  await expect(roles).toContainText("Vox");
   await expect(roles).not.toContainText("Strings");
   await expect(page.getByLabel("Strings")).toHaveCount(0);
 });
@@ -127,7 +128,10 @@ test("editing a profile field fires one write and no session/org refetch", async
   // session (the navbar shows it), which would make the assertions below lie.
   const email = page.getByLabel("Email");
   const original = await email.inputValue();
+  // The field saves on blur, not on every keystroke — so typing alone isn't a
+  // write, and the test has to leave the field the way a person would.
   await email.fill("carol.e2e@example.com");
+  await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
   // Let any (unwanted) trailing requests land before asserting.
   await page.waitForTimeout(500);
@@ -139,5 +143,6 @@ test("editing a profile field fires one write and no session/org refetch", async
 
   // Revert so the suite's shared state is unchanged.
   await email.fill(original);
+  await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
 });

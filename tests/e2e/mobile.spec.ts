@@ -203,7 +203,9 @@ test("phone week strip blocks a day with one tap", async ({ page }) => {
   const todayYmd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
     now.getDate()
   )}`;
-  const todayCell = page.locator(`[data-date="${todayYmd}"]`);
+  // The desktop month grid is still in the DOM (hidden by CSS at this width) and
+  // renders a cell per day too, so take the one actually on screen.
+  const todayCell = page.locator(`[data-date="${todayYmd}"]:visible`).first();
   await expect(todayCell).toBeVisible();
   await todayCell.click();
 
@@ -311,8 +313,14 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
   await modal.getByRole("button", { name: "Modify" }).click();
   await expect(modal).not.toBeVisible();
 
-  // Clean up the block so it doesn't leak into later specs.
+  // Clean up the block so it doesn't leak into later specs — and WAIT for it to
+  // go. Firing the click and ending the test can close the context before the
+  // DELETE lands, leaving a stray "All day" block that trips the next spec's
+  // "no blocks left" check.
   await page.getByRole("button", { name: "Delete" }).first().click();
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "All day" })
+  ).toHaveCount(0);
 });
 
 // ── Covers / Swaps: accepting / rejecting a targeted swap by TAP. ──────────
