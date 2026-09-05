@@ -191,9 +191,10 @@ export interface ApiSwapRequest {
 export interface ApiSetHistoryEvent {
   id: string;
   type: SetHistoryEventType;
-  // Null for SETLIST_CHANGED — that event is about the songs, not a slot.
+  // Null for the set-level events (SETLIST_CHANGED, NOTES_CHANGED) — those are
+  // about the songs/notes, not a slot.
   role: Instrument | null;
-  // Human summary, currently only for SETLIST_CHANGED.
+  // Human summary, for SETLIST_CHANGED and NOTES_CHANGED.
   detail: string | null;
   actor: ApiUserRef | null; // null = the auto-scheduler
   targetUser: ApiUserRef | null; // null if that user was later deleted
@@ -376,6 +377,11 @@ export interface StagedSet {
   // Team the set belongs to (see ApiSet.teamId). Optional so older plans and
   // test fixtures without a team keep working (= open to everyone).
   teamId?: string | null;
+  // Which recurring set (SetTemplate) this occurrence was expanded from. Used
+  // by the review modal to tint a set type's cards with the colour picked in
+  // the options dialog; apply ignores it. Optional for the same reason teamId
+  // is — older plans and fixtures predate it.
+  templateId?: string | null;
   // True if an (empty) Set row already exists at this time — apply fills it
   // rather than creating a new one. False = apply creates the set.
   existing: boolean;

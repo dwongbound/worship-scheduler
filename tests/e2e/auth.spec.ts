@@ -1,6 +1,6 @@
 // E2E: login flow + route protection.
-import { expect, test } from "@playwright/test";
-import { login, orgKey } from "./helpers";
+import { type Page, expect, test } from "@playwright/test";
+import { attemptTag, login, orgKey } from "./helpers";
 
 test("redirects unauthenticated visitors to the login page", async ({ page }) => {
   await page.goto("/calendar");
@@ -100,6 +100,120 @@ test("blocks sign-up when the passwords don't match", async ({ page }) => {
 
   await expect(page.getByText("Passwords don't match.")).toBeVisible();
   await expect(page).toHaveURL(/\/login/); // stayed put, no account created
+});
+
+// ── Duplicate-name warning ────────────────────────────────────────────────
+// Signing up under a name that already has an account is almost always the same
+// person on a second address, which would split their history across two rows.
+// We warn once, naming the account we found, and let them pick either way.
+//
+// Both tests build their own "first account" rather than leaning on the seed:
+// seeded users have no email, and the warning only reports accounts it can
+// actually send you to.
+
+/**
+ * Sign up one account and leave the browser signed out again, ready for the
+ * next sign-up. Stops at /join — a brand-new account has no org — which is
+ * proof enough that the account was created.
+ */
+async function signUpFresh(
+  page: Page,
+  first: string,
+  last: string,
+  email: string
+) {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByLabel("First name").fill(first);
+  await page.getByLabel("Last name").fill(last);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByLabel("Confirm password").fill("password123");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await expect(page).toHaveURL(/\/join/);
+  await page.context().clearCookies();
+}
+
+test("warns that an account with this name exists, and offers to sign in as it", async ({
+  page,
+}, testInfo) => {
+  const tag = attemptTag(testInfo);
+  const firstName = `Dana${tag}`;
+  await signUpFresh(page, firstName, "Doyle", `dana${tag}.doyle@example.com`);
+
+  // Same human, second address — exactly the case the warning exists for.
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByLabel("First name").fill(firstName);
+  await page.getByLabel("Last name").fill("Doyle");
+  await page.getByLabel("Email").fill(`dana${tag}.doyle@work.example.com`);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByLabel("Confirm password").fill("password123");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  // The popup names the account it found — both halves, since the email is the
+  // actionable part.
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("heading", {
+      name: "An account with this name already exists",
+    })
+  ).toBeVisible();
+  await expect(dialog.getByText(`${firstName} Doyle`)).toBeVisible();
+  await expect(
+    dialog.getByText(`dana${tag}.doyle@example.com`)
+  ).toBeVisible();
+
+  // "That's me" hands them to the sign-in form with that address filled in.
+  await dialog
+    .getByRole("button", { name: "That's me — sign in with that email" })
+    .click();
+  await expect(page.getByLabel("Username / Email")).toHaveValue(
+    `dana${tag}.doyle@example.com`
+  );
+  // And it really is that account's password — no second row was created.
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/join/);
+});
+
+test("signs up a namesake anyway when told it's a different person", async ({
+  page,
+}, testInfo) => {
+  const tag = attemptTag(testInfo);
+  const firstName = `Evan${tag}`;
+  await signUpFresh(page, firstName, "Ellis", `evan${tag}.ellis@example.com`);
+
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await page.getByLabel("First name").fill(firstName);
+  await page.getByLabel("Last name").fill("Ellis");
+  const secondEmail = `evan${tag}.ellis2@example.com`;
+  await page.getByLabel("Email").fill(secondEmail);
+  await page.getByLabel("Password", { exact: true }).fill("password123");
+  await page.getByLabel("Confirm password").fill("password123");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("heading", {
+      name: "An account with this name already exists",
+    })
+  ).toBeVisible();
+
+  // Overriding it goes through: two people really can share a name.
+  await dialog
+    .getByRole("button", { name: "This is someone else — continue" })
+    .click();
+  await expect(page).toHaveURL(/\/join/);
+
+  // Signed in as the SECOND account, not the first — the override created a
+  // genuinely new row rather than resolving to the namesake.
+  await page.getByLabel("Organization key").fill(orgKey(0));
+  await page.getByRole("button", { name: "Join" }).click();
+  await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
+  await page.goto("/profile");
+  await expect(page.getByLabel("Email")).toHaveValue(secondEmail);
 });
 
 // Login strategy 2: Google SSO. A true end-to-end run needs real OAuth

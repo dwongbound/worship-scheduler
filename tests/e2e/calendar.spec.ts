@@ -1,7 +1,12 @@
 // E2E: calendar tab — set list, team modal, stats windows, .ics export,
 // and the admin inline "+" create / set delete flows.
 import { Page, expect, test } from "@playwright/test";
-import { login, openSetByLabel, requestAvailability } from "./helpers";
+import {
+  attemptTag,
+  login,
+  openSetByLabel,
+  requestAvailability,
+} from "./helpers";
 
 // Open the "New set" form via the calendar's hover "+" button. Uses the last
 // in-month day cell (always present, avoids month-boundary date math) and
@@ -131,13 +136,16 @@ test("admin deletes a set from the detail modal", async ({ page }) => {
   await login(page, "admin");
   await createAdHocSet(page, "To Be Deleted");
 
-  // Open the set's team modal and delete it (two-step confirm). Scope to the
-  // visible grid chip (the hidden mobile panel repeats the label).
+  // Open the set's team modal and delete it. Scope to the visible grid chip
+  // (the hidden mobile panel repeats the label).
   await page.getByText("To Be Deleted").filter({ visible: true }).first().click();
-  const modal = page.getByRole("dialog");
+  const modal = page.getByRole("dialog").first();
   await expect(modal).toBeVisible();
   await modal.getByRole("button", { name: "Delete set" }).click();
-  await modal.getByRole("button", { name: "Confirm delete" }).click();
+  // Deleting raises a stacked confirm modal, nested inside the set modal.
+  const confirm = modal.getByRole("dialog");
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole("button", { name: "Delete set" }).click();
 
   // Modal closes and the chip is gone.
   await expect(modal).not.toBeVisible();
@@ -437,4 +445,73 @@ test("leaving the set modal with staged edits asks first and lists them", async 
     assignments: unknown[];
   }[];
   expect(sets.find((s) => s.label === "Staged Edit Night")!.assignments).toHaveLength(0);
+});
+
+// The set detail modal's Notes history: sending a note logs it, and NOTHING
+// else appears in that section — roster changes belong to the Team tab's
+// activity log, not here. The box itself is a composer: empty on open, sent by
+// its arrow, never part of the staged Save.
+//
+// Works on a set of its own (tagged per attempt) so the log starts genuinely
+// empty — the seeded sets are shared with the rest of this file.
+test("a sent note lands in the set's Notes history, and nothing else does", async ({
+  page,
+}, testInfo) => {
+  await login(page, "admin");
+  const label = `Notes Log Night${attemptTag(testInfo)}`;
+  const form = await openNewSetForm(page, label);
+  await form.getByLabel("Start time").fill("15:10");
+  await form.getByRole("button", { name: "Create set" }).click();
+  await expect(form).not.toBeVisible();
+
+  const modal = await openSetByLabel(page, label);
+  const notes = modal.getByPlaceholder("e.g. Communion Sunday");
+  const send = modal.getByRole("button", { name: "Send note" });
+
+  // Nothing written yet, and the arrow is inert until there's something to send.
+  await expect(modal.getByText("No notes yet.")).toBeVisible();
+  await expect(send).toBeDisabled();
+
+  // The note goes the moment the arrow is clicked — it isn't staged for Save —
+  // and the box empties behind it.
+  await notes.fill("Bring extra cables");
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect(notes).toHaveValue("");
+  // The row shows the message plainly, under who wrote it and when.
+  const first = modal.getByTestId("note-entry").first();
+  await expect(first).toContainText("Bring extra cables");
+  await expect(first).toContainText("Alice Admin");
+
+  // A second note goes on top and keeps the first one below it.
+  await notes.fill("Doors at 7:30");
+  await send.click();
+  await expect(modal.getByTestId("note-entry").first()).toContainText(
+    "Doors at 7:30"
+  );
+  await expect(modal.getByTestId("note-entry").nth(1)).toContainText(
+    "Bring extra cables"
+  );
+
+  // A roster change on the same set writes its own history event — which must
+  // NOT show up here. Assign the empty Bass slot and save (which closes the
+  // modal, so the log is read on the way back in).
+  const bassRow = modal.getByRole("listitem").filter({ hasText: "Bass" }).first();
+  await bassRow.getByRole("button", { name: "None" }).click();
+  await playerOption(page, "Dave Diaz").click();
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal).not.toBeVisible();
+
+  const reopened = await openSetByLabel(page, label);
+  // Exact: the slot's own "Remove Bass slot (Dave Diaz)" ✕ also carries his
+  // name, so a substring match resolves to two controls.
+  await expect(
+    reopened.getByRole("button", { name: "Dave Diaz", exact: true })
+  ).toBeVisible();
+  // Still exactly the two notes entries — no "added Dave Diaz as Bass".
+  await expect(reopened.getByTestId("note-entry")).toHaveCount(2);
+  // And the composer is empty again, even though this set has notes.
+  await expect(
+    reopened.getByPlaceholder("e.g. Communion Sunday")
+  ).toHaveValue("");
 });

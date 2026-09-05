@@ -17,7 +17,10 @@ import Modal from "@/components/common/Modal";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import { usePageLoading } from "@/components/LoadingProvider";
 import TemplateModal from "@/components/TemplateModal";
-import GenerateModal, { type GenerateOptions } from "@/components/GenerateModal";
+import GenerateModal, {
+  type GenerateOptions,
+  type TemplateColors,
+} from "@/components/GenerateModal";
 import StagedScheduleModal from "@/components/StagedScheduleModal";
 import { DAY_LABELS } from "@/lib/constants";
 import {
@@ -90,6 +93,10 @@ export default function CreatePage() {
   const [generateResult, setGenerateResult] = useState("");
   // The proposed schedule awaiting the admin's review (null = not staging).
   const [stagedPlan, setStagedPlan] = useState<StagedPlan | null>(null);
+  // Per-recurring-set tints chosen in the options dialog, handed to the review
+  // modal so each set type's cards read as a block. Preview-only: they aren't
+  // posted anywhere and are forgotten when the review closes.
+  const [planColors, setPlanColors] = useState<TemplateColors>({});
   // The "add weekly set time" popup (opened by "Add" on the templates card).
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   // Which page of the Weekly Recurring Sets table is shown (4 rows per page).
@@ -276,9 +283,10 @@ export default function CreatePage() {
   // has already checked that the window and template picks are complete. On
   // success the options dialog closes and the review modal takes over; on
   // failure it stays open showing why, with the picks intact.
-  async function generate(opts: GenerateOptions) {
+  async function generate(opts: GenerateOptions, colors: TemplateColors) {
     setBusyAction("generate");
     setGenerateResult("");
+    setPlanColors(colors);
     try {
       const res = await fetch("/api/admin/generate", {
         method: "POST",
@@ -953,6 +961,7 @@ export default function CreatePage() {
 
       <StagedScheduleModal
         plan={stagedPlan}
+        colors={planColors}
         users={users}
         teams={teams}
         busy={busyAction === "apply"}

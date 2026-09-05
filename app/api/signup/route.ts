@@ -11,9 +11,14 @@
 //                    account. Requires `orgKey`, because a placeholder is
 //                    already inside an org — see the guard below.
 //   Real account   → rejected as a duplicate, exactly as before.
+//
+// Orthogonal to all three: a NAME that already exists (any address) gets one
+// 409 warning naming that account, which the login page turns into a popup.
+// See lib/nameConflict — it's advisory, and `allowDuplicateName` overrides it.
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { claimPlaceholder, findUserByEmail } from "@/lib/accountClaim";
+import { findNameConflicts } from "@/lib/nameConflictStore";
 import { ensureOrgsSynced } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 
@@ -26,6 +31,9 @@ export async function POST(req: NextRequest) {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const orgKey = String(body.orgKey ?? "").trim();
+  // Set by the login page after the person has SEEN the "an account already
+  // exists under this name" warning and said it isn't them.
+  const allowDuplicateName = body.allowDuplicateName === true;
 
   if (!firstName || !lastName) {
     return NextResponse.json(
@@ -84,6 +92,26 @@ export async function POST(req: NextRequest) {
       passwordHash,
     });
     return NextResponse.json({ ok: true, claimed: true }, { status: 200 });
+  }
+
+  // Same name, different address? Stop once and show them who we found — this
+  // is almost always the same person with a second email, and going through
+  // creates a twin that splits their history. They can still say "not me" and
+  // resubmit with allowDuplicateName; two people really can share a name.
+  if (!allowDuplicateName) {
+    const nameConflicts = await findNameConflicts(
+      `${firstName} ${lastName}`,
+      email
+    );
+    if (nameConflicts.length > 0) {
+      return NextResponse.json(
+        {
+          error: "An account with that name already exists.",
+          nameConflicts,
+        },
+        { status: 409 }
+      );
+    }
   }
 
   try {

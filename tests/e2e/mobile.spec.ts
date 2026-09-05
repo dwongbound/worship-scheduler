@@ -132,9 +132,11 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
   await expect(save).toBeVisible();
   await expect(save).toBeDisabled();
 
-  // Stage a notes edit — the one thing every phone user can reach here.
-  const notes = modal.getByPlaceholder("e.g. Communion Sunday");
-  await notes.fill("Phone edit that should not be saved");
+  // Stage an edit reachable with one thumb: the ⋮ menu's Private toggle. (The
+  // notes box isn't staged — its arrow sends immediately — so it can't stand in
+  // for a pending change here.)
+  await modal.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("button", { name: "Private", exact: true }).click();
   await expect(modal.getByText("1 unsaved change")).toBeVisible();
   await expect(save).toBeEnabled();
 
@@ -144,17 +146,17 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
     .last();
-  await expect(warning.getByText("Edited the notes")).toBeVisible();
+  await expect(warning.getByText("Made the set private")).toBeVisible();
   await warning.getByRole("button", { name: "Discard changes" }).click();
   await expect(modal).not.toBeVisible();
 
   // Nothing reached the server.
   const sets = (await (await page.request.get("/api/sets")).json()) as {
     label: string | null;
-    notes: string | null;
+    isPrivate: boolean;
   }[];
   const sunday = sets.find((s) => s.label === "Sunday Morning");
-  expect(sunday?.notes ?? "").not.toContain("Phone edit");
+  expect(sunday?.isPrivate).toBe(false);
 });
 
 test("phone My Sets hides the desktop-only .ics export", async ({ page }) => {

@@ -2,12 +2,22 @@
 // Auth screen: sign in (credentials), sign up (name/email/password), and
 // optional Google SSO. Google only appears when it's configured on the
 // server (checked via getProviders).
+//
+// One extra gate on the way in: if the name being registered already belongs
+// to an account, we interrupt with a popup naming it (see lib/nameConflict).
+// Both providers land in the same dialog — signup gets its conflicts from a
+// 409, Google from the ?nameConflict params its signIn callback redirects to.
 import { getProviders, signIn } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
+import Modal from "@/components/common/Modal";
+import {
+  type NameConflict,
+  parseNameConflicts,
+} from "@/lib/nameConflict";
 
 // useSearchParams() (used inside LoginForm to read ?callbackUrl) must sit
 // under a Suspense boundary, so the page export just wraps the form in one.
@@ -47,17 +57,75 @@ function LoginForm() {
   const [needsOrgKey, setNeedsOrgKey] = useState(false);
   const [orgKey, setOrgKey] = useState("");
 
+  // The duplicate-name warning: which existing accounts we found, and which
+  // provider was interrupted (that decides what "Continue anyway" has to do —
+  // resubmit the signup, or re-run Google after recording consent server-side).
+  // `googleEmail` is the address Google was signing in with, present only on
+  // that path.
+  const [conflicts, setConflicts] = useState<NameConflict[] | null>(null);
+  const [googleEmail, setGoogleEmail] = useState("");
+
   useEffect(() => {
     getProviders().then((providers) => {
       setGoogleAvailable(!!providers?.google);
     });
   }, []);
 
+  // Google's signIn callback bounced us back here with the accounts it found.
+  // Show the same dialog the signup 409 shows, then strip the params so a
+  // refresh (or a later visit) doesn't resurrect a stale warning.
+  useEffect(() => {
+    const email = searchParams.get("nameConflict");
+    const found = parseNameConflicts(searchParams.get("conflicts"));
+    if (!email || found.length === 0) return;
+    setGoogleEmail(email);
+    setConflicts(found);
+    router.replace("/login");
+  }, [searchParams, router]);
+
   function switchMode(next: "signin" | "signup") {
     setMode(next);
     setError("");
     setNeedsOrgKey(false);
     setOrgKey("");
+    setConflicts(null);
+  }
+
+  // "That's me" — take them to the account we found instead of making a second
+  // one. A real account is SIGNED IN to; an unclaimed roster row has no password
+  // yet, so that one goes to signup with the address prefilled (which claims it).
+  function useExistingAccount(conflict: NameConflict) {
+    if (conflict.isPlaceholder) {
+      switchMode("signup");
+      setEmail(conflict.email);
+    } else {
+      switchMode("signin");
+      setUsernameOrEmail(conflict.email);
+    }
+  }
+
+  // "Not me, keep going." Credentials just resubmits with the override; Google
+  // has no request body to carry one, so record consent in a cookie first and
+  // re-run the provider (see /api/auth/allow-duplicate-name).
+  async function continueAnyway() {
+    const viaGoogle = !!googleEmail;
+    setConflicts(null);
+    if (!viaGoogle) {
+      submitSignup(true);
+      return;
+    }
+    setSubmitting(true);
+    const res = await fetch("/api/auth/allow-duplicate-name", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: googleEmail }),
+    });
+    if (!res.ok) {
+      setSubmitting(false);
+      setError("Couldn't continue with Google — sign up with a password instead.");
+      return;
+    }
+    signIn("google", { callbackUrl });
   }
 
   async function onSignIn(e: FormEvent) {
@@ -79,13 +147,19 @@ function LoginForm() {
     }
   }
 
-  async function onSignUp(e: FormEvent) {
+  function onSignUp(e: FormEvent) {
     e.preventDefault();
-    setError("");
     if (signupPassword !== signupPassword2) {
       setError("Passwords don't match.");
       return;
     }
+    submitSignup(false);
+  }
+
+  // The signup POST itself, split out because the duplicate-name dialog's
+  // "This is someone else" re-runs it with the override set.
+  async function submitSignup(allowDuplicateName: boolean) {
+    setError("");
     setSubmitting(true);
     const res = await fetch("/api/signup", {
       method: "POST",
@@ -97,6 +171,8 @@ function LoginForm() {
         password: signupPassword,
         // Only meaningful when claiming a placeholder; ignored otherwise.
         orgKey: orgKey.trim() || undefined,
+        // Only sent on the second pass, after they've seen the warning.
+        allowDuplicateName: allowDuplicateName || undefined,
       }),
     });
     if (!res.ok) {
@@ -104,6 +180,14 @@ function LoginForm() {
       // "There's already an account for you — prove you're in the org." Reveal
       // the key field and let them submit again with it filled in.
       if (data.needsOrgKey) setNeedsOrgKey(true);
+      // Someone already serves under this name. Open the dialog instead of
+      // showing the bare error — the useful part is WHICH account we found.
+      if (Array.isArray(data.nameConflicts) && data.nameConflicts.length > 0) {
+        setGoogleEmail("");
+        setConflicts(data.nameConflicts);
+        setSubmitting(false);
+        return;
+      }
       setError(data.error ?? "Could not create account.");
       setSubmitting(false);
       return;
@@ -269,6 +353,81 @@ function LoginForm() {
 
         <VersionFooter />
       </Card>
+
+      {/* Duplicate-name warning. Not a block — two people really can share a
+          name — but the account we found is named in full so the far more
+          likely case (same person, second address) is one click to fix. */}
+      {conflicts && conflicts.length > 0 && (
+        <Modal
+          open
+          onClose={() => setConflicts(null)}
+          title={
+            conflicts.length > 1
+              ? "Accounts with this name already exist"
+              : "An account with this name already exists"
+          }
+          footer={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setConflicts(null)}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={continueAnyway} disabled={submitting}>
+                {submitting ? "Continuing…" : "This is someone else — continue"}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            {googleEmail ? (
+              <>
+                You&rsquo;re signing in as{" "}
+                <span className="font-medium">{googleEmail}</span>, but we
+                already have{conflicts.length > 1 ? "" : " an account"} under
+                that name:
+              </>
+            ) : (
+              <>
+                We already have{conflicts.length > 1 ? "" : " an account"} under
+                that name:
+              </>
+            )}
+          </p>
+
+          <ul className="mt-3 space-y-2">
+            {conflicts.map((c) => (
+              <li
+                key={c.email}
+                className="rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+              >
+                <p className="text-sm font-medium">{c.name}</p>
+                <p className="break-all text-sm text-gray-500 dark:text-gray-400">
+                  {c.email}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => useExistingAccount(c)}
+                  className="mt-2 text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  {c.isPlaceholder
+                    ? "That's me — sign up with that email"
+                    : "That's me — sign in with that email"}
+                </button>
+              </li>
+            ))}
+          </ul>
+
+          <p className="mt-3 text-sm text-gray-600 dark:text-gray-400">
+            If that&rsquo;s you, use that email — otherwise your sets, roles and
+            availability end up split across two accounts. If it&rsquo;s a
+            different person who happens to share your name, continue: your org
+            will simply have two people with the same name.
+          </p>
+        </Modal>
+      )}
     </div>
   );
 }

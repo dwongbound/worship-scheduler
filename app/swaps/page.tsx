@@ -503,7 +503,6 @@ export default function SwapsPage() {
         currentUserId={myId}
         isAdmin={isAdminOf(detailSet?.org?.id)}
         users={detailSet?.org ? adminUsersByOrg[detailSet.org.id] ?? [] : []}
-        allSets={allSets}
         onChanged={reload}
       />
 

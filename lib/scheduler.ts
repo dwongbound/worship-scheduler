@@ -60,6 +60,8 @@ import {
   type TeamRoleDef,
 } from "./teamRoles";
 import { eligibleMDIds } from "./md";
+import { APP_TZ } from "./appTz";
+import { zonedParts } from "./dates";
 
 export interface SchedulerUser {
   id: string;
@@ -133,22 +135,30 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 // sets count as back-to-back weeks.
 const MIN_GAP_DAYS = 8;
 
-// Midnight of the given date's calendar day (drops the time component) so we
-// can compare two dates by day regardless of their clock times.
-function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
 /**
  * True if no unavailability rule blocks this user from this set.
  * Recurring rules block when the day matches and the time windows overlap;
  * date-range rules block any set starting within the range (inclusive).
+ *
+ * EVERY comparison here is made on the APP'S wall clock, not the runtime's.
+ * A rule says "Saturdays, 6am–12pm" — a weekday and minutes from midnight,
+ * which only mean something in one zone. Reading the set's day and hour with
+ * `getDay()`/`getHours()` answered in whatever zone the CODE was running in,
+ * so the server (church time) and an admin's browser (theirs) could disagree
+ * about which day a set was even on: the scheduler would seat someone the
+ * review modal then flagged as unavailable, on the same data.
  */
 export function isUserAvailable(
   userId: string,
   set: SchedulerSet,
-  rules: UnavailabilityRule[]
+  rules: UnavailabilityRule[],
+  timeZone: string = APP_TZ
 ): boolean {
+  const when = zonedParts(set.startsAt, timeZone);
+  // A rule's dates are stored as instants; what matters is the calendar day
+  // they land on in the app's zone.
+  const ruleDay = (d: Date) => zonedParts(d, timeZone).ymd;
+
   for (const rule of rules) {
     if (rule.userId !== userId) continue;
 
@@ -158,36 +168,30 @@ export function isUserAvailable(
       // [startDate, endDate] when an end date is set (a multi-day block).
       // Both then check time-window overlap.
       if (rule.type === "RECURRING") {
-        if (set.startsAt.getDay() !== rule.dayOfWeek) continue;
+        if (when.weekday !== rule.dayOfWeek) continue;
         // A recurring block can stop repeating: `endDate` is the last day it
         // applies (null = forever).
-        if (rule.endDate && startOfDay(set.startsAt) > startOfDay(rule.endDate)) {
-          continue;
-        }
+        if (rule.endDate && when.ymd > ruleDay(rule.endDate)) continue;
       } else {
         if (!rule.startDate) continue;
         // Compare by calendar day so a set anywhere within the day-range is
         // blocked (endDate defaults to startDate → a single day).
-        const setDay = startOfDay(set.startsAt);
-        const startDay = startOfDay(rule.startDate);
-        const endDay = rule.endDate ? startOfDay(rule.endDate) : startDay;
-        if (setDay < startDay || setDay > endDay) continue;
+        const startDay = ruleDay(rule.startDate);
+        const endDay = rule.endDate ? ruleDay(rule.endDate) : startDay;
+        if (when.ymd < startDay || when.ymd > endDay) continue;
       }
-      const setStart = set.startsAt.getHours() * 60 + set.startsAt.getMinutes();
+      const setStart = when.minuteOfDay;
       const setEnd = setStart + set.durationMinutes;
       const ruleStart = rule.startMinute ?? 0;
       const ruleEnd = rule.endMinute ?? 24 * 60;
       // Standard half-open interval overlap check.
       if (setStart < ruleEnd && setEnd > ruleStart) return false;
     } else {
-      // DATE_RANGE — endDate is stored at midnight, so extend it to the
-      // end of that day to make the range inclusive.
-      const t = set.startsAt.getTime();
-      const start = rule.startDate ? rule.startDate.getTime() : -Infinity;
-      const end = rule.endDate
-        ? rule.endDate.getTime() + MS_PER_DAY - 1
-        : Infinity;
-      if (t >= start && t <= end) return false;
+      // DATE_RANGE — an inclusive span of calendar days, so it's the same
+      // day comparison rather than instant math with an end-of-day fudge.
+      const startDay = rule.startDate ? ruleDay(rule.startDate) : -Infinity;
+      const endDay = rule.endDate ? ruleDay(rule.endDate) : Infinity;
+      if (when.ymd >= startDay && when.ymd <= endDay) return false;
     }
   }
   return true;

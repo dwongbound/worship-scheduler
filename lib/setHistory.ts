@@ -17,7 +17,8 @@ export interface SetHistoryDescriptor {
 export function describeSetHistoryEvent(
   event: ApiSetHistoryEvent
 ): SetHistoryDescriptor {
-  // Every type except SETLIST_CHANGED has a role; that one returns early below.
+  // Every type except the set-level ones (SETLIST_CHANGED, NOTES_CHANGED) has
+  // a role; those two return early below.
   const role = event.role ? roleLabel(event.role) : "";
   const target = event.targetUser?.name ?? "Someone";
   const previous = event.previousUser?.name ?? "someone";
@@ -89,6 +90,13 @@ export function describeSetHistoryEvent(
       return {
         actor: event.actor?.name ?? "Someone",
         tokens: [event.detail ?? "changed the setlist"],
+      };
+    // Notes edits, same shape: `detail` already reads as a fragment and
+    // carries an excerpt of what was written (see lib/setNotes.ts).
+    case "NOTES_CHANGED":
+      return {
+        actor: event.actor?.name ?? "Someone",
+        tokens: [event.detail ?? "changed the notes"],
       };
   }
 }

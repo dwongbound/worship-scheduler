@@ -1,12 +1,19 @@
 "use client";
 // Edit personal info: name, email, teams, and a Slack member ID field for the
-// future Slack integration. You can join and leave teams here, but the roles you
-// play on one are READ-ONLY: an admin assigns those from the Team tab, so the
-// panel just lists them with a note pointing at your org admin. Password changes
-// happen in a separate modal that requires typing the new password twice.
+// future Slack integration. The Teams & roles panel is a READ-ONLY list for
+// everyone: which teams you're on AND the roles you play on them are an org
+// admin's call, set from the Team tab, so the panel lists them with a note
+// pointing at your admin. NOBODY adds themselves to a team from here, admins
+// included — an admin who wants to be on a team puts themselves there from the
+// Team tab like anyone else, so the roster always has one owner. The only write
+// left is "Leave this team", and an admin of that team's org gets it (the API
+// enforces the same rule, so hiding the control isn't the whole guard).
+// Password changes happen in a separate modal that requires typing the new
+// password twice.
 import { useSession } from "next-auth/react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
@@ -18,13 +25,15 @@ import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
-import { fetchJsonArray } from "@/lib/api";
 import { DEFAULT_TEAM_ROLES, orderedRoles } from "@/lib/teamRoles";
-import type { ApiTeam, ApiTeamRole } from "@/lib/types";
+import type { ApiTeamRole } from "@/lib/types";
 
 type Membership = {
   orgId: string;
   orgName: string;
+  // Am I an admin of THIS org? Gates the join/leave controls below — team
+  // membership is an admin's to change, per org.
+  isAdmin: boolean;
   slackUserId: string | null;
   orgSlackConnected: boolean;
   slackTeamName: string | null;
@@ -35,7 +44,7 @@ type Membership = {
 const SLACK_CONNECT_MESSAGE = "slack-connect-result";
 
 export default function ProfilePage() {
-  const { update } = useSession();
+  const { data: session, update } = useSession();
   const { me } = useMe();
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
@@ -46,13 +55,8 @@ export default function ProfilePage() {
   // The team whose roles the editor is showing. Defaults to the first team
   // once they load ("" only while I'm on no teams at all).
   const [selectedTeamId, setSelectedTeamId] = useState("");
-  // Every team across my orgs (for the "join a team" picker); fetched on mount.
-  const [allTeams, setAllTeams] = useState<ApiTeam[]>([]);
-  // True while a role toggle / join / leave is in flight (shows inline dots).
+  // True while a leave is in flight (shows inline dots).
   const [savingRoles, setSavingRoles] = useState(false);
-  // "Add a team" modal: whether it's open and which teams are checked to join.
-  const [addTeamOpen, setAddTeamOpen] = useState(false);
-  const [addSelection, setAddSelection] = useState<Set<string>>(new Set());
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
   // Daily morning Slack digest, on by default. The send time is fixed, so this
@@ -106,12 +110,6 @@ export default function ProfilePage() {
     setLoaded(true);
   }, [me]);
 
-  // The teams a person can still join: every team across their orgs they aren't
-  // already on. Fetched once (the dropdown's "Join a team" picker).
-  useEffect(() => {
-    fetchJsonArray<ApiTeam>("/api/teams").then(setAllTeams);
-  }, []);
-
   // Always have a team selected: pick the first one, and re-point at it if the
   // selected team disappears (e.g. after leaving it).
   useEffect(() => {
@@ -120,61 +118,21 @@ export default function ProfilePage() {
     );
   }, [teams]);
 
-  // Joining/leaving a team is the only write this panel makes — the roles it
-  // shows are the admin's to change, not mine.
+  // This panel is a read-only list: the teams I'm on and the roles I play on
+  // them are both an org admin's to change, from the Team tab. Leaving is the
+  // only write left here, and only an admin of that team's org (or a platform
+  // super-admin) gets it — the API enforces the same rule.
   const selectedTeam = teams.find((t) => t.id === selectedTeamId) ?? null;
-  // Teams I can still join = every team across my orgs I'm not already on.
-  const joinableTeams = allTeams.filter(
-    (t) => !teams.some((mine) => mine.id === t.id)
-  );
+  const isSuperAdmin = Boolean(session?.user?.isSuperAdmin);
+  // Admin of ONE org — a team is only mine to change if I run the org it's in.
+  const canManageTeamsIn = (orgId?: string) =>
+    isSuperAdmin || memberships.some((m) => m.isAdmin && m.orgId === orgId);
   // Disambiguate teams by org only when I belong to more than one org.
   const teamLabel = (name: string, orgId?: string) => {
     if (memberships.length <= 1) return name;
     const org = memberships.find((m) => m.orgId === orgId)?.orgName;
     return org ? `${name} (${org})` : name;
   };
-
-  async function joinTeam(team: ApiTeam) {
-    setSavingRoles(true);
-    try {
-      const res = await fetch(`/api/me/teams/${team.id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roles: [] }),
-      });
-      if (!res.ok) throw new Error("join failed");
-      // New memberships start active (the db default) — see ApiTeamRole.active.
-      setTeams((prev) => [
-        ...prev,
-        { id: team.id, name: team.name, roles: [], active: true },
-      ]);
-      setSelectedTeamId(team.id); // show the new team's (empty) role list
-      window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
-    } catch {
-      setMessage("Error: could not join team");
-    } finally {
-      setSavingRoles(false);
-    }
-  }
-
-  // Toggle a team in the "Add a team" modal's checkbox selection.
-  function toggleAddSelection(teamId: string) {
-    setAddSelection((prev) => {
-      const next = new Set(prev);
-      next.has(teamId) ? next.delete(teamId) : next.add(teamId);
-      return next;
-    });
-  }
-
-  // Join every team checked in the modal, then close it. joinTeam leaves the
-  // last-joined team selected so its roles are ready to pick.
-  async function addSelectedTeams() {
-    for (const t of joinableTeams.filter((t) => addSelection.has(t.id))) {
-      await joinTeam(t);
-    }
-    setAddSelection(new Set());
-    setAddTeamOpen(false);
-  }
 
   async function leaveTeam(teamId: string) {
     setSavingRoles(true);
@@ -394,13 +352,15 @@ export default function ProfilePage() {
         </form>
       </Card>
 
-      {/* Teams & roles — its own panel. Pick a team to see the roles you play on
-          it (read-only — an admin assigns them); "Add a team" joins more. */}
+      {/* Teams & roles — its own panel. Pick a team to see the roles you play
+          on it. A list, not an editor: an admin decides both which teams you're
+          on and what you play on them, from the Team tab. Only "Leave this
+          team" is offered, and only to an admin of that team's org. */}
       <Card>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
             <span>Teams &amp; roles</span>
-            <InfoTooltip text="Your roles on a team are set by your org admin. If something here looks wrong, contact them to have it changed." />
+            <InfoTooltip text="The teams you're on and the roles you play on them are both set by your org admin. If something here looks wrong, contact them to have it changed." />
             {savingRoles ? (
               <LoadingDots size="sm" />
             ) : saved ? (
@@ -413,24 +373,15 @@ export default function ProfilePage() {
               </span>
             ) : null}
           </h2>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => {
-              setAddSelection(new Set());
-              setAddTeamOpen(true);
-            }}
-          >
-            Add a team
-          </Button>
         </div>
 
         {teams.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            You’re not on any teams yet. Add a team, then ask your org admin to
-            set the roles you play on it — you can’t be scheduled until they do.
-          </p>
+          // A banner rather than a line of gray text: being on no team means
+          // you can't be scheduled at all, which is worth noticing.
+          <Banner tone="amber" inset>
+            You’re not on any teams right now. Ask your organization’s admin to
+            be put on a team.
+          </Banner>
         ) : (
           <>
             <Select
@@ -486,13 +437,15 @@ export default function ProfilePage() {
                     ones you play so you can be scheduled.
                   </p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => leaveTeam(selectedTeam.id)}
-                  className="mt-3 text-sm text-red-600 hover:underline dark:text-red-400"
-                >
-                  Leave this team
-                </button>
+                {canManageTeamsIn(selectedTeam.orgId) && (
+                  <button
+                    type="button"
+                    onClick={() => leaveTeam(selectedTeam.id)}
+                    className="mt-3 text-sm text-red-600 hover:underline dark:text-red-400"
+                  >
+                    Leave this team
+                  </button>
+                )}
               </div>
             ) : (
               <p className="mt-2 text-sm text-gray-500">
@@ -502,43 +455,6 @@ export default function ProfilePage() {
           </>
         )}
       </Card>
-
-      {/* Join-a-team modal: check any teams across your orgs you're not on. */}
-      <Modal
-        open={addTeamOpen}
-        onClose={() => setAddTeamOpen(false)}
-        title="Add a team"
-        footer={
-          <div className="flex justify-end gap-2">
-            <Button variant="secondary" onClick={() => setAddTeamOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={addSelectedTeams}
-              disabled={addSelection.size === 0 || savingRoles}
-            >
-              {savingRoles ? <LoadingDots size="sm" label="Adding" /> : "Add"}
-            </Button>
-          </div>
-        }
-      >
-        {joinableTeams.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            You’re already on every team in your organizations.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {joinableTeams.map((t) => (
-              <Checkbox
-                key={t.id}
-                label={teamLabel(t.name, t.orgId)}
-                checked={addSelection.has(t.id)}
-                onChange={() => toggleAddSelection(t.id)}
-              />
-            ))}
-          </div>
-        )}
-      </Modal>
 
       <SlackConnections
         initial={memberships}

@@ -46,8 +46,12 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   scarce-first pass — everything reads roles via `orderedRoles`/`slottedRoles`. `adminOnly` still marks a role as admin-granted, but WHO
   plays WHAT is admin-only across the board now: only the Team tab
   (`PATCH /api/admin/users/[id]`, `teamRoles`) writes a member's roles.
-  `PUT /api/me/teams/[teamId]` joins a team and nothing more; /profile lists
-  your roles read-only with an (i) pointing at your org admin.
+  WHO IS ON a team is admin-only too, and there is NO self-join at all: the
+  `PUT /api/me/teams/[teamId]` route is gone and /profile has no "Add a team"
+  — everyone (admins included) is added from the Team tab via `PATCH
+  /api/admin/users/[id]` (`teamIds`). `DELETE /api/me/teams/[teamId]` (leave
+  your own membership) survives and requires org admin. /profile lists teams +
+  roles read-only with an (i) pointing at your org admin.
 - **TeamMember** — the user↔team join, carrying that person's per-team `roles`
   and `active` flag. Inactive = not auto-scheduled on that team (both scheduler
   callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
@@ -119,7 +123,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 ## API (`app/api/**/route.ts`)
 
-- Auth: `auth/[...nextauth]`, `signup`, `me`.
+- Auth: `auth/[...nextauth]`, `auth/allow-duplicate-name` (consent cookie for
+  the duplicate-name warning on the Google path), `signup`, `me`.
 - Sets/assignments: `sets`, `sets/[id]`, `assignments`, `assignments/[id]`,
   `assignments/confirm-all`.
 - Swaps: `swaps`, `swaps/[id]/take`.
@@ -131,6 +136,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   `admin/team-load` (per-window serve counts for the generate-review panel),
   `admin/assignments(+/[id])`, `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`.
+  (`admin/users/[id]` PATCH also renames a member — `name` is global to the
+  person, and the Team tab's cog → "Edit details" is its only caller.)
   (No `sets/[id]/autofill` — "Auto schedule" in the set detail modal runs
   `buildSchedule` in the browser now, because its roster is staged.)
 
@@ -175,10 +182,20 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   SETLIST_CHANGED history event + the Slack notice. ✅tested
 - `setHistory.ts` — `describeSetHistoryEvent()` → chips/tokens for the log.
 - `types.ts` — `Api*` (server shapes) & `Staged*` (create-flow) interfaces.
+- `nameConflict.ts` — the duplicate-name warning shown at account creation:
+  `findNameConflicts` lives in `nameConflictStore.ts` (prisma side); the pure
+  half holds `NameConflict`, `normalizeName`, `DUPLICATE_NAME_COOKIE` and the
+  `nameConflictRedirect`/`parseNameConflicts` pair that carries conflicts through
+  the Google redirect. Advisory, never a block — `POST /api/signup` 409s once
+  with `nameConflicts` (override: `allowDuplicateName`), and the Google signIn
+  callback bounces to `/login?nameConflict=…` (override: the cookie dropped by
+  `POST /api/auth/allow-duplicate-name`). ✅tested
 - `auth.ts` — `authOptions`, `getSessionUser()`, `getAdminUser()`.
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
 - `prisma.ts` — singleton client from generated output.
+- `colors.ts` — hex helpers for the preview tints: `normalizeHex` (accepts
+  `#abc`/`aabbcc`, returns `#rrggbb` or null) + `withAlpha(hex, a)`. ✅tested
 - `dbUrl.ts` — `normalizeDatabaseUrl()`: rewrites `sslmode=require|prefer|
   verify-ca` to `verify-full`, pinning today's TLS behavior before pg v9
   redefines those aliases (and silencing pg's startup warning). ✅tested
@@ -187,16 +204,23 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 Feature: `CalendarMonth`, `CreateSetModal`, `SetDetailModal` (edits are STAGED:
 everything writes to a local copy, a sticky footer has Delete · Cancel · Save,
-and any exit with changes hits a confirm that lists them — only Delete-set and
-Slack messaging act immediately; there's no per-set history here, that's the
-Team tab's `TeamActivityModal`), `SetFormFields`,
+Save COMMITS AND CLOSES (a failed save keeps the modal + edits up), and any
+exit with changes hits a confirm that lists them — Delete-set, Slack messaging
+and sending a note act immediately; the Notes box is a composer with a send
+arrow, empty on every open, its log below holding what's been written; there's
+no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFields`,
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
+`GenerateModal` (auto-schedule options — window, which recurring sets, and an
+optional per-set-type color) → `StagedScheduleModal` (the preview; a set type's
+color tints its cards at 10%, matched via `StagedSet.templateId`),
 `Navbar`, `Logo`,
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
-Primitives in `components/common/`: `Badge Banner Button Card Checkbox Dropdown
-Input Modal Select Stepper LoadingDots LoadingScreen`. Prefer extending these.
-(`Stepper` = number field with big − / + either side, replacing a native
-spinner.) `SetFormFields` asks for a start + **end** time; the set still stores
+Primitives in `components/common/`: `Badge Banner Button Card Checkbox
+ColorPicker Dropdown Input Modal Select Stepper LoadingDots LoadingScreen`.
+Prefer extending these. (`Stepper` = number field with big − / + either side,
+replacing a native spinner — a plain text box under the hood, digits only, so
+it can be cleared and retyped; `ColorPicker` = a swatch opening a portaled
+presets + hex panel, whose "no color" is null.) `SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
 
 ## Gotchas

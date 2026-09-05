@@ -66,9 +66,13 @@ test("auto-scheduling a required-MD set from its detail modal seats an MD", asyn
   await expect(modal.getByText("* (MD)").first()).toBeVisible();
 
   // The fill is staged; commit it so the set doesn't stay empty for the rest
-  // of the suite.
+  // of the suite. Saving closes the modal, so the MD marker is checked on the
+  // way back in.
   await modal.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(modal.getByText("* (MD)").first()).toBeVisible();
+  await expect(modal).not.toBeVisible();
+
+  const saved = await openSetByLabel(page, "MD Night");
+  await expect(saved.getByText("* (MD)").first()).toBeVisible();
 });
 
 test("the set actions (⋮) menu lists the actions and Change Roles sets Require MD", async ({

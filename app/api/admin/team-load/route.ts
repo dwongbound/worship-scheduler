@@ -1,11 +1,17 @@
-// GET /api/admin/team-load?metric=upcoming|30|90|182|365 — how many sets each
-// member of this org is on within that window, as { userId: count }.
+// GET /api/admin/team-load?metric=<window>&ref=<ISO date> — how many slots each
+// member of this org fills within that window, as { userId: count }.
 //
-// Backs the "Team load" panel in the generate-review modal (StagedScheduleModal),
-// and is DELIBERATELY its own endpoint: a year of assignments is a much bigger
-// read than the plan itself, most runs never leave the default "In this plan"
-// view, and the client caches each window it asks for. Shipping it with every
-// plan would have made every generate pay for a view almost nobody opens.
+// `metric` is one of lib/loadMetrics.ts's windows; `ref` is the date the
+// neighbourhood windows ("calendar-month", "around-2w") centre on, defaulting
+// to now. Backs the "Team load" panel in the generate-review modal
+// (StagedScheduleModal) and the ×n badges in the set detail modal's assignment
+// dropdowns — which passes its set's date as `ref`, so "calendar month" means
+// the month THAT set is in.
+//
+// DELIBERATELY its own endpoint: half a year of assignments is a much bigger
+// read than the page that wants it, and the client caches each window it asks
+// for. Shipping every window with every page would have made everyone pay for
+// a view most of them never open.
 //
 // Scoped to the caller's admin org — unlike the scheduler's balancing tallies
 // (deliberately cross-org), this is shown to a person, and another org's roster
@@ -13,7 +19,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { loadMetricRange, parseLoadMetric } from "@/lib/stagedPlan";
+import { loadMetricRange, parseLoadMetric } from "@/lib/loadMetrics";
 
 export async function GET(req: NextRequest) {
   const admin = await requireOrgAdmin(req);
@@ -22,9 +28,15 @@ export async function GET(req: NextRequest) {
   }
 
   const metric = parseLoadMetric(req.nextUrl.searchParams.get("metric"));
+  // The date the neighbourhood windows centre on. A junk value is ignored
+  // rather than fatal — it just means "now", which is the default anyway.
+  const rawRef = req.nextUrl.searchParams.get("ref");
+  const parsedRef = rawRef ? new Date(rawRef) : null;
+  const ref =
+    parsedRef && !Number.isNaN(parsedRef.getTime()) ? parsedRef : undefined;
   // "plan" is counted from the staged plan client-side, so asking for it here
   // is a mistake rather than an empty window.
-  const range = metric ? loadMetricRange(metric) : null;
+  const range = metric === null ? null : loadMetricRange(metric, { ref });
   if (!range) {
     return NextResponse.json({ error: "Unknown metric" }, { status: 400 });
   }

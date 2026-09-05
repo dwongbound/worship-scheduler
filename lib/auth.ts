@@ -6,7 +6,10 @@ import { getServerSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
+import { cookies } from "next/headers";
 import { claimPlaceholder, findUserByEmail } from "./accountClaim";
+import { DUPLICATE_NAME_COOKIE, nameConflictRedirect } from "./nameConflict";
+import { findNameConflicts } from "./nameConflictStore";
 import { prisma } from "./prisma";
 
 // Google sign-in is optional: it's only enabled when its OAuth credentials
@@ -99,6 +102,16 @@ export const authOptions: NextAuthOptions = {
       // still found when Google reports "Name.Kim@gmail.com".
       const existing = await findUserByEmail(email);
       if (!existing) {
+        // About to create a brand-new account. If someone already serves here
+        // under this exact name, this is far more likely the same person on a
+        // second address than a genuine namesake — and going through would
+        // split their history across two rows. Bounce to /login with the
+        // details so they can pick the account we found, or insist it isn't
+        // theirs (which drops the consent cookie checked here).
+        const conflicts = await findNameConflicts(user.name ?? "", email);
+        if (conflicts.length > 0 && !(await hasDuplicateNameConsent(email))) {
+          return nameConflictRedirect(email, conflicts);
+        }
         await prisma.user.create({
           data: {
             email: email.toLowerCase(),
@@ -207,4 +220,24 @@ export async function requireSuperAdmin() {
   const user = await getSessionUser();
   if (!isSuperAdmin(user?.email)) return null;
   return user;
+}
+
+/**
+ * Did this person already see the duplicate-name warning for THIS address and
+ * choose to continue? The cookie is dropped by
+ * POST /api/auth/allow-duplicate-name and expires in minutes.
+ *
+ * Reading cookies here works because NextAuth's callbacks run inside the route
+ * handler's request scope. If that ever stops holding we fail CLOSED — no
+ * consent — which shows the warning again rather than silently creating the
+ * twin account this check exists to prevent.
+ */
+async function hasDuplicateNameConsent(email: string): Promise<boolean> {
+  try {
+    const store = await cookies();
+    const granted = store.get(DUPLICATE_NAME_COOKIE)?.value;
+    return !!granted && granted.toLowerCase() === email.toLowerCase();
+  } catch {
+    return false;
+  }
 }

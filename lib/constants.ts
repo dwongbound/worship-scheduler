@@ -214,7 +214,8 @@ export type SetHistoryEventType =
   | "SWAP_ACCEPTED"
   | "APPROVED"
   | "REJECTED"
-  | "SETLIST_CHANGED";
+  | "SETLIST_CHANGED"
+  | "NOTES_CHANGED";
 
 // All event types + friendly labels — drives the Team Activity filter dropdown.
 export const ALL_HISTORY_TYPES: SetHistoryEventType[] = [
@@ -230,6 +231,7 @@ export const ALL_HISTORY_TYPES: SetHistoryEventType[] = [
   "APPROVED",
   "REJECTED",
   "SETLIST_CHANGED",
+  "NOTES_CHANGED",
 ];
 
 export const HISTORY_TYPE_LABELS: Record<SetHistoryEventType, string> = {
@@ -245,7 +247,20 @@ export const HISTORY_TYPE_LABELS: Record<SetHistoryEventType, string> = {
   APPROVED: "Approved",
   REJECTED: "Rejected",
   SETLIST_CHANGED: "Setlist changed",
+  NOTES_CHANGED: "Notes changed",
 };
+
+// Short day names for tight rows ("Tues 7PM"). Deliberately not a slice of
+// DAY_LABELS — "Tues"/"Thurs" read better than a blind 3-letter cut.
+export const DAY_ABBRS = [
+  "Sun",
+  "Mon",
+  "Tues",
+  "Wed",
+  "Thurs",
+  "Fri",
+  "Sat",
+];
 
 export const DAY_LABELS = [
   "Sunday",

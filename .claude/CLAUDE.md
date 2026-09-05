@@ -73,5 +73,13 @@ Playwright (e2e) · Docker.
   serverless prod (Vercel) the default is UTC and `TZ` is a RESERVED env var —
   set `APP_TZ` instead; `instrumentation.ts` pins `process.env.TZ` from it at
   server startup (falls back to America/Los_Angeles).
+  **The browser needs it too:** `isUserAvailable` compares a set's weekday and
+  hour against blocks stored as "weekday + minutes from midnight", so it reads
+  the set on the APP's clock (`lib/appTz.ts` → `lib/dates.ts zonedParts`), not
+  the runtime's. Set **`NEXT_PUBLIC_APP_TZ`** (same value as `APP_TZ`; inlined
+  at build) or an admin in another zone sees availability judged in LA while
+  their screen shows their own time. DISPLAY is still browser-local — a
+  Friday-evening set genuinely renders as Saturday morning for a UTC+8 admin;
+  pinning the whole client to `APP_TZ` is the outstanding fix.
 - Playwright `global-setup.ts` force-resets + reseeds the test db every run.
 - We use proxy.ts instead of middleware.ts in this version of nextAuth.

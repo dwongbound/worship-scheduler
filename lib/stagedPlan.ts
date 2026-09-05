@@ -95,74 +95,18 @@ export function totalLocked(sets: StagedSet[]): number {
   return total;
 }
 
-// ── Team load metrics ───────────────────────────────────────────────────
-// The load panel can measure people by THIS plan or by the sets they're already
-// on, so an admin can see "she's on 3 here, but she also played 5 times in the
-// last month" before committing.
-//
-// Anything but "plan" is COUNTED SERVER-SIDE, on demand: GET
-// /api/admin/team-load?metric=… returns one tally for the window asked for.
-// The plan deliberately doesn't ship a year of assignments with it — the
-// windows are opt-in, most runs never leave "In this plan", and a wide one is
-// slow enough that it shouldn't be on the critical path of every generate.
-
-// "plan" = assignments in the staged plan. "upcoming" = already-booked sets
-// still ahead of us. A NUMBER = that many days back from now.
-export type LoadMetric = "plan" | "upcoming" | number;
-
-// The choices the panel's selector offers, in order.
-export const LOAD_METRICS: { label: string; metric: LoadMetric }[] = [
-  { label: "In this plan", metric: "plan" },
-  { label: "Already booked (upcoming)", metric: "upcoming" },
-  { label: "Past month", metric: 30 },
-  { label: "Past 3 months", metric: 90 },
-  { label: "Past 6 months", metric: 182 },
-  { label: "Past year", metric: 365 },
-];
-
-const MS_PER_DAY = 24 * 60 * 60 * 1000;
-
-/**
- * A metric as the query string carries it, and back. The wire form is what the
- * client sends and what it keys its per-window cache on, so both sides agree on
- * "30" meaning "the last 30 days".
- */
-export function metricToParam(metric: LoadMetric): string {
-  return String(metric);
-}
-
-/** Parse a `metric` query param; null when it isn't one we serve. */
-export function parseLoadMetric(raw: string | null): LoadMetric | null {
-  if (raw === null) return null;
-  if (raw === "plan" || raw === "upcoming") return raw;
-  const days = Number(raw);
-  // Only the windows the picker offers — an arbitrary day count would let a
-  // caller ask for an unbounded scan.
-  return LOAD_METRICS.some((m) => m.metric === days) ? days : null;
-}
-
-/**
- * The [start, end] a metric asks the database for. "upcoming" runs from now
- * with no end; a day count looks back over exactly that many days. "plan" isn't
- * a window at all — it's counted from the staged plan, so it returns null.
- */
-export function loadMetricRange(
-  metric: LoadMetric,
-  now: Date = new Date()
-): { start: Date; end: Date | null } | null {
-  if (metric === "plan") return null;
-  if (metric === "upcoming") return { start: now, end: null };
-  return { start: new Date(now.getTime() - metric * MS_PER_DAY), end: now };
-}
+// ── Team load rows ──────────────────────────────────────────────────────
+// The panel can measure people by THIS plan or by a window of the sets they're
+// already on, so an admin can see "she's on 3 here, but she also played 5 times
+// last month" before committing. The windows themselves live in
+// lib/loadMetrics.ts — they're shared with the set detail modal's ×n badges.
 
 export interface LoadRow {
   userId: string;
-  // The measured number — what the bar draws and sorts on. Equals `planCount`
-  // while the panel is showing "In this plan".
+  // The measured number — the one thing each row shows. It's the plan's own
+  // tally while the panel is on "In this plan", and the window's count
+  // otherwise.
   count: number;
-  // Always this plan's own tally, so switching the metric never hides the thing
-  // the admin is actually editing.
-  planCount: number;
 }
 
 // Every user assigned in the PLAN (the panel is about the people in it, whatever
@@ -177,7 +121,6 @@ export function loadRows(
     .map(([userId, planCount]) => ({
       userId,
       count: by ? by.get(userId) ?? 0 : planCount,
-      planCount,
     }))
     .sort((a, b) => b.count - a.count || a.userId.localeCompare(b.userId));
 }
