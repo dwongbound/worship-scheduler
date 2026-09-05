@@ -2,8 +2,11 @@
 import { describe, expect, it } from "vitest";
 import {
   dateRangeLabel,
+  durationBetween,
+  minutesToTimeInput,
   occurrencesInRange,
   shortRangeLabel,
+  startOfWeekMonday,
   upcomingOccurrences,
 } from "@/lib/dates";
 
@@ -93,5 +96,69 @@ describe("occurrencesInRange", () => {
     const from = new Date(2026, 0, 6); // Tue
     const to = new Date(2026, 0, 8); // Thu — no Sunday between
     expect(occurrencesInRange(0, 9 * 60, from, to)).toHaveLength(0);
+  });
+});
+
+describe("minutesToTimeInput", () => {
+  it("renders a zero-padded 24-hour time", () => {
+    expect(minutesToTimeInput(0)).toBe("00:00");
+    expect(minutesToTimeInput(9 * 60 + 5)).toBe("09:05");
+    expect(minutesToTimeInput(19 * 60)).toBe("19:00");
+  });
+
+  it("wraps past midnight so a late end time still renders", () => {
+    // 22:30 + 3h = 25:30 → 01:30 the next day.
+    expect(minutesToTimeInput(25 * 60 + 30)).toBe("01:30");
+    expect(minutesToTimeInput(1440)).toBe("00:00");
+  });
+});
+
+describe("durationBetween", () => {
+  it("measures a normal same-day set", () => {
+    expect(durationBetween("09:00", "10:30")).toBe(90);
+    expect(durationBetween("19:00", "20:00")).toBe(60);
+  });
+
+  it("reads an end before the start as running past midnight", () => {
+    expect(durationBetween("22:00", "00:30")).toBe(150);
+    expect(durationBetween("23:30", "01:00")).toBe(90);
+  });
+
+  it("refuses a zero-length set (the caller keeps its old duration)", () => {
+    expect(durationBetween("09:00", "09:00")).toBeNull();
+  });
+
+  it("refuses an unparseable time", () => {
+    expect(durationBetween("09:00", "")).toBeNull();
+    expect(durationBetween("", "10:00")).toBeNull();
+  });
+});
+
+describe("startOfWeekMonday", () => {
+  const ymd = (d: Date) => [d.getFullYear(), d.getMonth(), d.getDate()];
+
+  it("returns the Monday of a midweek day's week", () => {
+    // Thu Jul 16 2026 → Mon Jul 13.
+    expect(ymd(startOfWeekMonday(new Date(2026, 6, 16)))).toEqual([2026, 6, 13]);
+  });
+
+  it("keeps a Monday where it is", () => {
+    expect(ymd(startOfWeekMonday(new Date(2026, 6, 13)))).toEqual([2026, 6, 13]);
+  });
+
+  it("groups a Sunday with the week BEFORE it, not after", () => {
+    // Sun Jul 19 2026 belongs to the week that started Mon Jul 13 — the whole
+    // point of a Mon–Sun week (a Sun–Sat one would open a new week here).
+    expect(ymd(startOfWeekMonday(new Date(2026, 6, 19)))).toEqual([2026, 6, 13]);
+  });
+
+  it("crosses a month boundary", () => {
+    // Wed Jul 1 2026 → Mon Jun 29.
+    expect(ymd(startOfWeekMonday(new Date(2026, 6, 1)))).toEqual([2026, 5, 29]);
+  });
+
+  it("drops the time component", () => {
+    const d = startOfWeekMonday(new Date(2026, 6, 16, 19, 30));
+    expect([d.getHours(), d.getMinutes()]).toEqual([0, 0]);
   });
 });

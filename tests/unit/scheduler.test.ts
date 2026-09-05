@@ -37,6 +37,17 @@ function user(
   };
 }
 
+// A run of consecutive Tuesdays, for the spacing/rotation tests.
+function weeklySets(n: number): SchedulerSet[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `week-${i + 1}`,
+    startsAt: new Date(2026, 0, 6 + 7 * i, 19, 0),
+    durationMinutes: 60,
+  }));
+}
+const who = (result: { setId: string; userId: string }[], setId: string) =>
+  result.filter((a) => a.setId === setId).map((a) => a.userId);
+
 describe("isUserAvailable", () => {
   it("blocks a recurring rule that overlaps the set time", () => {
     const rules: UnavailabilityRule[] = [
@@ -387,6 +398,102 @@ describe("buildSchedule", () => {
     expect(result.filter((a) => a.role === "DRUMS")).toHaveLength(1);
   });
 
+  it("doesn't pin the MD seat to one person when the roster leads itself", () => {
+    // THE BUG: the reservation used to walk roles scarce-first and take the
+    // first MD it found free, so "jacob" — the only MD who plays bass — was
+    // seated on every required-MD set no matter how much he'd served. The fill
+    // rotates first now: two MD electric guitarists already cover the set's
+    // need to be led, so bass alternates like any other role.
+    const users = [
+      user("jacob", ["BASS"], true),
+      user("b2", ["BASS"]),
+      user("eg1", ["ELECTRIC_GUITAR"], true),
+      user("eg2", ["ELECTRIC_GUITAR"], true),
+    ];
+    const sets = weeklySets(4).map((s) => ({ ...s, requiresMD: true }));
+    const bass = sets.map(
+      (s) =>
+        buildSchedule(sets, users, []).find(
+          (a) => a.setId === s.id && a.role === "BASS"
+        )!.userId
+    );
+    expect(bass).toEqual(["b2", "jacob", "b2", "jacob"]);
+  });
+
+  it("reserves the MD on electric guitar ahead of keys or bass", () => {
+    // Nobody the rotation seats can lead (m1 is far too loaded to win a slot on
+    // merit), so a seat is held for them. m1 plays bass, keys AND electric —
+    // electric wins, because that's who normally MDs.
+    const users = [
+      user("m1", ["BASS", "KEYS", "ELECTRIC_GUITAR"], true),
+      user("b1", ["BASS"]),
+      user("k1", ["KEYS"]),
+      user("e1", ["ELECTRIC_GUITAR"]),
+      user("e2", ["ELECTRIC_GUITAR"]),
+    ];
+    const set: SchedulerSet = { ...tuesdaySet, requiresMD: true };
+    const result = buildSchedule([set], users, [], new Map([["m1", 10]]));
+    expect(result).toContainEqual({
+      setId: "set-1",
+      userId: "m1",
+      role: "ELECTRIC_GUITAR",
+    });
+    // The fallback MD roles stayed with the people the rotation picked.
+    expect(result).toContainEqual({ setId: "set-1", userId: "b1", role: "BASS" });
+    expect(result).toContainEqual({ setId: "set-1", userId: "k1", role: "KEYS" });
+  });
+
+  it("gives a reserved MD seat to whichever MD didn't just serve", () => {
+    // Both MDs are too loaded to win a slot on merit, so one gets reserved —
+    // and it's picked by rotation, not by whose role comes first. m1 played
+    // yesterday, so the seat (and its role) goes to m2.
+    const users = [
+      user("m1", ["BASS"], true),
+      user("m2", ["ELECTRIC_GUITAR"], true),
+      user("b1", ["BASS"]),
+      user("e1", ["ELECTRIC_GUITAR"]),
+      user("e2", ["ELECTRIC_GUITAR"]),
+    ];
+    const set: SchedulerSet = { ...tuesdaySet, requiresMD: true };
+    const result = buildSchedule(
+      [set],
+      users,
+      [],
+      new Map([
+        ["m1", 10],
+        ["m2", 10],
+      ]),
+      [{ userId: "m1", startsAt: new Date(2026, 0, 5, 19, 0) }]
+    );
+    expect(result).toContainEqual({
+      setId: "set-1",
+      userId: "m2",
+      role: "ELECTRIC_GUITAR",
+    });
+    expect(result.some((a) => a.userId === "m1")).toBe(false);
+  });
+
+  it("undoes the discarded first attempt cleanly (no phantom load)", () => {
+    // Week 1 fills bass with b1, finds nobody who can lead, then throws that
+    // roster away and reserves the seat for m1. b1 has to come back out
+    // completely unbooked — otherwise week 2 counts them as having just played
+    // and hands the set to b2 instead.
+    const users = [
+      user("m1", ["BASS"], true),
+      user("b1", ["BASS"]),
+      user("b2", ["BASS"]),
+    ];
+    const [week1, week2] = weeklySets(2);
+    const result = buildSchedule(
+      [{ ...week1, requiresMD: true }, week2],
+      users,
+      [],
+      new Map([["m1", 10]])
+    );
+    expect(who(result, "week-1")).toEqual(["m1"]);
+    expect(who(result, "week-2")).toEqual(["b1"]);
+  });
+
   it("never seats the MD twice on one required-MD set", () => {
     // A single MD who could fill several roles should still take just one slot.
     const md = user("m1", ["WORSHIP_LEADER", "KEYS", "DRUMS"], true);
@@ -489,16 +596,6 @@ describe("buildSchedule", () => {
 // ── Spacing: prefer people who haven't served within the past week ────────
 describe("buildSchedule spacing", () => {
   // A weekly Tuesday-7pm series starting Jan 6 2026, `n` sets long.
-  function weeklySets(n: number): SchedulerSet[] {
-    return Array.from({ length: n }, (_, i) => ({
-      id: `week-${i + 1}`,
-      startsAt: new Date(2026, 0, 6 + 7 * i, 19, 0),
-      durationMinutes: 60,
-    }));
-  }
-  const who = (result: { setId: string; userId: string }[], setId: string) =>
-    result.filter((a) => a.setId === setId).map((a) => a.userId);
-
   it("spacing beats load-balancing: no two weeks in a row when someone else can play", () => {
     // d2 carries 5 prior sets, so pure balancing would give d1 BOTH weeks.
     // Spacing hands week 2 to d2 anyway — d1 just played.

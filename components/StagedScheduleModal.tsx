@@ -24,34 +24,37 @@
 // is and re-proposes only the rest, so the admin can pin the two or three
 // people they care about and let the algorithm redo the rest around them.
 // Clearing a slot (picking "None") — or clicking its 🔒 — releases the lock.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
 import Badge from "./common/Badge";
 import LoadingDots from "./common/LoadingDots";
 import ScrollRow from "./common/ScrollRow";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
+import { useOrgs } from "./OrgProvider";
+import { orgHeaders } from "@/lib/api";
 import Select from "./common/Select";
 import {
-  INSTRUMENT_LABELS,
   type Instrument,
 } from "@/lib/constants";
-import { formatDay, formatTime } from "@/lib/dates";
+import { formatDay, formatTime, startOfWeekMonday } from "@/lib/dates";
 import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
 import { buildPlayerOptions } from "@/lib/playerOptions";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   buildSchedule,
-  isUserAvailable,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
 import {
   conflictedUserIds,
   countAssignments,
+  LOAD_METRICS,
+  type LoadMetric,
+  metricToParam,
+  parseLoadMetric,
   loadRows,
   lockedCounts,
   maxLoad,
-  playsRoleForSet,
   totalConflicts,
   totalLocked,
   totalUnfillable,
@@ -78,14 +81,13 @@ interface StagedScheduleModalProps {
 }
 
 /**
- * The week a set falls in, as a heading: "Week of Aug 24". Weeks run Sun–Sat,
- * matching the calendar grid, so a Sunday service and the Thursday rehearsal
- * after it group together the way a paper schedule would.
+ * The week a set falls in, as a heading: "Week of Aug 24". Weeks run MON–SUN,
+ * the way a week is planned: the midweek rehearsals group with the Sunday
+ * service they lead up to, rather than that Sunday opening the next block.
  */
 function weekLabel(startsAt: string): string {
-  const d = new Date(startsAt);
-  const sunday = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay());
-  return `Week of ${sunday.toLocaleDateString("en-US", {
+  const monday = startOfWeekMonday(new Date(startsAt));
+  return `Week of ${monday.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
   })}`;
@@ -99,6 +101,9 @@ export default function StagedScheduleModal({
   onApply,
   onClose,
 }: StagedScheduleModalProps) {
+  // Which org's numbers the Team load panel asks for — the same admin org the
+  // page generated this plan under.
+  const { adminOrgId: orgId } = useOrgs();
   // Editable copy of the proposal — reset whenever a fresh plan arrives.
   const [sets, setSets] = useState<StagedSet[]>([]);
   // How the cards are grouped (see the header comment). Per-session, not
@@ -151,10 +156,64 @@ export default function StagedScheduleModal({
   const catalogFor = (set: StagedSet): TeamRoleDef[] =>
     (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
 
+  // What the Team load panel measures people by: this plan (the default), or
+  // the sets they're already on over some window. See LOAD_METRICS.
+  const [metric, setMetric] = useState<LoadMetric>("plan");
+  // Tallies fetched from the server, keyed by the metric that asked for them.
+  // A window is only ever queried once per modal session — re-picking one you've
+  // already looked at is instant, and the default view queries nothing at all.
+  const [loadCache, setLoadCache] = useState<
+    Record<string, Record<string, number>>
+  >({});
+  // Which window's fetch failed, if any — keyed by metric rather than a bare
+  // boolean so a failure on one window doesn't mislabel the next one you pick.
+  const [loadErrorKey, setLoadErrorKey] = useState<string | null>(null);
+
+  // Fetch the selected window's tally, unless it's the plan (counted locally)
+  // or we already have it. A wide window is a big read, which is exactly why
+  // it's on demand instead of riding along with every generated plan.
+  const metricKey = metricToParam(metric);
+  useEffect(() => {
+    if (!plan || metric === "plan" || loadCache[metricKey]) return;
+    let cancelled = false;
+    // Coming back to a window that failed before is a retry, not a failure.
+    setLoadErrorKey((k) => (k === metricKey ? null : k));
+    fetch(`/api/admin/team-load?metric=${encodeURIComponent(metricKey)}`, {
+      headers: orgHeaders(orgId),
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("failed"))))
+      .then((d) => {
+        if (cancelled) return;
+        setLoadCache((prev) => ({ ...prev, [metricKey]: d.counts ?? {} }));
+      })
+      .catch(() => !cancelled && setLoadErrorKey(metricKey));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan, metric, metricKey, orgId]);
+
   // Load stats, recomputed on every edit — the "who's playing often" signal.
+  // `counts` stays the PLAN's tally wherever the plan itself is the subject
+  // (the ×N badge on a slot, the auto-schedule baseline); only the panel's bars
+  // follow the selected metric.
   const counts = useMemo(() => countAssignments(sets), [sets]);
-  const rows = useMemo(() => loadRows(sets), [sets]);
-  const peak = useMemo(() => maxLoad(sets), [sets]);
+  // The fetched window as a Map. Absent while it's still loading, which is why
+  // the panel keeps showing the plan's bars until the real numbers land.
+  const windowCounts = loadCache[metricKey];
+  const measuredBy = useMemo(
+    () =>
+      metric === "plan" || !windowCounts
+        ? undefined
+        : new Map(Object.entries(windowCounts)),
+    [metric, windowCounts]
+  );
+  const loadError = loadErrorKey === metricKey;
+  // The window has been asked for but hasn't landed yet — the panel holds its
+  // shape and shows the dots rather than stale numbers under a new label.
+  const loadPending = metric !== "plan" && !measuredBy && !loadError;
+  const rows = useMemo(() => loadRows(sets, measuredBy), [sets, measuredBy]);
+  const peak = useMemo(() => maxLoad(rows), [rows]);
   const conflicts = useMemo(() => totalConflicts(sets, rules), [sets, rules]);
   // Roles with an open slot nobody available can fill (structural holes).
   const unfillable = useMemo(
@@ -179,6 +238,24 @@ export default function StagedScheduleModal({
       groups.set(key, group);
     });
     groupedSets.push(...groups.entries());
+  }
+
+  // What the Team load bars are measuring, spelled out under the panel. Built
+  // here as a plain if-chain: three states nested as ternaries inside the JSX
+  // was a lot to read for one line of text.
+  const windowName = metricLabel(metric).toLowerCase();
+  let loadNote: ReactNode = null;
+  if (loadError) {
+    loadNote = (
+      <span className="text-red-600 dark:text-red-400">
+        {" "}
+        — couldn’t load {windowName}
+      </span>
+    );
+  } else if (loadPending) {
+    loadNote = ` — loading ${windowName}…`;
+  } else if (metric !== "plan") {
+    loadNote = ` — bars show ${windowName}, “+N” is this plan`;
   }
 
   const totalAssignments = sets.reduce((n, s) => n + s.assignments.length, 0);
@@ -480,29 +557,75 @@ export default function StagedScheduleModal({
         </p>
       )}
 
-      {/* ── Team load: who's playing how often, full width ───────────── */}
+      {/* ── Team load: who's playing how often, full width ─────────────
+          The selector switches what the bars MEASURE: this plan, or the sets
+          each person is already on over a past/upcoming window. The people
+          listed are always this plan's — it's their existing load the admin is
+          weighing the plan against. */}
       <div className="mt-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          Team load
-        </p>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            Team load
+          </p>
+          <div className="w-52">
+            <Select
+              label="Measure team load by"
+              hideLabel
+              className="!py-1.5 text-xs"
+              value={metricKey}
+              onChange={(e) => {
+                // Option values are the metric in its wire form, so this is the
+                // same parse the API route does (lib/stagedPlan.ts).
+                const picked = parseLoadMetric(e.target.value);
+                if (picked !== null) setMetric(picked);
+              }}
+            >
+              {LOAD_METRICS.map((m) => (
+                <option key={metricToParam(m.metric)} value={metricToParam(m.metric)}>
+                  {m.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+        </div>
         {rows.length === 0 ? (
           <p className="text-sm text-gray-400">Nobody assigned yet.</p>
         ) : (
-          <ul className="grid max-h-40 grid-cols-1 gap-x-6 gap-y-1.5 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {rows.map((r) => (
-              <LoadBar
-                key={r.userId}
-                name={nameOf(r.userId)}
-                count={r.count}
-                peak={peak}
-                isMD={isMdOf(r.userId)}
-              />
-            ))}
-          </ul>
+          /* While a window loads, the list stays MOUNTED but hidden and the
+             dots sit in the middle of the space it was already holding —
+             `invisible` keeps its layout box, so picking a window doesn't
+             collapse the panel and jerk everything below it up the page. */
+          <div className="relative">
+            <ul
+              className={`grid max-h-40 grid-cols-1 gap-x-6 gap-y-1.5 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 ${
+                loadPending ? "invisible" : ""
+              }`}
+              aria-busy={loadPending}
+            >
+              {rows.map((r) => (
+                <LoadBar
+                  key={r.userId}
+                  name={nameOf(r.userId)}
+                  count={r.count}
+                  // Only worth showing alongside once the bar is showing
+                  // something else — until the window lands, it IS the plan.
+                  planCount={measuredBy ? r.planCount : null}
+                  peak={peak}
+                  isMD={isMdOf(r.userId)}
+                />
+              ))}
+            </ul>
+            {loadPending && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <LoadingDots label={`Loading ${metricLabel(metric).toLowerCase()}`} />
+              </div>
+            )}
+          </div>
         )}
         <p className="mt-2 border-t border-gray-100 pt-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
           {rows.length} {rows.length === 1 ? "person" : "people"} across{" "}
           {totalAssignments} slot{totalAssignments === 1 ? "" : "s"}
+          {loadNote}
         </p>
       </div>
 
@@ -810,16 +933,26 @@ export default function StagedScheduleModal({
   );
 }
 
+// The label for a metric, for the panel's footnote.
+function metricLabel(metric: LoadMetric): string {
+  return LOAD_METRICS.find((m) => m.metric === metric)?.label ?? "In this plan";
+}
+
 // One row of the Team load panel: name, a bar scaled to the busiest person, and
 // the count. The busiest people get an amber bar so over-use is easy to spot.
+// When the panel is measuring something OTHER than this plan, `planCount` is
+// this plan's own tally, shown as a muted "+N" so the admin never loses sight
+// of what they're editing.
 function LoadBar({
   name,
   count,
+  planCount,
   peak,
   isMD,
 }: {
   name: string;
   count: number;
+  planCount: number | null;
   peak: number;
   isMD: boolean;
 }) {
@@ -838,14 +971,21 @@ function LoadBar({
             </span>
           )}
         </span>
-        <span
-          className={`shrink-0 text-xs font-semibold tabular-nums ${
-            heavy
-              ? "text-amber-600 dark:text-amber-400"
-              : "text-gray-500 dark:text-gray-400"
-          }`}
-        >
-          {count}
+        <span className="shrink-0 text-xs tabular-nums">
+          {planCount !== null && (
+            <span className="mr-1 font-medium text-indigo-600 dark:text-indigo-400">
+              +{planCount}
+            </span>
+          )}
+          <span
+            className={`font-semibold ${
+              heavy
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-gray-500 dark:text-gray-400"
+            }`}
+          >
+            {count}
+          </span>
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">

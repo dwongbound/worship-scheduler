@@ -217,7 +217,7 @@ export default function CalendarMonth({
         className="grid min-h-0 flex-1 grid-cols-7 overflow-y-auto"
         style={{ gridTemplateRows: `repeat(${weekRows}, minmax(0, 1fr))` }}
       >
-        {cells.map((date, i) => {
+        {cells.map((date) => {
           const inMonth = date.getMonth() === month;
           const isToday = sameDay(date, today);
           // Past days (and days outside this month) are dimmed.

@@ -110,6 +110,53 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
   await expect(page.getByText("Prayer Cover Mobile")).toHaveCount(0);
 });
 
+test("phone: the set modal's staged edits and sticky footer work on a phone", async ({
+  page,
+}) => {
+  // The detail modal stages every edit behind a sticky Delete · Cancel · Save
+  // row. On a phone that row is the only way to commit or back out — there's no
+  // room for it to scroll away — so it's worth proving it's reachable and that
+  // the discard guard still names what would be lost.
+  await login(page, "admin");
+  await page.goto("/calendar");
+  await page
+    .getByText("Sunday Morning")
+    .filter({ visible: true })
+    .first()
+    .click();
+
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+  // Nothing staged yet: Save is inert but present without scrolling.
+  const save = modal.getByRole("button", { name: "Save", exact: true });
+  await expect(save).toBeVisible();
+  await expect(save).toBeDisabled();
+
+  // Stage a notes edit — the one thing every phone user can reach here.
+  const notes = modal.getByPlaceholder("e.g. Communion Sunday");
+  await notes.fill("Phone edit that should not be saved");
+  await expect(modal.getByText("1 unsaved change")).toBeVisible();
+  await expect(save).toBeEnabled();
+
+  // Backing out warns, and names the change.
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  const warning = page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard your changes?" })
+    .last();
+  await expect(warning.getByText("Edited the notes")).toBeVisible();
+  await warning.getByRole("button", { name: "Discard changes" }).click();
+  await expect(modal).not.toBeVisible();
+
+  // Nothing reached the server.
+  const sets = (await (await page.request.get("/api/sets")).json()) as {
+    label: string | null;
+    notes: string | null;
+  }[];
+  const sunday = sets.find((s) => s.label === "Sunday Morning");
+  expect(sunday?.notes ?? "").not.toContain("Phone edit");
+});
+
 test("phone My Sets hides the desktop-only .ics export", async ({ page }) => {
   await login(page, "bob");
   await page.goto("/swaps");

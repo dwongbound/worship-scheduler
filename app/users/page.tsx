@@ -581,14 +581,6 @@ function UsersPageInner() {
             <InfoTooltip
               text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page (desktop only)."
             />
-            {/* All cover/swap/approval activity across the org, filterable. */}
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setActivityOpen(true)}
-            >
-              Team Activity
-            </Button>
             {/* Creating a team lives on the Org settings page
                 (OrgTeamsManager); this panel only manages teams that already
                 exist, so link out rather than duplicating that form here. */}
@@ -600,35 +592,47 @@ function UsersPageInner() {
               + Add team
             </Link>
           </div>
-          <div className="w-full sm:w-64">
-            <Select
-              label="Set all to team"
-              hideLabel
-              data-testid="team-filter"
-              value={teamFilter}
-              onChange={(e) => {
-                const v = e.target.value;
-                setTeamFilter(v);
-                // Bulk-set every member on the chosen team to it; "all" clears
-                // each card's selection so nobody's roles are shown.
-                if (v === "all") {
-                  setTeamByUser({});
-                } else {
-                  const next: Record<string, string> = {};
-                  for (const u of users ?? []) {
-                    if (u.teams.some((t) => t.id === v)) next[u.id] = v;
-                  }
-                  setTeamByUser(next);
-                }
-              }}
+          {/* The panel's own actions, right-aligned so they line up with each
+              team row's "Send set reminder" rather than crowding the heading. */}
+          <div className="flex w-full items-center gap-2 sm:w-auto">
+            {/* All cover/swap/approval activity across the org, filterable. */}
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => setActivityOpen(true)}
             >
-              <option value="all">Set all to a team…</option>
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
+              Team Activity
+            </Button>
+            <div className="min-w-0 flex-1 sm:w-64 sm:flex-none">
+              <Select
+                label="Set all to team"
+                hideLabel
+                data-testid="team-filter"
+                value={teamFilter}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setTeamFilter(v);
+                  // Bulk-set every member on the chosen team to it; "all" clears
+                  // each card's selection so nobody's roles are shown.
+                  if (v === "all") {
+                    setTeamByUser({});
+                  } else {
+                    const next: Record<string, string> = {};
+                    for (const u of users ?? []) {
+                      if (u.teams.some((t) => t.id === v)) next[u.id] = v;
+                    }
+                    setTeamByUser(next);
+                  }
+                }}
+              >
+                <option value="all">Set all to a team…</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
           </div>
         </div>
         {teams.length === 0 ? (

@@ -10,10 +10,10 @@ import { useEffect, useState } from "react";
 import Button from "./common/Button";
 import Checkbox from "./common/Checkbox";
 import DateSelect from "./common/DateSelect";
-import Input from "./common/Input";
 import LoadingDots from "./common/LoadingDots";
 import Modal from "./common/Modal";
 import Select from "./common/Select";
+import Stepper from "./common/Stepper";
 import { DAY_LABELS } from "@/lib/constants";
 import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import type { ApiAvailabilityRequest, ApiSetTemplate } from "@/lib/types";
@@ -146,16 +146,13 @@ export default function GenerateModal({
                   : "Pick an availability request above."}
               </p>
             ) : mode === "weeks" ? (
-              <div className="w-32">
-                <Input
-                  label="Weeks ahead"
-                  type="number"
-                  min={1}
-                  max={26}
-                  value={weeks}
-                  onChange={(e) => setWeeks(Number(e.target.value))}
-                />
-              </div>
+              <Stepper
+                label="Weeks ahead"
+                value={weeks}
+                min={1}
+                max={26}
+                onChange={setWeeks}
+              />
             ) : (
               <div className="flex flex-wrap gap-3">
                 <div className="w-40">

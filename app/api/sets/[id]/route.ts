@@ -5,6 +5,13 @@
 // Send { notes }, { mdUserId } (null clears the MD), { isPrivate },
 // { requiresMD }, { slotCapacities } (null = go back to the default shape), or
 // { guestTeams } (the full replacement list — see lib/guestTeams.ts).
+//
+// The plain columns (notes / isPrivate / requiresMD / slotCapacities /
+// groupChatLeadDays) may be sent TOGETHER and are applied in one update — the
+// set detail modal stages its edits and commits them in a single click.
+// { mdUserId } and { guestTeams } each stay a request of their own: the MD is
+// validated against the set's final roster, and guest teams answer with the
+// resulting rows rather than the set.
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
@@ -84,72 +91,21 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (editingRequiresMD) {
-    if (typeof body.requiresMD !== "boolean") {
-      return NextResponse.json(
-        { error: "requiresMD must be a boolean" },
-        { status: 400 }
-      );
-    }
-    const updated = await prisma.set.update({
-      where: { id },
-      data: { requiresMD: body.requiresMD },
-    });
-    return NextResponse.json(updated);
-  }
-
-  if (editingCapacities) {
-    // The set's own team shape. null = clear the override and fall back to the
-    // global default (Prisma.DbNull writes a real SQL NULL into the Json
-    // column; a bare `null` would store the JSON literal `null` instead).
-    // Lowering a role below the people already standing in it is allowed — the
-    // roster keeps showing them, it just stops offering new slots — so nobody
-    // is silently dropped by a shape edit.
-    if (body.slotCapacities === null) {
-      const updated = await prisma.set.update({
-        where: { id },
-        data: { slotCapacities: Prisma.DbNull },
-      });
-      return NextResponse.json(updated);
-    }
-    const capacities = validateSlotCapacities(body.slotCapacities);
-    if (!capacities) {
-      return NextResponse.json(
-        { error: "Invalid slot capacities" },
-        { status: 400 }
-      );
-    }
-    const updated = await prisma.set.update({
-      where: { id },
-      data: { slotCapacities: capacities },
-    });
-    return NextResponse.json(updated);
-  }
-
-  if (editingGroupChatLead) {
-    // null = off; a number is normalized to a valid 1–30 day count (out-of-range
-    // → off). Admin-only, guarded above.
-    if (body.groupChatLeadDays !== null && typeof body.groupChatLeadDays !== "number") {
-      return NextResponse.json(
-        { error: "groupChatLeadDays must be a number or null" },
-        { status: 400 }
-      );
-    }
-    const updated = await prisma.set.update({
-      where: { id },
-      data: { groupChatLeadDays: parseGroupChatLeadDays(body.groupChatLeadDays) },
-    });
-    return NextResponse.json(updated);
-  }
-
   // Guest teams: the full list, replacing whatever the set had. Each entry is
   // { teamId, roles } where roles are keys from THAT team's catalog.
   //
   // Rows are diffed rather than wiped and recreated, because assignments point
   // at SetGuestTeam.id — deleting a row a guest is standing in would blank
   // their guestTeamId (onDelete: SetNull) and silently demote them to an
-  // owning-team seat. Only teams actually dropped by this edit get deleted,
-  // which is the one case where losing the link is what the admin asked for.
+  // owning-team seat, in a role the host team may not even have. So only teams
+  // actually dropped by this edit are deleted, and their borrowed SEATS are
+  // deleted with them: "this team isn't lending to us any more" means those
+  // people are off the set, not quietly moved onto our own roster.
+  //
+  // The editor won't even let you untick a team that still has people seated
+  // (GuestTeamsModal disables it), so in practice this is the backstop for a
+  // direct API call — but SetNull is a silent, data-corrupting default and the
+  // route shouldn't rely on the UI to avoid it.
   if (editingGuestTeams) {
     if (!Array.isArray(body.guestTeams)) {
       return NextResponse.json(
@@ -220,12 +176,15 @@ export async function PATCH(
       select: { id: true, teamId: true },
     });
     const keep = new Set(cleaned.map((c) => c.teamId));
+    const dropped = existing.filter((e) => !keep.has(e.teamId));
     await prisma.$transaction([
+      // The seats first: once the row is gone the link is null and there'd be
+      // no way to tell which assignments were borrowed from it.
+      prisma.assignment.deleteMany({
+        where: { setId: id, guestTeamId: { in: dropped.map((e) => e.id) } },
+      }),
       prisma.setGuestTeam.deleteMany({
-        where: {
-          setId: id,
-          teamId: { in: existing.filter((e) => !keep.has(e.teamId)).map((e) => e.teamId) },
-        },
+        where: { setId: id, teamId: { in: dropped.map((e) => e.teamId) } },
       }),
       ...cleaned.map((c) =>
         prisma.setGuestTeam.upsert({
@@ -238,20 +197,6 @@ export async function PATCH(
     const updated = await prisma.setGuestTeam.findMany({
       where: { setId: id },
       select: { id: true, teamId: true, roles: true },
-    });
-    return NextResponse.json(updated);
-  }
-
-  if (editingPrivate) {
-    if (typeof body.isPrivate !== "boolean") {
-      return NextResponse.json(
-        { error: "isPrivate must be a boolean" },
-        { status: 400 }
-      );
-    }
-    const updated = await prisma.set.update({
-      where: { id },
-      data: { isPrivate: body.isPrivate },
     });
     return NextResponse.json(updated);
   }
@@ -289,10 +234,76 @@ export async function PATCH(
     return NextResponse.json(updated);
   }
 
-  const updated = await prisma.set.update({
-    where: { id },
-    data: { notes: body.notes.trim() || null },
-  });
+  // ── The plain columns ────────────────────────────────────────────────
+  // Everything left is an ordinary field on the Set row, so any combination of
+  // them travels in ONE request and lands in ONE update. The detail modal saves
+  // several at a time (it stages edits and commits them together), and five
+  // sequential round trips for one click was five times the latency for no
+  // reason. Guest teams and the MD stay separate above: one returns a different
+  // shape, the other has to be validated against the final roster.
+  const data: Prisma.SetUpdateInput = {};
+
+  if (editingRequiresMD) {
+    if (typeof body.requiresMD !== "boolean") {
+      return NextResponse.json(
+        { error: "requiresMD must be a boolean" },
+        { status: 400 }
+      );
+    }
+    data.requiresMD = body.requiresMD;
+  }
+
+  if (editingCapacities) {
+    // The set's own team shape. null = clear the override and fall back to the
+    // team default (Prisma.DbNull writes a real SQL NULL into the Json column;
+    // a bare `null` would store the JSON literal `null` instead).
+    // Lowering a role below the people already standing in it is allowed — the
+    // roster keeps showing them, it just stops offering new slots — so nobody
+    // is silently dropped by a shape edit.
+    if (body.slotCapacities === null) {
+      data.slotCapacities = Prisma.DbNull;
+    } else {
+      const capacities = validateSlotCapacities(body.slotCapacities);
+      if (!capacities) {
+        return NextResponse.json(
+          { error: "Invalid slot capacities" },
+          { status: 400 }
+        );
+      }
+      data.slotCapacities = capacities;
+    }
+  }
+
+  if (editingGroupChatLead) {
+    // null = off; a number is normalized to a valid 1–30 day count (out-of-range
+    // → off). Admin-only, guarded above.
+    if (body.groupChatLeadDays !== null && typeof body.groupChatLeadDays !== "number") {
+      return NextResponse.json(
+        { error: "groupChatLeadDays must be a number or null" },
+        { status: 400 }
+      );
+    }
+    data.groupChatLeadDays = parseGroupChatLeadDays(body.groupChatLeadDays);
+  }
+
+  if (editingPrivate) {
+    if (typeof body.isPrivate !== "boolean") {
+      return NextResponse.json(
+        { error: "isPrivate must be a boolean" },
+        { status: 400 }
+      );
+    }
+    data.isPrivate = body.isPrivate;
+  }
+
+  // Notes are the one field a non-admin (the set's worship leader) may edit,
+  // and the only one that's required when nothing else was sent — the guard at
+  // the top of the route already rejected a body with neither.
+  if (typeof body.notes === "string") {
+    data.notes = body.notes.trim() || null;
+  }
+
+  const updated = await prisma.set.update({ where: { id }, data });
   return NextResponse.json(updated);
 }
 

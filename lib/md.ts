@@ -2,14 +2,15 @@
 //
 // A set has exactly one MD, stored explicitly as `Set.mdUserId`. To be eligible
 // a person must, on THIS set: be a musical director (`isMD`), hold an MD-capable
-// role (keys / electric guitar / bass — see MD_ROLES), and NOT be the worship
-// leader. These helpers are the single source of that rule, reused by the detail
-// modal, the generate preview, the API, and the Slack summary.
+// role (electric guitar / keys / bass — see MD_ROLES, which is ordered by
+// preference: the MD is normally the electric guitarist), and NOT be the
+// worship leader. These helpers are the single source of that rule, reused by
+// the detail modal, the generate preview, the API, and the Slack summary.
 //
 // MD eligibility is pinned to the BUILT-IN role keys. Now that a team owns its
 // catalog, a team that renames or drops keys/electric/bass simply has nobody
 // eligible to MD — deliberately, since custom roles carry no MD semantics.
-import { MD_ROLES, ROLE_ORDER, type Instrument } from "@/lib/constants";
+import { MD_ROLES, type Instrument } from "@/lib/constants";
 
 // The minimal per-assignment shape these helpers need. `isMD` is the assignee's
 // global musical-director flag (User.isMD); it may be absent on client refs, in
@@ -27,16 +28,17 @@ function worshipLeaderIds(assignments: MDAssignment[]): Set<string> {
   );
 }
 
-// Distinct userIds eligible to be the MD, in scarce-first role order (then by
+// Distinct userIds eligible to be the MD, in MD-role preference order (then by
 // userId) so the "best" candidate comes first. A person with several slots
-// appears once, keyed to their scarcest MD-capable role.
+// appears once, keyed to their most preferred MD-capable role.
 export function eligibleMDIds(assignments: MDAssignment[]): string[] {
   const wl = worshipLeaderIds(assignments);
   const seen = new Set<string>();
   const ids: string[] = [];
-  // Walk roles scarce-first; within a role, sort assignees by id for determinism.
-  for (const role of ROLE_ORDER) {
-    if (!MD_ROLES.includes(role)) continue;
+  // Walk the MD roles in preference order — electric guitar first, since that's
+  // who normally MDs, and only then keys/bass. Within a role, sort assignees by
+  // id for determinism.
+  for (const role of MD_ROLES) {
     const inRole = assignments
       .filter((a) => a.role === role && a.isMD && !wl.has(a.userId))
       .sort((a, b) => a.userId.localeCompare(b.userId));

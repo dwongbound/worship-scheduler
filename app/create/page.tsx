@@ -35,7 +35,6 @@ import type {
   ApiAvailabilityRequest,
   ApiSetTemplate,
   ApiTeam,
-  ApiUnavailability,
   StagedPlan,
   StagedSet,
 } from "@/lib/types";
