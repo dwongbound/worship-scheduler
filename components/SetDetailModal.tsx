@@ -71,8 +71,10 @@ import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
 import {
   availableGuestMembers,
   buildSchedule,
+  isUserAvailable,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
+import { isActiveForSet } from "@/lib/stagedPlan";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   describeSetChanges,
@@ -379,6 +381,19 @@ export default function SetDetailModal({
     startsAt: new Date(set.startsAt),
     durationMinutes: set.durationMinutes,
   };
+
+  // How the person already in a seat should read in that seat's open list.
+  // buildPlayerOptions excludes them from the candidates (they're already
+  // here), so PlayerSelect draws their row from this instead — without it the
+  // current pick is the only name in the list with no "(unavailable)" on it.
+  // The ×n counts this set too (serveCounts is built from the saved sets,
+  // which include this one), so the person in the seat reads on the same scale
+  // as the candidates under them rather than looking like they serve less.
+  const selectedFlags = (userId: string, teamId: string | null | undefined) => ({
+    available: isUserAvailable(userId, calcSet, rules),
+    inactive: !isActiveForSet(users.find((u) => u.id === userId) ?? { id: userId }, teamId),
+    count: serveCounts.get(userId) ?? 0,
+  });
 
   const isSetWorshipLeader =
     !!currentUserId &&
@@ -1331,7 +1346,11 @@ export default function SetDetailModal({
                         onClick={() => setSlotToDelete(a)}
                       />
                       <PlayerSelect
-                        selected={{ id: a.user.id, name: a.user.name }}
+                        selected={{
+                          id: a.user.id,
+                          name: a.user.name,
+                          ...selectedFlags(a.user.id, set.teamId ?? set.team?.id),
+                        }}
                         options={options}
                         disabled={busy}
                         onChange={(userId) =>
@@ -1500,7 +1519,11 @@ export default function SetDetailModal({
                               onClick={() => removeAssignment(a.id)}
                             />
                             <PlayerSelect
-                              selected={{ id: a.user.id, name: a.user.name }}
+                              selected={{
+                                id: a.user.id,
+                                name: a.user.name,
+                                ...selectedFlags(a.user.id, guest.teamId),
+                              }}
                               options={options}
                               disabled={busy}
                               onChange={(userId) =>

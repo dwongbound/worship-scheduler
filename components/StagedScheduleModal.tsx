@@ -48,6 +48,7 @@ import {
 import {
   conflictedUserIds,
   countAssignments,
+  isActiveForSet,
   LOAD_METRICS,
   type LoadMetric,
   metricToParam,
@@ -123,6 +124,13 @@ export default function StagedScheduleModal({
     const byId = new Map(users.map((u) => [u.id, u.name]));
     return (id: string) => byId.get(id) ?? "Unknown";
   }, [users]);
+
+  // The whole user row by id — the filled slots need their team memberships to
+  // tell whether the person sitting there is inactive on this set's team.
+  const userById = useMemo(
+    () => new Map(users.map((u) => [u.id, u])),
+    [users]
+  );
 
   const isMdOf = useMemo(() => {
     const mds = new Set(users.filter((u) => u.isMD).map((u) => u.id));
@@ -703,10 +711,19 @@ export default function StagedScheduleModal({
           day, days stacked down the page, each day's sets wrapping in a grid
           — so a Tuesday with a morning, noon and evening set reads together
           and the next day follows below. ─────────────────────────────────── */}
-      <div className="mt-4 space-y-5">
+      <div className="mt-4 space-y-6">
         {groupedSets.map(([groupLabel, entries]) => (
           <section key={groupLabel}>
-            <p className="mb-2 text-sm font-semibold">
+            {/* A tinted band, bled out past the modal body's px-6 so it runs
+                edge to edge: with a dozen sideways-scrolling rows stacked up,
+                a bare bold line wasn't enough to tell where one group of sets
+                ended and the next began. Sticky, so the label of the group
+                you're scrolled into stays overhead. */}
+            <p
+              className="sticky top-0 z-10 -mx-6 mb-2 border-y border-gray-200 bg-gray-100/95
+                px-6 py-2 text-sm font-semibold backdrop-blur
+                dark:border-gray-700 dark:bg-gray-900/95"
+            >
               {groupLabel}
               <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
                 {entries.length} set{entries.length === 1 ? "" : "s"}
@@ -813,6 +830,14 @@ export default function StagedScheduleModal({
                                 selected={{
                                   id: a.userId,
                                   name: nameOf(a.userId),
+                                  // Same flags the open list puts on everyone
+                                  // else, so the person already in the slot
+                                  // isn't the one name without them.
+                                  available: !conflicted.has(a.userId),
+                                  inactive: !isActiveForSet(
+                                    userById.get(a.userId) ?? { id: a.userId },
+                                    set.teamId
+                                  ),
                                 }}
                                 options={options}
                                 disabled={busy}

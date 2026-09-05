@@ -60,8 +60,20 @@ const VIEWPORT_MARGIN = 8;
 const MIN_MENU_HEIGHT = 160;
 
 interface PlayerSelectProps {
-  // The person currently in this slot, or null for an empty slot.
-  selected: { id: string; name: string } | null;
+  // The person currently in this slot, or null for an empty slot. They're
+  // excluded from `options` (they're already here), so the open list renders
+  // them from this — which means the flags have to come along too, or the
+  // current pick is the one row in the list with no "(unavailable)" on it.
+  // Both default to "fine": omit them and the row reads as a plain name.
+  selected: {
+    id: string;
+    name: string;
+    available?: boolean;
+    inactive?: boolean;
+    // Their nearby serve count, same as an option's — including this set, since
+    // they're on it. Omit to leave the ×n off (callers that don't count).
+    count?: number;
+  } | null;
   // Assignable candidates (excludes whoever is already in `selected`), already
   // sorted available-first by the caller.
   options: PlayerOption[];
@@ -218,7 +230,17 @@ export default function PlayerSelect({
             <OptionRow label="None" active={!selected} onClick={() => choose("")} />
           )}
           {!q && selected && (
-            <OptionRow label={selected.name} active onClick={() => choose(selected.id)} />
+            <OptionRow
+              // Flagged exactly like every other row, so the person already in
+              // the slot reads the same way in the list as they do on the
+              // control's "unavailable" marker beside it.
+              label={`${selected.name}${
+                selected.available === false ? " (unavailable)" : ""
+              }${selected.inactive ? " (inactive)" : ""}`}
+              count={selected.count}
+              active
+              onClick={() => choose(selected.id)}
+            />
           )}
           {filtered.map((o) => (
             <OptionRow

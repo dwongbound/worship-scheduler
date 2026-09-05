@@ -6,9 +6,11 @@
 // (users are prompted to confirm on their next visit). Duplicate assignments
 // are skipped so re-applying is safe.
 //
-// NOTE: this is the hook point for notifications — once email/Slack land,
-// they fire here (never during the dry-run preview), so nobody is messaged
-// until the admin actually applies.
+// NOTE: this is the notification hook point — DMs fire here and never during
+// the dry-run preview, so nobody is messaged until the admin actually applies.
+// They're BATCHED: one message per person listing every set they picked up,
+// because a month-long plan can seat the same person a dozen times and a DM
+// per seat would be a dozen pings for one admin click.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -20,6 +22,7 @@ import {
 import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { DEFAULT_TEAM_ROLES } from "@/lib/teamRoles";
 import type { StagedPlan, StagedSet } from "@/lib/types";
+import { notifyAssignmentsAdded, type NewSeat } from "@/lib/slack";
 
 // Light validation of one staged set from the request body. Returns a
 // normalized set, or null to skip anything malformed (admin-only route, so
@@ -110,6 +113,9 @@ export async function POST(req: NextRequest) {
 
   let setsCreated = 0;
   let assignmentsCreated = 0;
+  // Every seat this apply actually created, collected for the batched DMs at
+  // the end. Only genuinely-new rows land here — see createManyAndReturn below.
+  const newSeats: NewSeat[] = [];
 
   for (const s of sets) {
     const startsAt = new Date(s.startsAt);
@@ -170,7 +176,11 @@ export async function POST(req: NextRequest) {
     }
 
     if (roster.length > 0) {
-      const result = await prisma.assignment.createMany({
+      // …AndReturn rather than plain createMany: with skipDuplicates a re-apply
+      // silently drops rows, and a count alone can't say WHICH. The returned
+      // rows are exactly the new seats, so nobody gets DMed about a slot they
+      // already had.
+      const created = await prisma.assignment.createManyAndReturn({
         data: roster.map((a) => ({
           setId: set!.id,
           userId: a.userId,
@@ -181,13 +191,25 @@ export async function POST(req: NextRequest) {
         // in the same role twice on a set (e.g. re-apply, or an existing set
         // already partly staffed) — skip rather than error.
         skipDuplicates: true,
+        select: { userId: true, role: true },
       });
-      assignmentsCreated += result.count;
+      assignmentsCreated += created.length;
+      const catalog = teamId ? catalogs.get(teamId) : undefined;
+      for (const a of created) {
+        newSeats.push({
+          userId: a.userId,
+          role: a.role,
+          set: { label: set.label, startsAt: set.startsAt },
+          catalog,
+        });
+      }
     }
   }
 
-  // TODO: once email/Slack integration lands, notify the newly-assigned users
-  // here — this is the moment the schedule becomes "real".
+  // The moment the schedule becomes "real" — tell everyone who just landed on
+  // it, one message each. Non-throwing, so a Slack outage can't undo an apply
+  // that already committed.
+  await notifyAssignmentsAdded(admin.orgId, newSeats);
 
   return NextResponse.json({ setsCreated, assignmentsCreated });
 }
