@@ -346,7 +346,7 @@ export async function autoPopulateSlackIds(orgId: string): Promise<void> {
 
 // ── Message-text helpers ──────────────────────────────────────────────────
 
-type SetLike = { label: string | null; startsAt: Date };
+export type SetLike = { label: string | null; startsAt: Date };
 
 function setLabel(set: SetLike): string {
   const name = set.label ?? "the worship set";
@@ -683,6 +683,144 @@ export async function notifyAdminsPendingApproval(
     (url ? ` Review it here: ${url}` : "");
 
   await Promise.all(admins.map((m) => postDirectMessageTo(token, m, text)));
+}
+
+/**
+ * Tell ONE person their own place on a set changed — they were put on it, taken
+ * off it, or handed someone else's slot. This is the personal counterpart to
+ * notifySetChange: that one talks to the set's group chat (and only once the
+ * chat exists and its lead window has opened), which means the person who most
+ * needs to know can hear nothing at all. A DM always reaches them.
+ *
+ * Quiet in the cases where a message would be noise:
+ *
+ *   • the set has already happened → nothing they can do about it now.
+ *   • they haven't linked Slack in this org → postDirectMessageTo no-ops.
+ *
+ * Note there's deliberately NO group-chat-style lead window here: being added
+ * to a set two months out is exactly when you want to hear about it.
+ *
+ * Best-effort and non-throwing, like every notifier here — a Slack outage must
+ * never fail the roster edit that triggered it.
+ */
+export async function notifyAssignmentChange(
+  setId: string,
+  userId: string,
+  change: {
+    kind: "added" | "removed";
+    role: Instrument;
+    // The team catalog the role key belongs to, so it reads in that team's own
+    // words. Omit and roleLabel falls back to the built-in/humanized name.
+    catalog?: TeamRoleDef[];
+    // Who they're covering for (added) or who took over (removed), when this
+    // was a reassignment rather than a plain add/remove.
+    counterpart?: string;
+  }
+): Promise<void> {
+  try {
+    const set = await prisma.set.findUnique({
+      where: { id: setId },
+      select: { label: true, startsAt: true, orgId: true },
+    });
+    if (!set || set.startsAt < new Date()) return;
+
+    const token = await orgBotToken(set.orgId);
+    if (!token && !slackDryRun()) return;
+
+    const member = await prisma.orgMembership.findUnique({
+      where: { userId_orgId: { userId, orgId: set.orgId } },
+      select: DM_FIELDS,
+    });
+    if (!member?.slackUserId) return;
+
+    const role = roleLabel(change.role, change.catalog);
+    const where = setLabel(set);
+    const url = appUrl("/calendar");
+    const text =
+      change.kind === "added"
+        ? `\u{1F3B8} You're on *${role}* for ${where}` +
+          (change.counterpart ? `, covering for ${change.counterpart}.` : ".") +
+          (url ? ` Details here: ${url}` : "")
+        : `\u{1F44B} You're off *${role}* for ${where}` +
+          (change.counterpart ? ` — ${change.counterpart} is covering.` : ".");
+
+    await postDirectMessageTo(token, member, text);
+  } catch (err) {
+    console.error("[slack] assignment-change DM failed", err);
+  }
+}
+
+/**
+ * One person's newly-created seat, for the batched notice below.
+ */
+export type NewSeat = {
+  userId: string;
+  role: Instrument;
+  set: SetLike;
+  // The catalog the role key belongs to, so it reads in that team's own words.
+  catalog?: TeamRoleDef[];
+};
+
+/**
+ * Applying a generated plan seats a lot of people across a lot of sets at once.
+ * DMing per seat (what notifyAssignmentChange would do) turns one admin click
+ * into a dozen pings for the same person, so this batches instead: ONE message
+ * each, listing every set they just picked up, oldest first.
+ *
+ * Same quiet rules as the per-seat DM — past sets are dropped, and anyone
+ * without linked Slack in this org is skipped by postDirectMessageTo. Someone
+ * left with nothing to report after that filtering gets no message at all.
+ *
+ * Best-effort and non-throwing: applying the plan must succeed even if Slack
+ * is down.
+ */
+export async function notifyAssignmentsAdded(
+  orgId: string,
+  seats: NewSeat[]
+): Promise<void> {
+  try {
+    const now = new Date();
+    const upcoming = seats.filter((s) => s.set.startsAt >= now);
+    if (upcoming.length === 0) return;
+
+    const token = await orgBotToken(orgId);
+    if (!token && !slackDryRun()) return;
+
+    // Group by person, then order each person's list by date so their message
+    // reads as a schedule rather than whatever order the plan happened to be in.
+    const byUser = new Map<string, NewSeat[]>();
+    for (const seat of upcoming) {
+      const list = byUser.get(seat.userId) ?? [];
+      list.push(seat);
+      byUser.set(seat.userId, list);
+    }
+    for (const list of byUser.values()) {
+      list.sort((a, b) => a.set.startsAt.getTime() - b.set.startsAt.getTime());
+    }
+
+    // One query for every recipient's DM details, rather than one per person.
+    const members = await prisma.orgMembership.findMany({
+      where: { orgId, userId: { in: [...byUser.keys()] }, slackUserId: { not: null } },
+      select: { ...DM_FIELDS, userId: true },
+    });
+
+    const url = appUrl("/calendar");
+    await Promise.all(
+      members.map((m) => {
+        const list = byUser.get(m.userId) ?? [];
+        const lines = list.map(
+          (seat) => `\u{2022} *${roleLabel(seat.role, seat.catalog)}* — ${setLabel(seat.set)}`
+        );
+        const text =
+          `\u{1F3B8} You've been scheduled for ${list.length} ` +
+          `set${list.length === 1 ? "" : "s"}:\n${lines.join("\n")}` +
+          (url ? `\nConfirm here: ${url}` : "");
+        return postDirectMessageTo(token, m, text);
+      })
+    );
+  } catch (err) {
+    console.error("[slack] batched assignment DMs failed", err);
+  }
 }
 
 /**

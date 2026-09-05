@@ -6,10 +6,9 @@
 //   /schedule, /profile, /platform — locked to "All orgs" (these pages aren't
 //                       scoped to a single org): the menu lists the orgs
 //                       greyed-out/disabled with an (i) note explaining the
-//                       lock; "Org settings" + "Add an org…" still work.
-// Every mode ends with "Org settings" (admins only, hidden on phones — it opens
-// the full-page /orgs view) and "Add an org…", which prompts for an org key.
-import Link from "next/link";
+//                       lock; "Add an org…" still works.
+// Every mode ends with "Add an org…", which prompts for an org key. (Org
+// settings is reached from the /users Team tab, not from here.)
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useState } from "react";
@@ -59,9 +58,6 @@ export default function OrgSwitcher() {
 
   const mode = modeFor(pathname);
   const adminOrgs = orgs.filter((o) => o.isAdmin);
-  // "Org settings" is only useful to someone who administers an org; the item
-  // links to the full-page /orgs view where they pick which one.
-  const canManageOrgs = adminOrgs.length > 0;
 
   const label =
     mode === "locked"
@@ -120,19 +116,9 @@ export default function OrgSwitcher() {
   );
 
   // Shared menu tail, as one bordered group so there's a single divider above
-  // it (no stray borders / empty rows). "Org settings" is admins-only and
-  // hidden on phones (the full-page view is desktop-oriented).
+  // it (no stray borders / empty rows).
   const menuTail = (
     <div className="border-t border-gray-200 dark:border-gray-700">
-      {canManageOrgs && (
-        <Link
-          href="/orgs"
-          className="hidden w-full px-4 py-2 text-left text-sm text-gray-500
-            hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700 sm:block"
-        >
-          ⚙ Org settings
-        </Link>
-      )}
       <button
         onClick={() => {
           setAddError("");

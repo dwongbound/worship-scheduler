@@ -12,7 +12,7 @@ import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { promoteMDIfEmpty } from "@/lib/setMd";
-import { notifySetChange } from "@/lib/slack";
+import { notifyAssignmentChange, notifySetChange } from "@/lib/slack";
 import { type Instrument } from "@/lib/constants";
 import { getTeamCatalog } from "@/lib/teamRoleStore";
 
@@ -92,6 +92,13 @@ export async function POST(req: NextRequest) {
       setId,
       `\u{2795} ${membership.user.name} was added on ${roleLabel(role as Instrument, catalog)}.`
     );
+    // …and tell the person themselves. The group chat may not exist yet (or at
+    // all), so the DM is the only notice they're guaranteed to get.
+    await notifyAssignmentChange(setId, userId, {
+      kind: "added",
+      role: role as Instrument,
+      catalog,
+    });
     return NextResponse.json(created, { status: 201 });
   } catch {
     // Unique [setId, userId, role] — the person already fills this role here.
