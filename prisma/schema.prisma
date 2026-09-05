@@ -79,6 +79,11 @@ enum SetHistoryEventType {
   // every type above, this one isn't about a person in a slot, so it carries no
   // `role` — the human summary lives in `detail`.
   SETLIST_CHANGED
+  // The set's notes were written, rewritten or cleared. Like SETLIST_CHANGED
+  // it's about the set rather than a person in a slot, so it carries no `role`;
+  // `detail` holds the summary INCLUDING an excerpt of what was written, which
+  // is the point of the log (the live text is always on the set itself).
+  NOTES_CHANGED
 }
 
 // An organization — the highest-level tenant boundary (e.g. one church).
@@ -590,14 +595,16 @@ model SetHistoryEvent {
   set    Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
   setId  String
   type   SetHistoryEventType
-  // The slot this event is about (a TeamRole.key). Null only for
-  // SETLIST_CHANGED, which concerns the set's songs rather than any one role.
+  // The slot this event is about (a TeamRole.key). Null for the two set-level
+  // types — SETLIST_CHANGED and NOTES_CHANGED — which concern the set's songs
+  // and notes rather than any one role.
   // Kept as a bare string even if the role is later deleted — the log is a
   // record of what happened, not a live reference.
   role   String?
 
-  // Human summary for events that type + people don't fully describe (currently
-  // SETLIST_CHANGED, e.g. 'Added "Who Else" (E)').
+  // Human summary for events that type + people don't fully describe:
+  // SETLIST_CHANGED (e.g. 'added "Who Else" (E)') and NOTES_CHANGED (e.g.
+  // 'added a note: "Bring extra cables"').
   detail String?
 
   // Who performed the action; null = the auto-scheduler (no human actor).

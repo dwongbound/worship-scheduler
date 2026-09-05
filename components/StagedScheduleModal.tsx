@@ -24,7 +24,18 @@
 // is and re-proposes only the rest, so the admin can pin the two or three
 // people they care about and let the algorithm redo the rest around them.
 // Clearing a slot (picking "None") — or clicking its 🔒 — releases the lock.
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+//
+// COLOURS: the options dialog can tint each recurring set; those tints arrive
+// as `colors` (templateId → hex) and paint the matching cards at half strength,
+// so one set type reads as a block however the cards are grouped. Purely a
+// reading aid for this review — nothing about it is saved.
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
 import Badge from "./common/Badge";
@@ -33,6 +44,7 @@ import ScrollRow from "./common/ScrollRow";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import { useOrgs } from "./OrgProvider";
 import { orgHeaders } from "@/lib/api";
+import { tintVars } from "@/lib/colors";
 import Select from "./common/Select";
 import {
   type Instrument,
@@ -49,10 +61,6 @@ import {
   conflictedUserIds,
   countAssignments,
   isActiveForSet,
-  LOAD_METRICS,
-  type LoadMetric,
-  metricToParam,
-  parseLoadMetric,
   loadRows,
   lockedCounts,
   maxLoad,
@@ -61,6 +69,14 @@ import {
   totalUnfillable,
   unfillableRoles,
 } from "@/lib/stagedPlan";
+import {
+  DEFAULT_PLAN_METRIC,
+  type LoadMetric,
+  metricLabel,
+  metricToParam,
+  parseLoadMetric,
+  PLAN_LOAD_METRICS,
+} from "@/lib/loadMetrics";
 import {
   DEFAULT_TEAM_ROLES,
   slottedRoles,
@@ -76,6 +92,9 @@ interface StagedScheduleModalProps {
   // Every team in scope, each carrying its role catalog — a plan spans teams,
   // and each set's roster is drawn from ITS team's roles.
   teams: ApiTeam[];
+  // Preview tints from the options dialog, keyed by the recurring set a card
+  // came from. Empty (the default) = every card keeps the plain background.
+  colors?: Record<string, string>;
   busy: boolean; // an apply is in flight
   onApply: (sets: StagedSet[]) => void;
   onClose: () => void; // discard the staged plan
@@ -98,6 +117,7 @@ export default function StagedScheduleModal({
   plan,
   users,
   teams,
+  colors = {},
   busy,
   onApply,
   onClose,
@@ -166,7 +186,7 @@ export default function StagedScheduleModal({
 
   // What the Team load panel measures people by: this plan (the default), or
   // the sets they're already on over some window. See LOAD_METRICS.
-  const [metric, setMetric] = useState<LoadMetric>("plan");
+  const [metric, setMetric] = useState<LoadMetric>(DEFAULT_PLAN_METRIC);
   // Tallies fetched from the server, keyed by the metric that asked for them.
   // A window is only ever queried once per modal session — re-picking one you've
   // already looked at is instant, and the default view queries nothing at all.
@@ -263,7 +283,7 @@ export default function StagedScheduleModal({
   } else if (loadPending) {
     loadNote = ` — loading ${windowName}…`;
   } else if (metric !== "plan") {
-    loadNote = ` — bars show ${windowName}, “+N” is this plan`;
+    loadNote = ` — bars show ${windowName}`;
   }
 
   const totalAssignments = sets.reduce((n, s) => n + s.assignments.length, 0);
@@ -583,12 +603,12 @@ export default function StagedScheduleModal({
               value={metricKey}
               onChange={(e) => {
                 // Option values are the metric in its wire form, so this is the
-                // same parse the API route does (lib/stagedPlan.ts).
+                // same parse the API route does (lib/loadMetrics.ts).
                 const picked = parseLoadMetric(e.target.value);
                 if (picked !== null) setMetric(picked);
               }}
             >
-              {LOAD_METRICS.map((m) => (
+              {PLAN_LOAD_METRICS.map((m) => (
                 <option key={metricToParam(m.metric)} value={metricToParam(m.metric)}>
                   {m.label}
                 </option>
@@ -615,9 +635,6 @@ export default function StagedScheduleModal({
                   key={r.userId}
                   name={nameOf(r.userId)}
                   count={r.count}
-                  // Only worth showing alongside once the bar is showing
-                  // something else — until the window lands, it IS the plan.
-                  planCount={measuredBy ? r.planCount : null}
                   peak={peak}
                   isMD={isMdOf(r.userId)}
                 />
@@ -748,11 +765,21 @@ export default function StagedScheduleModal({
             const conflicted = conflictedUserIds(set, rules);
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
+            // This set type's tint, if the admin picked one — a fifth
+            // strength in light mode, half that in dark, where the same alpha
+            // over a near-black card shouts. Both go in as custom properties
+            // so the CSS below picks one per theme (see lib/colors.ts).
+            const tint = set.templateId
+              ? tintVars(colors[set.templateId] ?? "", 0.2, 0.1)
+              : null;
             return (
               <div
                 key={set.startsAt}
                 data-testid="staged-set-card"
-                className="flex w-72 shrink-0 flex-col rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+                style={tint as CSSProperties | undefined}
+                className={`flex w-72 shrink-0 flex-col rounded-lg border border-gray-200 p-3 dark:border-gray-700 ${
+                  tint ? "bg-[var(--tint)] dark:bg-[var(--tint-dark)]" : ""
+                }`}
               >
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -826,6 +853,10 @@ export default function StagedScheduleModal({
                               key={`${a.userId}-${role}`}
                               className="flex items-center gap-1.5"
                             >
+                              <LockCell
+                                locked={!!a.locked}
+                                onUnlock={() => unlock(idx, a.userId, role)}
+                              />
                               <PlayerSelect
                                 selected={{
                                   id: a.userId,
@@ -838,6 +869,11 @@ export default function StagedScheduleModal({
                                     userById.get(a.userId) ?? { id: a.userId },
                                     set.teamId
                                   ),
+                                  // The designated MD rides inside the box with
+                                  // the name, so the box still ends where every
+                                  // other box on the card ends.
+                                  tag:
+                                    a.userId === mdUserId ? "* (MD)" : undefined,
                                 }}
                                 options={options}
                                 disabled={busy}
@@ -852,29 +888,33 @@ export default function StagedScheduleModal({
                                     : remove(idx, a.userId, role)
                                 }
                               />
-                              <SlotMarkers
-                                count={counts.get(a.userId) ?? 0}
-                                isMD={a.userId === mdUserId}
-                                unavailable={conflicted.has(a.userId)}
-                                locked={!!a.locked}
-                                onUnlock={() => unlock(idx, a.userId, role)}
-                              />
+                              <LoadCell count={counts.get(a.userId) ?? 0} />
                             </div>
                           ))}
 
                           {/* Empty slots: pick someone to fill them. */}
                           {Array.from({ length: openSlots }).map((_, i) => (
-                            <PlayerSelect
+                            /* The same three columns as a filled row — an empty
+                               lock cell and an empty load cell — so an unfilled
+                               slot's box starts and ends exactly where the
+                               filled ones above it do. */
+                            <div
                               key={`add-${role}-${i}`}
-                              selected={null}
-                              options={options}
-                              disabled={busy}
-                              dashed
-                              widthClass="w-full"
-                              onChange={(userId) =>
-                                userId && add(idx, role, userId)
-                              }
-                            />
+                              className="flex items-center gap-1.5"
+                            >
+                              <LockCell locked={false} />
+                              <PlayerSelect
+                                selected={null}
+                                options={options}
+                                disabled={busy}
+                                dashed
+                                widthClass="w-full min-w-0 flex-1"
+                                onChange={(userId) =>
+                                  userId && add(idx, role, userId)
+                                }
+                              />
+                              <LoadCell />
+                            </div>
                           ))}
                         </div>
                       </li>
@@ -958,26 +998,17 @@ export default function StagedScheduleModal({
   );
 }
 
-// The label for a metric, for the panel's footnote.
-function metricLabel(metric: LoadMetric): string {
-  return LOAD_METRICS.find((m) => m.metric === metric)?.label ?? "In this plan";
-}
-
 // One row of the Team load panel: name, a bar scaled to the busiest person, and
-// the count. The busiest people get an amber bar so over-use is easy to spot.
-// When the panel is measuring something OTHER than this plan, `planCount` is
-// this plan's own tally, shown as a muted "+N" so the admin never loses sight
-// of what they're editing.
+// ONE number — how many slots that person holds in whatever window the picker
+// is showing. The busiest people get an amber bar so over-use is easy to spot.
 function LoadBar({
   name,
   count,
-  planCount,
   peak,
   isMD,
 }: {
   name: string;
   count: number;
-  planCount: number | null;
   peak: number;
   isMD: boolean;
 }) {
@@ -996,21 +1027,14 @@ function LoadBar({
             </span>
           )}
         </span>
-        <span className="shrink-0 text-xs tabular-nums">
-          {planCount !== null && (
-            <span className="mr-1 font-medium text-indigo-600 dark:text-indigo-400">
-              +{planCount}
-            </span>
-          )}
-          <span
-            className={`font-semibold ${
-              heavy
-                ? "text-amber-600 dark:text-amber-400"
-                : "text-gray-500 dark:text-gray-400"
-            }`}
-          >
-            {count}
-          </span>
+        <span
+          className={`shrink-0 text-xs font-semibold tabular-nums ${
+            heavy
+              ? "text-amber-600 dark:text-amber-400"
+              : "text-gray-500 dark:text-gray-400"
+          }`}
+        >
+          {count}
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
@@ -1025,25 +1049,20 @@ function LoadBar({
   );
 }
 
-// The little badges to the right of a filled slot: a 🔒 when you picked this
-// person yourself, total load (×N), an MD tag, and an "unavailable" warning
-// when the person can't serve at this set's time. The lock is a button: click
-// it to hand the slot back to the scheduler without emptying it.
-function SlotMarkers({
-  count,
-  isMD,
-  unavailable,
+// The 🔒 column to the LEFT of a slot's dropdown: shown when you picked this
+// person yourself (auto schedule will then keep them), and clicking it hands
+// the slot back to the scheduler without emptying it. It keeps its width when
+// there's no lock to draw, so every dropdown on a card starts at the same edge.
+function LockCell({
   locked,
   onUnlock,
 }: {
-  count: number;
-  isMD: boolean;
-  unavailable: boolean;
   locked: boolean;
-  onUnlock: () => void;
+  // Absent on an empty slot — there's nothing to unlock, the cell is a spacer.
+  onUnlock?: () => void;
 }) {
   return (
-    <span className="flex shrink-0 items-center gap-1 text-xs">
+    <span className="flex w-4 shrink-0 justify-center text-xs">
       {locked && (
         <button
           type="button"
@@ -1055,25 +1074,25 @@ function SlotMarkers({
           🔒
         </button>
       )}
-      {unavailable && (
-        <span
-          className="font-medium text-amber-600 dark:text-amber-400"
-          title="Unavailable at this set's time"
-        >
-          unavailable
-        </span>
-      )}
-      {isMD && (
-        <span className="font-medium text-indigo-600 dark:text-indigo-400">
-          * (MD)
-        </span>
-      )}
-      <span
-        className="tabular-nums text-gray-400"
-        title={`On ${count} set${count === 1 ? "" : "s"} this run`}
-      >
-        ×{count}
-      </span>
+    </span>
+  );
+}
+
+// The load column to the RIGHT: how many sets this person is on in the plan.
+// Fixed at the width of a two-digit count and right-aligned, and drawn (empty)
+// for unfilled slots too — the point is that every dropdown in the column ends
+// at the same edge, not that the number is snug.
+function LoadCell({ count }: { count?: number }) {
+  return (
+    <span
+      className="w-7 shrink-0 text-right text-xs tabular-nums text-gray-400"
+      title={
+        count === undefined
+          ? undefined
+          : `On ${count} set${count === 1 ? "" : "s"} this run`
+      }
+    >
+      {count === undefined ? "" : `×${count}`}
     </span>
   );
 }

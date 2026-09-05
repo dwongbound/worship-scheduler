@@ -19,11 +19,13 @@ interface ModalProps {
   // chip), center-aligned with it rather than dropping to the subtitle line.
   titleAccessory?: ReactNode;
   children: ReactNode;
-  // Panel width. "lg" (default) is the standard centered dialog; "xl" is the
-  // roomier dialog for content-heavy views (e.g. a set's roster + setlist);
+  // Panel width. "lg" (default) is the standard centered dialog; "wide" is a
+  // step up for dialogs whose lines would otherwise wrap (e.g. a list of
+  // recurring sets with their day, time and team); "xl" is the roomier dialog
+  // for content-heavy views (e.g. a set's roster + setlist);
   // "full" is a near-full-screen workspace for review/editing flows (e.g. the
   // staged schedule) where a single narrow column would be hard to scan.
-  size?: "lg" | "xl" | "full";
+  size?: "lg" | "wide" | "xl" | "full";
   // Optional action bar pinned to the bottom of the panel, outside the scroll
   // area (e.g. Apply / Discard). Buttons here stay put while the body scrolls.
   footer?: ReactNode;
@@ -34,6 +36,7 @@ interface ModalProps {
 // thin margin below — just enough for the backdrop to still read as a modal.
 const SIZE_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
   lg: "max-w-lg max-h-[85vh]",
+  wide: "max-w-2xl max-h-[85vh]",
   xl: "max-w-3xl max-h-[88vh]",
   full: "max-w-none h-[96vh]",
 };
@@ -74,6 +77,7 @@ function lockBodyScroll(): () => void {
 // screen, so its margin is a hairline compared to a centered dialog's.
 const PADDING_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
   lg: "p-4",
+  wide: "p-4",
   xl: "p-4",
   full: "p-2 sm:p-3",
 };

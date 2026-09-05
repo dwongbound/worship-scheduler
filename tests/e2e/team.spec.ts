@@ -236,3 +236,53 @@ test("admin reorders a team's roles by dragging, and the order sticks", async ({
 // Note: per-set auto group chats are configured on the set/template now (see the
 // set detail modal and the recurring-set form), not on the team, so there's no
 // team-level lead-time control here anymore.
+
+// The cog menu's "Edit details" — for now the display name, which is a User
+// field (global to the person), not a per-org one. Renaming has to survive a
+// reload and re-sort the list, since the page is ordered by name.
+test("admin renames a member from the cog menu's Edit details", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.getByRole("button", { name: "Admin", exact: true }).hover();
+  await page.getByRole("link", { name: "Team" }).click();
+  await expect(page.getByRole("heading", { name: "Team" })).toBeVisible();
+
+  const openDetailsFor = async (name: string) => {
+    await page.getByLabel(`Settings for ${name}`).click();
+    await page.getByRole("button", { name: "Edit details" }).click();
+  };
+
+  await openDetailsFor("Bob Baker");
+  // The modal names the person and says what they sign in as — the reassurance
+  // that a rename doesn't move their login.
+  await expect(page.getByRole("heading", { name: "Edit Bob Baker" })).toBeVisible();
+  await expect(page.getByText("bob", { exact: true })).toBeVisible();
+
+  // A blank name is refused, and the modal stays open to say so.
+  await page.getByLabel("Name").fill("   ");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByText("Name is required.")).toBeVisible();
+
+  await page.getByLabel("Name").fill("Robert Baker");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Edit Bob Baker" })
+  ).not.toBeVisible();
+
+  // Reload to prove it was persisted server-side, not just local state.
+  await page.reload();
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "Robert Baker" })
+  ).toBeVisible();
+  await expect(page.getByText("Bob Baker")).not.toBeVisible();
+
+  // Revert, so the rest of the suite still finds "Bob Baker".
+  await openDetailsFor("Robert Baker");
+  await page.getByLabel("Name").fill("Bob Baker");
+  await page.getByRole("button", { name: "Save" }).click();
+  await page.reload();
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "Bob Baker" })
+  ).toBeVisible();
+});

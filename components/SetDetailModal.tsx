@@ -11,11 +11,15 @@
 // footer: every control writes to a local working copy of the set (`draft`),
 // which the whole render reads through the shadowed `set` below, so a change
 // looks exactly as it will once saved. Save then diffs the copy against the
-// original (lib/setDraft.ts) and issues only the calls that changed; Cancel,
-// ✕, Escape and the backdrop all route through a confirmation that LISTS the
-// unsaved changes first. Two things stay immediate, because neither can be
-// staged honestly: deleting the set, and messaging the team on Slack (that one
-// leaves the building the moment you click it).
+// original (lib/setDraft.ts) and issues only the calls that changed, then CLOSES
+// the modal — a save is the end of the job (a failed one keeps the modal and
+// the staged edits up, with the error in a toast). Cancel, ✕, Escape and the
+// backdrop all route through a confirmation that LISTS the unsaved changes
+// first. Two things stay immediate, because neither can be
+// staged honestly: deleting the set, messaging the team on Slack (that one
+// leaves the building the moment you click it), and sending a note — the notes
+// box is a composer with a send arrow, empty every time the modal opens, whose
+// log below it holds everything written so far.
 //
 // There's no activity log here: a set's history is part of the org-wide Team
 // Activity view (components/TeamActivityModal.tsx, on the admin Team tab),
@@ -44,6 +48,7 @@ import Dropdown from "./common/Dropdown";
 import InfoTooltip from "./common/InfoTooltip";
 import LoadingDots from "./common/LoadingDots";
 import Checkbox from "./common/Checkbox";
+import Select from "./common/Select";
 import SlackIcon from "./common/SlackIcon";
 import Toast, { type ToastMessage } from "./common/Toast";
 import SlotCapacityEditor from "./SlotCapacityEditor";
@@ -66,7 +71,7 @@ import {
   roleLabel,
   teamSupportsMD,
 } from "@/lib/teamRoles";
-import { formatDay, formatTime } from "@/lib/dates";
+import { formatDay, formatTime, shortDateTimeLabel } from "@/lib/dates";
 import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
 import {
   availableGuestMembers,
@@ -75,6 +80,13 @@ import {
   type UnavailabilityRule,
 } from "@/lib/scheduler";
 import { isActiveForSet } from "@/lib/stagedPlan";
+import {
+  DEFAULT_SET_METRIC,
+  type LoadMetric,
+  metricToParam,
+  parseLoadMetric,
+  SET_LOAD_METRICS,
+} from "@/lib/loadMetrics";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   describeSetChanges,
@@ -83,7 +95,8 @@ import {
   type SetSnapshot,
 } from "@/lib/setDraft";
 import { buildPlayerOptions } from "@/lib/playerOptions";
-import { fetchJsonArray } from "@/lib/api";
+import { describeNotesChange, noteTextFromDetail } from "@/lib/setNotes";
+import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { isUnbounded, openSeats } from "@/lib/guestTeams";
 import GuestTeamsModal, { type GuestTeamDraft } from "./GuestTeamsModal";
 import type {
@@ -91,6 +104,7 @@ import type {
   ApiAssignment,
   ApiSet,
   ApiSetGuestTeam,
+  ApiSetHistoryEvent,
   ApiTeam,
 } from "@/lib/types";
 
@@ -100,16 +114,13 @@ interface SetDetailModalProps {
   currentUserId?: string;
   isAdmin?: boolean;
   users?: ApiAdminUser[]; // for the admin assignment dropdowns
-  // Every set in view (calendar's −7d…+92d window). Used to count how many
-  // times each person is already scheduled within ±2 weeks of this set, which
-  // orders the assignment dropdowns least-scheduled-first.
-  allSets?: ApiSet[];
   onChanged?: () => void | Promise<void>; // refetch after an edit
 }
 
-// How wide a window (each side, in days) counts toward a person's recent
-// scheduling load in the assignment dropdowns.
-const SERVE_WINDOW_DAYS = 14;
+// Where the assignment dropdowns' ×n window is remembered. Session-scoped and
+// shared by every set: an admin who wants to weigh people by the past 3 months
+// wants that for the whole sitting, not one set at a time.
+const LOAD_METRIC_KEY = "worship:set-load-metric";
 
 export default function SetDetailModal({
   set: savedSet,
@@ -117,7 +128,6 @@ export default function SetDetailModal({
   currentUserId,
   isAdmin = false,
   users = [],
-  allSets = [],
   onChanged,
 }: SetDetailModalProps) {
   // The working copy every edit writes to. null = untouched since it opened (or
@@ -128,8 +138,14 @@ export default function SetDetailModal({
   // this one name, so staging cost the rest of the component nothing.
   const set = draft ?? savedSet;
   const [notesDraft, setNotesDraft] = useState("");
+  // The notes log shown under the textarea. Deliberately ONLY notes events —
+  // the roster's own history lives in the Team tab's activity log, and mixing
+  // the two here buried the handful of lines anyone opens this for.
+  const [notesHistory, setNotesHistory] = useState<ApiSetHistoryEvent[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  // Two-step delete: the button flips to "Confirm delete" before firing.
+  // Deleting the set raises a stacked confirm modal — the same weight as every
+  // other irreversible step here, rather than an inline row you can hit twice.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Stacked "you have unsaved changes" warning, raised by any attempt to leave
   // with staged edits (Cancel, ✕, Escape, the backdrop).
@@ -181,12 +197,12 @@ export default function SetDetailModal({
   const [guestDraft, setGuestDraft] = useState<GuestTeamDraft[] | null>(null);
   const [orgTeams, setOrgTeams] = useState<ApiTeam[] | null>(null);
 
-  // Keep the notes textarea in sync with whichever set is open. Follows the
-  // SAVED set: the textarea is the notes' staging area, so it must only be
-  // reseeded when the server's copy changes (a save, or a different set).
+  // The notes box is a COMPOSER, not a field: it starts empty every time a set
+  // opens, the way a message box does. What's already been written lives in the
+  // notes log below it, so an empty box never means "the notes were lost".
   useEffect(() => {
-    setNotesDraft(savedSet?.notes ?? "");
-  }, [savedSet?.id, savedSet?.notes]);
+    setNotesDraft("");
+  }, [savedSet?.id]);
 
   // The saved setlist, as the comparable shape. Doubles as the songs editor's
   // reseed trigger and as one half of the unsaved-changes diff. Everything is
@@ -236,6 +252,28 @@ export default function SetDetailModal({
     setGuestDraft(null);
     setToast(null);
   }, [savedSet?.id]);
+
+  // The notes log, reloaded whenever a different set opens and again right
+  // after a note is sent. Asking the endpoint for NOTES_CHANGED alone keeps a
+  // busy set's whole roster history off the wire.
+  const refetchNotesHistory = (id: string) => {
+    setHistoryLoading(true);
+    fetch(`/api/sets/${id}/history?types=NOTES_CHANGED`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setNotesHistory(Array.isArray(d) ? d : []))
+      .catch(() => setNotesHistory([]))
+      .finally(() => setHistoryLoading(false));
+  };
+
+  const openSetId = savedSet?.id;
+  useEffect(() => {
+    // Blank the previous set's entries so one set's notes can never flash under
+    // another's textarea while the new list is in flight.
+    setNotesHistory([]);
+    if (!openSetId) return;
+    refetchNotesHistory(openSetId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openSetId]);
 
   // The org's teams, for the guest-team picker. Fetched once the editor is
   // first opened (not on every calendar load) and only for the set's own org,
@@ -294,26 +332,79 @@ export default function SetDetailModal({
     [users]
   );
 
-  // How many times each user is already scheduled within ±SERVE_WINDOW_DAYS of
-  // this set (counted once per set even if they hold several roles on it).
-  // Orders the assignment dropdowns so the least-recently-scheduled surface
-  // first. (Above the early return to keep hook order stable.)
-  const serveCounts = useMemo<Map<string, number>>(() => {
-    const counts = new Map<string, number>();
-    if (!set) return counts;
-    const center = new Date(set.startsAt).getTime();
-    const span = SERVE_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-    for (const s of allSets) {
-      if (Math.abs(new Date(s.startsAt).getTime() - center) > span) continue;
-      const seen = new Set<string>();
-      for (const a of s.assignments) {
-        if (seen.has(a.user.id)) continue; // one set = one serve, not per role
-        seen.add(a.user.id);
-        counts.set(a.user.id, (counts.get(a.user.id) ?? 0) + 1);
-      }
+  // ── The ×n load window ─────────────────────────────────────────────────
+  // How busy each person already is, which orders the assignment dropdowns
+  // least-scheduled-first and feeds the in-browser auto fill. WHICH window that
+  // is measured over is the admin's pick (the selector above the roster), so
+  // the numbers are counted server-side per window rather than from whatever
+  // the calendar happened to have fetched — "past 3 months" is data this page
+  // never holds. Same endpoint and same vocabulary as the generate-review
+  // modal's Team load panel (lib/loadMetrics.ts).
+  //
+  // (All of this sits above the early return to keep hook order stable.)
+  const [metric, setMetric] = useState<LoadMetric>(() => {
+    if (typeof window === "undefined") return DEFAULT_SET_METRIC;
+    // Session-scoped, so the window follows the admin from set to set.
+    const stored = parseLoadMetric(
+      window.sessionStorage.getItem(LOAD_METRIC_KEY)
+    );
+    // "plan" is the review modal's own metric and means nothing here.
+    return stored === null || stored === "plan" ? DEFAULT_SET_METRIC : stored;
+  });
+  const metricKey = metricToParam(metric);
+  const pickMetric = (next: LoadMetric) => {
+    setMetric(next);
+    try {
+      window.sessionStorage.setItem(LOAD_METRIC_KEY, metricToParam(next));
+    } catch {
+      // Private-mode storage failures are cosmetic — the pick still applies to
+      // this modal, it just won't be remembered.
     }
-    return counts;
-  }, [allSets, set?.id, set?.startsAt]);
+  };
+  // Tallies keyed by the window that asked for them. Cleared when a different
+  // set opens: the neighbourhood windows ("this set's month", "±2 weeks") are
+  // measured around THAT set's date, so another set's numbers aren't reusable.
+  const [loadCache, setLoadCache] = useState<
+    Record<string, Record<string, number>>
+  >({});
+  useEffect(() => setLoadCache({}), [savedSet?.id]);
+
+  const setStartsAt = set?.startsAt;
+  const loadOrgId = set?.org?.id;
+  useEffect(() => {
+    // Only admins see the ×n at all, and the endpoint is admin-only.
+    if (!isAdmin || !loadOrgId || !setStartsAt || loadCache[metricKey]) return;
+    let cancelled = false;
+    const params = new URLSearchParams({
+      metric: metricKey,
+      // The date the neighbourhood windows centre on: THIS set's, not today's.
+      ref: setStartsAt,
+    });
+    fetch(`/api/admin/team-load?${params}`, { headers: orgHeaders(loadOrgId) })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("failed"))))
+      .then((d) => {
+        if (!cancelled) {
+          setLoadCache((prev) => ({ ...prev, [metricKey]: d.counts ?? {} }));
+        }
+      })
+      // A failed window just means no ×n — the dropdowns still work, they're
+      // only ordered by availability and name instead.
+      .catch(() => {
+        if (!cancelled) setLoadCache((prev) => ({ ...prev, [metricKey]: {} }));
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, loadOrgId, setStartsAt, metricKey]);
+
+  // Undefined until the window lands — buildPlayerOptions then leaves the ×n
+  // off entirely rather than showing one window's numbers under another's name.
+  const windowCounts = loadCache[metricKey];
+  const serveCounts = useMemo<Map<string, number> | undefined>(
+    () => (windowCounts ? new Map(Object.entries(windowCounts)) : undefined),
+    [windowCounts]
+  );
 
   // Song-reorder sensors: a pointer sensor (mouse + touch) with a small
   // activation distance so focusing a row's handle doesn't start a drag, plus a
@@ -338,6 +429,11 @@ export default function SetDetailModal({
   // are rendered in their own blocks lower down and must not be counted here —
   // a visiting choir doesn't fill this team's own choir slots.
   const ownAssignments = set.assignments.filter((a) => !a.guestTeamId);
+  // How many distinct people are on the SAVED set — what the delete confirm
+  // warns about. Staged edits don't count: deleting throws them away anyway.
+  const savedAssignedCount = new Set(
+    (savedSet ?? set).assignments.map((a) => a.user.id)
+  ).size;
   const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
   // What to call a role here — this team's own label, with the built-in name
   // (then a humanized key) as the fallback for a role it has since dropped.
@@ -386,13 +482,14 @@ export default function SetDetailModal({
   // buildPlayerOptions excludes them from the candidates (they're already
   // here), so PlayerSelect draws their row from this instead — without it the
   // current pick is the only name in the list with no "(unavailable)" on it.
-  // The ×n counts this set too (serveCounts is built from the saved sets,
-  // which include this one), so the person in the seat reads on the same scale
-  // as the candidates under them rather than looking like they serve less.
+  // The ×n counts this set too (the window includes it), so the person in the
+  // seat reads on the same scale as the candidates under them rather than
+  // looking like they serve less. While the window is still loading there's no
+  // count to show, exactly as for the candidates.
   const selectedFlags = (userId: string, teamId: string | null | undefined) => ({
     available: isUserAvailable(userId, calcSet, rules),
     inactive: !isActiveForSet(users.find((u) => u.id === userId) ?? { id: userId }, teamId),
-    count: serveCounts.get(userId) ?? 0,
+    ...(serveCounts ? { count: serveCounts.get(userId) ?? 0 } : {}),
   });
 
   const isSetWorshipLeader =
@@ -586,9 +683,11 @@ export default function SetDetailModal({
       ],
       schedulerPool(),
       rules,
-      // How often each person serves nearby — the same signal the dropdowns
-      // sort by, so the fill and the manual picks agree on who's fresh.
-      new Map(serveCounts)
+      // How often each person serves in the selected window — the same signal
+      // the dropdowns sort by, so the fill and the manual picks agree on who's
+      // fresh. Empty until that window lands, which only costs the fill its
+      // balancing tiebreak.
+      new Map(serveCounts ?? [])
     );
     if (proposals.length === 0) return;
 
@@ -822,7 +921,10 @@ export default function SetDetailModal({
   const before = snapshot(original, original.notes ?? "", savedSongs);
   // The MD goes in validated: pulling someone's seat can leave a stale id, and
   // "cleared the MD" is exactly what the admin needs to see before saving.
-  const after = { ...snapshot(set, notesDraft, draftSongs), mdUserId };
+  // Notes aren't staged: the composer sends them on its own (see sendNote), so
+  // both sides of the diff read the server's copy and an unsent note never
+  // counts as an unsaved change.
+  const after = { ...snapshot(set, set.notes ?? "", draftSongs), mdUserId };
   const nameFor = (userId: string) =>
     users.find((u) => u.id === userId)?.name ??
     set.assignments.find((a) => a.user.id === userId)?.user.name ??
@@ -899,9 +1001,6 @@ export default function SetDetailModal({
       if (before.groupChatLeadDays !== after.groupChatLeadDays) {
         fields.groupChatLeadDays = after.groupChatLeadDays;
       }
-      if (before.notes.trim() !== after.notes.trim()) {
-        fields.notes = notesDraft;
-      }
       if (Object.keys(fields).length > 0) await patchSet(fields);
 
       for (const r of ops.reassigned) {
@@ -947,8 +1046,12 @@ export default function SetDetailModal({
 
       await onChanged?.();
       // Back to following the server's copy — the refetched set IS the truth
-      // now, and the drafts reseed from it.
+      // now, and the drafts reseed from it if the modal is reopened.
       setDraft(null);
+      // Saving is the end of the job, so it closes the modal. Only a SUCCESSFUL
+      // save gets here: a failed call throws above and lands in the catch,
+      // which keeps the modal (and the staged edits) on screen.
+      onClose();
     } catch (err) {
       setToast({
         text: err instanceof Error ? err.message : "Could not save your changes.",
@@ -969,6 +1072,67 @@ export default function SetDetailModal({
     setConfirmingDiscard(false);
     setDraft(null);
     onClose();
+  };
+
+  // Post the note in the composer. IMMEDIATE, like the Slack message and unlike
+  // every staged edit here: the box is a "send this" control, so the arrow
+  // sends it rather than parking it in the draft. The set's notes column holds
+  // the latest note; the log under the box keeps the earlier ones.
+  const noteReady = notesDraft.trim().length > 0 && !busy;
+  const sendNote = async () => {
+    if (!noteReady) return;
+    const text = notesDraft.trim();
+    // The line the server will log, worked out here from the SAME pure helper
+    // it uses (lib/setNotes.ts) so the optimistic entry below reads identically.
+    const summary = describeNotesChange(set.notes, text);
+    setBusy(true);
+    setToast(null);
+    try {
+      const res = await fetch(`/api/sets/${currentSetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: text }),
+      });
+      if (!res.ok) {
+        // Say what the server said — "Set not found" (a set deleted, or a page
+        // left open across a dev reseed) is a very different problem from a
+        // permission one, and a generic message hides both.
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error ?? "Could not send that note.");
+      }
+      setNotesDraft(""); // sent — the box empties for the next one
+      // Show it in the log AT ONCE, without waiting on either round trip: a
+      // stand-in row goes in now, and the refetch below swaps in the server's
+      // real one (same text, real id and timestamp) when it lands.
+      if (summary) {
+        setNotesHistory((prev) => [
+          {
+            id: `pending-${Date.now()}`,
+            type: "NOTES_CHANGED",
+            role: null,
+            detail: summary,
+            actor: currentUserId
+              ? { id: currentUserId, name: nameFor(currentUserId) }
+              : null,
+            targetUser: null,
+            previousUser: null,
+            createdAt: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
+      }
+      // Not awaited: the log is already right, and the calendar behind the
+      // modal can catch up in its own time.
+      refetchNotesHistory(currentSetId);
+      await onChanged?.();
+    } catch (err) {
+      setToast({
+        text: err instanceof Error ? err.message : "Could not send that note.",
+        tone: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Delete the whole set (assignments cascade). Closes the modal afterwards.
@@ -993,9 +1157,11 @@ export default function SetDetailModal({
       onClose={
         slotToDelete
           ? () => setSlotToDelete(null)
-          : confirmingDiscard
-            ? () => setConfirmingDiscard(false)
-            : attemptClose
+          : confirmingDelete
+            ? () => setConfirmingDelete(false)
+            : confirmingDiscard
+              ? () => setConfirmingDiscard(false)
+              : attemptClose
       }
       title={set.label ?? "Worship Set"}
       titleAccessory={
@@ -1037,39 +1203,16 @@ export default function SetDetailModal({
            the one button here that can't be taken back — and Cancel/Save at the
            right, Save last. Someone who can't edit anything just gets Close. */
         <div className="flex w-full items-center gap-2">
-          {isAdmin &&
-            (confirmingDelete ? (
-              <>
-                <Button
-                  size="sm"
-                  variant="danger"
-                  onClick={deleteSet}
-                  disabled={busy}
-                >
-                  Confirm delete
-                </Button>
-                <span className="text-sm text-gray-600 dark:text-gray-400">
-                  Delete this set and its whole team?
-                </span>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setConfirmingDelete(false)}
-                  disabled={busy}
-                >
-                  Keep set
-                </Button>
-              </>
-            ) : (
-              <Button
-                size="sm"
-                variant="danger"
-                onClick={() => setConfirmingDelete(true)}
-                disabled={busy}
-              >
-                Delete set
-              </Button>
-            ))}
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={() => setConfirmingDelete(true)}
+              disabled={busy}
+            >
+              Delete set
+            </Button>
+          )}
           <div className="ml-auto flex items-center gap-2">
             {canEditAnything ? (
               <>
@@ -1106,9 +1249,36 @@ export default function SetDetailModal({
           the overflow (⋮) menu on the right. The (i) tooltip opens DOWNWARD so
           it isn't clipped by the top of the modal. */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-3 dark:border-gray-700">
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5">
           {canEditTeam && (
             <>
+              {/* What the ×n badges measure. Sits BEFORE Auto schedule because
+                  it governs it too: the fill prefers whoever is least busy in
+                  this window. Changing it refetches the counts (they're a
+                  server-side tally, not something this page could derive). */}
+              <div className="w-44">
+                <Select
+                  label="Measure recent load by"
+                  hideLabel
+                  className="!py-1.5 text-xs"
+                  value={metricKey}
+                  onChange={(e) => {
+                    // Option values are the metric in its wire form — the same
+                    // parse the API route does (lib/loadMetrics.ts).
+                    const picked = parseLoadMetric(e.target.value);
+                    if (picked !== null) pickMetric(picked);
+                  }}
+                >
+                  {SET_LOAD_METRICS.map((m) => (
+                    <option
+                      key={metricToParam(m.metric)}
+                      value={metricToParam(m.metric)}
+                    >
+                      {m.label}
+                    </option>
+                  ))}
+                </Select>
+              </div>
               <Button
                 size="sm"
                 variant="secondary"
@@ -1122,14 +1292,14 @@ export default function SetDetailModal({
                 text={
                   <>
                     Fills this set&apos;s <strong>empty slots</strong>{" "}
-                    with available team members, preferring people who aren&apos;t
-                    already serving in the surrounding week. People already
-                    assigned keep their roles — the fill works around them.
-                    Seats borrowed from other teams have their own Auto schedule
-                    button, on their block below. In
-                    the assignment dropdowns, the ×N badge is how many times
-                    that person is already scheduled within ±2 weeks of this
-                    set; the least-scheduled, available people are listed first.
+                    with available team members, preferring people who
+                    aren&apos;t already serving much. People already assigned
+                    keep their roles — the fill works around them. Seats
+                    borrowed from other teams have their own Auto schedule
+                    button, on their block below. The dropdown on the left picks
+                    the window that &quot;serving much&quot; is measured over:
+                    it&apos;s the ×N badge in every assignment dropdown, and the
+                    least-scheduled, available people are listed first.
                   </>
                 }
               />
@@ -1349,6 +1519,9 @@ export default function SetDetailModal({
                         selected={{
                           id: a.user.id,
                           name: a.user.name,
+                          // Inside the box with the name, so the status badge
+                          // beside it lands in the same place on every row.
+                          tag: a.user.id === mdUserId ? "* (MD)" : undefined,
                           ...selectedFlags(a.user.id, set.teamId ?? set.team?.id),
                         }}
                         options={options}
@@ -1359,11 +1532,6 @@ export default function SetDetailModal({
                             : removeAssignment(a.id)
                         }
                       />
-                      {a.user.id === mdUserId && (
-                        <span className="text-xs font-medium text-indigo-600 dark:text-indigo-400">
-                          * (MD)
-                        </span>
-                      )}
                       <StatusBadge status={a.status} />
                     </li>
                   ) : (
@@ -1738,16 +1906,38 @@ export default function SetDetailModal({
           Notes
         </p>
         {canEditNotes ? (
-          <div className="space-y-2">
+          // Box + send arrow, like a message composer: the arrow only lights up
+          // once there's something to send, and Enter sends (⇧Enter for a new
+          // line) so a one-line note never needs the mouse.
+          <div className="flex items-end gap-2">
             <textarea
               value={notesDraft}
               onChange={(e) => setNotesDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  sendNote();
+                }
+              }}
               rows={2}
               placeholder="e.g. Communion Sunday — extra song at the end"
               className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm
                 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
                 dark:border-gray-600 dark:bg-gray-800"
             />
+            <button
+              type="button"
+              onClick={sendNote}
+              disabled={!noteReady}
+              aria-label="Send note"
+              title={noteReady ? "Send note" : "Write a note to send"}
+              className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full
+                bg-indigo-600 text-lg leading-none text-white transition-colors
+                hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-gray-200
+                disabled:text-gray-400 dark:disabled:bg-gray-700 dark:disabled:text-gray-500"
+            >
+              →
+            </button>
           </div>
         ) : set.notes ? (
           <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
@@ -1756,6 +1946,44 @@ export default function SetDetailModal({
         ) : (
           <p className="text-sm text-gray-400">No notes.</p>
         )}
+
+        {/* What's been written, newest first — the box above only ever sends,
+            so this is where every note lives. Each one is its own bubble, read
+            as a message rather than a log row (no heading, no rules between
+            them). Roster changes aren't shown here; those live in the Team
+            tab's activity log. */}
+        <div className="mt-3">
+          {/* "Loading…" only on a FIRST load. A refresh after sending keeps the
+              existing bubbles on screen and swaps them in place — blanking the
+              list and back moved everything under it and yanked the modal's
+              scroll position out from under the reader. */}
+          {historyLoading && notesHistory.length === 0 ? (
+            <p className="text-sm text-gray-400">Loading…</p>
+          ) : notesHistory.length === 0 ? (
+            <p className="text-sm text-gray-400">No notes yet.</p>
+          ) : (
+            <ul className="max-h-56 space-y-2 overflow-y-auto pr-1">
+              {notesHistory.map((event) => (
+                <li
+                  key={event.id}
+                  data-testid="note-entry"
+                  className="rounded-2xl bg-gray-100 px-3 py-2 dark:bg-gray-700/50"
+                >
+                  {/* Who and when, then the note itself — the message reads
+                      plainly, without the log's "added a note:" wrapper or the
+                      quotes around it (see lib/setNotes.ts). */}
+                  <p className="text-xs text-gray-400 dark:text-gray-500">
+                    {event.actor?.name ?? "Someone"} —{" "}
+                    {shortDateTimeLabel(event.createdAt)}
+                  </p>
+                  <p className="mt-0.5 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">
+                    {noteTextFromDetail(event.detail)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
 
 
@@ -1877,6 +2105,52 @@ export default function SetDetailModal({
           onSave={saveGuestTeams}
           busy={busy}
         />
+      )}
+
+      {/* Stacked confirm for deleting the whole set. A modal rather than an
+          inline "Confirm delete" row: this is the one action here that can't
+          be undone, so it gets its own surface, names the set it's about, and
+          says how many people go with it. */}
+      {confirmingDelete && (
+        <Modal
+          open
+          onClose={() => setConfirmingDelete(false)}
+          title="Delete this set?"
+          subtitle={`${formatDay(set.startsAt)} · ${formatTime(set.startsAt)}`}
+          footer={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setConfirmingDelete(false)}
+                disabled={busy}
+              >
+                Keep set
+              </Button>
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={deleteSet}
+                disabled={busy}
+              >
+                {busy ? <LoadingDots size="sm" /> : "Delete set"}
+              </Button>
+            </>
+          }
+        >
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            {set.label ?? "This set"} and its whole roster will be removed.
+            {savedAssignedCount > 0 && (
+              <>
+                {" "}
+                {savedAssignedCount}{" "}
+                {savedAssignedCount === 1 ? "person is" : "people are"} scheduled
+                on it.
+              </>
+            )}{" "}
+            This can't be undone.
+          </p>
+        </Modal>
       )}
 
       {/* Stacked confirm for removing a slot that still has a person in it. */}

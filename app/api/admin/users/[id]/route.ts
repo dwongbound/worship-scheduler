@@ -1,8 +1,8 @@
-// PATCH /api/admin/users/:id — an org admin edits a member's admin flag
-// (for THIS org), musical-director flag, this-org team memberships, that
-// member's per-team roles + per-team active flag, and the per-org "always in
-// group chats" flag. Org comes from the x-org-id header; the target must be a
-// member of that org.
+// PATCH /api/admin/users/:id — an org admin edits a member's display name,
+// admin flag (for THIS org), musical-director flag, this-org team
+// memberships, that member's per-team roles + per-team active flag, and the
+// per-org "always in group chats" flag. Org comes from the x-org-id header;
+// the target must be a member of that org.
 // DELETE /api/admin/users/:id — an org admin removes a member from THIS org.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
@@ -36,6 +36,17 @@ export async function PATCH(
   // membership + per-team roles on TeamMember. All team edits touch only THIS
   // org's teams. We run the writes below imperatively (not one $transaction)
   // because the TeamMember reconciliation depends on reads.
+
+  // The display name is global to the person (a User field, like isMD), not
+  // per-org: they're one human, and every org they serve in should see the
+  // correction. Rejected blank — the name is what every roster renders.
+  if (typeof body.name === "string") {
+    const name = body.name.trim().replace(/\s+/g, " ");
+    if (!name) {
+      return NextResponse.json({ error: "Name is required." }, { status: 400 });
+    }
+    await prisma.user.update({ where: { id }, data: { name } });
+  }
 
   if (typeof body.isMD === "boolean") {
     await prisma.user.update({ where: { id }, data: { isMD: body.isMD } });

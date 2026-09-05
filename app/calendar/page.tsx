@@ -427,7 +427,6 @@ function CalendarView() {
         users={
           selectedSet?.org ? adminUsersByOrg[selectedSet.org.id] ?? [] : []
         }
-        allSets={sets}
         onChanged={refetchSets}
       />
 
