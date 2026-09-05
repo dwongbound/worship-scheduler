@@ -64,6 +64,11 @@ test("auto-scheduling a required-MD set from its detail modal seats an MD", asyn
     modal.getByText(/requires an MD but none is assigned/)
   ).toHaveCount(0);
   await expect(modal.getByText("* (MD)").first()).toBeVisible();
+
+  // The fill is staged; commit it so the set doesn't stay empty for the rest
+  // of the suite.
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(modal.getByText("* (MD)").first()).toBeVisible();
 });
 
 test("the set actions (⋮) menu lists the actions and Change Roles sets Require MD", async ({
@@ -107,12 +112,12 @@ test("the set actions (⋮) menu lists the actions and Change Roles sets Require
   await expect(menuItem("Change Roles")).toHaveCount(0);
   await openMenu();
 
-  // "Change Roles" opens a stacked modal holding the team shape plus the MD
-  // and choir flags. Turning Require MD on → the "needs an MD" warning appears
-  // (this set is empty).
+  // "Change Roles" opens a stacked modal holding the team shape plus the
+  // Require-MD flag. Turning it on → the "needs an MD" warning appears (this
+  // set is empty). Borrowing other teams' people lives in its own "Guest
+  // teams" modal, not here.
   await menuItem("Change Roles").click();
   const roles = () => page.getByRole("dialog").last();
-  await expect(roles().getByLabel("Include choir in set")).toBeVisible();
   await roles().getByLabel("Require MD").check();
   await roles().getByRole("button", { name: "Save" }).click();
   await expect(

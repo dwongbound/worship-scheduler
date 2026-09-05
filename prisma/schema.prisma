@@ -196,6 +196,8 @@ model Team {
   reminders WeeklyReminder[]
   // Availability requests aimed at this team (see AvailabilityRequest.teams).
   availabilityRequests AvailabilityRequest[] @relation("AvailabilityRequestTeams")
+  // Sets this team guests on (it doesn't own them) — see SetGuestTeam.
+  guestOnSets          SetGuestTeam[]
 
   createdAt DateTime @default(now())
 
@@ -370,11 +372,6 @@ model Set {
   // Default false = a normal set visible to the whole org.
   isPrivate Boolean @default(false)
 
-  // Choir is opt-in PER SET: an admin flips this on before anyone can be added
-  // to the set's choir or auto-scheduled into it. Default false = no choir on
-  // this set (the choir section is off and "Auto schedule" skips choir).
-  choirEnabled Boolean @default(false)
-
   // Auto-create this set's private Slack channel this many days before it
   // starts (the daily cron does it). Null = off. Copied from the SetTemplate at
   // generate time; editable per set. Distinct from Team.slackChannelId (the
@@ -430,9 +427,47 @@ model Set {
   assignments Assignment[]
   history     SetHistoryEvent[]
 
+  // Other teams lending people to this set (e.g. the choir team joining a
+  // Sunday-team set). The set still BELONGS to `team` — guests only widen who
+  // may be assigned, and each row says which of its team's roles are on offer.
+  guestTeams SetGuestTeam[]
+
   createdAt DateTime @default(now())
 
   @@map("sets")
+}
+
+// One team lending its people to a set it doesn't own ("guest team").
+//
+// The set keeps a single owning team — its Slack channel, availability
+// requests and org anchor are unchanged. A guest row only adds seats: it names
+// which of the GUEST team's roles this set borrows and how many of each, and
+// its members become pickable for exactly those seats. Assignments made into
+// them carry `Assignment.guestTeamId`, which is what tells a guest CHOIR seat
+// apart from an owning-team CHOIR seat (role keys are only unique per team).
+model SetGuestTeam {
+  id     String @id @default(cuid())
+  set    Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId  String
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String
+
+  // Which of the guest team's roles this set borrows, as a JSON array of
+  // { role, count } | { role, allAvailable: true } — see lib/guestTeams.ts.
+  // `allAvailable` is the unbounded seat the choir used to hardcode: no target
+  // count, so it never reads as a hole and the auto-fill seats everyone free.
+  roles Json
+
+  // Seats filled under this guest row. SetNull on the assignment side, so
+  // dropping a guest team leaves its people on the set as ordinary seats
+  // rather than silently deleting them.
+  assignments Assignment[]
+
+  createdAt DateTime @default(now())
+
+  // One row per team per set; re-adding a guest edits its roles instead.
+  @@unique([setId, teamId])
+  @@map("set_guest_teams")
 }
 
 // One song in a set's setlist. The worship leader enters a title and (optional)
@@ -461,8 +496,16 @@ model Assignment {
   setId  String
   user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
-  // The TeamRole.key this slot is for, on the set's team.
+  // The TeamRole.key this slot is for. Read against the set's OWN team catalog
+  // normally, or against `guestTeam`'s catalog when this is a guest seat.
   role   String
+
+  // Set when this person is here as a guest from another team — the
+  // SetGuestTeam row they were seated under. Null (every pre-existing row) =
+  // an ordinary seat on the set's own team. Role keys are unique only within a
+  // team, so this is what disambiguates two same-keyed roles on one set.
+  guestTeam   SetGuestTeam? @relation(fields: [guestTeamId], references: [id], onDelete: SetNull)
+  guestTeamId String?
   status AssignmentStatus @default(PENDING)
 
   // Optional note the owner leaves when requesting cover (status

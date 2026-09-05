@@ -278,7 +278,15 @@ export default function SwapsPage() {
 
       {/* ── 1. Covers / swaps — everything mid-handoff ───────────────── */}
       <section>
-        <SectionHeading title="Covers / Swaps" />
+        {/* Three kinds of row live here (incoming proposals, open cover
+            requests, in-flight handoffs), so the count is simply how many are
+            in the section. */}
+        <SectionHeading
+          title="Covers / Swaps"
+          count={
+            visibleIncoming.length + visibleOpenSwaps.length + inFlight.length
+          }
+        />
         {visibleOpenSwaps.length === 0 &&
           visibleIncoming.length === 0 &&
           inFlight.length === 0 && (
@@ -455,10 +463,14 @@ export default function SwapsPage() {
       <section>
         <SectionHeading title="Confirmed" count={confirmed.length}>
           {/* Plain link download: the browser sends session cookies along.
-              Hidden on phones — no .ics export on narrow screens. */}
-          <a href="/api/export" download className="hidden sm:block">
-            <Button variant="secondary">Export all my sets (.ics)</Button>
-          </a>
+              Hidden on phones — no .ics export on narrow screens — and hidden
+              with nothing confirmed, where it would only ever hand back an
+              empty calendar. */}
+          {confirmed.length > 0 && (
+            <a href="/api/export" download className="hidden sm:block">
+              <Button variant="secondary">Export all my sets (.ics)</Button>
+            </a>
+          )}
         </SectionHeading>
         {confirmed.length === 0 ? (
           <p className="text-sm text-gray-500">No confirmed sets in this window.</p>
@@ -521,28 +533,46 @@ export default function SwapsPage() {
 // A section label plus whatever controls belong to that section. Deliberately
 // quiet — these divide one page into three, so they're a small uppercase tag
 // over a rule rather than three competing page titles.
+// The longest section title. Rendered invisibly inside every heading to give
+// them all one width — see the sizer in SectionHeading.
+const WIDEST_TITLE = "Covers / Swaps";
+
 function SectionHeading({
   title,
   count,
   children,
 }: {
   title: string;
-  // Omit where a count would be noise (Covers / Swaps mixes three kinds of
-  // row, so one number wouldn't describe it).
+  // Every section shows one, including a zero — "0" is information ("nothing
+  // here"), and a heading that sometimes has a badge and sometimes doesn't
+  // makes the three read as different kinds of thing. Omitted counts as 0.
   count?: number;
   children?: ReactNode;
 }) {
   return (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-      {/* The rule underlines the label itself rather than running the width of
-          the page — it belongs to the heading, not to the section. */}
-      <h2 className="flex items-center gap-2 border-b border-gray-200 pb-1.5 text-sm font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-700 dark:text-gray-400">
-        {title}
-        {count !== undefined && count > 0 && (
-          <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-gray-600 dark:bg-gray-700 dark:text-gray-300">
-            {count}
+      {/* A rule under the label, ending in the same place for all three
+          headings — but only as long as it has to be: an invisible copy of the
+          LONGEST title sits in the label cell of every heading, so the rule
+          measures itself against that rather than a hardcoded width. Rename a
+          section and the alignment still holds. */}
+      <h2 className="inline-flex items-center gap-4 border-b border-gray-300 pb-1.5 text-sm font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-600 dark:text-gray-400">
+        {/* Sizer and real title stack in one grid cell — the cell is as wide as
+            the wider of the two, which is always the sizer. */}
+        <span className="grid">
+          <span
+            aria-hidden
+            className="invisible col-start-1 row-start-1 whitespace-nowrap"
+          >
+            {WIDEST_TITLE}
           </span>
-        )}
+          <span className="col-start-1 row-start-1 truncate">{title}</span>
+        </span>
+        {/* min-w so a one- and a two-digit count are the same width, and the
+            rules still end together. */}
+        <span className="inline-flex min-w-7 shrink-0 items-center justify-center rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+          {count ?? 0}
+        </span>
       </h2>
       {children && <div className="flex items-center gap-2">{children}</div>}
     </div>
@@ -571,7 +601,25 @@ function AssignmentRow({
   onCancelSwap: (proposalId: string) => void;
 }) {
   return (
-    <Card className="flex flex-wrap items-center justify-between gap-3">
+    // The whole row is the way into the set — there's no "Details" button any
+    // more. On a hover-capable device it glows to say so (Tailwind's `hover:`
+    // is already media-gated, so touch screens don't get a stuck highlight).
+    // Enter/Space match the click for keyboard users.
+    <Card
+      role="button"
+      tabIndex={0}
+      onClick={onDetails}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onDetails();
+        }
+      }}
+      className="flex cursor-pointer flex-wrap items-center justify-between gap-3 transition
+        hover:border-indigo-300 hover:shadow-md hover:shadow-indigo-500/20
+        focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500
+        dark:hover:border-indigo-500 dark:hover:shadow-indigo-400/20"
+    >
       <div>
         {/* Status chip rides up here next to the team/org chip so the action
             row below can't overflow the card on phones. */}
@@ -584,10 +632,12 @@ function AssignmentRow({
           {formatDay(a.set.startsAt)} · {formatTime(a.set.startsAt)}
         </p>
       </div>
-      <div className="flex items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={onDetails}>
-          Details
-        </Button>
+      {/* The actions keep their own jobs: a click here must not also open the
+          details modal behind them. */}
+      <div
+        className="flex items-center gap-2"
+        onClick={(e) => e.stopPropagation()}
+      >
         {busy ? (
           <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
         ) : a.status === "PENDING_APPROVAL" ? (

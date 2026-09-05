@@ -7,6 +7,7 @@ import type {
   SlotCapacityMap,
 } from "./constants";
 import type { TeamRoleDef } from "./teamRoles";
+import type { GuestRoleSpec } from "./guestTeams";
 
 // Re-exported so client components can type a catalog without reaching past
 // the Api* shapes they already import.
@@ -67,6 +68,22 @@ export interface ApiAssignment {
   role: Instrument;
   status: AssignmentStatus;
   user: ApiUserRef;
+  // Set when this seat was borrowed from a guest team — the ApiSetGuestTeam.id
+  // it belongs to. Null/absent = an ordinary seat on the set's own team. Role
+  // keys are only unique within a team, so this is what tells a guest CHOIR
+  // seat apart from the owning team's own CHOIR seat.
+  guestTeamId?: string | null;
+}
+
+// One team lending its people to a set (see lib/guestTeams.ts). `roles` says
+// which of THAT team's roles this set borrows and how many of each.
+export interface ApiSetGuestTeam {
+  id: string;
+  teamId: string;
+  roles: GuestRoleSpec[];
+  // The guest team itself, with its own catalog — the borrowed seats are
+  // labelled and filled from this, not from the owning team's roles.
+  team: ApiTeam;
 }
 
 // One song in a set's setlist (see the Song model). `key` is one of SONG_KEYS
@@ -89,9 +106,6 @@ export interface ApiSet {
   // server never returns private sets to anyone else, so this is effectively
   // always visible-to-you when present.
   isPrivate: boolean;
-  // Choir opt-in: false = the set has no choir (section off, "Auto schedule"
-  // skips choir); an admin toggles it on to manage/auto-schedule a choir.
-  choirEnabled: boolean;
   // The designated MD's userId, or null (none chosen / doesn't require one).
   // Must be an eligible assignee — see lib/md.ts.
   mdUserId: string | null;
@@ -107,6 +121,9 @@ export interface ApiSet {
   // drives the org chip when viewing "All orgs").
   org?: { id: string; name: string };
   assignments: ApiAssignment[];
+  // Teams lending people to this set (see lib/guestTeams.ts). Present on
+  // GET /api/sets; absent on endpoints that don't include it.
+  guestTeams?: ApiSetGuestTeam[];
   // The worship leader's setlist, ordered. Present on GET /api/sets; may be
   // absent (undefined) on endpoints that don't include it.
   songs?: ApiSong[];
@@ -333,6 +350,12 @@ export interface ApiAdminUser {
 export interface StagedAssignment {
   userId: string;
   role: Instrument;
+  // True when an admin hand-picked this person for this slot in the review
+  // modal. Locked slots are HARD constraints for a re-run of "Auto schedule"
+  // (they ride along as scheduler `preAssigned`); everything else is thrown
+  // away and re-proposed. Clearing the slot (picking "None") drops the lock
+  // with the assignment. Never persisted — apply only reads userId/role.
+  locked?: boolean;
 }
 
 // A set the generator would create (or fill), with its proposed roster.
@@ -364,6 +387,19 @@ export interface StagedPlan {
   sets: StagedSet[];
   // Sets in the window we left untouched because they're already staffed.
   skipped: number;
+  // The balancing state the server's fill started from, shipped so the review
+  // modal's "Auto schedule all" can re-run the SAME pure algorithm over the
+  // SAME inputs (see lib/scheduler.ts). Without it a client-side re-fill would
+  // start every tally at zero and quietly undo the load balancing.
+  // Optional so older plans and test fixtures keep type-checking.
+  baseline?: {
+    // userId → assignments already on the books (upcoming, cross-org).
+    counts: Record<string, number>;
+    // teamKey(userId, teamId) → the same, split by team.
+    teamCounts: Record<string, number>;
+    // Dates people are already booked on, for the spacing rule.
+    booked: { userId: string; startsAt: string }[];
+  };
 }
 
 // One membership row as GET /api/me returns it — the per-org fields the

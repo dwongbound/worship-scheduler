@@ -92,6 +92,21 @@ test("adds several weekly blocks in one submit", async ({ page }) => {
   await clearBusyBlocks(page);
 });
 
+/**
+ * Bring the month grid back to the current month. The page opens focused on the
+ * first request that still owes an answer, and that lens parks the calendar on
+ * the request's FIRST month (July, for the seeded 2026-07-01 window) — where
+ * today isn't rendered at all. Whether a request is auto-selected depends on
+ * what earlier specs submitted, so this always presses the calendar's own
+ * "Today" rather than assuming either state.
+ */
+async function showCurrentMonth(page: Page) {
+  await page
+    .locator("[data-tour='avail-calendar']")
+    .getByRole("button", { name: "Today" })
+    .click();
+}
+
 test("stops a weekly block repeating after a number of weeks", async ({ page }) => {
   await requestAvailability(page);
   await login(page, "carol");
@@ -104,7 +119,9 @@ test("stops a weekly block repeating after a number of weeks", async ({ page }) 
   await blockOutTimes.getByRole("button", { name: "Tuesday" }).click(); // off
   await blockOutTimes.getByRole("button", { name: "Thursday" }).click();
   await blockOutTimes.getByLabel("Repeats").selectOption("weeks");
-  await blockOutTimes.getByLabel("Number of weeks").fill("2");
+  // Exact: the "Repeats" <select>'s accessible name includes its option text
+  // ("For a number of weeks"), which a substring match would also hit.
+  await blockOutTimes.getByLabel("Number of weeks", { exact: true }).fill("2");
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
     .click();
@@ -176,7 +193,12 @@ test("blocks a day by clicking it on the calendar", async ({ page }) => {
     now.getDate()
   )}`;
 
-  await page.locator(`[data-date="${todayYmd}"]`).click();
+  await showCurrentMonth(page);
+  // Both the month grid and the phone week strip render a cell per day (one is
+  // hidden by CSS at this width), so take the one actually on screen.
+  const todayCell = page.locator(`[data-date="${todayYmd}"]:visible`).first();
+  await expect(todayCell).toBeVisible();
+  await todayCell.click();
 
   // The block shows up in the My availability list as an all-day entry. (Scope to
   // the list item — "All day" is also a time-preset <option> in the forms.)
@@ -227,16 +249,21 @@ test("confirmation modal lists a blocked day, and the date picker marks it", asy
   const todayYmd = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(
     now.getDate()
   )}`;
-  await page.locator(`[data-date="${todayYmd}"]`).click();
+  await showCurrentMonth(page);
+  // Both the month grid and the phone week strip render a cell per day (one is
+  // hidden by CSS at this width), so take the one actually on screen.
+  const todayCell = page.locator(`[data-date="${todayYmd}"]:visible`).first();
+  await expect(todayCell).toBeVisible();
+  await todayCell.click();
 
   // The "Block out times" picker marks it with a red "full day" dot.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Specific times" }).click();
   await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
-  const todayCell = page
+  const pickerDay = page
     .getByRole("dialog")
     .getByRole("button", { name: String(new Date().getDate()), exact: true });
-  await expect(todayCell.locator(".bg-rose-500")).toBeVisible();
+  await expect(pickerDay.locator(".bg-rose-500")).toBeVisible();
   await page.keyboard.press("Escape");
 
   // The submit-confirmation modal breaks the blocked day out instead of
@@ -249,6 +276,12 @@ test("confirmation modal lists a blocked day, and the date picker marks it", asy
   await modal.getByRole("button", { name: "Modify" }).click();
   await expect(modal).not.toBeVisible();
 
-  // Clean up the block so it doesn't leak into later specs.
+  // Clean up the block so it doesn't leak into later specs — and WAIT for it to
+  // go. Firing the click and ending the test can close the context before the
+  // DELETE lands, leaving a stray "All day" block that trips the next spec's
+  // "no blocks left" check.
   await page.getByRole("button", { name: "Delete" }).first().click();
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "All day" })
+  ).toHaveCount(0);
 });

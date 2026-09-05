@@ -1,11 +1,12 @@
 // Unit tests for the auto-scheduling algorithm (lib/scheduler.ts).
 import { describe, expect, it } from "vitest";
 import {
-  availableChoirMembers,
+  availableGuestMembers,
   buildSchedule,
   isUserAvailable,
   type SchedulerSet,
   type SchedulerUser,
+  teamKey,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
 import { SLOT_CAPACITIES } from "@/lib/constants";
@@ -35,6 +36,17 @@ function user(
     rolesByTeam: Object.fromEntries(teams.map((t) => [t, roles])),
   };
 }
+
+// A run of consecutive Tuesdays, for the spacing/rotation tests.
+function weeklySets(n: number): SchedulerSet[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `week-${i + 1}`,
+    startsAt: new Date(2026, 0, 6 + 7 * i, 19, 0),
+    durationMinutes: 60,
+  }));
+}
+const who = (result: { setId: string; userId: string }[], setId: string) =>
+  result.filter((a) => a.setId === setId).map((a) => a.userId);
 
 describe("isUserAvailable", () => {
   it("blocks a recurring rule that overlaps the set time", () => {
@@ -386,6 +398,102 @@ describe("buildSchedule", () => {
     expect(result.filter((a) => a.role === "DRUMS")).toHaveLength(1);
   });
 
+  it("doesn't pin the MD seat to one person when the roster leads itself", () => {
+    // THE BUG: the reservation used to walk roles scarce-first and take the
+    // first MD it found free, so "jacob" — the only MD who plays bass — was
+    // seated on every required-MD set no matter how much he'd served. The fill
+    // rotates first now: two MD electric guitarists already cover the set's
+    // need to be led, so bass alternates like any other role.
+    const users = [
+      user("jacob", ["BASS"], true),
+      user("b2", ["BASS"]),
+      user("eg1", ["ELECTRIC_GUITAR"], true),
+      user("eg2", ["ELECTRIC_GUITAR"], true),
+    ];
+    const sets = weeklySets(4).map((s) => ({ ...s, requiresMD: true }));
+    const bass = sets.map(
+      (s) =>
+        buildSchedule(sets, users, []).find(
+          (a) => a.setId === s.id && a.role === "BASS"
+        )!.userId
+    );
+    expect(bass).toEqual(["b2", "jacob", "b2", "jacob"]);
+  });
+
+  it("reserves the MD on electric guitar ahead of keys or bass", () => {
+    // Nobody the rotation seats can lead (m1 is far too loaded to win a slot on
+    // merit), so a seat is held for them. m1 plays bass, keys AND electric —
+    // electric wins, because that's who normally MDs.
+    const users = [
+      user("m1", ["BASS", "KEYS", "ELECTRIC_GUITAR"], true),
+      user("b1", ["BASS"]),
+      user("k1", ["KEYS"]),
+      user("e1", ["ELECTRIC_GUITAR"]),
+      user("e2", ["ELECTRIC_GUITAR"]),
+    ];
+    const set: SchedulerSet = { ...tuesdaySet, requiresMD: true };
+    const result = buildSchedule([set], users, [], new Map([["m1", 10]]));
+    expect(result).toContainEqual({
+      setId: "set-1",
+      userId: "m1",
+      role: "ELECTRIC_GUITAR",
+    });
+    // The fallback MD roles stayed with the people the rotation picked.
+    expect(result).toContainEqual({ setId: "set-1", userId: "b1", role: "BASS" });
+    expect(result).toContainEqual({ setId: "set-1", userId: "k1", role: "KEYS" });
+  });
+
+  it("gives a reserved MD seat to whichever MD didn't just serve", () => {
+    // Both MDs are too loaded to win a slot on merit, so one gets reserved —
+    // and it's picked by rotation, not by whose role comes first. m1 played
+    // yesterday, so the seat (and its role) goes to m2.
+    const users = [
+      user("m1", ["BASS"], true),
+      user("m2", ["ELECTRIC_GUITAR"], true),
+      user("b1", ["BASS"]),
+      user("e1", ["ELECTRIC_GUITAR"]),
+      user("e2", ["ELECTRIC_GUITAR"]),
+    ];
+    const set: SchedulerSet = { ...tuesdaySet, requiresMD: true };
+    const result = buildSchedule(
+      [set],
+      users,
+      [],
+      new Map([
+        ["m1", 10],
+        ["m2", 10],
+      ]),
+      [{ userId: "m1", startsAt: new Date(2026, 0, 5, 19, 0) }]
+    );
+    expect(result).toContainEqual({
+      setId: "set-1",
+      userId: "m2",
+      role: "ELECTRIC_GUITAR",
+    });
+    expect(result.some((a) => a.userId === "m1")).toBe(false);
+  });
+
+  it("undoes the discarded first attempt cleanly (no phantom load)", () => {
+    // Week 1 fills bass with b1, finds nobody who can lead, then throws that
+    // roster away and reserves the seat for m1. b1 has to come back out
+    // completely unbooked — otherwise week 2 counts them as having just played
+    // and hands the set to b2 instead.
+    const users = [
+      user("m1", ["BASS"], true),
+      user("b1", ["BASS"]),
+      user("b2", ["BASS"]),
+    ];
+    const [week1, week2] = weeklySets(2);
+    const result = buildSchedule(
+      [{ ...week1, requiresMD: true }, week2],
+      users,
+      [],
+      new Map([["m1", 10]])
+    );
+    expect(who(result, "week-1")).toEqual(["m1"]);
+    expect(who(result, "week-2")).toEqual(["b1"]);
+  });
+
   it("never seats the MD twice on one required-MD set", () => {
     // A single MD who could fill several roles should still take just one slot.
     const md = user("m1", ["WORSHIP_LEADER", "KEYS", "DRUMS"], true);
@@ -488,16 +596,6 @@ describe("buildSchedule", () => {
 // ── Spacing: prefer people who haven't served within the past week ────────
 describe("buildSchedule spacing", () => {
   // A weekly Tuesday-7pm series starting Jan 6 2026, `n` sets long.
-  function weeklySets(n: number): SchedulerSet[] {
-    return Array.from({ length: n }, (_, i) => ({
-      id: `week-${i + 1}`,
-      startsAt: new Date(2026, 0, 6 + 7 * i, 19, 0),
-      durationMinutes: 60,
-    }));
-  }
-  const who = (result: { setId: string; userId: string }[], setId: string) =>
-    result.filter((a) => a.setId === setId).map((a) => a.userId);
-
   it("spacing beats load-balancing: no two weeks in a row when someone else can play", () => {
     // d2 carries 5 prior sets, so pure balancing would give d1 BOTH weeks.
     // Spacing hands week 2 to d2 anyway — d1 just played.
@@ -594,67 +692,188 @@ describe("buildSchedule spacing", () => {
     expect(who(result, "week-2")).toEqual(["d2"]);
   });
 
-  it("never fills CHOIR (it isn't a capacity band role)", () => {
-    // A pure choir member is ignored by the greedy fill — choir is seated
-    // separately, via availableChoirMembers.
+  it("fills CHOIR like any other counted role", () => {
+    // Choir used to be skipped by the greedy fill (it was an unbounded list
+    // seated separately). It's an ordinary slotted role now, so a set that
+    // asks for choir seats gets them filled.
     const singer = user("c1", ["CHOIR"]);
-    expect(buildSchedule([tuesdaySet], [singer], [])).toEqual([]);
+    const result = buildSchedule(
+      [{ ...tuesdaySet, capacities: { CHOIR: 1 } }],
+      [singer],
+      []
+    );
+    expect(result).toContainEqual({ setId: "set-1", userId: "c1", role: "CHOIR" });
   });
 
-  it("ignores a pre-assigned CHOIR slot so the singer stays free for a band role", () => {
-    // p1 is already on the set's choir AND plays drums. The choir slot must not
-    // count as a constraint that blocks them from the open drums slot.
+  it("treats a pre-assigned CHOIR slot as a constraint like any other role", () => {
+    // Standing in a choir seat means you aren't also playing drums. (This is
+    // the inverse of the old behaviour, which had to let choir members double
+    // up because EVERY available singer was seated automatically.)
     const player = user("p1", ["DRUMS", "CHOIR"]);
     const result = buildSchedule(
       [{ ...tuesdaySet, preAssigned: [{ userId: "p1", role: "CHOIR" }] }],
       [player],
       []
     );
-    expect(result).toContainEqual({ setId: "set-1", userId: "p1", role: "DRUMS" });
+    expect(result).not.toContainEqual({
+      setId: "set-1",
+      userId: "p1",
+      role: "DRUMS",
+    });
   });
 });
 
-describe("availableChoirMembers", () => {
-  it("returns every available singer who lists CHOIR", () => {
+describe("availableGuestMembers", () => {
+  // A guest seat draws on ANOTHER team's members — the generalization of what
+  // the hardcoded choir fill used to do for one built-in key.
+  const hostSet: SchedulerSet = { ...tuesdaySet, teamId: "team-host" };
+
+  it("returns every available member who plays that role on the guest team", () => {
     const users = [
-      user("c1", ["CHOIR"]),
-      user("c2", ["VOCALS", "CHOIR"]),
-      user("d1", ["DRUMS"]), // not a choir member
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["VOCALS", "CHOIR"], false, "team-guest"),
+      user("d1", ["DRUMS"], false, "team-guest"), // doesn't sing choir
     ];
-    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+    expect(
+      availableGuestMembers(hostSet, "CHOIR", "team-guest", users, [])
+    ).toEqual(["c1", "c2"]);
   });
 
   it("excludes people who are unavailable at the set's time", () => {
-    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
+    const users = [
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-guest"),
+    ];
     const rules: UnavailabilityRule[] = [
       // c2 is blocked Tuesday evening.
       { userId: "c2", type: "RECURRING", dayOfWeek: 2, startMinute: 1080, endMinute: 1260 },
     ];
-    expect(availableChoirMembers(tuesdaySet, users, rules)).toEqual(["c1"]);
+    expect(
+      availableGuestMembers(hostSet, "CHOIR", "team-guest", users, rules)
+    ).toEqual(["c1"]);
   });
 
-  it("excludes people already on the set's choir", () => {
-    const users = [user("c1", ["CHOIR"]), user("c2", ["CHOIR"])];
-    const already = new Set(["c1"]);
-    expect(availableChoirMembers(tuesdaySet, users, [], already)).toEqual(["c2"]);
-  });
-
-  it("is team-scoped: only choir members of the set's team are seated", () => {
-    // Choir is a per-team role now — a set's choir draws only on people who
-    // list CHOIR on THAT team, not singers from another team.
-    const teamSet: SchedulerSet = { ...tuesdaySet, teamId: "team-A" };
+  it("excludes anyone already on the set, in ANY seat", () => {
+    // The point of the exclusion: someone playing keys for the host team is
+    // busy, so the visiting choir must not also seat them.
     const users = [
-      user("c1", ["CHOIR"], false, "team-A"),
-      user("c2", ["CHOIR"], false, "team-B"), // other team → excluded
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-guest"),
     ];
-    expect(availableChoirMembers(teamSet, users, [])).toEqual(["c1"]);
+    expect(
+      availableGuestMembers(
+        hostSet,
+        "CHOIR",
+        "team-guest",
+        users,
+        [],
+        new Set(["c1"])
+      )
+    ).toEqual(["c2"]);
   });
 
-  it("a team-less set draws choir from anyone with CHOIR on any team", () => {
+  it("is scoped to the named guest team, not the set's own or any other", () => {
     const users = [
-      user("c1", ["CHOIR"], false, "team-A"),
-      user("c2", ["CHOIR"], false, "team-B"),
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-other"), // different team → excluded
+      user("c3", ["CHOIR"], false, "team-host"), // the host team → excluded
     ];
-    expect(availableChoirMembers(tuesdaySet, users, [])).toEqual(["c1", "c2"]);
+    expect(
+      availableGuestMembers(hostSet, "CHOIR", "team-guest", users, [])
+    ).toEqual(["c1"]);
+  });
+
+  it("orders least-booked first, so a capped guest role rotates", () => {
+    const users = [
+      user("c1", ["CHOIR"], false, "team-guest"),
+      user("c2", ["CHOIR"], false, "team-guest"),
+    ];
+    // c1 has served twice recently, c2 once — c2 should come first.
+    const loads = new Map([
+      ["c1", 2],
+      ["c2", 1],
+    ]);
+    expect(
+      availableGuestMembers(
+        hostSet,
+        "CHOIR",
+        "team-guest",
+        users,
+        [],
+        new Set(),
+        loads
+      )
+    ).toEqual(["c2", "c1"]);
+  });
+});
+
+// ── Per-team balance ────────────────────────────────────────────────────────
+// Overall load alone treats every set as interchangeable, so two people on two
+// teams could end up owning one team's rotation each. The per-team tiebreak
+// splits each team's sets between them instead.
+describe("buildSchedule per-team balance", () => {
+  // A drums-only shape, so nothing but the balancing rule decides who plays.
+  const DRUMS_ONLY = Object.fromEntries(
+    Object.keys(SLOT_CAPACITIES).map((role) => [role, role === "DRUMS" ? 1 : 0])
+  );
+
+  // Two teams, four weekly sets each: team A on Sundays, team B on the
+  // Wednesday after — far enough apart that spacing doesn't pin the answer.
+  function twoTeamSets(): SchedulerSet[] {
+    const sets: SchedulerSet[] = [];
+    for (let week = 0; week < 4; week++) {
+      sets.push(
+        {
+          id: `a${week}`,
+          startsAt: new Date(2026, 0, 4 + week * 7, 10, 0),
+          durationMinutes: 60,
+          teamId: "teamA",
+          capacities: DRUMS_ONLY,
+        },
+        {
+          id: `b${week}`,
+          startsAt: new Date(2026, 0, 7 + week * 7, 19, 0),
+          durationMinutes: 60,
+          teamId: "teamB",
+          capacities: DRUMS_ONLY,
+        }
+      );
+    }
+    return sets;
+  }
+
+  // Both people play drums on both teams.
+  const bothTeams = (id: string) => user(id, ["DRUMS"], false, ["teamA", "teamB"]);
+  const countOn = (
+    result: { setId: string; userId: string }[],
+    team: string,
+    userId: string
+  ) => result.filter((x) => x.setId.startsWith(team) && x.userId === userId).length;
+
+  it("splits each team's sets between people who are on both", () => {
+    const result = buildSchedule(
+      twoTeamSets(),
+      [bothTeams("p"), bothTeams("q")],
+      []
+    );
+    for (const team of ["a", "b"]) {
+      for (const person of ["p", "q"]) {
+        expect(countOn(result, team, person), `${person} on ${team}`).toBe(2);
+      }
+    }
+  });
+
+  it("seeds from the caller's existing per-team counts", () => {
+    // p has already done three of team A's sets in the db, so team A's slots
+    // should now favour q even though the two are level overall.
+    const result = buildSchedule(
+      twoTeamSets(),
+      [bothTeams("p"), bothTeams("q")],
+      [],
+      new Map(),
+      [],
+      new Map([[teamKey("p", "teamA"), 3]])
+    );
+    expect(countOn(result, "a", "q")).toBeGreaterThan(countOn(result, "a", "p"));
   });
 });

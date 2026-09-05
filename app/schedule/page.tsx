@@ -44,7 +44,6 @@ import {
   dateRangeLabel,
   minutesToTimeLabel,
   shortDateLabel,
-  shortRangeLabel,
   timeStringToMinutes,
 } from "@/lib/dates";
 import type { ApiAvailabilityRequest, ApiUnavailability } from "@/lib/types";
@@ -90,15 +89,6 @@ const REPEAT_OPTIONS: { value: "forever" | "weeks" | "until"; label: string }[] 
 function requestLabel(r: ApiAvailabilityRequest): string {
   const base = r.name || dateRangeLabel(r.startDate, r.endDate);
   return r.org ? `${r.org.name}: ${base}` : base;
-}
-
-// Dropdown label — always shows the requested date range (shorthand), and
-// prefixes the custom name when there is one. Mirrors the Create tab.
-// <option>s can't hold chips, so the org rides along as a text prefix.
-function requestOptionLabel(r: ApiAvailabilityRequest): string {
-  const range = shortRangeLabel(r.startDate, r.endDate);
-  const base = r.name ? `${r.name} (${range})` : range;
-  return r.org ? `${r.org.name} — ${base}` : base;
 }
 
 // Tab styling for the "Block out times" recurring/specific switch. An underline
@@ -539,12 +529,6 @@ export default function SchedulePage() {
   if (!entries) return null;
 
   const selectedRequest = requests.find((r) => r.id === selectedRequestId);
-  const selectedResponse = responses.find(
-    (r) => r.requestId === selectedRequestId
-  );
-  // Submitted = a response row with a completedAt (a null one is "unsubmitted").
-  const submitted = !!selectedResponse?.completedAt;
-
   // The selected request's window, as the day pickers want it: rings its days
   // (and dims the rest, on the calendar). Null = showing everything.
   const lensRange = selectedRequest
@@ -656,16 +640,53 @@ export default function SchedulePage() {
                           <Badge tone="amber">Not sent</Badge>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {shortDateLabel(r.startDate)} –{" "}
-                        {shortDateLabel(r.endDate)}
-                        {done && response!.completedAt && (
+                      {/* The description line. On the SELECTED card it also
+                          carries what the calendar is doing, the way out, and a
+                          running count of what submitting would send — all on
+                          this line rather than as a row of its own, which grew
+                          the card on click and shoved the rest of the page
+                          down every time you picked a request. */}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-500 dark:text-gray-400">
+                        <span>
+                          {shortDateLabel(r.startDate)} –{" "}
+                          {shortDateLabel(r.endDate)}
+                          {done && response!.completedAt && (
+                            <>
+                              {" · sent "}
+                              {new Date(response!.completedAt).toLocaleDateString()}
+                            </>
+                          )}
+                        </span>
+                        {active && (
                           <>
-                            {" · sent "}
-                            {new Date(response!.completedAt).toLocaleDateString()}
+                            <span aria-hidden>·</span>
+                            <span className="inline-flex items-center gap-1.5 font-medium text-indigo-700 dark:text-indigo-300">
+                              <EyeIcon />
+                              Shown on the calendar below
+                            </span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedRequestId("");
+                              }}
+                              className="rounded text-indigo-600 underline underline-offset-2 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200"
+                            >
+                              Show all dates
+                            </button>
+                            {!done && (
+                              <span>
+                                ·{" "}
+                                {confirmDays.length === 0
+                                  ? "You're available every day in this window."
+                                  : `Unavailable on ${confirmDays.length} ${
+                                      confirmDays.length === 1 ? "day" : "days"
+                                    }.`}
+                              </span>
+                            )}
                           </>
                         )}
-                      </p>
+                      </div>
                     </div>
 
                     {/* The action lives on the selected card only, so there's
@@ -704,39 +725,6 @@ export default function SchedulePage() {
                         </Button>
                       ))}
                   </div>
-
-                  {/* The active card says so in words — and carries the way
-                      out. Plus a running count of what submitting would send,
-                      so "it's already correct, just submit" is visible rather
-                      than something you have to work out. */}
-                  {active && (
-                    <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-indigo-500/30 pt-2 text-sm">
-                      <span className="inline-flex items-center gap-1.5 font-medium text-indigo-700 dark:text-indigo-300">
-                        <EyeIcon />
-                        Shown on the calendar below
-                      </span>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedRequestId("");
-                        }}
-                        className="rounded text-indigo-600 underline underline-offset-2 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200"
-                      >
-                        Show all dates
-                      </button>
-                      {!done && (
-                        <span className="text-gray-500 dark:text-gray-400">
-                          ·{" "}
-                          {confirmDays.length === 0
-                            ? "You're available every day in this window."
-                            : `Unavailable on ${confirmDays.length} ${
-                                confirmDays.length === 1 ? "day" : "days"
-                              }.`}
-                        </span>
-                      )}
-                    </div>
-                  )}
                 </Card>
               );
             })}

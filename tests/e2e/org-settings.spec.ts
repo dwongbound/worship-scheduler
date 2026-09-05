@@ -75,20 +75,28 @@ test("an org admin includes a member in all group chats and it persists", async 
         r.url().includes("/api/admin/users/") &&
         r.request().method() === "PATCH"
     );
-  // The "Include in all group chats" list has a checkbox per member.
-  const bobBox = () =>
-    page
-      .getByRole("listitem")
-      .filter({ hasText: "Bob Baker" })
-      .getByRole("checkbox");
+  // "Include in all group chats" lists only the people who ARE included, as
+  // chips; everyone else is reached through a type-ahead, so the org's whole
+  // roster is never rendered here.
+  const bobChip = () => page.getByLabel("Remove Bob Baker");
+  await expect(bobChip()).toHaveCount(0);
+  await expect(page.getByText("Bob Baker")).toHaveCount(0);
 
-  await expect(bobBox()).not.toBeChecked();
-  await Promise.all([savePatch(), bobBox().check()]);
+  // Add him through the dashed "+ Add person" chip.
+  await page.getByRole("button", { name: "+ Add person" }).click();
+  const search = page.getByLabel("Add someone to every group chat");
+  await search.fill("Bob");
+  await Promise.all([
+    savePatch(),
+    page.getByRole("button", { name: /^Bob Baker/ }).click(),
+  ]);
+  await expect(bobChip()).toBeVisible();
 
   // Persisted server-side.
   await page.reload();
-  await expect(bobBox()).toBeChecked();
+  await expect(bobChip()).toBeVisible();
 
-  // Restore shared seed state.
-  await Promise.all([savePatch(), bobBox().uncheck()]);
+  // Restore shared seed state — the chip's ✕ takes him back out.
+  await Promise.all([savePatch(), bobChip().click()]);
+  await expect(bobChip()).toHaveCount(0);
 });

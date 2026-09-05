@@ -8,7 +8,7 @@ import { roleLabel } from "@/lib/teamRoles";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "@/lib/setMd";
-import { notifySetChange } from "@/lib/slack";
+import { notifyAssignmentChange, notifySetChange } from "@/lib/slack";
 
 // Look up the assignment + gate on the set's org. Returns the row and the
 // acting admin, or an error response.
@@ -78,6 +78,18 @@ export async function PATCH(
       `\u{1F501} ${roleLabel(existing.role)}: ${membership.user.name} ` +
         `is now covering for ${existing.user.name}.`
     );
+    // A reassignment is a removal and an addition from the two people's point
+    // of view, so both get their own DM naming the other.
+    await notifyAssignmentChange(existing.setId, existing.userId, {
+      kind: "removed",
+      role: existing.role,
+      counterpart: membership.user.name,
+    });
+    await notifyAssignmentChange(existing.setId, userId, {
+      kind: "added",
+      role: existing.role,
+      counterpart: existing.user.name,
+    });
     return NextResponse.json(updated);
   } catch {
     // Unique [setId, userId, role] — that person already fills this role here.
@@ -112,5 +124,9 @@ export async function DELETE(
     existing.setId,
     `\u{2796} ${existing.user.name} is no longer on ${roleLabel(existing.role)}.`
   );
+  await notifyAssignmentChange(existing.setId, existing.userId, {
+    kind: "removed",
+    role: existing.role,
+  });
   return NextResponse.json({ ok: true });
 }

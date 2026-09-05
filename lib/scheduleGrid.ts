@@ -5,7 +5,7 @@
 import type { BandRole, Instrument, SlotCapacityMap } from "./constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   orderedRoles,
   resolveTeamCapacities,
   type TeamRoleDef,
@@ -96,7 +96,7 @@ export function buildScheduleGrid(
   // ordering for any role two teams share.
   const union = new Map<string, TeamRoleDef>();
   for (const set of ordered) {
-    for (const role of bandRoles(catalogFor(set))) {
+    for (const role of slottedRoles(catalogFor(set))) {
       if (!union.has(role.key)) union.set(role.key, role);
     }
   }

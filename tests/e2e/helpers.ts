@@ -19,9 +19,16 @@ function ymd(d: Date): string {
  * on strict mode. Matching on the heading element pins it to the real one.
  */
 export function sectionByHeading(page: Page, heading: string): Locator {
-  return page
-    .locator("section")
-    .filter({ has: page.getByRole("heading", { name: heading, exact: true }) });
+  return (
+    page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: heading, exact: true }) })
+      // Sections nest — "Block out times" sits inside "My availability" — and a
+      // filter matches every ancestor that contains the heading, which makes
+      // every chained lookup resolve one copy per matching section. The LAST
+      // match is the innermost, i.e. the panel the heading actually titles.
+      .last()
+  );
 }
 
 /**

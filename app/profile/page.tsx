@@ -1,13 +1,16 @@
 "use client";
-// Edit personal info: name, email, per-team roles, and a Slack member ID field
-// for the future Slack integration. Roles are per-team: pick a team from the
-// dropdown (or join a new one), then check the roles you play on it. Password
-// changes happen in a separate modal that requires typing the new password twice.
+// Edit personal info: name, email, teams, and a Slack member ID field for the
+// future Slack integration. You can join and leave teams here, but the roles you
+// play on one are READ-ONLY: an admin assigns those from the Team tab, so the
+// panel just lists them with a note pointing at your org admin. Password changes
+// happen in a separate modal that requires typing the new password twice.
 import { useSession } from "next-auth/react";
 import { FormEvent, useEffect, useRef, useState } from "react";
+import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
 import Modal from "@/components/common/Modal";
@@ -16,7 +19,6 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
 import { fetchJsonArray } from "@/lib/api";
-import { type Instrument } from "@/lib/constants";
 import { DEFAULT_TEAM_ROLES, orderedRoles } from "@/lib/teamRoles";
 import type { ApiTeam, ApiTeamRole } from "@/lib/types";
 
@@ -118,8 +120,8 @@ export default function ProfilePage() {
     );
   }, [teams]);
 
-  // Roles are per-team, saved to their own endpoint. Toggling a role writes the
-  // whole next role list for THAT team; joining/leaving add/remove a team.
+  // Joining/leaving a team is the only write this panel makes — the roles it
+  // shows are the admin's to change, not mine.
   const selectedTeam = teams.find((t) => t.id === selectedTeamId) ?? null;
   // Teams I can still join = every team across my orgs I'm not already on.
   const joinableTeams = allTeams.filter(
@@ -131,38 +133,6 @@ export default function ProfilePage() {
     const org = memberships.find((m) => m.orgId === orgId)?.orgName;
     return org ? `${name} (${org})` : name;
   };
-
-  async function saveTeamRoles(teamId: string, roles: Instrument[]) {
-    setSavingRoles(true);
-    // Optimistic: reflect the toggle immediately, revert on failure.
-    setTeams((prev) => prev.map((t) => (t.id === teamId ? { ...t, roles } : t)));
-    try {
-      const res = await fetch(`/api/me/teams/${teamId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roles }),
-      });
-      if (!res.ok) throw new Error("save failed");
-      // Flash the same "Saved ✓" the name/email save uses.
-      setSaved(true);
-      if (savedTimer.current) clearTimeout(savedTimer.current);
-      savedTimer.current = setTimeout(() => setSaved(false), 2000);
-      // The "finish your profile" dot depends on whether I have any role yet.
-      window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
-    } catch {
-      setMessage("Error: could not save roles");
-      setTeams(me?.teams ?? []); // fall back to the last known-good state
-    } finally {
-      setSavingRoles(false);
-    }
-  }
-
-  function toggleRole(teamId: string, role: Instrument, current: Instrument[]) {
-    const next = current.includes(role)
-      ? current.filter((r) => r !== role)
-      : [...current, role];
-    saveTeamRoles(teamId, next);
-  }
 
   async function joinTeam(team: ApiTeam) {
     setSavingRoles(true);
@@ -178,7 +148,7 @@ export default function ProfilePage() {
         ...prev,
         { id: team.id, name: team.name, roles: [], active: true },
       ]);
-      setSelectedTeamId(team.id); // jump straight to picking roles on it
+      setSelectedTeamId(team.id); // show the new team's (empty) role list
       window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
     } catch {
       setMessage("Error: could not join team");
@@ -424,12 +394,13 @@ export default function ProfilePage() {
         </form>
       </Card>
 
-      {/* Teams & roles — its own panel. Pick a team, then the roles you play on
-          it (roles are per-team); "Add a team" opens a modal to join more. */}
+      {/* Teams & roles — its own panel. Pick a team to see the roles you play on
+          it (read-only — an admin assigns them); "Add a team" joins more. */}
       <Card>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
             <span>Teams &amp; roles</span>
+            <InfoTooltip text="Your roles on a team are set by your org admin. If something here looks wrong, contact them to have it changed." />
             {savingRoles ? (
               <LoadingDots size="sm" />
             ) : saved ? (
@@ -457,8 +428,8 @@ export default function ProfilePage() {
 
         {teams.length === 0 ? (
           <p className="text-sm text-gray-500">
-            You’re not on any teams yet. Add a team to pick the roles you play —
-            you can’t be scheduled until you do.
+            You’re not on any teams yet. Add a team, then ask your org admin to
+            set the roles you play on it — you can’t be scheduled until they do.
           </p>
         ) : (
           <>
@@ -488,39 +459,33 @@ export default function ProfilePage() {
                     you.
                   </p>
                 )}
-                {/* This team's own roles — every team defines its own list.
-                    Admin-only roles are left out entirely: an admin grants
-                    those from the Team page, the way MD has always worked. A
-                    role you already hold still shows (greyed) so you can see
-                    it, even though only an admin can take it away. */}
-                <div className="grid grid-cols-2 gap-2">
-                  {orderedRoles(selectedTeam.catalog ?? DEFAULT_TEAM_ROLES)
-                    .filter(
-                      (role) =>
-                        !role.adminOnly || selectedTeam.roles.includes(role.key)
-                    )
-                    .map((role) => (
-                      <Checkbox
-                        key={role.key}
-                        label={role.label}
-                        // Granted by an admin — yours to see, not to change.
-                        // The reason lives in the tooltip rather than a suffix
-                        // on the name: only a role you already hold can even
-                        // appear here, so it's one greyed row, not a pattern
-                        // worth labelling.
-                        disabled={role.adminOnly}
-                        title={
-                          role.adminOnly
-                            ? "An admin manages this role for you."
-                            : undefined
-                        }
-                        checked={selectedTeam.roles.includes(role.key)}
-                        onChange={() =>
-                          toggleRole(selectedTeam.id, role.key, selectedTeam.roles)
-                        }
-                      />
-                    ))}
-                </div>
+                {/* The roles I hold on this team, in the team's own catalog
+                    order. Read-only: every role here is an admin's to grant or
+                    take away (the rule MD always had, now the rule for all of
+                    them), so this lists what I hold rather than offering the
+                    whole catalog to check. */}
+                {selectedTeam.roles.length > 0 ? (
+                  <div
+                    className="flex flex-wrap gap-1.5"
+                    data-testid="profile-roles"
+                  >
+                    {orderedRoles(selectedTeam.catalog ?? DEFAULT_TEAM_ROLES)
+                      .filter((role) => selectedTeam.roles.includes(role.key))
+                      .map((role) => (
+                        <Badge key={role.key} tone="gray">
+                          {role.label}
+                        </Badge>
+                      ))}
+                  </div>
+                ) : (
+                  <p
+                    className="text-sm text-gray-500 dark:text-gray-400"
+                    data-testid="profile-roles"
+                  >
+                    No roles on this team yet — ask your org admin to add the
+                    ones you play so you can be scheduled.
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => leaveTeam(selectedTeam.id)}
@@ -531,7 +496,7 @@ export default function ProfilePage() {
               </div>
             ) : (
               <p className="mt-2 text-sm text-gray-500">
-                Pick a team above to set the roles you play on it.
+                Pick a team above to see the roles you play on it.
               </p>
             )}
           </>

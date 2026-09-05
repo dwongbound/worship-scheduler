@@ -1,57 +1,49 @@
-// E2E: profile editing — the per-team roles a user can be scheduled for.
+// E2E: profile editing — teams, and the READ-ONLY view of the per-team roles a
+// user can be scheduled for (an admin assigns those from the Team tab).
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
-test("a user edits the roles they play on a team", async ({ page }) => {
+test("a user sees their per-team roles but can't change them", async ({ page }) => {
   await login(page, "carol");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  // Roles are per-team: pick Carol's team first, then toggle a role on it.
+  // Roles are per-team: pick Carol's team first.
   await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
 
-  // Carol plays Keys + Vocals but not Strings — toggling it auto-saves (no
-  // Save button; see app/profile/page.tsx).
-  const strings = page.getByLabel("Strings");
-  await expect(strings).not.toBeChecked();
-  await strings.check();
-  await expect(page.getByTestId("profile-saved")).toBeVisible();
-
-  // Revert so the suite's shared state is unchanged.
-  await page.getByLabel("Strings").uncheck();
-  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  // Her roles are listed as plain chips, not offered as checkboxes, and a role
+  // she doesn't play (Strings) isn't shown at all.
+  const roles = page.getByTestId("profile-roles");
+  await expect(roles).toContainText("Keys");
+  // The team calls VOCALS "Vox" — the chips use the team's own labels.
+  await expect(roles).toContainText("Vox");
+  await expect(roles).not.toContainText("Strings");
+  await expect(page.getByLabel("Strings")).toHaveCount(0);
 });
 
-test("a brand-new member is nudged to pick their roles, then the nudge clears", async ({
+test("a brand-new member is told to ask an admin for their roles", async ({
   page,
 }) => {
   // "newbie" (Noah New) is on the Sunday team but has no roles yet — the
   // onboarding state (needsRoles).
   await login(page, "newbie");
 
-  // Reminder dot on the avatar + a banner prompting profile setup.
+  // Reminder dot on the avatar + a banner explaining why they can't be booked.
   await expect(page.getByTestId("profile-dot")).toBeVisible();
-  const banner = page.getByText("Finish setting up your profile");
-  await expect(banner).toBeVisible();
+  await expect(
+    page.getByText("don’t play any roles on your teams yet")
+  ).toBeVisible();
 
-  // The banner links straight to the profile page.
-  await page
-    .getByRole("link", { name: "add the instruments and roles you play" })
-    .click();
+  // The banner links to the profile page, which says who to ask — roles are an
+  // admin's to grant, so there's nothing here for the user to check.
+  await page.getByRole("link", { name: "Check your profile" }).click();
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  // Pick a team, then a role — it auto-saves, and the dot and banner clear.
   await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
-  await page.getByLabel("Drums").check();
-  await expect(page.getByTestId("profile-saved")).toBeVisible();
-
-  await expect(page.getByTestId("profile-dot")).toHaveCount(0);
-  await expect(page.getByText("Finish setting up your profile")).toHaveCount(0);
-
-  // Revert so the suite's shared state (a role-less account) is unchanged.
-  await page.getByLabel("Drums").uncheck();
-  await expect(page.getByTestId("profile-saved")).toBeVisible();
-  await expect(page.getByTestId("profile-dot")).toBeVisible();
+  await expect(page.getByTestId("profile-roles")).toContainText(
+    "ask your org admin"
+  );
+  await expect(page.getByLabel("Drums")).toHaveCount(0);
 });
 
 test("a user joins a team via the Add-a-team modal, then leaves it", async ({
@@ -95,7 +87,9 @@ test("an established member sees no profile-setup nudge", async ({ page }) => {
   // Carol already has roles on her team, so neither the dot nor banner appears.
   await login(page, "carol");
   await expect(page.getByTestId("profile-dot")).toHaveCount(0);
-  await expect(page.getByText("Finish setting up your profile")).toHaveCount(0);
+  await expect(
+    page.getByText("don’t play any roles on your teams yet")
+  ).toHaveCount(0);
 });
 
 test("a password (non-Google) account can edit its email and password", async ({
@@ -113,17 +107,16 @@ test("a password (non-Google) account can edit its email and password", async ({
   await expect(page.getByText("(signed in with Google)")).toHaveCount(0);
 });
 
-test("toggling a role fires exactly one write and no session/org refetch", async ({
+test("editing a profile field fires one write and no session/org refetch", async ({
   page,
 }) => {
-  // Regression guard for the save cascade: a role toggle should be a single PUT
-  // to the per-team roles endpoint plus the one aggregated GET
-  // /api/notifications that refreshes the reminder dots — no session refresh, no
-  // /api/orgs, no per-badge availability fetch.
+  // Regression guard for the save cascade: an autosaved field should be a single
+  // PUT to /api/me plus the one aggregated GET /api/notifications that refreshes
+  // the reminder dots — no session refresh, no /api/orgs, no per-badge
+  // availability fetch.
   await login(page, "carol");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
-  await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
 
   const calls: string[] = [];
   page.on("request", (req) => {
@@ -131,19 +124,25 @@ test("toggling a role fires exactly one write and no session/org refetch", async
     if (url.pathname.startsWith("/api/")) calls.push(`${req.method()} ${url.pathname}`);
   });
 
-  await page.getByLabel("Strings").check();
+  // The email field, not the name: a name change deliberately refreshes the
+  // session (the navbar shows it), which would make the assertions below lie.
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  // The field saves on blur, not on every keystroke — so typing alone isn't a
+  // write, and the test has to leave the field the way a person would.
+  await email.fill("carol.e2e@example.com");
+  await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
   // Let any (unwanted) trailing requests land before asserting.
   await page.waitForTimeout(500);
 
-  expect(
-    calls.filter((c) => c.startsWith("PUT /api/me/teams/"))
-  ).toHaveLength(1);
+  expect(calls.filter((c) => c === "PUT /api/me")).toHaveLength(1);
   expect(calls).not.toContain("POST /api/auth/session");
   expect(calls).not.toContain("GET /api/orgs");
   expect(calls).not.toContain("GET /api/availability-request");
 
   // Revert so the suite's shared state is unchanged.
-  await page.getByLabel("Strings").uncheck();
+  await email.fill(original);
+  await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
 });

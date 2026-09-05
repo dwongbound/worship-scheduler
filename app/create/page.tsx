@@ -17,11 +17,12 @@ import Modal from "@/components/common/Modal";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import { usePageLoading } from "@/components/LoadingProvider";
 import TemplateModal from "@/components/TemplateModal";
+import GenerateModal, { type GenerateOptions } from "@/components/GenerateModal";
 import StagedScheduleModal from "@/components/StagedScheduleModal";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   type TeamRoleDef,
 } from "@/lib/teamRoles";
@@ -34,7 +35,6 @@ import type {
   ApiAvailabilityRequest,
   ApiSetTemplate,
   ApiTeam,
-  ApiUnavailability,
   StagedPlan,
   StagedSet,
 } from "@/lib/types";
@@ -53,7 +53,7 @@ function capacitiesSummary(
   if (!caps) return "";
   const defaults = resolveTeamCapacities(catalog, null);
   const parts: string[] = [];
-  for (const role of bandRoles(catalog)) {
+  for (const role of slottedRoles(catalog)) {
     const n = caps[role.key];
     if (n === undefined || n === defaults[role.key]) continue;
     parts.push(n === 0 ? `no ${role.label}` : `${n}× ${role.label}`);
@@ -94,15 +94,9 @@ export default function CreatePage() {
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   // Which page of the Weekly Recurring Sets table is shown (4 rows per page).
   const [templatePage, setTemplatePage] = useState(0);
-  const [weeks, setWeeks] = useState(12); // ~3 months
-  // Generate scope: "weeks" ahead from now, an explicit date range, or the span
-  // of a named availability request ("request" + genRequestId).
-  const [genMode, setGenMode] = useState<"weeks" | "range" | "request">(
-    "weeks"
-  );
-  const [genRequestId, setGenRequestId] = useState("");
-  const [genStart, setGenStart] = useState("");
-  const [genEnd, setGenEnd] = useState("");
+  // The "Auto schedule" options dialog. Its scope + template picks live inside
+  // it (see GenerateModal) — the page only needs to know it's open.
+  const [generateOpen, setGenerateOpen] = useState(false);
 
   // "Request availabilities" form state. `reqTeamIds` = the teams to ask;
   // it defaults to every team in the org once the team list loads.
@@ -278,32 +272,22 @@ export default function CreatePage() {
 
   // Step 1 — dry run: expand templates + auto-assign, but persist nothing.
   // The proposal opens in the review modal for the admin to tweak.
-  async function generate() {
-    // In range mode, both endpoints are required.
-    if (genMode === "range" && (!genStart || !genEnd)) {
-      setGenerateResult("Error: pick both a start and end date.");
-      return;
-    }
-    if (genMode === "request" && !genRequestId) {
-      setGenerateResult("Error: pick an availability request.");
-      return;
-    }
+  // Step 1 — the dry run. `opts` comes straight from the options dialog, which
+  // has already checked that the window and template picks are complete. On
+  // success the options dialog closes and the review modal takes over; on
+  // failure it stays open showing why, with the picks intact.
+  async function generate(opts: GenerateOptions) {
     setBusyAction("generate");
     setGenerateResult("");
     try {
       const res = await fetch("/api/admin/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
-        body: JSON.stringify(
-          genMode === "range"
-            ? { startDate: genStart, endDate: genEnd }
-            : genMode === "request"
-              ? { requestId: genRequestId }
-              : { weeks }
-        ),
+        body: JSON.stringify(opts),
       });
       const data = await res.json();
       if (res.ok) {
+        setGenerateOpen(false);
         setStagedPlan(data as StagedPlan);
       } else {
         setGenerateResult(`Error: ${data.error ?? "unknown"}`);
@@ -416,10 +400,6 @@ export default function CreatePage() {
         })
     : [];
 
-  // The availability request chosen as the "Generate" scope (null unless the
-  // admin picked one) — used for the range summary under the picker.
-  const genRequest = requests.find((r) => r.id === genRequestId) ?? null;
-
   // Paginate the templates table. Clamp the page here (instead of storing the
   // clamped value) so deleting the last row of the final page can't strand the
   // view on an empty page.
@@ -447,8 +427,16 @@ export default function CreatePage() {
       {/* ── Weekly templates ────────────────────────────────────────── */}
       <section>
         <Card>
-          <div className="mb-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-semibold">Weekly Recurring Sets</h2>
+            {/* These rows are only a shape until something expands them, and
+                that something is further down the page — so say where. */}
+            <a
+              href="#auto-schedule"
+              className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              Auto schedule these ↓
+            </a>
           </div>
           {templates.length === 0 ? (
             <p className="text-sm text-gray-500">No templates yet.</p>
@@ -769,101 +757,35 @@ export default function CreatePage() {
         </Card>
       </div>
 
-      {/* ── Generate ────────────────────────────────────────────────── */}
+      {/* ── Auto schedule ───────────────────────────────────────────── */}
+      {/* id is the jump target for the Weekly Recurring Sets link above;
+          scroll-mt keeps the heading clear of the sticky navbar on arrival. */}
+      <div id="auto-schedule" className="scroll-mt-24">
       <Card>
-        <h2 className="mb-3 font-semibold">Generate schedule</h2>
-        <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
-          Expands the weekly templates into concrete sets, then auto-assigns
-          people based on their instruments and availability (see
-          lib/scheduler.ts). You&rsquo;ll get a <strong>preview to review and
-          tweak</strong> before anything is saved — nobody is notified until
-          you apply.
-        </p>
-        {/* Scope: N weeks ahead, an explicit date range, or the span of a
-            named availability request (so you schedule exactly what you asked
-            the team about). Request options carry a "req:" value prefix. */}
-        <div className="mb-3 w-64">
-          <Select
-            label="Schedule for"
-            value={genMode === "request" ? `req:${genRequestId}` : genMode}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v.startsWith("req:")) {
-                setGenMode("request");
-                setGenRequestId(v.slice(4));
-              } else {
-                setGenMode(v as "weeks" | "range");
-              }
-            }}
-          >
-            <option value="weeks">Weeks ahead</option>
-            <option value="range">Date range</option>
-            {requests.length > 0 && (
-              <optgroup label="Availability request">
-                {requests.map((r) => (
-                  <option key={r.id} value={`req:${r.id}`}>
-                    {requestLabel(r)}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </Select>
+        {/* The card is one button now, so what it does rides on the heading
+            rather than taking three lines above it. */}
+        <div className="mb-3 flex items-center gap-1.5">
+          <h2 className="font-semibold">Auto schedule</h2>
+          <InfoTooltip text="Expands the weekly recurring sets into concrete sets, then auto-assigns people based on the roles they play and their availability. You'll get a preview to review and tweak before anything is saved — nobody is notified until you apply." />
         </div>
-        <div className="flex flex-wrap items-end gap-3">
-          {genMode === "request" ? (
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              {genRequest
-                ? `Scheduling ${shortRangeLabel(genRequest.startDate, genRequest.endDate)}.`
-                : "Pick an availability request above."}
-            </p>
-          ) : genMode === "weeks" ? (
-            <div className="w-32">
-              <Input
-                label="Weeks ahead"
-                type="number"
-                min={1}
-                max={26}
-                value={weeks}
-                onChange={(e) => setWeeks(Number(e.target.value))}
-              />
-            </div>
-          ) : (
-            <>
-              <div className="w-40">
-                <DateSelect
-                  label="Start date"
-                  value={genStart}
-                  max={genEnd || undefined}
-                  onChange={(v) => {
-                    setGenStart(v);
-                    if (genEnd && genEnd < v) setGenEnd("");
-                  }}
-                  required
-                />
-              </div>
-              <div className="w-40">
-                <DateSelect
-                  label="End date"
-                  value={genEnd}
-                  min={genStart || undefined}
-                  onChange={setGenEnd}
-                  required
-                />
-              </div>
-            </>
-          )}
-          <Button
-            onClick={generate}
-            disabled={busyAction === "generate" || templates.length === 0}
-          >
-            {busyAction === "generate" ? (
-              <LoadingDots size="sm" />
-            ) : (
-              "Generate preview"
-            )}
-          </Button>
-        </div>
-        {generateResult && (
+        {/* The window and the template picks are asked in the dialog, not
+            parked on the page: they're answered once per run, and half of
+            them only apply to one of the three scopes. */}
+        <Button
+          onClick={() => {
+            setGenerateResult("");
+            setGenerateOpen(true);
+          }}
+          disabled={templates.length === 0}
+          title={
+            templates.length === 0
+              ? "Add a weekly recurring set first."
+              : undefined
+          }
+        >
+          Auto schedule…
+        </Button>
+        {generateResult && !generateOpen && (
           <p className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">
             {generateResult}
           </p>
@@ -876,6 +798,18 @@ export default function CreatePage() {
           to manually change who&rsquo;s assigned.
         </p>
       </Card>
+      </div>
+
+      {/* Step 1: the options. Step 2 (StagedScheduleModal) opens on success. */}
+      <GenerateModal
+        open={generateOpen}
+        templates={templates}
+        requests={requests}
+        busy={busyAction === "generate"}
+        error={generateResult}
+        onGenerate={generate}
+        onClose={() => setGenerateOpen(false)}
+      />
 
       <Modal
         open={Boolean(selectedUser && selectedRequest)}

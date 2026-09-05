@@ -21,7 +21,8 @@ Playwright (e2e) · Docker.
   and `components/common/` reusable primitives.
 - `lib/` — pure logic: `scheduler.ts` (greedy roster fill, unit-tested),
   `auth.ts`, `dates.ts`, `ics.ts`, `stats.ts`, `theme.ts`, `setStatus.ts`
-  (set → empty/confirmed/unconfirmed/cover), `constants.ts` (`SLOT_CAPACITIES`
+  (set → empty/confirmed/unconfirmed/cover), `guestTeams.ts` (another team
+  lending people to one set), `constants.ts` (`SLOT_CAPACITIES`
   = team shape; `resolveCapacities` is THE way to read a set's shape),
   `api.ts` (`fetchJsonArray` client helper), `types.ts` (`Api*` server shapes
   and `Staged*` create-flow shapes). `prisma.ts` wraps the generated client

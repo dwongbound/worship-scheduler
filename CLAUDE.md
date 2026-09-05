@@ -40,8 +40,14 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `label` (renameable), `defaultCount`, `adminOnly`, `order`. Seeded with
   `DEFAULT_TEAM_ROLES` on team create; edited in TeamMembersModal → Roles
   (`PUT /api/teams/[id]/roles`), which REFUSES to delete a role anyone holds on
-  an upcoming set. `adminOnly` = only an admin may grant it (hidden from the
-  profile picker), the same rule MD has.
+  an upcoming set. `order` is admin-set: TeamRolesEditor rows are drag-sortable
+  (dnd-kit, grip handle) and POSITION IS the order (`validateCatalog` stamps
+  `order: i`). It drives every roster's display AND the auto-fill's
+  scarce-first pass — everything reads roles via `orderedRoles`/`slottedRoles`. `adminOnly` still marks a role as admin-granted, but WHO
+  plays WHAT is admin-only across the board now: only the Team tab
+  (`PATCH /api/admin/users/[id]`, `teamRoles`) writes a member's roles.
+  `PUT /api/me/teams/[teamId]` joins a team and nothing more; /profile lists
+  your roles read-only with an (i) pointing at your org admin.
 - **TeamMember** — the user↔team join, carrying that person's per-team `roles`
   and `active` flag. Inactive = not auto-scheduled on that team (both scheduler
   callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
@@ -64,6 +70,16 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - **Assignment** — one User in one `role` (a TeamRole.key **string**, not an
   enum) on one Set; a user may fill several roles on a set.
   `status: PENDING|CONFIRMED|SWAP_REQUESTED`. `@@unique([setId, userId, role])`.
+  Nullable `guestTeamId` = this seat was borrowed from a **SetGuestTeam**
+  (null, i.e. every legacy row, = an ordinary seat on the set's own team).
+- **SetGuestTeam** — another team lending people to a set it doesn't own (the
+  choir team joining a Sunday set). The set keeps ONE owning team; a guest row
+  only widens who may sit where. `roles: Json` = which of **that team's** roles
+  this set borrows: `{role, count}` or `{role, allAvailable: true}` (unbounded
+  — no target, so it never reads as a hole and auto-fill seats everyone free).
+  `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
+  replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
+  ordinary counted role.
 - **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute),
   `SPECIFIC` (startDate + time window, tied to a request), or `DATE_RANGE`
   (startDate/endDate, legacy). Times = minutes from midnight, day 0=Sun.
@@ -82,15 +98,18 @@ roles are TeamRole rows now; every role column is a `String` holding a key.)
 
 Roles are **per team**. `lib/teamRoles.ts` is the vocabulary: `TeamRoleDef`,
 `DEFAULT_TEAM_ROLES` (the built-ins a new team starts with), `orderedRoles`,
-`bandRoles` (drops CHOIR), **`resolveTeamCapacities(catalog, stored)`** — THE
+`slottedRoles` (drops only MD; **was `bandRoles`, which also dropped CHOIR**),
+**`resolveTeamCapacities(catalog, stored)`** — THE
 way to read a set's shape — `roleLabel(key, catalog?)` (team label → built-in →
 humanized key, so a custom/deleted role never renders blank), `roleKeyFromLabel`,
 `validateCatalog`. `lib/teamRoleStore.ts` is its prisma side
 (`getTeamCatalog`/`getTeamCatalogs`/`seedTeamRoles`/`TEAM_ROLE_FIELDS`).
 `lib/constants.ts` keeps the BUILT-IN defaults only (`SLOT_CAPACITIES`,
 `ROLE_ORDER`, `INSTRUMENT_LABELS`, `ALL_INSTRUMENTS`) plus `MD_ROLES` /
-`ACOUSTIC_HOST_ROLES` / `CHOIR` — special behaviours pinned to built-in keys
-that custom roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`.
+`ACOUSTIC_HOST_ROLES` — special behaviours pinned to built-in keys that custom
+roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`. `CHOIR` is
+just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
+`lib/guestTeams.ts`, available to any team's any role.
 
 ## Pages (`app/*/page.tsx`)
 
@@ -109,14 +128,25 @@ that custom roles never inherit — and `validateSlotCapacities(raw, allowedKeys
   `availability-request`.
 - Export: `export`, `export/[id]` (ICS).
 - Admin (re-checks `isAdmin` vs db): `admin/users(+/[id]|/stats)`,
+  `admin/team-load` (per-window serve counts for the generate-review panel),
   `admin/assignments(+/[id])`, `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`.
+  (No `sets/[id]/autofill` — "Auto schedule" in the set detail modal runs
+  `buildSchedule` in the browser now, because its roster is staged.)
 
 ## lib (pure logic, unit-tested where noted)
 
-- `scheduler.ts` — `buildSchedule()` greedy roster fill + `isUserAvailable()`.
+- `scheduler.ts` — `buildSchedule()` greedy roster fill + `isUserAvailable()` +
+  `availableGuestMembers()` (one guest role's pool, minus anyone already on the
+  set — replaced `availableChoirMembers`).
   Soft spacing rule: people booked within 8 days of a set (incl. caller-fed
-  existing DB bookings) are picked last → weekly sets rotate round-robin. ✅tested
+  existing DB bookings) are picked last → weekly sets rotate round-robin.
+  A required-MD set is filled on PURE ROTATION first and only refilled with a
+  reserved MD seat if that roster has nobody who could lead (the old
+  reserve-first pass pinned the seat to one person); the reserved seat goes to
+  the freshest MD, in the best role they play — `MD_ROLES` is preference-ordered
+  (electric guitar, keys, bass), and `lib/md.ts` designates the MD the same way.
+  ✅tested
 - `constants.ts` ✅ · `dates.ts` ✅ (`upcomingOccurrences`, `format*`, minute⇄time)
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
 - `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops
@@ -125,7 +155,21 @@ that custom roles never inherit — and `validateSlotCapacities(raw, allowedKeys
 - `playerOptions.ts` — `buildPlayerOptions()`: the assignment dropdown's
   candidate list, shared by SetDetailModal + StagedScheduleModal. Nobody is
   filtered out — unavailable/inactive people are flagged and sink. ✅tested
-- `setStatus.ts` — `setStatus()` → empty|confirmed|unconfirmed|cover.
+- `guestTeams.ts` — guest-team vocabulary: `GuestRoleSpec`, `isUnbounded`,
+  `openSeats` (an `allAvailable` seat reports 0, so it never reads as a hole),
+  `validateGuestRoles(raw, allowedKeys)`. ✅tested
+- `stagedPlan.ts` — pure helpers for the generate-review modal, incl. the Team
+  load panel's metrics: `LOAD_METRICS` / `loadMetricRange()` / `parseLoadMetric()`
+  let the admin measure people by this plan, upcoming bookings, or the past
+  month/3/6/12 months. Only "this plan" is counted client-side; every window is
+  ONE on-demand query to `GET /api/admin/team-load?metric=…`, cached per window
+  in the modal — the plan itself never carries a year of assignments. ✅tested
+- `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
+  (what changed, in words, for the discard warning) + `diffAssignments()`
+  (roster changes as DELETE/PATCH/POST) + `newAssignmentId()`. ✅tested
+- `setStatus.ts` — `setStatus()` → empty|confirmed|unconfirmed|cover. Counts the
+  owning team's slots plus guest teams' COUNTED seats (guest seats don't fill
+  the host's same-named slots).
 - `setlist.ts` — `describeSetlistChange(before, after)` → one human fragment
   ("added \"Who Else\" (E)") or null when nothing changed. Feeds the
   SETLIST_CHANGED history event + the Slack notice. ✅tested
@@ -141,11 +185,19 @@ that custom roles never inherit — and `validateSlotCapacities(raw, allowedKeys
 
 ## Components
 
-Feature: `CalendarMonth`, `CreateSetModal`, `SetDetailModal`, `SetFormFields`,
-`SlotCapacityEditor`, `TemplateModal`, `MySetsPanel`, `Navbar`, `Logo`,
+Feature: `CalendarMonth`, `CreateSetModal`, `SetDetailModal` (edits are STAGED:
+everything writes to a local copy, a sticky footer has Delete · Cancel · Save,
+and any exit with changes hits a confirm that lists them — only Delete-set and
+Slack messaging act immediately; there's no per-set history here, that's the
+Team tab's `TeamActivityModal`), `SetFormFields`,
+`SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
+`Navbar`, `Logo`,
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
 Primitives in `components/common/`: `Badge Banner Button Card Checkbox Dropdown
-Input Modal Select LoadingDots LoadingScreen`. Prefer extending these.
+Input Modal Select Stepper LoadingDots LoadingScreen`. Prefer extending these.
+(`Stepper` = number field with big − / + either side, replacing a native
+spinner.) `SetFormFields` asks for a start + **end** time; the set still stores
+`durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
 
 ## Gotchas
 

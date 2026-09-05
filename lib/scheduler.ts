@@ -8,7 +8,8 @@
 //      candidate who (a) plays that instrument, (b) is available, (c) isn't
 //      already on this set, then prefer (d) people who did NOT serve within
 //      the past week (soft — see SPACING below), and among those (e) whoever
-//      has the FEWEST assignments so far.
+//      has the FEWEST assignments so far, and among THOSE (f) whoever has done
+//      the fewest sets FOR THIS TEAM (see PER-TEAM BALANCE).
 //   3. Ties break on user id so results are deterministic (nice for tests).
 // Slots with no viable candidate stay empty rather than blocking the run.
 //
@@ -18,6 +19,25 @@
 // singer. If none of them play it, the slot is left empty (never a dedicated
 // acoustic-only player). See ACOUSTIC_HOST_ROLES.
 //
+// PER-TEAM BALANCE: overall load alone can seat someone on all four of one
+// team's sets and none of another's — both teams' sets are just "a set" to a
+// global tally, so which team a slot belongs to never enters the choice. A
+// per-(user, team) tally breaks ties that user id used to break arbitrarily,
+// steering each pick toward whoever has served THIS team least. It sits BELOW
+// the global count on purpose: it re-orders only people who are already
+// equally loaded, so it can never make overall balance worse by handing a set
+// to someone who's already stretched across three teams.
+//
+// MUSICAL DIRECTOR: a required-MD set is filled on pure rotation FIRST, and
+// only if that roster contains nobody who could lead (lib/md.ts's rule) is it
+// thrown away and refilled with a seat reserved for an MD. Reserving up front —
+// which is what this used to do, one role at a time, taking the first role that
+// had any MD free — handed the same person every set as soon as they were the
+// only MD in some role. When a seat IS reserved, WHO gets it is the freshest MD
+// by the same rotation ranking as everyone else, and their ROLE is the most
+// preferred one they can take: electric guitar, then keys, then bass (MD_ROLES
+// is preference-ordered).
+//
 // SPACING: someone who served (or is being scheduled) within MIN_GAP_DAYS of
 // a set is deprioritized for it, not excluded — with enough people this makes
 // weekly sets rotate round-robin, but a small pool still gets fully staffed.
@@ -26,7 +46,6 @@
 
 import {
   ACOUSTIC_HOST_ROLES,
-  CHOIR,
   MD_ROLES,
   rolesMayOverlap,
   type BandRole,
@@ -35,11 +54,12 @@ import {
 } from "./constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   teamSupportsMD,
   type TeamRoleDef,
 } from "./teamRoles";
+import { eligibleMDIds } from "./md";
 
 export interface SchedulerUser {
   id: string;
@@ -174,22 +194,40 @@ export function isUserAvailable(
 }
 
 /**
+ * Map key for one person's tally on one team. A team-less set ("open to the
+ * whole org") gets its own bucket rather than being merged into any team's.
+ */
+export function teamKey(userId: string, teamId: string | null | undefined): string {
+  return `${userId}|${teamId ?? ""}`;
+}
+
+/**
  * Fill every set's slots from the pool of users.
  * `existingCounts` lets callers pre-load how many assignments each user
  * already has (so re-runs stay balanced against prior schedules).
  * `existingAssignments` are dates people are already booked on in the DB, so
  * the spacing rule can also steer new sets away from them.
+ * `existingTeamCounts` does the same per team, keyed by `teamKey(userId,
+ * teamId)` — without it a re-run starts every team tally at zero while the
+ * global one carries over, and the two signals disagree.
  */
 export function buildSchedule(
   sets: SchedulerSet[],
   users: SchedulerUser[],
   rules: UnavailabilityRule[],
   existingCounts: Map<string, number> = new Map(),
-  existingAssignments: ExistingAssignment[] = []
+  existingAssignments: ExistingAssignment[] = [],
+  existingTeamCounts: Map<string, number> = new Map()
 ): ProposedAssignment[] {
   // Running tally of assignments per user — the load-balancing signal.
   const counts = new Map<string, number>();
   for (const u of users) counts.set(u.id, existingCounts.get(u.id) ?? 0);
+
+  // The same tally split by team — see PER-TEAM BALANCE above. Seeded from the
+  // caller's DB counts so a re-run continues where the last one left off.
+  const teamCounts = new Map<string, number>(existingTeamCounts);
+  const teamCountOf = (userId: string, teamId: string | null | undefined) =>
+    teamCounts.get(teamKey(userId, teamId)) ?? 0;
 
   // Every date each person is booked on (DB bookings + picks made during this
   // run) — the spacing signal. See tooClose below.
@@ -214,6 +252,9 @@ export function buildSchedule(
     );
   };
 
+  // Who's an MD, for checking a filled roster against lib/md.ts's rule.
+  const isMDById = new Map(users.map((u) => [u.id, !!u.isMD]));
+
   const proposals: ProposedAssignment[] = [];
   const chronological = [...sets].sort(
     (a, b) => a.startsAt.getTime() - b.startsAt.getTime()
@@ -221,12 +262,12 @@ export function buildSchedule(
 
   for (const set of chronological) {
     const setTime = set.startsAt.getTime();
-    // Only band roles are slot-filled here. Choir has no capacity, so a
-    // pre-assigned choir member is NOT a fill constraint — dropping them keeps
-    // them free to also take a band role and out of the spacing tally.
-    const preAssigned = (set.preAssigned ?? []).filter(
-      (p): p is typeof p & { role: BandRole } => p.role !== CHOIR
-    );
+    // Every pre-assigned seat is a fill constraint, choir included. (Choir was
+    // dropped here while it was an unbounded list — seating every available
+    // singer would otherwise have blocked them all from their band roles. Now
+    // that a choir seat is deliberate and counted, standing in one means you
+    // aren't also playing bass, which is what the rest of the fill assumes.)
+    const preAssigned = set.preAssigned ?? [];
     // Roles each person already holds on this set — seeded with the pre-assigned
     // people. Normally one slot per person, but one person may hold BOTH worship
     // leader and acoustic guitar (OVERLAP_ALLOWED_ROLES); see canTakeRole.
@@ -235,15 +276,20 @@ export function buildSchedule(
       const held = rolesOnSet.get(p.userId) ?? new Set<Instrument>();
       held.add(p.role);
       rolesOnSet.set(p.userId, held);
-      // Their presence here counts for spacing on the surrounding sets too.
+      // Their presence here counts for spacing on the surrounding sets too —
+      // and toward this team's tally, so a hand-picked roster steers the rest
+      // of the run the same way an auto-filled one does. (Deliberately NOT the
+      // global tally; see the note on `preAssigned`.)
       recordBooking(p.userId, setTime);
+      const preKey = teamKey(p.userId, set.teamId);
+      teamCounts.set(preKey, (teamCounts.get(preKey) ?? 0) + 1);
     }
     // This set's role catalog and its resulting shape. Both come from the
     // team now, so two teams can fill genuinely different rosters.
     const catalog = set.roles?.length ? set.roles : DEFAULT_TEAM_ROLES;
-    const fillOrder = bandRoles(catalog);
+    const fillOrder = slottedRoles(catalog);
     // Remaining slots per role — starts at the set's shape, decremented as we
-    // fill (the MD reservation below eats into it before the normal pass).
+    // fill (and restored by undoPicks when a fill is thrown away).
     const remaining = resolveTeamCapacities(catalog, set.capacities);
     // Pre-assigned slots are already taken (an overfilled role just goes
     // negative, which the fill loop treats as full).
@@ -262,29 +308,60 @@ export function buildSchedule(
       return true;
     };
 
-    // Commit a pick: record it and update all running tallies. Only ever called
-    // with band roles (choir isn't slot-filled here — see availableChoirMembers).
+    // Picks made for THIS set, in order. They only reach `proposals` once the
+    // set is settled, so the required-MD retry below can throw them away.
+    const picks: ProposedAssignment[] = [];
+
+    // Commit a pick: record it and update all running tallies.
     const assign = (userId: string, role: BandRole) => {
       const held = rolesOnSet.get(userId) ?? new Set<Instrument>();
       held.add(role);
       rolesOnSet.set(userId, held);
       counts.set(userId, (counts.get(userId) ?? 0) + 1);
+      const tk = teamKey(userId, set.teamId);
+      teamCounts.set(tk, (teamCounts.get(tk) ?? 0) + 1);
       recordBooking(userId, setTime);
       remaining[role]--;
-      proposals.push({ setId: set.id, userId, role });
+      picks.push({ setId: set.id, userId, role });
     };
 
-    // Pick the best candidate for a role, honoring availability and the
-    // one-slot-per-person rule (plus its lone overlap exception). Preference
+    // Undo every pick this set has made, reversing exactly what `assign` did so
+    // the set can be re-filled from scratch. Pre-assigned seats are untouched —
+    // they're constraints, not picks. Used only by the required-MD retry.
+    const undoPicks = () => {
+      for (const p of picks.reverse()) {
+        rolesOnSet.get(p.userId)?.delete(p.role);
+        counts.set(p.userId, (counts.get(p.userId) ?? 1) - 1);
+        const tk = teamKey(p.userId, set.teamId);
+        teamCounts.set(tk, (teamCounts.get(tk) ?? 1) - 1);
+        // Drop ONE booking at this set's time: the person may legitimately
+        // still have another here (a pre-assigned seat, or an overlapping role).
+        const times = bookedTimes.get(p.userId);
+        const at = times ? times.indexOf(setTime) : -1;
+        if (times && at >= 0) times.splice(at, 1);
+        remaining[p.role]++;
+      }
+      picks.length = 0;
+    };
+
+    // The rotation ranking EVERY pick is made with — the MD pass included, so
+    // nobody gets a seat by a route that skips load balancing. Preference
     // order: people NOT booked within MIN_GAP_DAYS of this set first (the
     // spacing rule — soft, so a small pool still fills every slot), then the
-    // least-loaded, then user id for determinism. Optional `mdOnly` restricts
-    // to MDs (used only by the MD reservation below). MDs are otherwise treated
-    // as ordinary players — they may fill any role on any set; being the set's
-    // designated MD is a separate choice (Set.mdUserId, see lib/md.ts).
+    // least-loaded overall, then the least-loaded on this team, then user id
+    // for determinism.
+    const byRotation = (a: SchedulerUser, b: SchedulerUser) =>
+      Number(tooClose(a.id, setTime)) - Number(tooClose(b.id, setTime)) ||
+      counts.get(a.id)! - counts.get(b.id)! ||
+      teamCountOf(a.id, set.teamId) - teamCountOf(b.id, set.teamId) ||
+      a.id.localeCompare(b.id);
+
+    // Pick the best candidate for a role, honoring availability and the
+    // one-slot-per-person rule (plus its lone overlap exception). MDs are
+    // ordinary players here — they may fill any role on any set; being the
+    // set's designated MD is a separate choice (Set.mdUserId, see lib/md.ts).
     const bestFor = (
       role: Instrument,
-      mdOnly = false,
       // Extra hard filter on candidates (e.g. "already seated as WL/vocals" for
       // the acoustic pass below). Defaults to no restriction.
       eligible: (u: SchedulerUser) => boolean = () => true
@@ -294,97 +371,142 @@ export function buildSchedule(
         // on any team for a team-less set. A person on the team with no roles
         // for it is naturally excluded — rolesFor returns [].
         .filter((u) => rolesFor(u, set).includes(role))
-        .filter((u) => (mdOnly ? u.isMD : true))
         .filter((u) => eligible(u))
         .filter((u) => canTakeRole(u.id, role))
         .filter((u) => isUserAvailable(u.id, set, rules))
-        .sort(
-          (a, b) =>
-            Number(tooClose(a.id, setTime)) - Number(tooClose(b.id, setTime)) ||
-            counts.get(a.id)! - counts.get(b.id)! ||
-            a.id.localeCompare(b.id)
-        )[0];
+        .sort(byRotation)[0];
 
-    // ── MD reservation ──────────────────────────────────────────────────
-    // If this set needs an MD, seat one first so the greedy fill can't use up
-    // every slot an MD could take. An MD can only lead from an MD_ROLE (keys,
-    // electric guitar, or bass), so we only consider those — scarcest first
-    // (ROLE_ORDER is scarce-first). If no eligible MD is available, the set is
-    // left without one — surfaced to the admin rather than blocking the run.
-    // A pre-assigned MD already sitting in an MD role satisfies the need.
-    const hasPreMD = preAssigned.some(
-      (p) => p.isMD && MD_ROLES.includes(p.role)
-    );
-    // A team that has deleted MD from its catalog has no MD logic at all, so
-    // requiresMD on one of its sets is a leftover flag we simply ignore.
-    if (set.requiresMD && teamSupportsMD(catalog) && !hasPreMD) {
+    // ── MD reservation (retry only — see the fill/retry block below) ─────
+    // Seat an MD ahead of everyone else. WHO comes first: the MD pool is ranked
+    // by the same rotation as every other pick, so the seat moves around the
+    // MDs instead of pinning itself to whichever one happens to play a role
+    // nobody else covers. Their ROLE is then the most preferred one they can
+    // actually take — electric guitar, then keys, then bass (MD_ROLES is
+    // preference-ordered; the MD is normally the electric guitarist).
+    // If nobody qualifies the set is left unled — surfaced to the admin rather
+    // than blocking the run.
+    const seatMD = () => {
+      // The MD-capable slots this team has AND still has room in.
+      const openMDRoles = MD_ROLES.filter(
+        (r) => catalog.some((c) => c.key === r) && (remaining[r] ?? 0) > 0
+      );
+      const best = users
+        .filter((u) => u.isMD)
+        .filter((u) => isUserAvailable(u.id, set, rules))
+        .map((u) => ({
+          user: u,
+          // Their most preferred open MD role, or undefined if they play none.
+          role: openMDRoles.find(
+            (r) => rolesFor(u, set).includes(r) && canTakeRole(u.id, r)
+          ),
+        }))
+        .filter((c): c is { user: SchedulerUser; role: Instrument } => !!c.role)
+        .sort((a, b) => byRotation(a.user, b.user))[0];
+      if (best) assign(best.user.id, best.role);
+    };
+
+    // One complete fill of this set's open slots. `reserveMD` seats an MD
+    // first, which bends the rotation, so only the retry below passes it.
+    const fillSet = (reserveMD: boolean) => {
+      if (reserveMD) seatMD();
+
+      // ── Normal greedy fill of the remaining slots ─────────────────────
+      // Every slotted role is capacity-filled here, choir included.
+      // ACOUSTIC_GUITAR is skipped here and filled in its own pass afterward,
+      // because its candidate must ALREADY be seated as the worship leader or a
+      // vocalist (which VOCALS, filled last in ROLE_ORDER, only becomes after).
       for (const { key: role } of fillOrder) {
-        if (!MD_ROLES.includes(role)) continue;
-        if (remaining[role] <= 0) continue;
-        const md = bestFor(role, true);
-        if (md) {
-          assign(md.id, role);
-          break;
+        if (role === "ACOUSTIC_GUITAR") continue;
+        while (remaining[role] > 0) {
+          const pick = bestFor(role);
+          if (!pick) break; // nobody left for this role — leave slot empty
+          assign(pick.id, role);
         }
       }
-    }
 
-    // ── Normal greedy fill of the remaining slots ───────────────────────
-    // Only the band roles (ROLE_ORDER) are capacity-filled here. Choir is not a
-    // band role and has no slot count, so it's handled separately — see
-    // availableChoirMembers, called by the set-detail "Auto schedule".
-    // ACOUSTIC_GUITAR is skipped here and filled in its own pass afterward,
-    // because its candidate must ALREADY be seated as the worship leader or a
-    // vocalist (which VOCALS, filled last in ROLE_ORDER, only becomes after).
-    for (const { key: role } of fillOrder) {
-      if (role === "ACOUSTIC_GUITAR") continue;
-      while (remaining[role] > 0) {
-        const pick = bestFor(role);
-        if (!pick) break; // nobody left for this role — leave slot empty
-        assign(pick.id, role);
+      // ── Acoustic guitar: only a seated worship leader or vocalist ──────
+      // The acoustic guitarist should also be singing/leading — never a
+      // dedicated acoustic-only player. Now that every other role is seated,
+      // hand the slot to a worship leader or vocalist on this set who also
+      // plays acoustic (canTakeRole already sanctions that double-up). If none
+      // do, leave it empty. Only fires if this team kept the built-in acoustic
+      // role — the double-up rule is built-in behaviour a custom role never
+      // inherits.
+      const holdsHostRole = (userId: string): boolean => {
+        const held = rolesOnSet.get(userId);
+        return held ? ACOUSTIC_HOST_ROLES.some((r) => held.has(r)) : false;
+      };
+      while ((remaining.ACOUSTIC_GUITAR ?? 0) > 0) {
+        const pick = bestFor("ACOUSTIC_GUITAR", (u) => holdsHostRole(u.id));
+        if (!pick) break; // no seated WL/vocalist plays acoustic — leave empty
+        assign(pick.id, "ACOUSTIC_GUITAR");
       }
-    }
-
-    // ── Acoustic guitar: only a seated worship leader or vocalist ────────
-    // The acoustic guitarist should also be singing/leading — never a dedicated
-    // acoustic-only player. Now that every other role is seated, hand the slot
-    // to a worship leader or vocalist on this set who also plays acoustic
-    // (canTakeRole already sanctions that double-up). If none do, leave it empty.
-    const holdsHostRole = (userId: string): boolean => {
-      const held = rolesOnSet.get(userId);
-      return held ? ACOUSTIC_HOST_ROLES.some((r) => held.has(r)) : false;
     };
-    // Only if this team kept the built-in acoustic role — the double-up rule
-    // is built-in behaviour and a custom role never inherits it.
-    while ((remaining.ACOUSTIC_GUITAR ?? 0) > 0) {
-      const pick = bestFor("ACOUSTIC_GUITAR", false, (u) => holdsHostRole(u.id));
-      if (!pick) break; // no seated WL/vocalist plays acoustic — leave it empty
-      assign(pick.id, "ACOUSTIC_GUITAR");
+
+    // Can the roster as filled supply an MD? Same rule the app designates one
+    // with (lib/md.ts): an MD in an MD-capable role who isn't the worship
+    // leader. Pre-assigned seats count — a hand-picked MD needs no reservation.
+    const rosterCanLead = () =>
+      eligibleMDIds([
+        ...preAssigned,
+        ...picks.map((p) => ({
+          userId: p.userId,
+          role: p.role,
+          isMD: isMDById.get(p.userId) ?? false,
+        })),
+      ]).length > 0;
+
+    // ── Fill, then only reserve an MD if the fill didn't produce one ─────
+    // Rotation comes first. Reserving the MD up front (which is what this used
+    // to do) hands the same person every single set as soon as they're the only
+    // MD in some role — the reservation looked at one role at a time and took
+    // the first that had any MD free, so load and spacing never entered into
+    // it. So: fill on pure rotation, and only if that roster turns out to have
+    // nobody who could lead do we throw it away and refill with a seat held for
+    // an MD. A team that has deleted MD from its catalog has no MD logic at
+    // all, so requiresMD on one of its sets is a leftover flag we ignore.
+    fillSet(false);
+    if (set.requiresMD && teamSupportsMD(catalog) && !rosterCanLead()) {
+      undoPicks();
+      fillSet(true);
     }
+    proposals.push(...picks);
   }
 
   return proposals;
 }
 
 /**
- * Everyone who should join a set's choir on "Auto schedule": every singer who
- * lists CHOIR on the set's team and is free at the set's time. Unlike the band
- * roles, choir has no capacity — it's an unbounded list, so we don't balance or
- * space it, we simply seat all the available singers. Choir is team-scoped like
- * every other role now (rolesFor): a team-less set draws on anyone with CHOIR on
- * any team. Returns their userIds, excluding anyone already on this set's choir
- * (`alreadyOnChoir`). Pure + separate from buildSchedule so the modal's autofill
- * can layer choir on top.
+ * Who "Auto schedule" should seat in ONE guest-team role — the generalization
+ * of what the hardcoded choir fill used to do.
+ *
+ * Everyone on `guestTeamId` who plays `role` there and is free at the set's
+ * time, minus `alreadyOnSet`. That subtraction is the point: a guest seat is
+ * meant for someone who ISN'T otherwise busy on this set, so a singer already
+ * playing keys on the band isn't also dragged into the visiting choir.
+ *
+ * Ordered least-recently-booked first (via `bookings`) so a CAPPED guest role
+ * rotates like any other; an `allAvailable` role ignores the cap and seats the
+ * whole list. Pure + separate from buildSchedule so the set detail modal's
+ * "Auto schedule" can layer guests on top of a normal band fill.
  */
-export function availableChoirMembers(
+export function availableGuestMembers(
   set: SchedulerSet,
+  role: Instrument,
+  guestTeamId: string,
   users: SchedulerUser[],
   rules: UnavailabilityRule[],
-  alreadyOnChoir: Set<string> = new Set()
+  alreadyOnSet: Set<string> = new Set(),
+  // How many times each person is already booked nearby — same map the band
+  // fill uses. Absent = everyone ties and the order falls back to name/id.
+  loads: Map<string, number> = new Map()
 ): string[] {
   return users
-    .filter((u) => rolesFor(u, set).includes(CHOIR))
-    .filter((u) => !alreadyOnChoir.has(u.id))
+    .filter((u) => (u.rolesByTeam[guestTeamId] ?? []).includes(role))
+    .filter((u) => !alreadyOnSet.has(u.id))
     .filter((u) => isUserAvailable(u.id, set, rules))
+    .sort(
+      (a, b) => (loads.get(a.id) ?? 0) - (loads.get(b.id) ?? 0) || a.id.localeCompare(b.id)
+    )
     .map((u) => u.id);
 }

@@ -91,6 +91,8 @@ test("admin creates a private set from the calendar, then toggles it public", as
   const detail = await openSetByLabel(page, "Secret Set");
   await detail.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("button", { name: "Private", exact: true }).click();
+  // Staged like every other edit in this modal — Save commits it.
+  await detail.getByRole("button", { name: "Save", exact: true }).click();
   await expect(async () => {
     const nowPublic = (await fetchSets(page)).find((s) => s.label === "Secret Set");
     expect(nowPublic?.isPrivate).toBe(false);

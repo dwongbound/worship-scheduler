@@ -7,6 +7,17 @@ import { login, openSetByLabel, requestAvailability } from "./helpers";
 // in-month day cell (always present, avoids month-boundary date math) and
 // reveals its hidden "+" by hovering the containing cell first. Returns the
 // open dialog with the label pre-filled.
+// One person in an open roster dropdown. PlayerSelect portals its list to
+// document.body (so no scrolling ancestor can clip it — see the component), so
+// the options are NOT inside the set modal's dialog and can't be looked up
+// through it. Scoping to the open listbox instead keeps the calendar's own
+// "Show sets for" <select> out of the match.
+function playerOption(page: Page, name: string) {
+  // Substring, not exact: an option's accessible name also carries the flags and
+  // the "×N recently scheduled" badge PlayerSelect appends to it.
+  return page.getByRole("listbox").getByRole("option", { name });
+}
+
 async function openNewSetForm(page: Page, label: string) {
   const addButton = page.getByRole("button", { name: /^Add set on/ }).last();
   await addButton.locator("xpath=ancestor::div[1]").hover();
@@ -149,16 +160,14 @@ test("admin assigns and removes a player in the set modal", async ({ page }) => 
     .getByRole("listitem")
     .filter({ hasText: "Worship Leader" });
   await wlRow.getByRole("button", { name: "None" }).click();
-  // Scope to the modal's listbox: the calendar's "Show sets for" filter is a
-  // native <select> whose options include the same member names.
-  await modal.getByRole("option", { name: "Jack Jones" }).click();
+  await playerOption(page, "Jack Jones").click();
   await expect(wlRow.getByText("Pending confirmation")).toBeVisible();
 
   // Remove them again by re-opening the box and picking "None".
   // Exact match: the slot's ✕ button ("Remove … (Jack Jones)") would also
   // match a substring regex.
   await wlRow.getByRole("button", { name: "Jack Jones", exact: true }).click();
-  await modal.getByRole("option", { name: "None" }).click();
+  await playerOption(page, "None").click();
   await expect(wlRow.getByText("Pending confirmation")).not.toBeVisible();
 });
 
@@ -293,10 +302,12 @@ test("admin auto-schedules a set's open slots around a hand-picked player", asyn
     .getByRole("listitem")
     .filter({ hasText: "Worship Leader" });
   await wlRow.getByRole("button", { name: "None" }).click();
-  await modal.getByRole("option", { name: "Alice Admin" }).click();
+  await playerOption(page, "Alice Admin").click();
   await expect(wlRow.getByText("Pending confirmation")).toBeVisible();
 
   await modal.getByRole("button", { name: "Auto schedule" }).click();
+  // Edits are staged now — nothing reaches the server until Save.
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
 
   // The open slots filled in as PENDING; the hand-picked worship leader
   // stayed exactly as she was (the fill works around her).
@@ -344,7 +355,7 @@ test("removing a filled slot asks for confirmation first", async ({ page }) => {
   // Put a drummer in the (single) drums slot.
   const drumsRow = modal.getByRole("listitem").filter({ hasText: "Drums" });
   await drumsRow.getByRole("button", { name: "None" }).click();
-  await modal.getByRole("option", { name: "Bob Baker" }).click();
+  await playerOption(page, "Bob Baker").click();
   await expect(drumsRow.getByText("Pending confirmation")).toBeVisible();
 
   // ✕ on the filled slot opens a confirm modal (the person would go with the
@@ -380,4 +391,50 @@ test("removing a filled slot asks for confirmation first", async ({ page }) => {
   await expect(
     modal.getByRole("button", { name: "Remove empty Drums slot" })
   ).toHaveCount(0);
+});
+
+test("leaving the set modal with staged edits asks first and lists them", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await createAdHocSet(page, "Staged Edit Night");
+  const modal = await openSetByLabel(page, "Staged Edit Night");
+
+  // Nothing staged yet → Save is inert and Cancel just closes.
+  await expect(modal.getByRole("button", { name: "Save", exact: true })).toBeDisabled();
+
+  // Stage one roster change.
+  const drumsRow = modal.getByRole("listitem").filter({ hasText: "Drums" });
+  await drumsRow.getByRole("button", { name: "None" }).click();
+  await playerOption(page, "Bob Baker").click();
+  await expect(modal.getByText("1 unsaved change")).toBeVisible();
+
+  // Cancel now warns, naming the change rather than just saying "unsaved".
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  const warning = page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard your changes?" })
+    .last();
+  await expect(warning.getByText("Added Bob Baker on Drums")).toBeVisible();
+
+  // "Keep editing" leaves everything exactly as it was.
+  await warning.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page.getByText("Discard your changes?")).toHaveCount(0);
+  await expect(modal.getByText("1 unsaved change")).toBeVisible();
+
+  // Discarding closes the modal and never touches the server.
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard your changes?" })
+    .last()
+    .getByRole("button", { name: "Discard changes" })
+    .click();
+  await expect(modal).not.toBeVisible();
+
+  const sets = (await (await page.request.get("/api/sets")).json()) as {
+    label: string | null;
+    assignments: unknown[];
+  }[];
+  expect(sets.find((s) => s.label === "Staged Edit Night")!.assignments).toHaveLength(0);
 });

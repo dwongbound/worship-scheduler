@@ -62,6 +62,23 @@ export async function GET(req: NextRequest) {
       assignments: {
         include: { user: { select: { id: true, name: true, isMD: true } } },
       },
+      // Teams lending people to this set. Each carries its OWN catalog, since
+      // borrowed seats are named and filled from the guest team's roles rather
+      // than the owning team's (see lib/guestTeams.ts).
+      guestTeams: {
+        select: {
+          id: true,
+          teamId: true,
+          roles: true,
+          team: {
+            select: {
+              id: true,
+              name: true,
+              roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
+            },
+          },
+        },
+      },
       songs: { orderBy: { order: "asc" } },
     },
   });

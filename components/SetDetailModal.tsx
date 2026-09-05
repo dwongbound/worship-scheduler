@@ -6,6 +6,20 @@
 //     "✕" beside each row), and edit the notes.
 //   • The set's worship leader can also edit the notes.
 //   • Everyone else sees it read-only.
+//
+// EDITS ARE STAGED. Nothing here reaches the server until "Save" in the sticky
+// footer: every control writes to a local working copy of the set (`draft`),
+// which the whole render reads through the shadowed `set` below, so a change
+// looks exactly as it will once saved. Save then diffs the copy against the
+// original (lib/setDraft.ts) and issues only the calls that changed; Cancel,
+// ✕, Escape and the backdrop all route through a confirmation that LISTS the
+// unsaved changes first. Two things stay immediate, because neither can be
+// staged honestly: deleting the set, and messaging the team on Slack (that one
+// leaves the building the moment you click it).
+//
+// There's no activity log here: a set's history is part of the org-wide Team
+// Activity view (components/TeamActivityModal.tsx, on the admin Team tab),
+// which is filterable and covers every set rather than one.
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   DndContext,
@@ -36,13 +50,10 @@ import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
-  CHOIR,
   GROUP_CHAT_LEAD_OPTIONS,
-  INSTRUMENT_LABELS,
   MAX_SONGS_PER_SET,
   MAX_SONG_TITLE_LENGTH,
   MD_ROLES,
-  ROLE_ORDER,
   SONG_KEYS,
   normalizeSongKey,
   type BandRole,
@@ -50,21 +61,37 @@ import {
 } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
-  bandRoles,
+  slottedRoles,
   resolveTeamCapacities,
   roleLabel,
   teamSupportsMD,
 } from "@/lib/teamRoles";
 import { formatDay, formatTime } from "@/lib/dates";
-import { eligibleMDIds, isValidMD } from "@/lib/md";
-import { isUserAvailable, type UnavailabilityRule } from "@/lib/scheduler";
+import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
+import {
+  availableGuestMembers,
+  buildSchedule,
+  isUserAvailable,
+  type UnavailabilityRule,
+} from "@/lib/scheduler";
+import { isActiveForSet } from "@/lib/stagedPlan";
+import { schedulableRolesByTeam } from "@/lib/roster";
+import {
+  describeSetChanges,
+  diffAssignments,
+  newLocalId,
+  type SetSnapshot,
+} from "@/lib/setDraft";
 import { buildPlayerOptions } from "@/lib/playerOptions";
-import SetHistoryEntry from "./SetHistoryEntry";
+import { fetchJsonArray } from "@/lib/api";
+import { isUnbounded, openSeats } from "@/lib/guestTeams";
+import GuestTeamsModal, { type GuestTeamDraft } from "./GuestTeamsModal";
 import type {
   ApiAdminUser,
   ApiAssignment,
   ApiSet,
-  ApiSetHistoryEvent,
+  ApiSetGuestTeam,
+  ApiTeam,
 } from "@/lib/types";
 
 interface SetDetailModalProps {
@@ -85,7 +112,7 @@ interface SetDetailModalProps {
 const SERVE_WINDOW_DAYS = 14;
 
 export default function SetDetailModal({
-  set,
+  set: savedSet,
   onClose,
   currentUserId,
   isAdmin = false,
@@ -93,13 +120,20 @@ export default function SetDetailModal({
   allSets = [],
   onChanged,
 }: SetDetailModalProps) {
+  // The working copy every edit writes to. null = untouched since it opened (or
+  // since the last save), in which case the render falls straight through to
+  // the server's version.
+  const [draft, setDraft] = useState<ApiSet | null>(null);
+  // Everything below — render and derived state alike — reads the set through
+  // this one name, so staging cost the rest of the component nothing.
+  const set = draft ?? savedSet;
   const [notesDraft, setNotesDraft] = useState("");
   const [busy, setBusy] = useState(false);
   // Two-step delete: the button flips to "Confirm delete" before firing.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  // "Auto schedule" in flight (busy also goes true; this picks which button
-  // shows the dots).
-  const [autofilling, setAutofilling] = useState(false);
+  // Stacked "you have unsaved changes" warning, raised by any attempt to leave
+  // with staged edits (Cancel, ✕, Escape, the backdrop).
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // Filled slot whose "✕" was clicked — a confirm modal asks before removing
   // the person along with their slot. (Empty slots are removed right away.)
   const [slotToDelete, setSlotToDelete] = useState<ApiAssignment | null>(null);
@@ -134,122 +168,112 @@ export default function SetDetailModal({
   >([]);
 
   // "Change Roles": the stacked modal for editing this set's team shape (how
-  // many of each role it wants) plus the two flags that shape it — MD and
-  // choir. Null = closed; opening seeds the draft from the set.
+  // many of each role it wants) plus the Require-MD flag. Null = closed;
+  // opening seeds the draft from the set.
   const [rolesDraft, setRolesDraft] = useState<{
     capacities: Record<BandRole, number>;
     requiresMD: boolean;
-    choirEnabled: boolean;
   } | null>(null);
 
-  // The set's activity log (History section, bottom of the modal).
-  const [history, setHistory] = useState<ApiSetHistoryEvent[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
+  // "Other teams": the stacked editor for which OTHER teams lend people to this
+  // set. Null = closed. The org's teams are fetched lazily the first time an
+  // admin opens it — most set views never need them.
+  const [guestDraft, setGuestDraft] = useState<GuestTeamDraft[] | null>(null);
+  const [orgTeams, setOrgTeams] = useState<ApiTeam[] | null>(null);
 
-  // Keep the notes textarea in sync with whichever set is open.
+  // Keep the notes textarea in sync with whichever set is open. Follows the
+  // SAVED set: the textarea is the notes' staging area, so it must only be
+  // reseeded when the server's copy changes (a save, or a different set).
   useEffect(() => {
-    setNotesDraft(set?.notes ?? "");
-  }, [set?.id, set?.notes]);
+    setNotesDraft(savedSet?.notes ?? "");
+  }, [savedSet?.id, savedSet?.notes]);
 
-  // Load the songs editor whenever a (different) set opens. Keyed on the set id
-  // ONLY — not set.songs — so the auto-save refetch below (same set, new object)
-  // doesn't reset the draft and clobber whatever the user is mid-typing. The
-  // sets list always ships each set's songs, so the id changing is enough.
+  // The saved setlist, as the comparable shape. Doubles as the songs editor's
+  // reseed trigger and as one half of the unsaved-changes diff. Everything is
+  // run through the same cleaning the server does (trim, drop blank titles,
+  // normalize the key) so a row that can't be saved — a blank "+ Add song", a
+  // key with no title — never reads as a pending change.
+  const savedSongs = (savedSet?.songs ?? []).map((s) => ({
+    title: s.title,
+    key: s.key ?? "",
+  }));
+  const savedSongsKey = JSON.stringify(savedSongs);
+
+  // Load the songs editor whenever a different set opens, or the saved setlist
+  // changes under it (i.e. our own save landed). Keyed on the CONTENT, not the
+  // songs array's identity, so an unrelated refetch can't reset a draft the
+  // user is mid-typing.
   useEffect(() => {
     setSongDraft(
-      (set?.songs ?? []).map((s) => ({
+      (savedSet?.songs ?? []).map((s) => ({
         id: s.id,
         title: s.title,
         key: s.key ?? "",
       }))
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [set?.id]);
+  }, [savedSet?.id, savedSongsKey]);
 
-  // Auto-save the setlist — there's no explicit "save" button. Debounced so we
-  // PUT once the user pauses (not on every keystroke), and only when the draft
-  // actually differs from what's saved on the server. `runEdit` refetches the
-  // set afterwards so the Spotify/history sections stay current. The row ids are
-  // stripped — only { title, key } (in order) is persisted or compared.
-  //
-  // What we send AND compare is the draft run through the same cleaning the
-  // server does (drop blank titles, trim, normalize the key — see the songs
-  // PUT route). Comparing the raw draft made an unsaveable row (an empty
-  // "+ Add song" row, a key with no title, a title that only trims down) look
-  // like a pending change forever: we'd PUT, the server would drop it, the
-  // refetch would come back without it, and the effect would fire again —
-  // re-saving in a loop every 800ms for as long as the row sat there.
-  const savedSongs = JSON.stringify(
-    (set?.songs ?? []).map((s) => ({ title: s.title, key: s.key ?? "" }))
-  );
-  const draftSongs = JSON.stringify(
-    songDraft
-      .map((r) => ({
-        title: r.title.trim().slice(0, MAX_SONG_TITLE_LENGTH),
-        key: normalizeSongKey(r.key) ?? "",
-      }))
-      .filter((r) => r.title !== "")
-  );
-  const currentSongSetId = set?.id;
-  useEffect(() => {
-    if (!currentSongSetId || savedSongs === draftSongs) return;
-    const timer = setTimeout(() => {
-      runEdit(() =>
-        fetch(`/api/sets/${currentSongSetId}/songs`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ songs: JSON.parse(draftSongs) }),
-        })
-      );
-    }, 800);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentSongSetId, savedSongs, draftSongs]);
+  // The setlist as it stands in the editor, cleaned the same way — this is what
+  // gets saved and what the diff compares against `savedSongs`.
+  const draftSongs = songDraft
+    .map((r) => ({
+      title: r.title.trim().slice(0, MAX_SONG_TITLE_LENGTH),
+      key: normalizeSongKey(r.key) ?? "",
+    }))
+    .filter((r) => r.title !== "");
+  const songsChanged = JSON.stringify(draftSongs) !== savedSongsKey;
 
-  // Reset the delete confirmations + Slack feedback whenever a different set
-  // opens (or the modal closes) — a toast about set A shouldn't outlive it.
+  // Reset every staged edit + the confirmations and Slack feedback whenever a
+  // different set opens (or the modal closes) — a toast about set A shouldn't
+  // outlive it, and neither should a half-made edit to it.
   useEffect(() => {
+    setDraft(null);
+    setConfirmingDiscard(false);
     setConfirmingDelete(false);
     setSlotToDelete(null);
     setRolesDraft(null);
+    setGuestDraft(null);
     setToast(null);
-  }, [set?.id]);
+  }, [savedSet?.id]);
+
+  // The org's teams, for the guest-team picker. Fetched once the editor is
+  // first opened (not on every calendar load) and only for the set's own org,
+  // so another tenant's teams can never be offered as guests.
+  useEffect(() => {
+    if (!guestDraft || orgTeams || !set?.org?.id) return;
+    let cancelled = false;
+    fetchJsonArray<ApiTeam>(`/api/teams?orgId=${set.org.id}`)
+      .then((teams) => !cancelled && setOrgTeams(teams))
+      .catch(() => !cancelled && setOrgTeams([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [guestDraft, orgTeams, set?.org?.id]);
 
   // Is the Slack bot configured for this org? Drives whether the "Slack Team"
   // button is enabled (it's shown to everyone regardless).
   // Only fetch while a set is actually open — this modal is always mounted (with
   // set=null) on the calendar page, so gating on `set` avoids a wasted request
   // (and a doubled one under React's dev Strict Mode) on every calendar load.
+  // Keyed on the ORG ID, not the set object: with edits staged, `set` is a new
+  // object on every keystroke, and depending on it re-asked Slack whether it was
+  // configured for every character typed into the notes box.
+  const slackStatusOrgId = set?.org?.id ?? "";
   useEffect(() => {
     if (!set) return;
+    let cancelled = false;
     // Per-org: the "Slack Team" button only works if the set's OWN org has
     // connected Slack, so ask about that org specifically.
-    fetch(`/api/slack/status?orgId=${set.org?.id ?? ""}`)
+    fetch(`/api/slack/status?orgId=${slackStatusOrgId}`)
       .then((r) => r.json())
-      .then((d) => setSlackConfigured(!!d.enabled))
-      .catch(() => setSlackConfigured(false));
-  }, [set]);
-
-  // History section: fetched fresh whenever a (different) set opens, and
-  // refreshed again after any edit made from this modal (see runEdit).
-  function refetchHistory(id: string) {
-    setHistoryLoading(true);
-    fetch(`/api/sets/${id}/history`)
-      .then((r) => r.json())
-      .then((d) => setHistory(Array.isArray(d) ? d : []))
-      .catch(() => setHistory([]))
-      .finally(() => setHistoryLoading(false));
-  }
-
-  const setId = set?.id;
-  useEffect(() => {
-    if (!setId) return;
-    // A DIFFERENT set: drop the old log outright, so another set's rows can't
-    // linger while this one's load is in flight. (In-place refreshes of the
-    // same set deliberately keep theirs — see the History section below.)
-    setHistory([]);
-    refetchHistory(setId);
-  }, [setId]);
+      .then((d) => !cancelled && setSlackConfigured(!!d.enabled))
+      .catch(() => !cancelled && setSlackConfigured(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slackStatusOrgId]);
 
   // Flatten every user's unavailability into scheduler rules once, so the
   // dropdowns can flag who can't serve at this set's time. (Hook stays above
@@ -309,7 +333,11 @@ export default function SetDetailModal({
   // This set's roles come from ITS TEAM's catalog — two teams can offer
   // entirely different ones. A team-less set falls back to the built-ins.
   const catalog = set.team?.roles?.length ? set.team.roles : DEFAULT_TEAM_ROLES;
-  const rosterRoles = bandRoles(catalog);
+  const rosterRoles = slottedRoles(catalog);
+  // The roster above is the OWNING team's. Seats borrowed from a guest team
+  // are rendered in their own blocks lower down and must not be counted here —
+  // a visiting choir doesn't fill this team's own choir slots.
+  const ownAssignments = set.assignments.filter((a) => !a.guestTeamId);
   const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
   // What to call a role here — this team's own label, with the built-in name
   // (then a humanized key) as the fallback for a role it has since dropped.
@@ -319,14 +347,9 @@ export default function SetDetailModal({
   const assignedByRole = Object.fromEntries(
     rosterRoles.map((role) => [
       role.key,
-      set.assignments.filter((a) => a.role === role.key).length,
+      ownAssignments.filter((a) => a.role === role.key).length,
     ])
   ) as Record<BandRole, number>;
-
-  // The set's choir roster (its dropdown options are computed after eligibleFor
-  // is defined, below). Choir is a role with no fixed slot count — see the
-  // Choir section in the JSX.
-  const choirMembers = set.assignments.filter((a) => a.role === CHOIR);
 
   // MD picker data. Eligible = an assignee who is an MD, plays an MD-capable
   // role (keys/electric/bass), and isn't the worship leader (see lib/md.ts).
@@ -359,6 +382,19 @@ export default function SetDetailModal({
     durationMinutes: set.durationMinutes,
   };
 
+  // How the person already in a seat should read in that seat's open list.
+  // buildPlayerOptions excludes them from the candidates (they're already
+  // here), so PlayerSelect draws their row from this instead — without it the
+  // current pick is the only name in the list with no "(unavailable)" on it.
+  // The ×n counts this set too (serveCounts is built from the saved sets,
+  // which include this one), so the person in the seat reads on the same scale
+  // as the candidates under them rather than looking like they serve less.
+  const selectedFlags = (userId: string, teamId: string | null | undefined) => ({
+    available: isUserAvailable(userId, calcSet, rules),
+    inactive: !isActiveForSet(users.find((u) => u.id === userId) ?? { id: userId }, teamId),
+    count: serveCounts.get(userId) ?? 0,
+  });
+
   const isSetWorshipLeader =
     !!currentUserId &&
     set.assignments.some(
@@ -371,6 +407,9 @@ export default function SetDetailModal({
   const isSetMember =
     !!currentUserId && set.assignments.some((a) => a.user.id === currentUserId);
   const canEditSongs = isAdmin || isSetMember;
+  // Anyone with any editable surface gets the Cancel/Save footer; a pure
+  // viewer gets a plain Close, since there's nothing here for them to stage.
+  const canEditAnything = canEditNotes || canEditTeam || canEditSongs;
 
   // Options for a role's dropdown. We offer this set's team members who play
   // THIS role (per their Team-tab instruments) and aren't already filling it
@@ -400,7 +439,7 @@ export default function SetDetailModal({
       // Whoever already fills this exact role here (a person may hold several
       // roles on one set, so only this role's occupants are excluded).
       exclude: new Set(
-        set.assignments.filter((a) => a.role === role).map((a) => a.user.id)
+        ownAssignments.filter((a) => a.role === role).map((a) => a.user.id)
       ),
       serveCounts,
       isMDHere: (u) =>
@@ -410,80 +449,221 @@ export default function SetDetailModal({
     });
   };
 
-  // Choir dropdown options — same shared eligibility/availability logic as the
-  // band roles (see the Choir section in the JSX).
-  const choirOptions = eligibleFor(CHOIR);
+  // Options for ONE borrowed seat. Same availability/load logic as the roster
+  // above, but drawn from the GUEST team's members rather than this set's own —
+  // that's the whole point of a guest team.
+  //
+  // Anyone already on the set in any seat is excluded, not just sunk: a person
+  // playing keys for the host team can't also stand in the visiting choir, and
+  // offering them would only invite a double-booking. (Contrast the roster's
+  // own dropdowns, where an unavailable person stays pickable so an admin can
+  // deliberately override.)
+  const guestOptionsFor = (
+    guest: ApiSetGuestTeam,
+    role: Instrument
+  ): PlayerOption[] =>
+    buildPlayerOptions({
+      users,
+      role,
+      teamId: guest.teamId,
+      set: calcSet,
+      rules,
+      exclude: new Set(set.assignments.map((a) => a.user.id)),
+      serveCounts,
+    });
 
-  async function runEdit(fn: () => Promise<Response>) {
-    setBusy(true);
-    try {
-      await fn();
-      await onChanged?.();
-      refetchHistory(currentSetId);
-    } finally {
-      setBusy(false);
-    }
-  }
+  // ── Staged edits ───────────────────────────────────────────────────────
+  // Every control below writes to the working copy instead of the server. The
+  // first edit of a session forks `savedSet`; from then on it's the draft that
+  // gets patched, and the render sees the change immediately because `set`
+  // points at it.
+  const patchDraft = (next: (s: ApiSet) => ApiSet) =>
+    setDraft((d) => next(d ?? set));
+  const patchAssignments = (next: (rows: ApiAssignment[]) => ApiAssignment[]) =>
+    patchDraft((s) => ({ ...s, assignments: next(s.assignments) }));
 
-  const reassign = (assignmentId: string, userId: string) =>
-    runEdit(() =>
-      fetch(`/api/admin/assignments/${assignmentId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId }),
-      })
+  // Swap the person in a seat. The seat KEEPS ITS ID, so a saved one is later
+  // updated in place (its history and swap state follow the seat, not the
+  // person), and it drops back to PENDING — the new person hasn't confirmed.
+  const reassign = (assignmentId: string, userId: string) => {
+    const user = users.find((u) => u.id === userId);
+    if (!user) return;
+    patchAssignments((rows) =>
+      rows.map((a) =>
+        a.id === assignmentId
+          ? {
+              ...a,
+              status: "PENDING" as const,
+              user: { id: user.id, name: user.name, isMD: user.isMD },
+            }
+          : a
+      )
     );
+  };
 
   const removeAssignment = (assignmentId: string) =>
-    runEdit(() =>
-      fetch(`/api/admin/assignments/${assignmentId}`, { method: "DELETE" })
-    );
+    patchAssignments((rows) => rows.filter((a) => a.id !== assignmentId));
 
-  const addAssignment = (role: Instrument, userId: string) =>
-    runEdit(() =>
-      fetch("/api/admin/assignments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ setId: set.id, userId, role }),
-      })
-    );
-
-  // Fill the empty slots server-side, keeping everyone already assigned in
-  // place (their slots are constraints the fill works around).
-  const autoSchedule = async () => {
-    setAutofilling(true);
-    try {
-      await runEdit(() =>
-        fetch(`/api/admin/sets/${currentSetId}/autofill`, { method: "POST" })
-      );
-    } finally {
-      setAutofilling(false);
-    }
+  // `guestTeamId` marks the new seat as borrowed from that guest row; omitting
+  // it (the roster's own dropdowns) creates an ordinary owning-team seat.
+  const addAssignment = (
+    role: Instrument,
+    userId: string,
+    guestTeamId?: string
+  ) => {
+    const user = users.find((u) => u.id === userId);
+    if (!user) return;
+    patchAssignments((rows) => [
+      ...rows,
+      {
+        // A local id until it's saved — that's what tells the save an INSERT
+        // from an UPDATE (lib/setDraft.ts).
+        id: newLocalId(),
+        role,
+        status: "PENDING" as const,
+        user: { id: user.id, name: user.name, isMD: user.isMD },
+        guestTeamId: guestTeamId ?? null,
+      },
+    ]);
   };
 
   // Remove ONE slot of a role from this set (capacity − 1). For a filled slot
-  // pass its assignmentId — the person is unassigned in the same request.
+  // pass its assignmentId — the person comes out of the seat with it.
   const deleteSlot = (role: Instrument, assignmentId?: string) => {
     setSlotToDelete(null);
-    const query = assignmentId ? `?assignmentId=${assignmentId}` : "";
-    return runEdit(() =>
-      fetch(`/api/admin/sets/${currentSetId}/roles/${role}${query}`, {
-        method: "DELETE",
-      })
-    );
+    patchDraft((s) => {
+      // Materialize the shape before editing it: a set with no override is
+      // still following its team's defaults, and lowering one role has to
+      // pin the rest rather than silently re-inherit them later.
+      const shape = resolveTeamCapacities(catalog, s.slotCapacities);
+      return {
+        ...s,
+        slotCapacities: {
+          ...shape,
+          [role]: Math.max(0, (shape[role] ?? 0) - 1),
+        },
+        assignments: assignmentId
+          ? s.assignments.filter((a) => a.id !== assignmentId)
+          : s.assignments,
+      };
+    });
   };
 
-  const saveNotes = () =>
-    runEdit(() =>
-      fetch(`/api/sets/${set.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notes: notesDraft }),
-      })
-    );
+  // The pool every fill draws from: everyone, with the roles they play on each
+  // team — minus the teams they're paused on, the same rule the server's
+  // callers apply (lib/roster.ts).
+  const schedulerPool = () =>
+    users.map((u) => ({
+      id: u.id,
+      isMD: u.isMD,
+      rolesByTeam: schedulableRolesByTeam(
+        u.teams.map((t) => ({ teamId: t.id, roles: t.roles, active: t.active }))
+      ),
+    }));
 
-  // Drag-and-drop reorder (dnd-kit): apply the move on drop. The debounced
-  // auto-save persists the new order. (Sensors are set up with the hooks above.)
+  // Fill this set's OWN empty slots, keeping everyone already assigned in place
+  // (their seats are constraints the fill works around). Never removes or moves
+  // anyone, so there's nothing to confirm.
+  //
+  // Runs the SAME pure algorithm the server does (lib/scheduler.ts) rather than
+  // calling an endpoint, because a staged roster has nothing on the server to
+  // fill yet — and being pure, it's instant, so there's nothing to spin on.
+  const autoScheduleOwnRoster = () => {
+    const proposals = buildSchedule(
+      [
+        {
+          ...calcSet,
+          teamId: set.teamId ?? set.team?.id ?? null,
+          roles: catalog,
+          capacities,
+          requiresMD: set.requiresMD,
+          preAssigned: ownAssignments.map((a) => ({
+            userId: a.user.id,
+            role: a.role,
+            isMD: a.user.isMD,
+          })),
+        },
+      ],
+      schedulerPool(),
+      rules,
+      // How often each person serves nearby — the same signal the dropdowns
+      // sort by, so the fill and the manual picks agree on who's fresh.
+      new Map(serveCounts)
+    );
+    if (proposals.length === 0) return;
+
+    const seats = proposals.flatMap((p) => {
+      const user = users.find((u) => u.id === p.userId);
+      if (!user) return [];
+      return [
+        {
+          id: newLocalId(),
+          role: p.role,
+          status: "PENDING" as const,
+          user: { id: user.id, name: user.name, isMD: user.isMD },
+          guestTeamId: null,
+        },
+      ];
+    });
+
+    // One update for the whole fill, so the MD can be derived from the roster
+    // it produces. Designating one here is what the server's autofill route
+    // used to do: the fill may have just seated the only person eligible to
+    // lead, and without this a required-MD set still reads as unled. A valid
+    // hand-picked MD is left exactly as it is.
+    patchDraft((current) => {
+      const assignments = [...current.assignments, ...seats];
+      const roster = assignments.map((a) => ({
+        userId: a.user.id,
+        role: a.role,
+        isMD: a.user.isMD,
+      }));
+      const needsNewMD =
+        supportsMD && current.requiresMD && !isValidMD(current.mdUserId, roster);
+      return {
+        ...current,
+        assignments,
+        mdUserId: needsNewMD ? defaultMDId(roster) : current.mdUserId,
+      };
+    });
+  };
+
+  // Fill ONE borrowed team's empty seats, and only those — each guest block has
+  // its own button, and neither touches the other's people. Each of that team's
+  // roles draws from its own pool, minus anyone already on this set in any seat.
+  const autoScheduleGuest = (guestTeamId: string) => {
+    const guest = (set.guestTeams ?? []).find((g) => g.id === guestTeamId);
+    if (!guest) return;
+    // Grows as we go, so one person can't be seated twice across the roles in
+    // a single pass.
+    const onSet = new Set(set.assignments.map((a) => a.user.id));
+
+    for (const spec of guest.roles) {
+      const seated = set.assignments.filter(
+        (a) => a.guestTeamId === guest.id && a.role === spec.role
+      ).length;
+      const free = availableGuestMembers(
+        calcSet,
+        spec.role,
+        guest.teamId,
+        schedulerPool(),
+        rules,
+        onSet,
+        serveCounts
+      );
+      // An unbounded role seats everyone free; a counted one fills its gap.
+      const picks = isUnbounded(spec)
+        ? free
+        : free.slice(0, Math.max(0, (spec.count ?? 0) - seated));
+      for (const userId of picks) {
+        addAssignment(spec.role, userId, guest.id);
+        onSet.add(userId);
+      }
+    }
+  };
+
+  // Drag-and-drop reorder (dnd-kit): apply the move on drop. The new order is
+  // staged like every other setlist edit.
   const handleSongDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
@@ -498,61 +678,82 @@ export default function SetDetailModal({
   // Flip this set's private flag (admin only). Private = hidden from everyone
   // except org admins and the people assigned to it.
   const togglePrivate = (isPrivate: boolean) =>
-    runEdit(() =>
-      fetch(`/api/sets/${currentSetId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ isPrivate }),
-      })
-    );
+    patchDraft((s) => ({ ...s, isPrivate }));
 
-  // Save the "Change Roles" draft. The PATCH route takes one field per call, so
-  // this fires up to three — but only for what actually changed, and in one
-  // runEdit so the modal refetches (and the history reloads) exactly once.
-  const saveRoles = async () => {
-    const draft = rolesDraft;
-    if (!draft || !set) return;
-    const patches: Record<string, unknown>[] = [];
-    if (JSON.stringify(draft.capacities) !== JSON.stringify(capacities)) {
-      // A shape that matches the default is stored as null (no override), so
-      // the set keeps tracking the default if it ever changes.
-      const isDefault =
-        JSON.stringify(draft.capacities) ===
-        JSON.stringify(resolveTeamCapacities(catalog, null));
-      patches.push({ slotCapacities: isDefault ? null : draft.capacities });
-    }
-    if (draft.requiresMD !== set.requiresMD) {
-      patches.push({ requiresMD: draft.requiresMD });
-    }
-    if (draft.choirEnabled !== set.choirEnabled) {
-      patches.push({ choirEnabled: draft.choirEnabled });
-    }
+  // Take the "Change Roles" draft (this set's shape + the Require-MD flag).
+  const saveRoles = () => {
+    const rd = rolesDraft;
     setRolesDraft(null);
-    if (patches.length === 0) return;
-    await runEdit(async () => {
-      let last: Response | undefined;
-      for (const body of patches) {
-        last = await fetch(`/api/sets/${currentSetId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-      }
-      return last!;
+    if (!rd) return;
+    // A shape that matches the team's default is stored as null (no override),
+    // so the set keeps tracking that default if it ever changes.
+    const isDefault =
+      JSON.stringify(rd.capacities) ===
+      JSON.stringify(resolveTeamCapacities(catalog, null));
+    patchDraft((s) => ({
+      ...s,
+      slotCapacities: isDefault ? null : rd.capacities,
+      requiresMD: rd.requiresMD,
+    }));
+  };
+
+  // The current guest config as the editor's draft shape.
+  const guestDraftFromSet = (): GuestTeamDraft[] =>
+    (set.guestTeams ?? []).map((g) => ({ teamId: g.teamId, roles: g.roles }));
+
+  // How many people already sit in one borrowed seat — the editor floors each
+  // count here so shrinking a guest role can't orphan someone.
+  const seatedInGuestRole = (teamId: string, role: string) => {
+    const guest = (set.guestTeams ?? []).find((g) => g.teamId === teamId);
+    if (!guest) return 0;
+    return set.assignments.filter(
+      (a) => a.guestTeamId === guest.id && a.role === role
+    ).length;
+  };
+
+  // Take the guest-team editor's list. A row that's already on the set keeps
+  // its id (so the seats standing in it stay attached); a newly borrowed team
+  // gets a local one, which the save swaps for the server's.
+  const saveGuestTeams = (next: GuestTeamDraft[]) => {
+    setGuestDraft(null);
+    patchDraft((s) => {
+      const existing = s.guestTeams ?? [];
+      const rows = next.map((row) => {
+        const was = existing.find((g) => g.teamId === row.teamId);
+        if (was) return { ...was, roles: row.roles };
+        const team = (orgTeams ?? []).find((t) => t.id === row.teamId);
+        return {
+          id: newLocalId(),
+          teamId: row.teamId,
+          roles: row.roles,
+          team: team ?? ({ id: row.teamId, name: "Team" } as ApiTeam),
+        };
+      });
+      const keptIds = new Set(rows.map((g) => g.id));
+      return {
+        ...s,
+        guestTeams: rows,
+        // A team that's no longer lending takes its borrowed seats with it.
+        assignments: s.assignments.filter(
+          (a) => !a.guestTeamId || keptIds.has(a.guestTeamId)
+        ),
+      };
     });
   };
 
   // Set (or clear, with "") this set's designated MD.
   const setMD = (userId: string) =>
-    runEdit(() =>
-      fetch(`/api/sets/${currentSetId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mdUserId: userId || null }),
-      })
-    );
+    patchDraft((s) => ({ ...s, mdUserId: userId || null }));
+
+  // Set (or turn off, with null) when this set's private Slack channel is auto-
+  // created ahead of time (admin only). The daily cron makes it once inside the
+  // window; the manual "Slack Team" button still works regardless.
+  const setGroupChatLead = (value: number | null) =>
+    patchDraft((s) => ({ ...s, groupChatLeadDays: value }));
 
   // Open a Slack group DM among this set's assigned team and post an intro.
+  // Deliberately NOT staged — a message can't be un-sent, so it acts on what's
+  // actually saved. (The Save-first guard lives on the button.)
   const messageTeamOnSlack = async () => {
     setBusy(true);
     setToast(null);
@@ -587,17 +788,188 @@ export default function SetDetailModal({
     }
   };
 
-  // Set (or turn off, with null) when this set's private Slack channel is auto-
-  // created ahead of time (admin only). The daily cron makes it once inside the
-  // window; the manual "Slack Team" button still works regardless.
-  const setGroupChatLead = (value: number | null) =>
-    runEdit(() =>
-      fetch(`/api/sets/${currentSetId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ groupChatLeadDays: value }),
-      })
-    );
+  // ── What's staged, and saving it ───────────────────────────────────────
+  // Both sides of the comparison flattened to the same shape, so one pure
+  // function can say what changed (lib/setDraft.ts).
+  const snapshot = (
+    source: ApiSet,
+    notes: string,
+    songs: { title: string; key: string }[]
+  ): SetSnapshot => ({
+    assignments: source.assignments.map((a) => ({
+      id: a.id,
+      role: a.role,
+      user: { id: a.user.id, name: a.user.name },
+      guestTeamId: a.guestTeamId ?? null,
+    })),
+    notes,
+    songs,
+    capacities: resolveTeamCapacities(catalog, source.slotCapacities),
+    requiresMD: source.requiresMD,
+    isPrivate: source.isPrivate,
+    mdUserId: source.mdUserId,
+    groupChatLeadDays: source.groupChatLeadDays ?? null,
+    guestTeams: (source.guestTeams ?? []).map((g) => ({
+      teamId: g.teamId,
+      teamName: g.team?.name ?? "another team",
+      roles: g.roles,
+    })),
+  });
+
+  // `savedSet` is non-null here (the guard above returned when it wasn't); the
+  // ?? is only to say so to the type checker.
+  const original = savedSet ?? set;
+  const before = snapshot(original, original.notes ?? "", savedSongs);
+  // The MD goes in validated: pulling someone's seat can leave a stale id, and
+  // "cleared the MD" is exactly what the admin needs to see before saving.
+  const after = { ...snapshot(set, notesDraft, draftSongs), mdUserId };
+  const nameFor = (userId: string) =>
+    users.find((u) => u.id === userId)?.name ??
+    set.assignments.find((a) => a.user.id === userId)?.user.name ??
+    "someone";
+  // The unsaved-changes list — also how the modal knows it has any.
+  const changes = describeSetChanges(before, after, labelFor, nameFor);
+  const dirty = changes.length > 0;
+
+  // Save every staged change. Ordering is load-bearing:
+  //   1. seats that went away, so a shrunk role is never briefly over-full;
+  //   2. guest teams, because a seat borrowed from a team added in this
+  //      session needs that team's REAL row id, which only exists after this;
+  //   3. the set's own plain fields, all in one PATCH;
+  //   4. the roster — swaps, then the new seats;
+  //   5. the MD, which the server validates against the FINAL roster;
+  //   6. the setlist.
+  const saveAll = async () => {
+    setBusy(true);
+    setToast(null);
+    try {
+      const ops = diffAssignments(before.assignments, after.assignments);
+      // A failed call stops the save where it is and leaves the draft intact,
+      // so a half-applied save doesn't quietly read as a finished one — the
+      // admin sees what went wrong with their edits still on screen.
+      const send = async (url: string, init?: RequestInit) => {
+        const res = await fetch(url, init);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error ?? "Could not save your changes.");
+        }
+        return res;
+      };
+      const patchSet = (body: Record<string, unknown>) =>
+        send(`/api/sets/${currentSetId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+
+      for (const id of ops.removed) {
+        await send(`/api/admin/assignments/${id}`, { method: "DELETE" });
+      }
+
+      // teamId → the guest row id the server ended up with.
+      const guestIdByTeam = new Map<string, string>();
+      const guestsChanged =
+        JSON.stringify(before.guestTeams.map((g) => [g.teamId, g.roles])) !==
+        JSON.stringify(after.guestTeams.map((g) => [g.teamId, g.roles]));
+      if (guestsChanged) {
+        const res = await patchSet({
+          guestTeams: after.guestTeams.map((g) => ({
+            teamId: g.teamId,
+            roles: g.roles,
+          })),
+        });
+        const rows = await res.json().catch(() => []);
+        if (Array.isArray(rows)) {
+          for (const row of rows) guestIdByTeam.set(row.teamId, row.id);
+        }
+      }
+
+      // Every plain column the admin touched, in ONE request — the route
+      // applies them together (see app/api/sets/[id]/route.ts).
+      const fields: Record<string, unknown> = {};
+      if (JSON.stringify(before.capacities) !== JSON.stringify(after.capacities)) {
+        fields.slotCapacities = set.slotCapacities;
+      }
+      if (before.requiresMD !== after.requiresMD) {
+        fields.requiresMD = after.requiresMD;
+      }
+      if (before.isPrivate !== after.isPrivate) {
+        fields.isPrivate = after.isPrivate;
+      }
+      if (before.groupChatLeadDays !== after.groupChatLeadDays) {
+        fields.groupChatLeadDays = after.groupChatLeadDays;
+      }
+      if (before.notes.trim() !== after.notes.trim()) {
+        fields.notes = notesDraft;
+      }
+      if (Object.keys(fields).length > 0) await patchSet(fields);
+
+      for (const r of ops.reassigned) {
+        await send(`/api/admin/assignments/${r.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: r.userId }),
+        });
+      }
+      // A borrowed seat points at a guest ROW. If that row was only staged
+      // locally, the guest PATCH above has just created it for real, so the
+      // local id has to be swapped for the one the server assigned.
+      const serverGuestId = (localId: string | null | undefined) => {
+        if (!localId) return undefined;
+        const row = (set.guestTeams ?? []).find((g) => g.id === localId);
+        if (!row) return localId;
+        return guestIdByTeam.get(row.teamId) ?? localId;
+      };
+
+      for (const a of ops.added) {
+        await send("/api/admin/assignments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            setId: currentSetId,
+            userId: a.userId,
+            role: a.role,
+            guestTeamId: serverGuestId(a.guestTeamId),
+          }),
+        });
+      }
+
+      if (before.mdUserId !== after.mdUserId) {
+        await patchSet({ mdUserId: after.mdUserId });
+      }
+      if (songsChanged) {
+        await send(`/api/sets/${currentSetId}/songs`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ songs: draftSongs }),
+        });
+      }
+
+      await onChanged?.();
+      // Back to following the server's copy — the refetched set IS the truth
+      // now, and the drafts reseed from it.
+      setDraft(null);
+    } catch (err) {
+      setToast({
+        text: err instanceof Error ? err.message : "Could not save your changes.",
+        tone: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Leaving with staged edits asks first, listing exactly what would be lost.
+  // Every exit funnels through here: Cancel, the ✕, Escape and the backdrop.
+  const attemptClose = () => {
+    if (dirty) setConfirmingDiscard(true);
+    else onClose();
+  };
+  const discardAndClose = () => {
+    setConfirmingDiscard(false);
+    setDraft(null);
+    onClose();
+  };
 
   // Delete the whole set (assignments cascade). Closes the modal afterwards.
   const deleteSet = async () => {
@@ -612,11 +984,19 @@ export default function SetDetailModal({
   };
 
   return (
-    // While the slot-delete confirm is stacked on top, Escape/overlay on the
-    // outer modal only dismiss the confirm (both modals listen for Escape).
+    // While a confirm is stacked on top, Escape/overlay on the outer modal only
+    // dismiss that confirm (both modals listen for Escape). Otherwise closing
+    // goes through the unsaved-changes guard.
     <Modal
       open
-      onClose={slotToDelete ? () => setSlotToDelete(null) : onClose}
+      size="xl"
+      onClose={
+        slotToDelete
+          ? () => setSlotToDelete(null)
+          : confirmingDiscard
+            ? () => setConfirmingDiscard(false)
+            : attemptClose
+      }
       title={set.label ?? "Worship Set"}
       titleAccessory={
         /* On the title line: the set's org (matters in "All orgs" views), its
@@ -652,6 +1032,75 @@ export default function SetDetailModal({
           {formatDay(set.startsAt)} · {formatTime(set.startsAt)}
         </>
       }
+      footer={
+        /* Sticky action row. Delete sits far left — away from Save, since it's
+           the one button here that can't be taken back — and Cancel/Save at the
+           right, Save last. Someone who can't edit anything just gets Close. */
+        <div className="flex w-full items-center gap-2">
+          {isAdmin &&
+            (confirmingDelete ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={deleteSet}
+                  disabled={busy}
+                >
+                  Confirm delete
+                </Button>
+                <span className="text-sm text-gray-600 dark:text-gray-400">
+                  Delete this set and its whole team?
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setConfirmingDelete(false)}
+                  disabled={busy}
+                >
+                  Keep set
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="danger"
+                onClick={() => setConfirmingDelete(true)}
+                disabled={busy}
+              >
+                Delete set
+              </Button>
+            ))}
+          <div className="ml-auto flex items-center gap-2">
+            {canEditAnything ? (
+              <>
+                {/* Unsaved-changes count, so "Save" isn't the only clue that
+                    something is pending. */}
+                {dirty && (
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {changes.length} unsaved change
+                    {changes.length === 1 ? "" : "s"}
+                  </span>
+                )}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={attemptClose}
+                  disabled={busy}
+                >
+                  Cancel
+                </Button>
+                <Button size="sm" onClick={saveAll} disabled={busy || !dirty}>
+                  {busy ? <LoadingDots size="sm" /> : "Save"}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" variant="secondary" onClick={onClose}>
+                Close
+              </Button>
+            )}
+          </div>
+        </div>
+      }
     >
       {/* Action bar right below the title: Auto schedule on the left; Slack +
           the overflow (⋮) menu on the right. The (i) tooltip opens DOWNWARD so
@@ -663,10 +1112,10 @@ export default function SetDetailModal({
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={autoSchedule}
+                onClick={autoScheduleOwnRoster}
                 disabled={busy}
               >
-                {autofilling ? <LoadingDots size="sm" /> : "Auto schedule"}
+                Auto schedule
               </Button>
               <InfoTooltip
                 side="bottom"
@@ -675,7 +1124,9 @@ export default function SetDetailModal({
                     Fills this set&apos;s <strong>empty slots</strong>{" "}
                     with available team members, preferring people who aren&apos;t
                     already serving in the surrounding week. People already
-                    assigned keep their roles — the fill works around them. In
+                    assigned keep their roles — the fill works around them.
+                    Seats borrowed from other teams have their own Auto schedule
+                    button, on their block below. In
                     the assignment dropdowns, the ×N badge is how many times
                     that person is already scheduled within ±2 weeks of this
                     set; the least-scheduled, available people are listed first.
@@ -693,11 +1144,13 @@ export default function SetDetailModal({
             size="sm"
             variant="secondary"
             onClick={messageTeamOnSlack}
-            disabled={busy || !slackConfigured}
+            disabled={busy || !slackConfigured || dirty}
             title={
-              slackConfigured
-                ? undefined
-                : "Connect Slack for this organization to message the team."
+              !slackConfigured
+                ? "Connect Slack for this organization to message the team."
+                : dirty
+                  ? "Save your changes first — the message goes to the roster as saved."
+                  : undefined
             }
           >
             <span className="flex items-center gap-1.5">
@@ -771,9 +1224,11 @@ export default function SetDetailModal({
             {canEditTeam && (
               <>
                 {/* The team shape lives in its own modal — a role-by-role
-                    editor is far too much for a menu row, and the MD/choir
-                    flags belong with it since they're the other two things
-                    that decide who a set has room for. */}
+                    editor is far too much for a menu row, and the Require-MD
+                    flag belongs with it since it's the other thing that
+                    decides who a set has room for. Borrowing another team's
+                    people is its own modal (below) — it's about WHO may sit
+                    here, not how many seats this team wants. */}
                 <button
                   type="button"
                   disabled={busy}
@@ -781,7 +1236,6 @@ export default function SetDetailModal({
                     setRolesDraft({
                       capacities,
                       requiresMD: set.requiresMD,
-                      choirEnabled: set.choirEnabled,
                     })
                   }
                   className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
@@ -790,6 +1244,27 @@ export default function SetDetailModal({
                 >
                   <span aria-hidden className="w-4" />
                   Change Roles
+                </button>
+                {/* Other teams: borrow another team's people for this set only
+                    (the choir team joining a Sunday set). Separate from Change
+                    Roles because it edits a different question — not "how many
+                    seats does this team want" but "who else may fill seats
+                    here". */}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setGuestDraft(guestDraftFromSet())}
+                  className="flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-sm
+                    text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50
+                    dark:text-gray-200 dark:hover:bg-gray-700"
+                >
+                  <span aria-hidden className="w-4" />
+                  Other teams
+                  {(set.guestTeams ?? []).length > 0 && (
+                    <span className="ml-auto rounded-full bg-purple-100 px-1.5 text-xs font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                      {(set.guestTeams ?? []).length}
+                    </span>
+                  )}
                 </button>
                 <MenuToggle
                   label="Private"
@@ -837,7 +1312,7 @@ export default function SetDetailModal({
 
       <ul className="space-y-3">
         {rosterRoles.map(({ key: role }) => {
-          const filled = set.assignments.filter((a) => a.role === role);
+          const filled = ownAssignments.filter((a) => a.role === role);
           const capacity = capacities[role];
           const openSlots = Math.max(0, capacity - filled.length);
           const options = eligibleFor(role);
@@ -871,7 +1346,11 @@ export default function SetDetailModal({
                         onClick={() => setSlotToDelete(a)}
                       />
                       <PlayerSelect
-                        selected={{ id: a.user.id, name: a.user.name }}
+                        selected={{
+                          id: a.user.id,
+                          name: a.user.name,
+                          ...selectedFlags(a.user.id, set.teamId ?? set.team?.id),
+                        }}
                         options={options}
                         disabled={busy}
                         onChange={(userId) =>
@@ -947,95 +1426,167 @@ export default function SetDetailModal({
         })}
       </ul>
 
-      {/* Choir: opt-in PER SET, turned on where the rest of the set's shape is
-          decided — the create form, or "Change Roles" in the (⋮) menu. A set
-          without choir has no choir section at all, the same way it has no
-          slots for a role it set to zero. A special role with no fixed slot
-          count — an unbounded, admin-managed list rather than a fixed set of
-          slots. When on, "Auto schedule" (above) seats every available singer;
-          admins can also add/remove people by hand. Non-admins additionally
-          need the choir to actually have people on it. */}
-      {set.choirEnabled && (canEditTeam || choirMembers.length > 0) && (
-        <div
-          data-testid="choir-section"
-          className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 font-medium">
-              <span>
-                Choir
-                {choirMembers.length > 0 && (
-                  <span className="ml-1 text-xs text-gray-500">
-                    ({choirMembers.length})
-                  </span>
+      {/* Other teams: teams lending people to this set (e.g. the choir
+          team joining a Sunday-team set). Each borrowed team gets its own
+          block, because a role key only means something within its team's
+          catalog — a guest "Choir" and this team's own "Choir" are different
+          seats, told apart by the assignment's guestTeamId.
+
+          A role with a count renders fixed slots like the roster above; one
+          marked "as many as available" renders whoever is on it plus a single
+          spare add row, since there's no target to derive empty slots from.
+          That unbounded seat is what the hardcoded choir section used to be. */}
+      {(set.guestTeams ?? []).map((guest) => {
+        const guestCatalog = guest.team.roles?.length
+          ? guest.team.roles
+          : DEFAULT_TEAM_ROLES;
+        // Only show a guest block that has something to show: any seat, or an
+        // admin who can add one.
+        const seats = guest.roles.filter(
+          (spec) =>
+            canEditTeam ||
+            set.assignments.some(
+              (a) => a.guestTeamId === guest.id && a.role === spec.role
+            )
+        );
+        if (seats.length === 0) return null;
+
+        return (
+          <div
+            key={guest.id}
+            data-testid={`guest-team-${guest.teamId}`}
+            className="mt-4 border-t border-gray-200 pt-4 text-sm dark:border-gray-700"
+          >
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="flex items-center gap-1.5 font-medium">
+                {guest.team.name}
+                {canEditTeam && (
+                  <InfoTooltip text="People borrowed from another team for this set only. Manage which teams and roles under Other teams in the (⋮) menu." />
                 )}
               </span>
+              {/* This block's own fill, deliberately separate from the action
+                  bar's: it seats only the borrowed roles above, and the main
+                  button leaves them alone. Same non-destructive rule — it fills
+                  empty seats and never moves anyone already here. */}
               {canEditTeam && (
-                <InfoTooltip text="An unbounded, admin-managed list — everyone here is included when you auto-schedule. Turn choir off again under Change Roles in the (⋮) menu." />
-              )}
-            </span>
-          </div>
-
-          <ul className="mt-1 space-y-1 pl-4">
-            {choirMembers.map((a) =>
-              canEditTeam ? (
-                // Picking "None" removes them from the choir; picking someone
-                // else reassigns this slot (resets it to PENDING). The "✕"
-                // matches the band roles — it removes this singer directly.
-                // Choir has no fixed slot shape, so (unlike band roles) there's
-                // nothing to confirm: it just drops the person, like "None".
-                <li key={a.id} className="flex items-center gap-2">
-                  <SlotDeleteButton
-                    label={`Remove ${a.user.name} from choir`}
-                    disabled={busy}
-                    onClick={() => removeAssignment(a.id)}
-                  />
-                  <PlayerSelect
-                    selected={{ id: a.user.id, name: a.user.name }}
-                    options={choirOptions}
-                    disabled={busy}
-                    onChange={(userId) =>
-                      userId ? reassign(a.id, userId) : removeAssignment(a.id)
-                    }
-                  />
-                  <StatusBadge status={a.status} />
-                </li>
-              ) : (
-                // Same read-only box as the band roles above, so the choir
-                // list matches the rest of the roster.
-                <li key={a.id} className="flex items-center gap-2">
-                  <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
-                    <span className="truncate">{a.user.name}</span>
-                  </div>
-                  <StatusBadge status={a.status} />
-                </li>
-              )
-            )}
-
-            {/* Admins get one always-present "add someone" row (the list is
-                unbounded, so unlike band roles there's no slot count to derive).
-                It has no "✕" (nothing to remove), so a matching-width spacer
-                keeps its dropdown aligned with the member rows above. */}
-            {canEditTeam && (
-              <li className="flex items-center gap-2">
-                <span
-                  aria-hidden
-                  className="invisible rounded p-0.5 text-xs leading-none"
-                >
-                  ✕
-                </span>
-                <PlayerSelect
-                  selected={null}
-                  options={choirOptions}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => autoScheduleGuest(guest.id)}
                   disabled={busy}
-                  dashed
-                  onChange={(userId) => userId && addAssignment(CHOIR, userId)}
-                />
-              </li>
-            )}
-          </ul>
-        </div>
-      )}
+                  title={`Fill ${guest.team.name}'s empty seats on this set — the rest of the roster is left alone`}
+                >
+                  Auto schedule
+                </Button>
+              )}
+            </div>
+
+            <ul className="mt-1 space-y-3 pl-1">
+              {seats.map((spec) => {
+                const filled = set.assignments.filter(
+                  (a) => a.guestTeamId === guest.id && a.role === spec.role
+                );
+                const unbounded = isUnbounded(spec);
+                // Unbounded seats show one spare row to add into; counted ones
+                // show exactly the slots still open.
+                const openRows = unbounded
+                  ? canEditTeam
+                    ? 1
+                    : 0
+                  : openSeats(spec, filled.length);
+                const options = guestOptionsFor(guest, spec.role);
+
+                return (
+                  <li key={spec.role}>
+                    <span className="font-medium">
+                      {roleLabel(spec.role, guestCatalog)}
+                      <span className="ml-1 text-xs text-gray-500">
+                        {unbounded
+                          ? `(${filled.length} · as many as available)`
+                          : spec.count > 1
+                            ? `(${filled.length}/${spec.count})`
+                            : ""}
+                      </span>
+                    </span>
+
+                    <ul className="mt-1 space-y-1 pl-4">
+                      {filled.map((a) =>
+                        canEditTeam ? (
+                          <li key={a.id} className="flex items-center gap-2">
+                            <SlotDeleteButton
+                              label={`Remove ${a.user.name} from ${guest.team.name}`}
+                              disabled={busy}
+                              onClick={() => removeAssignment(a.id)}
+                            />
+                            <PlayerSelect
+                              selected={{
+                                id: a.user.id,
+                                name: a.user.name,
+                                ...selectedFlags(a.user.id, guest.teamId),
+                              }}
+                              options={options}
+                              disabled={busy}
+                              onChange={(userId) =>
+                                userId
+                                  ? reassign(a.id, userId)
+                                  : removeAssignment(a.id)
+                              }
+                            />
+                            <StatusBadge status={a.status} />
+                          </li>
+                        ) : (
+                          <li key={a.id} className="flex items-center gap-2">
+                            <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                              <span className="truncate">{a.user.name}</span>
+                            </div>
+                            <StatusBadge status={a.status} />
+                          </li>
+                        )
+                      )}
+
+                      {/* Open seats. The add row has no "✕" (there's nothing to
+                          remove yet), so an invisible spacer keeps its dropdown
+                          in line with the filled rows above. */}
+                      {canEditTeam &&
+                        Array.from({ length: openRows }).map((_, i) => (
+                          <li
+                            key={`guest-add-${i}`}
+                            className="flex items-center gap-2"
+                          >
+                            <span
+                              aria-hidden
+                              className="invisible rounded p-0.5 text-xs leading-none"
+                            >
+                              ✕
+                            </span>
+                            <PlayerSelect
+                              selected={null}
+                              options={options}
+                              disabled={busy}
+                              dashed
+                              onChange={(userId) =>
+                                userId &&
+                                addAssignment(spec.role, userId, guest.id)
+                              }
+                            />
+                          </li>
+                        ))}
+                      {!canEditTeam &&
+                        Array.from({ length: openRows }).map((_, i) => (
+                          <li key={`guest-empty-${i}`}>
+                            <div className="w-48 rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+                              Unfilled
+                            </div>
+                          </li>
+                        ))}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
 
       {/* MD picker (only for sets that require one). One MD per set, chosen from
           the assignees — clickable only for those who qualify (an MD playing
@@ -1197,11 +1748,6 @@ export default function SetDetailModal({
                 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
                 dark:border-gray-600 dark:bg-gray-800"
             />
-            {notesDraft !== (set.notes ?? "") && (
-              <Button size="sm" onClick={saveNotes} disabled={busy}>
-                Save notes
-              </Button>
-            )}
           </div>
         ) : set.notes ? (
           <p className="whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300">
@@ -1212,69 +1758,42 @@ export default function SetDetailModal({
         )}
       </div>
 
-      {/* History: a chronological log of who confirmed, who was manually
-          swapped/added/removed (and by which admin), and swap requests. */}
-      <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
-        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-          History
-        </p>
-        {/* "Loading…" only on a FIRST load. A refresh (after any edit here)
-            keeps the existing rows on screen and swaps them in place — blanking
-            a 12rem list down to one line and back moved everything under it and
-            yanked the modal's scroll position out from under the reader. */}
-        {historyLoading && history.length === 0 ? (
-          <p className="text-sm text-gray-400">Loading…</p>
-        ) : history.length === 0 ? (
-          <p className="text-sm text-gray-400">No activity yet.</p>
-        ) : (
-          <ul className="max-h-48 divide-y divide-gray-200 overflow-y-auto dark:divide-gray-700">
-            {history.map((event) => (
-              <SetHistoryEntry key={event.id} event={event} />
-            ))}
-          </ul>
-        )}
-      </div>
 
-      {/* Danger zone: admins can delete the whole set (two-step confirm). */}
-      {isAdmin && (
-        <div className="mt-5 flex items-center justify-end gap-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-          {confirmingDelete ? (
+      {/* Stacked "unsaved changes": the one thing standing between a staged
+          edit and losing it. It LISTS the changes rather than saying "you have
+          unsaved changes", so discarding is a decision about known work — and
+          "Keep editing" is the default-looking button, not the destructive one. */}
+      {confirmingDiscard && (
+        <Modal
+          open
+          onClose={() => setConfirmingDiscard(false)}
+          title="Discard your changes?"
+          subtitle="These edits haven't been saved to the set."
+          footer={
             <>
-              <span className="mr-auto text-sm text-gray-600 dark:text-gray-400">
-                Delete this set and its whole team?
-              </span>
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => setConfirmingDelete(false)}
-                disabled={busy}
+                onClick={() => setConfirmingDiscard(false)}
               >
-                Cancel
+                Keep editing
               </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                onClick={deleteSet}
-                disabled={busy}
-              >
-                Confirm delete
+              <Button size="sm" variant="danger" onClick={discardAndClose}>
+                Discard changes
               </Button>
             </>
-          ) : (
-            <Button
-              size="sm"
-              variant="danger"
-              onClick={() => setConfirmingDelete(true)}
-              disabled={busy}
-            >
-              Delete set
-            </Button>
-          )}
-        </div>
+          }
+        >
+          <ul className="list-disc space-y-1 pl-5 text-sm text-gray-700 dark:text-gray-300">
+            {changes.map((line, i) => (
+              <li key={i}>{line}</li>
+            ))}
+          </ul>
+        </Modal>
       )}
 
-      {/* Stacked "Change Roles": this set's team shape, plus the MD and choir
-          flags. Each role's count floors at the people already standing in it,
+      {/* Stacked "Change Roles": this set's team shape, plus the Require-MD
+          flag. Each role's count floors at the people already standing in it,
           so an edit here can never quietly drop someone from the set. */}
       {rolesDraft && (
         <Modal
@@ -1323,25 +1842,6 @@ export default function SetDetailModal({
                 }
               />
             )}
-            {/* Choir can't be turned OFF while singers are on it (they'd be
-                silently dropped) — the same rule the Choir section enforces. */}
-            <Checkbox
-              label="Include choir in set"
-              checked={rolesDraft.choirEnabled}
-              disabled={
-                busy || (set.choirEnabled && choirMembers.length > 0)
-              }
-              title={
-                set.choirEnabled && choirMembers.length > 0
-                  ? "Remove the choir members first."
-                  : undefined
-              }
-              onChange={(e) =>
-                setRolesDraft((d) =>
-                  d ? { ...d, choirEnabled: e.target.checked } : d
-                )
-              }
-            />
           </div>
 
           {/* Back to the org's default shape — only offered while this set
@@ -1363,6 +1863,20 @@ export default function SetDetailModal({
             </button>
           )}
         </Modal>
+      )}
+
+      {/* Stacked "Other teams" editor. Teams offered exclude the set's own —
+          a set can't borrow from itself. */}
+      {guestDraft && (
+        <GuestTeamsModal
+          open
+          onClose={() => setGuestDraft(null)}
+          teams={(orgTeams ?? []).filter((t) => t.id !== (set.teamId ?? set.team?.id))}
+          value={guestDraft}
+          seatedCount={seatedInGuestRole}
+          onSave={saveGuestTeams}
+          busy={busy}
+        />
       )}
 
       {/* Stacked confirm for removing a slot that still has a person in it. */}

@@ -152,6 +152,87 @@ test("admin opens the team management modal from the Teams card", async ({ page 
   await expect(modal).not.toBeVisible();
 });
 
+test("admin reorders a team's roles by dragging, and the order sticks", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/users");
+  await page.getByRole("button", { name: /Prayer Room Team\s*\d+ members/ }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal.getByText(/Roles \(\d+\)/)).toBeVisible();
+
+  // The name boxes, in list order — which IS the saved `order`.
+  const orderNow = () =>
+    modal
+      .getByLabel("Role name")
+      .evaluateAll((els) => els.map((el) => (el as HTMLInputElement).value));
+  // The same order as the SERVER has it, so persistence is checked against the
+  // database rather than against a re-render of the page that just saved it.
+  const savedOrder = async () => {
+    const teams = (await (await page.request.get("/api/teams")).json()) as {
+      name: string;
+      roles: { label: string }[];
+    }[];
+    return teams.find((t) => t.name === "Prayer Room Team")!.roles.map((r) => r.label);
+  };
+
+  // The team's catalog as the server has it — its id for the restore below, and
+  // its roles as the reference order.
+  const team = (
+    (await (await page.request.get("/api/teams")).json()) as {
+      id: string;
+      name: string;
+      roles: { key: string; label: string; defaultCount: number; adminOnly: boolean }[];
+    }[]
+  ).find((t) => t.name === "Prayer Room Team")!;
+
+  const before = await orderNow();
+  expect(before).toEqual(team.roles.map((r) => r.label));
+  expect(before.length).toBeGreaterThan(1);
+  const swapped = [before[1], before[0], ...before.slice(2)];
+
+  // Drag one row's grip onto another's. Done with real pointer events, in
+  // steps: dnd-kit's pointer sensor only activates after ~5px of movement, and
+  // it needs several moves to decide the row has passed its neighbour.
+  const grip = (label: string) =>
+    modal.getByRole("button", { name: `Drag ${label} to reorder` });
+  const dragOnto = async (label: string, target: string) => {
+    const from = (await grip(label).boundingBox())!;
+    const to = (await grip(target).boundingBox())!;
+    const x = from.x + from.width / 2;
+    const startY = from.y + from.height / 2;
+    const goingUp = to.y < from.y;
+    // Overshoot past the target's centre in the direction of travel: dnd-kit
+    // swaps two rows once the dragged one passes its neighbour's midpoint, so
+    // stopping exactly ON the midpoint is a coin flip.
+    const endY = to.y + to.height / 2 + (goingUp ? -8 : 8);
+
+    await page.mouse.move(x, startY);
+    await page.mouse.down();
+    // Clear the sensor's activation distance first, in the same direction.
+    await page.mouse.move(x, startY + (goingUp ? -12 : 12), { steps: 4 });
+    await page.mouse.move(x, endY, { steps: 12 });
+    await page.mouse.up();
+  };
+
+  await dragOnto(before[0], before[1]);
+  await expect.poll(orderNow).toEqual(swapped);
+
+  await modal.getByRole("button", { name: "Save roles" }).click();
+  await expect.poll(savedOrder).toEqual(swapped);
+
+  // Put the seed order back for the rest of the suite. Done through the API,
+  // not a second drag: the drag is what this test is about, and re-testing it
+  // as cleanup would only add a way for the cleanup to fail. The catalog is
+  // sent back exactly as it was read — position is the order, so replaying the
+  // original list restores it without inventing anything.
+  const restored = await page.request.put(`/api/teams/${team.id}/roles`, {
+    data: { roles: team.roles },
+  });
+  expect(restored.ok()).toBeTruthy();
+  await expect.poll(savedOrder).toEqual(before);
+});
+
 // Note: per-set auto group chats are configured on the set/template now (see the
 // set detail modal and the recurring-set form), not on the team, so there's no
 // team-level lead-time control here anymore.

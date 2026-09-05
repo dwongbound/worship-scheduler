@@ -86,12 +86,14 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
     .filter({ hasText: "Sunday Morning" })
     .filter({ hasText: "Omar Osei" });
   await expect(omarRow).toBeVisible();
-  await omarRow.getByRole("button", { name: "Request swap" }).click();
+  await omarRow.getByRole("button", { name: "Request swap", exact: true }).click();
 
   // Modal closes and erin's slot is now frozen mid-trade (she can cancel).
   await expect(erinCard.getByText("Pending swap")).toBeVisible();
+  // Exact on every card-scoped button: the card itself is a role="button" whose
+  // accessible name is all of its text, so a substring match hits it too.
   await expect(
-    erinCard.getByRole("button", { name: "Cancel swap" })
+    erinCard.getByRole("button", { name: "Cancel swap", exact: true })
   ).toBeVisible();
 
   // ── omar accepts from his Covers / Swaps section. ───────────────────────────────
@@ -99,7 +101,7 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
   await page.goto("/swaps");
   const incoming = page.locator("li").filter({ hasText: "Erin Evans" }).first();
   await expect(incoming).toBeVisible();
-  await incoming.getByRole("button", { name: "Accept" }).click();
+  await incoming.getByRole("button", { name: "Accept", exact: true }).click();
 
   // The slots switch immediately, but as PENDING_APPROVAL — an admin still has
   // to sign off before it's final. The proposal card is gone from omar's view.
@@ -119,7 +121,7 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
     .filter({ hasText: "Omar Osei" })
     .first();
   await expect(swapItem).toBeVisible();
-  await swapItem.getByRole("button", { name: "Approve" }).click();
+  await swapItem.getByRole("button", { name: "Approve", exact: true }).click();
   await expect(swapItem).not.toBeVisible();
 
   await login(page, "omar");

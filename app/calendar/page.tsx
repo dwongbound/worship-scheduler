@@ -325,6 +325,7 @@ function CalendarView() {
             }
           >
             <option value="all">All statuses</option>
+            <option value="understaffed">Needs people</option>
             <option value="confirmed">Confirmed</option>
             <option value="unconfirmed">Unconfirmed</option>
             <option value="cover">Cover requested</option>

@@ -1,7 +1,10 @@
-// POST /api/admin/generate — the "Generate" button (admin only).
+// POST /api/admin/generate — the "Auto schedule" button (admin only).
 // Body: either { weeks?: number } (default 12 ≈ 3 months) OR
 //       { startDate: "YYYY-MM-DD", endDate: "YYYY-MM-DD" } for an explicit
 //       window. The date range wins when both dates are supplied.
+//       { templateIds?: string[] } narrows which recurring sets are expanded
+//       (omitted/empty = all of them), so an admin can schedule just the
+//       Sunday services without touching midweek prayer.
 //
 // This is a DRY RUN: it computes a proposed schedule and returns it as a
 // StagedPlan WITHOUT writing anything. The admin reviews/tweaks the plan in
@@ -21,10 +24,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { schedulableRolesByTeam } from "@/lib/roster";
-import { buildSchedule } from "@/lib/scheduler";
+import { buildSchedule, teamKey } from "@/lib/scheduler";
 import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { defaultMDId } from "@/lib/md";
-import type { Instrument, SlotCapacityMap } from "@/lib/constants";
+import type { SlotCapacityMap } from "@/lib/constants";
 import { occurrencesInRange, parseLocalDate, upcomingOccurrences } from "@/lib/dates";
 import type { StagedPlan, StagedSet } from "@/lib/types";
 
@@ -79,6 +82,16 @@ export async function POST(req: NextRequest) {
 
   const weeks = Math.min(Math.max(Number(body.weeks) || 12, 1), 26);
 
+  // Which recurring sets to expand. An absent or empty list means all of them
+  // — the long-standing behaviour, and what the modal sends when every box is
+  // ticked. Ids are matched against this org's templates, so a foreign id
+  // simply selects nothing rather than reaching across orgs.
+  const templateIds: string[] | null = Array.isArray(body.templateIds)
+    ? body.templateIds.filter((id: unknown) => typeof id === "string")
+    : null;
+  const templateFilter =
+    templateIds && templateIds.length > 0 ? { id: { in: templateIds } } : {};
+
   // The scheduling window. Range mode covers whole days (start-of-day →
   // end-of-day); weeks mode runs from now for N weeks.
   const now = new Date();
@@ -94,7 +107,9 @@ export async function POST(req: NextRequest) {
   const spacingEnd = new Date(windowEnd.getTime() + 8 * MS_PER_DAY);
   const [templates, users, rules, existingSets, existing, booked] =
     await Promise.all([
-    prisma.setTemplate.findMany({ where: { orgId: admin.orgId } }),
+    prisma.setTemplate.findMany({
+      where: { orgId: admin.orgId, ...templateFilter },
+    }),
     // The candidate pool = this org's members. A null-teamId set draws from
     // this whole pool, which is exactly "open to everyone in the org".
     prisma.user.findMany({
@@ -128,13 +143,15 @@ export async function POST(req: NextRequest) {
         _count: { select: { assignments: true } },
       },
     }),
-    // Existing upcoming load per user, so the proposal stays balanced.
+    // Existing upcoming load per user, so the proposal stays balanced — and
+    // the same rows split by team, which feeds the per-team tiebreak. One
+    // findMany rather than two groupBys: prisma can't group by a field on the
+    // related Set, so the team split has to be tallied here anyway.
     // Deliberately cross-org: someone slammed in another org shouldn't also
     // be first pick here (mirrors how busy blocks span orgs).
-    prisma.assignment.groupBy({
-      by: ["userId"],
+    prisma.assignment.findMany({
       where: { set: { startsAt: { gte: now } } },
-      _count: true,
+      select: { userId: true, set: { select: { teamId: true } } },
     }),
     // Who's already booked near the window (see spacingStart/End above) —
     // also cross-org, so the spacing rule sees ALL of a person's bookings.
@@ -151,7 +168,13 @@ export async function POST(req: NextRequest) {
   const existingByKey = new Map(
     existingSets.map((s) => [existingKey(s.startsAt, s.label), s._count.assignments])
   );
-  const existingCounts = new Map(existing.map((e) => [e.userId, e._count]));
+  const existingCounts = new Map<string, number>();
+  const existingTeamCounts = new Map<string, number>();
+  for (const a of existing) {
+    existingCounts.set(a.userId, (existingCounts.get(a.userId) ?? 0) + 1);
+    const key = teamKey(a.userId, a.set.teamId);
+    existingTeamCounts.set(key, (existingTeamCounts.get(key) ?? 0) + 1);
+  }
 
   // ── 1–2. Templates → the set occurrences worth staging ────────────────
   // Keyed by start time so two templates can't stage the same slot twice.
@@ -233,7 +256,8 @@ export async function POST(req: NextRequest) {
     })),
     rules,
     existingCounts,
-    booked.map((b) => ({ userId: b.userId, startsAt: b.set.startsAt }))
+    booked.map((b) => ({ userId: b.userId, startsAt: b.set.startsAt })),
+    existingTeamCounts
   );
 
   const rosters = new Map<string, StagedSet["assignments"]>();
@@ -275,6 +299,19 @@ export async function POST(req: NextRequest) {
     })
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
 
-  const plan: StagedPlan = { sets, skipped };
+  const plan: StagedPlan = {
+    sets,
+    skipped,
+    // Hand the review modal the same starting tallies this fill used, so its
+    // "Auto schedule all" reproduces this run rather than a from-zero one.
+    baseline: {
+      counts: Object.fromEntries(existingCounts),
+      teamCounts: Object.fromEntries(existingTeamCounts),
+      booked: booked.map((b) => ({
+        userId: b.userId,
+        startsAt: b.set.startsAt.toISOString(),
+      })),
+    },
+  };
   return NextResponse.json(plan);
 }

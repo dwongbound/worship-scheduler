@@ -164,3 +164,41 @@ export function timeStringToMinutes(value: string): number {
   const [h, m] = value.split(":").map(Number);
   return h * 60 + m;
 }
+
+/**
+ * Midnight on the MONDAY of the week `d` falls in. Weeks read Monday→Sunday
+ * here — the way a week is planned — so a Sunday service groups with the
+ * rehearsals that led up to it rather than starting a fresh week of its own.
+ * (The month calendar's Sun–Sat grid is a separate thing and stays as it is.)
+ */
+export function startOfWeekMonday(d: Date): Date {
+  // getDay() is 0=Sun…6=Sat, so Sunday is 6 days after its Monday, not 0.
+  const backToMonday = (d.getDay() + 6) % 7;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - backToMonday);
+}
+
+/**
+ * 1140 → "19:00" — the value an `<input type=time>` wants. Wraps around the
+ * clock (1500 → "01:00"), so an end time that lands after midnight still
+ * renders as a real time of day.
+ */
+export function minutesToTimeInput(minutes: number): string {
+  const m = ((Math.round(minutes) % 1440) + 1440) % 1440;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
+}
+
+/**
+ * How long a set running `start` → `end` lasts, both "HH:MM". An end at or
+ * before the start is read as running past midnight (22:00 → 00:30 = 150 min),
+ * which is the only sensible reading for a late set.
+ * Returns null when either time is unparseable or the two are identical — a
+ * zero-length set is a mis-typed time, not a 24-hour one, so callers keep
+ * whatever duration they had.
+ */
+export function durationBetween(start: string, end: string): number | null {
+  const a = timeStringToMinutes(start);
+  const b = timeStringToMinutes(end);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) return null;
+  return b > a ? b - a : b + 1440 - a;
+}

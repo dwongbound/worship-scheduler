@@ -289,6 +289,10 @@ export default function Navbar() {
   const adminGroupActive = adminTabs.some((t) => isActive(t.href));
   const adminHasDot = adminTabs.some((t) => "dot" in t && t.dot);
 
+  // "Org settings" is only useful to someone who administers an org — same rule
+  // the org switcher's copy of the item uses (OrgSwitcher `canManageOrgs`).
+  const canManageOrgs = !!orgs?.some((o) => o.isAdmin);
+
   // Feed the swipe handler the current tab order, active tab, and a navigate
   // fn (same optimistic highlight + loader a tab tap gets, then a real push).
   tabHrefsRef.current = tabs.map((t) => t.href);
@@ -467,6 +471,20 @@ export default function Navbar() {
                   <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />
                 )}
               </Link>
+              {canManageOrgs && (
+                // Mirrors "Platform admin" below: an admin-only row, so it gets
+                // the amber accent + shield the rest of the app marks admin
+                // surfaces with. Hidden on phones like the org switcher's copy,
+                // because /orgs is a desktop-oriented full-page view.
+                <Link
+                  href="/orgs"
+                  className="hidden items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-600
+                    hover:bg-gray-100 dark:text-amber-400 dark:hover:bg-gray-700 sm:flex"
+                >
+                  <ShieldIcon />
+                  Org settings
+                </Link>
+              )}
               {session.user.isSuperAdmin && (
                 <Link
                   href="/platform"
@@ -500,8 +518,10 @@ export default function Navbar() {
     <div ref={navRef}>
       <div className="h-16" aria-hidden />
 
-      {/* Onboarding banner: shown until a new user picks the instruments/roles
-          they play, so the scheduler can actually assign them. */}
+      {/* Onboarding banner: shown until someone holds a role on some team, since
+          the scheduler can't assign them until then. Roles are an admin's to
+          grant, so this points at the profile page to SEE the state (and who to
+          ask), not to fix it. */}
       {needsRoles && !instrumentsBannerDismissed && (
         <Banner
           tone="indigo"
@@ -509,11 +529,11 @@ export default function Navbar() {
           onLinkClick={() => handleTabClick("/profile")}
           onDismiss={() => setInstrumentsBannerDismissed(true)}
         >
-          Finish setting up your profile:{" "}
+          You don’t play any roles on your teams yet, so you can’t be scheduled.{" "}
           <Link href="/profile" className="font-semibold underline">
-            add the instruments and roles you play
+            Check your profile
           </Link>{" "}
-          so you can be scheduled.
+          and ask your org admin to add them.
         </Banner>
       )}
 
