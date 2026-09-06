@@ -29,6 +29,19 @@
 // as `colors` (templateId → hex) and paint the matching cards at half strength,
 // so one set type reads as a block however the cards are grouped. Purely a
 // reading aid for this review — nothing about it is saved.
+//
+// PREVIEW MODE (`mode="preview"`): the calendar's admin-only "Preview Mode"
+// opens this same workspace over the sets that ALREADY exist, so a whole
+// season's rosters read and edit as one screen. Same layout, same cards, same
+// load panel, same staged-until-you-commit rule — the differences are:
+//   • the footer is Cancel / Save Changes, and Save hands the edited sets back
+//     for the caller to diff and PATCH (lib/calendarPreview.previewSaves);
+//   • a preview opens as an exact mirror of the calendar, so it only asks
+//     before you leave once something has actually changed;
+//   • "Already exists" on every card would be noise, so that badge and the
+//     plan-wide Auto schedule / Clear all buttons sit this one out — a card's
+//     own ⟳ is the fill affordance here, and there's no scheduler baseline
+//     behind a real calendar for a whole-plan re-roll to balance against.
 import {
   useEffect,
   useMemo,
@@ -55,6 +68,7 @@ import { buildPlayerOptions } from "@/lib/playerOptions";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   buildSchedule,
+  teamKey,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
 import {
@@ -84,6 +98,7 @@ import {
   teamSupportsMD,
   type TeamRoleDef,
 } from "@/lib/teamRoles";
+import { describePreviewSaves, previewSaves } from "@/lib/calendarPreview";
 import type { ApiAdminUser, ApiTeam, StagedPlan, StagedSet } from "@/lib/types";
 
 interface StagedScheduleModalProps {
@@ -96,6 +111,15 @@ interface StagedScheduleModalProps {
   // came from. Empty (the default) = every card keeps the plain background.
   colors?: Record<string, string>;
   busy: boolean; // an apply is in flight
+  // "generate" (the default) is the Create tab's reviewable proposal;
+  // "preview" is the calendar's read-only lens over the real schedule.
+  mode?: "generate" | "preview";
+  // The org the Team load panel's windows are counted in. Defaults to the
+  // admin tabs' org, which is the one the Create tab generates under.
+  orgId?: string;
+  // Commit: "Apply schedule" in the generate flow, "Save Changes" in a
+  // preview (where the caller diffs the returned sets against what it opened
+  // the preview with).
   onApply: (sets: StagedSet[]) => void;
   onClose: () => void; // discard the staged plan
 }
@@ -113,18 +137,32 @@ function weekLabel(startsAt: string): string {
   })}`;
 }
 
+/**
+ * The editor's identity for a staged set. Normally its start time (one
+ * occurrence per time in a generated plan); Preview Mode stages real calendar
+ * sets, where two can share an instant, so those carry an explicit id.
+ */
+function stagingKey(set: StagedSet): string {
+  return set.stagingId ?? set.startsAt;
+}
+
 export default function StagedScheduleModal({
   plan,
   users,
   teams,
   colors = {},
   busy,
+  mode = "generate",
+  orgId: orgIdProp,
   onApply,
   onClose,
 }: StagedScheduleModalProps) {
-  // Which org's numbers the Team load panel asks for — the same admin org the
-  // page generated this plan under.
-  const { adminOrgId: orgId } = useOrgs();
+  const preview = mode === "preview";
+  // Which org's numbers the Team load panel asks for. The caller can name it
+  // (Preview Mode follows the calendar's org); otherwise it's the admin tabs'
+  // org, the one the Create tab generated this plan under.
+  const { adminOrgId } = useOrgs();
+  const orgId = orgIdProp ?? adminOrgId;
   // Editable copy of the proposal — reset whenever a fresh plan arrives.
   const [sets, setSets] = useState<StagedSet[]>([]);
   // How the cards are grouped (see the header comment). Per-session, not
@@ -183,6 +221,25 @@ export default function StagedScheduleModal({
   );
   const catalogFor = (set: StagedSet): TeamRoleDef[] =>
     (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
+
+  // The candidate pool both fills run over (the whole plan, and one card).
+  // Inactive memberships are dropped, so neither can propose someone paused on
+  // that team — the same rule the server's callers apply.
+  const schedulerUsers = useMemo(
+    () =>
+      users.map((u) => ({
+        id: u.id,
+        isMD: u.isMD,
+        rolesByTeam: schedulableRolesByTeam(
+          u.teams.map((t) => ({
+            teamId: t.id,
+            roles: t.roles,
+            active: t.active,
+          }))
+        ),
+      })),
+    [users]
+  );
 
   // What the Team load panel measures people by: this plan (the default), or
   // the sets they're already on over some window. See LOAD_METRICS.
@@ -312,7 +369,10 @@ export default function StagedScheduleModal({
       ...s,
       assignments: s.assignments.map((a) =>
         a.userId === oldUserId && a.role === role
-          ? { userId: newUserId, role, locked: true }
+          ? // Same SEAT, new person: `assignmentId` rides along so a preview
+            // save updates the row (keeping its history) instead of deleting
+            // and re-inserting it. Absent on a generated plan's seats.
+            { assignmentId: a.assignmentId, userId: newUserId, role, locked: true }
           : a
       ),
     }));
@@ -339,7 +399,9 @@ export default function StagedScheduleModal({
     updateSet(idx, (s) => ({
       ...s,
       assignments: s.assignments.map((a) =>
-        a.userId === userId && a.role === role ? { userId, role } : a
+        a.userId === userId && a.role === role
+          ? { assignmentId: a.assignmentId, userId, role }
+          : a
       ),
     }));
 
@@ -365,7 +427,7 @@ export default function StagedScheduleModal({
   const autoScheduleAll = () => {
     // Locked slots per set, keyed by the staging id (the ISO start time).
     const keptBySet = new Map<string, StagedSet["assignments"]>(
-      sets.map((s) => [s.startsAt, s.assignments.filter((a) => a.locked)])
+      sets.map((s) => [stagingKey(s), s.assignments.filter((a) => a.locked)])
     );
     // The scheduler leaves pre-assigned people out of its GLOBAL load tally
     // (see the note on SchedulerSet.preAssigned), so fold the locked slots
@@ -379,32 +441,20 @@ export default function StagedScheduleModal({
     const proposals = buildSchedule(
       sets.map((s) => ({
         // The staging identity, matching what the server keyed rosters by.
-        id: s.startsAt,
+        id: stagingKey(s),
         startsAt: new Date(s.startsAt),
         durationMinutes: s.durationMinutes,
         roles: catalogFor(s),
         capacities: s.slotCapacities,
         requiresMD: s.requiresMD,
         teamId: s.teamId,
-        preAssigned: (keptBySet.get(s.startsAt) ?? []).map((a) => ({
+        preAssigned: (keptBySet.get(stagingKey(s)) ?? []).map((a) => ({
           userId: a.userId,
           role: a.role,
           isMD: isMdOf(a.userId),
         })),
       })),
-      users.map((u) => ({
-        id: u.id,
-        isMD: u.isMD,
-        // Inactive memberships are dropped, so the fill can't propose someone
-        // paused on that team — the same rule the server's callers apply.
-        rolesByTeam: schedulableRolesByTeam(
-          u.teams.map((t) => ({
-            teamId: t.id,
-            roles: t.roles,
-            active: t.active,
-          }))
-        ),
-      })),
+      schedulerUsers,
       rules,
       counts,
       (plan?.baseline?.booked ?? []).map((b) => ({
@@ -425,8 +475,8 @@ export default function StagedScheduleModal({
       prev.map((s) => {
         // Locked picks first (they kept their slots), then the fresh proposals.
         const merged = [
-          ...(keptBySet.get(s.startsAt) ?? []),
-          ...(bySet.get(s.startsAt) ?? []),
+          ...(keptBySet.get(stagingKey(s)) ?? []),
+          ...(bySet.get(stagingKey(s)) ?? []),
         ];
         return {
           ...s,
@@ -446,6 +496,102 @@ export default function StagedScheduleModal({
         };
       })
     );
+  };
+
+  // Fill ONE card's empty slots and nothing else — the ⟳ button on a set.
+  // Everyone already on the set (locked or not) rides along as `preAssigned`,
+  // so the scheduler leaves them exactly where they are and only proposes
+  // people for the holes.
+  //
+  // A whole-plan run sees every set at once and balances/spaces across them.
+  // A single-set run can't, so it's handed the rest of the plan as context:
+  // the other cards' seats fold into the load tallies and into the booked
+  // dates, and one card's refill lands on the same person a full run would
+  // have picked.
+  const autoScheduleSet = (idx: number) => {
+    const set = sets[idx];
+    if (!set) return;
+
+    // Load, per person and per team: the DB baseline plus every seat staged so
+    // far. This set's own seats count too — they're pre-assigned, which the
+    // scheduler deliberately leaves out of its own tally (see
+    // SchedulerSet.preAssigned).
+    const counts = new Map(Object.entries(plan?.baseline?.counts ?? {}));
+    const teamCounts = new Map(
+      Object.entries(plan?.baseline?.teamCounts ?? {})
+    );
+    for (const s of sets) {
+      for (const a of s.assignments) {
+        counts.set(a.userId, (counts.get(a.userId) ?? 0) + 1);
+        const key = teamKey(a.userId, s.teamId);
+        teamCounts.set(key, (teamCounts.get(key) ?? 0) + 1);
+      }
+    }
+
+    // Dates people are already booked on, for the 8-day spacing rule: the
+    // baseline's real bookings plus the OTHER staged sets. This set is left
+    // out — its own date is the one being filled.
+    const booked = [
+      ...(plan?.baseline?.booked ?? []).map((b) => ({
+        userId: b.userId,
+        startsAt: new Date(b.startsAt),
+      })),
+      ...sets.flatMap((s, i) =>
+        i === idx
+          ? []
+          : s.assignments.map((a) => ({
+              userId: a.userId,
+              startsAt: new Date(s.startsAt),
+            }))
+      ),
+    ];
+
+    const proposals = buildSchedule(
+      [
+        {
+          id: stagingKey(set),
+          startsAt: new Date(set.startsAt),
+          durationMinutes: set.durationMinutes,
+          roles: catalogFor(set),
+          capacities: set.slotCapacities,
+          requiresMD: set.requiresMD,
+          teamId: set.teamId,
+          preAssigned: set.assignments.map((a) => ({
+            userId: a.userId,
+            role: a.role,
+            isMD: isMdOf(a.userId),
+          })),
+        },
+      ],
+      schedulerUsers,
+      rules,
+      counts,
+      booked,
+      teamCounts
+    );
+
+    updateSet(idx, (s) => {
+      const merged = [
+        ...s.assignments,
+        ...proposals.map((p) => ({ userId: p.userId, role: p.role })),
+      ];
+      return {
+        ...s,
+        assignments: merged,
+        // Re-derive the MD the way a full run does: a still-eligible pick
+        // survives, otherwise the best of the newly-complete roster.
+        mdUserId: s.requiresMD
+          ? (() => {
+              const a = merged.map((x) => ({
+                userId: x.userId,
+                role: x.role,
+                isMD: isMdOf(x.userId),
+              }));
+              return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
+            })()
+          : null,
+      };
+    });
   };
 
   // Pick (or clear, with "") a staged set's designated MD.
@@ -493,7 +639,7 @@ export default function StagedScheduleModal({
       role,
       teamId: set.teamId,
       set: {
-        id: set.startsAt,
+        id: stagingKey(set),
         startsAt: new Date(set.startsAt),
         durationMinutes: set.durationMinutes,
       },
@@ -502,12 +648,23 @@ export default function StagedScheduleModal({
       exclude: new Set(set.assignments.map((a) => a.userId)),
     });
 
+  const title = preview ? "Schedule preview" : "Review generated schedule";
+  // A preview opens as a mirror of the calendar, so until something is edited
+  // there's nothing to save and nothing to lose. These are the pending edits:
+  // one entry per set that actually differs from what the preview opened with.
+  const pendingSaves = preview ? previewSaves(plan.sets, sets) : [];
+  const dirty = pendingSaves.length > 0;
+  // Leaving the generate flow always destroys a proposal that exists nowhere
+  // else, so it asks first. A preview asks only once it has edits to lose.
+  const requestClose = () =>
+    preview && !dirty ? onClose() : setConfirmDiscard(true);
+
   // Nothing to review — everything in the window was already staffed.
   if (sets.length === 0) {
     return (
-      <Modal open onClose={onClose} title="Review generated schedule">
+      <Modal open onClose={onClose} title={title}>
         <p className="text-sm text-gray-600 dark:text-gray-400">
-          Nothing to schedule in this window
+          {preview ? "No sets to preview" : "Nothing to schedule in this window"}
           {plan.skipped > 0 &&
             ` — ${plan.skipped} set${
               plan.skipped === 1 ? "" : "s"
@@ -527,43 +684,75 @@ export default function StagedScheduleModal({
     <>
     <Modal
       open
-      onClose={() => setConfirmDiscard(true)}
-      title="Review generated schedule"
+      onClose={requestClose}
+      title={title}
       size="full"
       footer={
-        <>
-          <Button
-            variant="secondary"
-            onClick={() => setConfirmDiscard(true)}
-            disabled={busy}
-          >
-            Discard
-          </Button>
-          <Button onClick={() => onApply(applySets())} disabled={busy}>
-            {busy ? <LoadingDots size="sm" /> : "Apply schedule"}
-          </Button>
-        </>
+        // Preview mode has nothing to commit, so its footer is the one way
+        // out; the generate flow keeps Discard beside Apply.
+        preview ? (
+          // Same two-button shape as the generate flow: back out, or commit.
+          // Save is dead until something has actually changed, so a preview
+          // opened just to read can't write anything.
+          <>
+            <Button variant="secondary" onClick={requestClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => onApply(sets)}
+              disabled={busy || !dirty}
+              title={dirty ? undefined : "Nothing has been changed yet"}
+            >
+              {busy ? <LoadingDots size="sm" /> : "Save Changes"}
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button
+              variant="secondary"
+              onClick={requestClose}
+              disabled={busy}
+            >
+              Discard
+            </Button>
+            <Button onClick={() => onApply(applySets())} disabled={busy}>
+              {busy ? <LoadingDots size="sm" /> : "Apply schedule"}
+            </Button>
+          </>
+        )
       }
     >
-      <p className="text-sm text-gray-600 dark:text-gray-400">
-        Staged <strong>{sets.length}</strong> set
-        {sets.length === 1 ? "" : "s"} with{" "}
-        <strong>{totalAssignments}</strong> assignment
-        {totalAssignments === 1 ? "" : "s"}
-        {existingCount > 0 &&
-          ` (${newCount} new, ${existingCount} already exist${
-            existingCount === 1 ? "s" : ""
-          } and will be filled — not recreated)`}
-        . Adjust anyone below, then apply — nothing is saved (or announced)
-        until you do. Anyone you pick by hand is{" "}
-        <span className="whitespace-nowrap">🔒 locked</span> and stays put if you
-        re-run auto schedule; set their slot back to “None” (or click the 🔒) to
-        release them.
-        {plan.skipped > 0 &&
-          ` ${plan.skipped} already-staffed set${
-            plan.skipped === 1 ? "" : "s"
-          } left untouched.`}
-      </p>
+      {preview ? (
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Showing <strong>{sets.length}</strong> upcoming set
+          {sets.length === 1 ? "" : "s"} already on the calendar, with{" "}
+          <strong>{totalAssignments}</strong> assignment
+          {totalAssignments === 1 ? "" : "s"}. Move people around, or use a
+          card&rsquo;s ⟳ to fill just its empty slots. Nothing reaches the
+          calendar (and nobody is messaged) until you{" "}
+          <strong>Save Changes</strong>.
+        </p>
+      ) : (
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          Staged <strong>{sets.length}</strong> set
+          {sets.length === 1 ? "" : "s"} with{" "}
+          <strong>{totalAssignments}</strong> assignment
+          {totalAssignments === 1 ? "" : "s"}
+          {existingCount > 0 &&
+            ` (${newCount} new, ${existingCount} already exist${
+              existingCount === 1 ? "s" : ""
+            } and will be filled — not recreated)`}
+          . Adjust anyone below, then apply — nothing is saved (or announced)
+          until you do. Anyone you pick by hand is{" "}
+          <span className="whitespace-nowrap">🔒 locked</span> and stays put if you
+          re-run auto schedule; set their slot back to “None” (or click the 🔒) to
+          release them.
+          {plan.skipped > 0 &&
+            ` ${plan.skipped} already-staffed set${
+              plan.skipped === 1 ? "" : "s"
+            } left untouched.`}
+        </p>
+      )}
 
       {/* Unfillable banner: a role has an open slot with no available person to
           fill it (nobody plays it, or all are busy). Look for the red roles. */}
@@ -662,7 +851,12 @@ export default function StagedScheduleModal({
             exactly what the server proposed (same algorithm, same baseline)
             EXCEPT around the slots you locked, so neither button is a one-way
             door. */}
-        <div className="flex flex-wrap items-center gap-2">
+        {/* Preview mode has no proposal to re-roll: there's no scheduler
+            baseline behind a real calendar, so a re-run would rebalance from
+            zero and read as advice it isn't — and "Clear all people" would
+            look like it emptied the real rosters. Both sit it out; the
+            grouping toggle (the reading aid) stays. */}
+        <div className={`flex flex-wrap items-center gap-2 ${preview ? "hidden" : ""}`}>
           <Button
             size="sm"
             variant="secondary"
@@ -763,6 +957,18 @@ export default function StagedScheduleModal({
             // Required-MD set with no eligible MD chosen → couldn't close it.
             const missingMD = supportsMD && set.requiresMD && !mdUserId;
             const conflicted = conflictedUserIds(set, rules);
+            // How many slots are still empty on this card — the ⟳ button's
+            // whole job, so it's what says whether there's anything to do.
+            const openTotal = slottedRoles(catalog).reduce(
+              (n, { key }) =>
+                n +
+                Math.max(
+                  0,
+                  capacities[key] -
+                    set.assignments.filter((a) => a.role === key).length
+                ),
+              0
+            );
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
             // This set type's tint, if the admin picked one — a fifth
@@ -774,7 +980,7 @@ export default function StagedScheduleModal({
               : null;
             return (
               <div
-                key={set.startsAt}
+                key={stagingKey(set)}
                 data-testid="staged-set-card"
                 style={tint as CSSProperties | undefined}
                 className={`flex w-72 shrink-0 flex-col rounded-lg border border-gray-200 p-3 dark:border-gray-700 ${
@@ -790,18 +996,31 @@ export default function StagedScheduleModal({
                       {formatDay(set.startsAt)} · {formatTime(set.startsAt)}
                     </p>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    {/* Whether Apply creates this set or fills one that already
-                        exists (same name + time) — existing ones are never
-                        recreated, only filled. */}
-                    <Badge tone={set.existing ? "amber" : "green"}>
-                      {set.existing ? "Already exists" : "New set"}
-                    </Badge>
-                    {supportsMD && set.requiresMD && (
-                      <Badge tone={missingMD ? "amber" : "blue"}>
-                        {missingMD ? "⚠ No MD" : "MD ✓"}
-                      </Badge>
-                    )}
+                  <div className="flex shrink-0 items-start gap-1.5">
+                    <div className="flex flex-col items-end gap-1">
+                      {/* Whether Apply creates this set or fills one that
+                          already exists (same name + time) — existing ones are
+                          never recreated, only filled. Every card in a preview
+                          is an existing set, so the badge says nothing there. */}
+                      {!preview && (
+                        <Badge tone={set.existing ? "amber" : "green"}>
+                          {set.existing ? "Already exists" : "New set"}
+                        </Badge>
+                      )}
+                      {supportsMD && set.requiresMD && (
+                        <Badge tone={missingMD ? "amber" : "blue"}>
+                          {missingMD ? "⚠ No MD" : "MD ✓"}
+                        </Badge>
+                      )}
+                    </div>
+                    {/* Fill just this card's holes. Pinned to the card's top
+                        right corner (after the badges) so it's in the same
+                        place on every card, badges or not. */}
+                    <FillSetButton
+                      openSlots={openTotal}
+                      disabled={busy}
+                      onClick={() => autoScheduleSet(idx)}
+                    />
                   </div>
                 </div>
 
@@ -975,11 +1194,11 @@ export default function StagedScheduleModal({
     <Modal
       open={confirmDiscard}
       onClose={() => setConfirmDiscard(false)}
-      title="Discard this preview?"
+      title={preview ? "Discard your changes?" : "Discard this preview?"}
       footer={
         <>
           <Button variant="secondary" onClick={() => setConfirmDiscard(false)}>
-            Keep reviewing
+            Keep {preview ? "editing" : "reviewing"}
           </Button>
           <Button variant="danger" onClick={onClose}>
             Discard
@@ -988,10 +1207,20 @@ export default function StagedScheduleModal({
       }
     >
       <p className="text-sm text-gray-600 dark:text-gray-400">
-        This preview was never saved — {sets.length} staged set
-        {sets.length === 1 ? "" : "s"} and any changes you&rsquo;ve made here
-        will be lost, and you&rsquo;ll need to auto schedule again to get them
-        back. Nothing on the calendar changes either way.
+        {preview ? (
+          <>
+            You have {describePreviewSaves(pendingSaves)} that haven&rsquo;t
+            been saved. Leaving now throws them away and the calendar stays
+            exactly as it is.
+          </>
+        ) : (
+          <>
+            This preview was never saved — {sets.length} staged set
+            {sets.length === 1 ? "" : "s"} and any changes you&rsquo;ve made
+            here will be lost, and you&rsquo;ll need to auto schedule again to
+            get them back. Nothing on the calendar changes either way.
+          </>
+        )}
       </p>
     </Modal>
     </>
@@ -1046,6 +1275,66 @@ function LoadBar({
         />
       </div>
     </li>
+  );
+}
+
+// The ⟳ button in a card's top-right corner: auto-schedule this ONE set's
+// empty slots, leaving everyone already on it exactly where they are. Greyed
+// out (and saying so) when the roster is already full, so the button always
+// tells you whether there's a hole to fill.
+function FillSetButton({
+  openSlots,
+  disabled,
+  onClick,
+}: {
+  openSlots: number;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const full = openSlots === 0;
+  const label = full
+    ? "Every slot on this set is filled"
+    : `Auto schedule this set's ${openSlots} empty slot${
+        openSlots === 1 ? "" : "s"
+      } — nobody already on it moves`;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || full}
+      title={label}
+      aria-label={label}
+      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-gray-400
+        transition-colors hover:bg-indigo-50 hover:text-indigo-600
+        disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent
+        disabled:hover:text-gray-400 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+    >
+      <RefreshIcon />
+    </button>
+  );
+}
+
+// Two arrows chasing each other round a circle — the usual "refill this"
+// glyph. Drawn rather than pulled in, like every other icon in the app.
+function RefreshIcon() {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" className="h-4 w-4">
+      <path
+        d="M16.5 8.5A6.5 6.5 0 004.9 5.6M3.5 11.5a6.5 6.5 0 0011.6 2.9"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      {/* The arrowheads: one at the top-left of the upper arc, one at the
+          bottom-right of the lower, so the pair reads as a loop. */}
+      <path
+        d="M4.5 2.5v3.2h3.2M15.5 17.5v-3.2h-3.2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

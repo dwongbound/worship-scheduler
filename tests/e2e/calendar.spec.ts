@@ -447,6 +447,45 @@ test("leaving the set modal with staged edits asks first and lists them", async 
   expect(sets.find((s) => s.label === "Staged Edit Night")!.assignments).toHaveLength(0);
 });
 
+// A whole roster save is ONE request now. It used to be a call per seat, so an
+// auto-fill of an empty set fired a round trip (and a Slack message) for every
+// person it seated; the endpoint takes the diff whole and applies it in one
+// transaction. This guards the count, which is the entire point of the change.
+test("saving a roster sends one request for every seat it changes", async ({
+  page,
+}, testInfo) => {
+  await login(page, "admin");
+  const label = `Batch Roster${attemptTag(testInfo)}`;
+  const form = await openNewSetForm(page, label);
+  await form.getByLabel("Start time").fill("16:20");
+  await form.getByRole("button", { name: "Create set" }).click();
+  await expect(form).not.toBeVisible();
+
+  const modal = await openSetByLabel(page, label);
+
+  // Fill the whole roster in one go — several seats, staged locally.
+  await modal.getByRole("button", { name: "Auto schedule" }).click();
+
+  // Count only what Save itself sends.
+  const rosterCalls: string[] = [];
+  page.on("request", (req) => {
+    if (req.method() === "GET") return;
+    if (req.url().includes("/roster") || req.url().includes("/assignments")) {
+      rosterCalls.push(`${req.method()} ${new URL(req.url()).pathname}`);
+    }
+  });
+  await modal.getByRole("button", { name: "Save", exact: true }).click();
+
+  // Several people were seated…
+  const seats = modal.getByRole("listitem").filter({ hasText: "Pending confirmation" });
+  await expect(seats.first()).toBeVisible();
+  expect(await seats.count()).toBeGreaterThan(1);
+
+  // …by exactly one request, whatever the seat count.
+  expect(rosterCalls).toHaveLength(1);
+  expect(rosterCalls[0]).toMatch(/^PATCH .*\/roster$/);
+});
+
 // The set detail modal's Notes history: sending a note logs it, and NOTHING
 // else appears in that section — roster changes belong to the Team tab's
 // activity log, not here. The box itself is a composer: empty on open, sent by

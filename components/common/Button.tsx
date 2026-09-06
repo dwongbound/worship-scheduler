@@ -2,7 +2,7 @@
 // Reusable button. Add variants/sizes here as the app grows.
 import { ButtonHTMLAttributes } from "react";
 
-type Variant = "primary" | "secondary" | "danger" | "ghost";
+type Variant = "primary" | "secondary" | "danger" | "ghost" | "admin";
 type Size = "sm" | "md";
 
 const VARIANT_CLASSES: Record<Variant, string> = {
@@ -15,6 +15,14 @@ const VARIANT_CLASSES: Record<Variant, string> = {
   ghost:
     "bg-transparent text-gray-700 hover:bg-gray-100 " +
     "dark:text-gray-300 dark:hover:bg-gray-800",
+  // Admin-only action: "secondary" wearing the amber accent the app marks
+  // admin surfaces with (the Navbar's admin tabs, "Org settings"). Same
+  // outlined shape and ground as the neutral buttons it sits beside, so a
+  // toolbar reads as one row and only the colour says "admin".
+  admin:
+    "bg-white text-amber-600 border border-amber-500 hover:bg-amber-50 " +
+    "dark:bg-gray-800 dark:text-amber-400 dark:border-amber-500/70 " +
+    "dark:hover:bg-amber-500/10",
 };
 
 const SIZE_CLASSES: Record<Size, string> = {

@@ -134,7 +134,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Export: `export`, `export/[id]` (ICS).
 - Admin (re-checks `isAdmin` vs db): `admin/users(+/[id]|/stats)`,
   `admin/team-load` (per-window serve counts for the generate-review panel),
-  `admin/assignments(+/[id])`, `admin/templates(+/[id])`,
+  `admin/sets/[id]/roster` (the WHOLE roster diff — removals, swaps and
+  additions — in one PATCH, applied as one transaction with one grouped Slack
+  notice; it replaced the per-seat `admin/assignments` routes, which fired a
+  round trip and a Slack message per person), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`.
   (`admin/users/[id]` PATCH also renames a member — `name` is global to the
   person, and the Team tab's cog → "Edit details" is its only caller.)
@@ -173,7 +176,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   in the modal — the plan itself never carries a year of assignments. ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
-  (roster changes as DELETE/PATCH/POST) + `newAssignmentId()`. ✅tested
+  (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.
+  ✅tested
+- `rosterChanges.ts` — `describeRosterChanges()`: one roster save as ONE Slack
+  notice (a lone change stays a plain sentence; several get a counted header).
+  ✅tested
 - `setStatus.ts` — `setStatus()` → empty|confirmed|unconfirmed|cover. Counts the
   owning team's slots plus guest teams' COUNTED seats (guest seats don't fill
   the host's same-named slots).

@@ -17,6 +17,7 @@ import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
+import AttentionDot from "@/components/common/AttentionDot";
 import InfoTooltip from "@/components/common/InfoTooltip";
 import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
@@ -127,6 +128,14 @@ export default function ProfilePage() {
   // Admin of ONE org — a team is only mine to change if I run the org it's in.
   const canManageTeamsIn = (orgId?: string) =>
     isSuperAdmin || memberships.some((m) => m.isAdmin && m.orgId === orgId);
+  // Something in the Teams & roles panel is keeping me off the schedule: I'm
+  // on no team at all, or on one where I hold no roles. Both are an admin's to
+  // fix, so the dot's job is to get me to the text saying who to ask — it isn't
+  // a to-do I can clear myself. Being marked inactive on a team is deliberate
+  // (an admin paused me), so it doesn't count.
+  const teamsNeedAttention =
+    teams.length === 0 || teams.some((t) => t.roles.length === 0);
+
   // Disambiguate teams by org only when I belong to more than one org.
   const teamLabel = (name: string, orgId?: string) => {
     if (memberships.length <= 1) return name;
@@ -361,6 +370,17 @@ export default function ProfilePage() {
           <h2 className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
             <span>Teams &amp; roles</span>
             <InfoTooltip text="The teams you're on and the roles you play on them are both set by your org admin. If something here looks wrong, contact them to have it changed." />
+            {/* After the (i), so the heading and its tooltip stay one unit. */}
+            {teamsNeedAttention && (
+              <AttentionDot
+                label={
+                  teams.length === 0
+                    ? "You're not on any team yet, so you can't be scheduled"
+                    : "A team you're on has no roles for you yet, so you can't be scheduled on it"
+                }
+                className="ml-1 h-1.5 w-1.5"
+              />
+            )}
             {savingRoles ? (
               <LoadingDots size="sm" />
             ) : saved ? (

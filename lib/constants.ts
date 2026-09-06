@@ -172,6 +172,12 @@ export const OVERLAP_ALLOWED_PAIRS: [Instrument, Instrument][] = [
 // exactly the roles acoustic guitar may overlap with — see OVERLAP_ALLOWED_PAIRS.)
 export const ACOUSTIC_HOST_ROLES: string[] = ["WORSHIP_LEADER", "VOCALS"];
 
+// The role ACOUSTIC_HOST_ROLES governs. A built-in key like CHOIR, named here
+// because two places have to agree on it: the scheduler (which fills it last,
+// and only from a seated host) and setStatus (which doesn't count an empty one
+// as a hole — see lib/setStatus.ts).
+export const ACOUSTIC_GUITAR = "ACOUSTIC_GUITAR" as const;
+
 // True if two distinct roles may be held by the same person on one set.
 export function rolesMayOverlap(a: Instrument, b: Instrument): boolean {
   return OVERLAP_ALLOWED_PAIRS.some(

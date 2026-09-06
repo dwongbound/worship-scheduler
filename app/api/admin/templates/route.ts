@@ -1,4 +1,9 @@
 // GET/POST /api/admin/templates — the org's weekly set-time templates.
+//
+// POST takes one `dayOfWeek`, or a `daysOfWeek` array for the form's
+// multi-day picker: "Tuesday and Thursday, 7pm" is one gesture, so it's one
+// request creating both — and one all-or-nothing write, rather than a POST
+// per day that could leave half the days created when one of them fails.
 // Org admin only; org comes from the x-org-id header.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
@@ -28,6 +33,7 @@ export async function POST(req: NextRequest) {
   const {
     label,
     dayOfWeek,
+    daysOfWeek,
     startMinute,
     durationMinutes,
     slotCapacities,
@@ -35,9 +41,14 @@ export async function POST(req: NextRequest) {
     groupChatLeadDays,
     teamId,
   } = await req.json();
+  // One day or several — the batch form is the only difference between them.
+  const isBatch = Array.isArray(daysOfWeek);
+  const days: unknown[] = isBatch ? daysOfWeek : [dayOfWeek];
+  const validDay = (d: unknown) =>
+    typeof d === "number" && d >= 0 && d <= 6;
   if (
     typeof label !== "string" || label.trim().length === 0 ||
-    typeof dayOfWeek !== "number" || dayOfWeek < 0 || dayOfWeek > 6 ||
+    days.length === 0 || !days.every(validDay) ||
     typeof startMinute !== "number" || startMinute < 0 || startMinute >= 1440 ||
     typeof durationMinutes !== "number" || durationMinutes <= 0
   ) {
@@ -65,18 +76,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Team not found" }, { status: 400 });
   }
 
-  const template = await prisma.setTemplate.create({
-    data: {
-      label: label.trim(),
-      dayOfWeek,
-      startMinute,
-      durationMinutes,
-      requiresMD: Boolean(requiresMD),
-      groupChatLeadDays: parseGroupChatLeadDays(groupChatLeadDays),
-      slotCapacities: capacities ?? undefined,
-      teamId,
-      orgId: admin.orgId,
-    },
+  const shared = {
+    label: label.trim(),
+    startMinute,
+    durationMinutes,
+    requiresMD: Boolean(requiresMD),
+    groupChatLeadDays: parseGroupChatLeadDays(groupChatLeadDays),
+    slotCapacities: capacities ?? undefined,
+    teamId,
+    orgId: admin.orgId,
+  };
+
+  // The single-day form answers with the row it created, as it always has.
+  if (!isBatch) {
+    const template = await prisma.setTemplate.create({
+      data: { ...shared, dayOfWeek: days[0] as number },
+    });
+    return NextResponse.json(template, { status: 201 });
+  }
+  const templates = await prisma.setTemplate.createManyAndReturn({
+    data: (days as number[]).map((day) => ({ ...shared, dayOfWeek: day })),
   });
-  return NextResponse.json(template, { status: 201 });
+  return NextResponse.json(templates, { status: 201 });
 }

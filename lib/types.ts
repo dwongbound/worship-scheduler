@@ -229,6 +229,9 @@ export interface ApiSetTemplate {
   startMinute: number;
   durationMinutes: number;
   requiresMD: boolean; // sets from this template need a musical director
+  // Auto-create the generated set's Slack group chat this many days ahead;
+  // null = off. Inherited by every set expanded from this template.
+  groupChatLeadDays: number | null;
   slotCapacities: SlotCapacityMap | null; // null = default team shape
   teamId: string | null; // team the generated sets belong to
   team: ApiTeam | null;
@@ -351,6 +354,12 @@ export interface ApiAdminUser {
 export interface StagedAssignment {
   userId: string;
   role: Instrument;
+  // The real Assignment row this seat came from. Only the calendar's Preview
+  // Mode sets it (it stages sets that already exist); a generated plan's seats
+  // have no row yet. It's what lets a preview SAVE diff into updates and
+  // deletes rather than blind inserts — a seat that keeps its id is the same
+  // seat, so swapping its person is an update and keeps its history.
+  assignmentId?: string;
   // True when an admin hand-picked this person for this slot in the review
   // modal. Locked slots are HARD constraints for a re-run of "Auto schedule"
   // (they ride along as scheduler `preAssigned`); everything else is thrown
@@ -365,6 +374,12 @@ export interface StagedSet {
   // no DB id yet, so `startsAt` is the staging identity used by the editor
   // and by apply to match/create the row.
   startsAt: string; // ISO datetime
+  // Overrides `startsAt` as the editor's identity for this row. A generated
+  // plan never sets it (one occurrence per template per time), but the
+  // calendar's Preview Mode stages sets that ALREADY exist, where two of them
+  // — a service and a prayer meeting — can start at the same instant. Never
+  // persisted: apply reads startsAt/label to match the row.
+  stagingId?: string;
   label: string | null;
   durationMinutes: number;
   requiresMD: boolean; // set needs a musical director on its team

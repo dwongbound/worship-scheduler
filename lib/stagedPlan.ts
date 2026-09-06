@@ -21,11 +21,6 @@ interface RosterUser {
   teams?: { id: string; roles: Instrument[]; active?: boolean }[];
 }
 
-// Whether this user may serve on a set of this team (no team = open to all).
-export function isOnTeam(user: RosterUser, teamId: string | null | undefined): boolean {
-  return !teamId || (user.teams ?? []).some((t) => t.id === teamId);
-}
-
 // The roles a user can fill FOR a set: their roles on the set's team, or the
 // union across all their teams for a team-less set ("open to the whole org").
 export function rolesForSet(

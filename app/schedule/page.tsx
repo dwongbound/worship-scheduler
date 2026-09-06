@@ -20,6 +20,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import WeekStrip from "@/components/WeekStrip";
+import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
@@ -397,19 +398,19 @@ export default function SchedulePage() {
     }
     setBusyAction("block");
     try {
-      for (const w of specWindows) {
-        await fetch("/api/availability", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "SPECIFIC",
-            date: blockStart,
-            endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
-            startMinute: w.startMinute,
-            endMinute: w.endMinute,
-          }),
-        });
-      }
+      // All the windows in ONE request, the way the recurring branch above
+      // sends its blocks — "Friday morning and evening" is one gesture, so it
+      // shouldn't be a round trip per window.
+      await fetch("/api/availability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "SPECIFIC",
+          date: blockStart,
+          endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
+          windows: specWindows,
+        }),
+      });
       setBlockStart("");
       setBlockEnd("");
       await reload();
@@ -614,6 +615,18 @@ export default function SchedulePage() {
               side="bottom"
               text="Pick a request to see its dates on the calendar below, block the days you can't serve, then submit. Times you've already blocked count automatically."
             />
+            {/* Whether you owe anyone an answer is the whole reason to open
+                this page, so say it on the heading — the Todo tab's count is
+                only visible once you look at the filter. Sits after the (i) so
+                the heading and its tooltip stay one unit. */}
+            {todoRequests.length > 0 && (
+              <AttentionDot
+                label={`${todoRequests.length} request${
+                  todoRequests.length === 1 ? "" : "s"
+                } still need${todoRequests.length === 1 ? "s" : ""} an answer`}
+                className="ml-1 h-2 w-2"
+              />
+            )}
           </div>
           {/* Todo / All, with counts so the filter says what it's hiding. */}
           {requests.length > 0 && (
@@ -707,10 +720,12 @@ export default function SchedulePage() {
                         )}
                         {done ? (
                           <Badge tone="green">
-                            {response!.edited ? "Updated" : "Sent"}
+                            {response!.edited ? "Updated" : "Completed"}
                           </Badge>
                         ) : (
-                          <Badge tone="amber">Not sent</Badge>
+                          // "Todo" rather than "Not sent" — the same word the
+                          // filter tab above uses for exactly these cards.
+                          <Badge tone="amber">Todo</Badge>
                         )}
                       </div>
                       {/* The description line. On the SELECTED card it also
