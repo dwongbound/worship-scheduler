@@ -17,7 +17,10 @@ import Modal from "@/components/common/Modal";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import { usePageLoading } from "@/components/LoadingProvider";
 import TemplateModal from "@/components/TemplateModal";
-import GenerateModal, { type GenerateOptions } from "@/components/GenerateModal";
+import GenerateModal, {
+  type GenerateOptions,
+  type TemplateColors,
+} from "@/components/GenerateModal";
 import StagedScheduleModal from "@/components/StagedScheduleModal";
 import { DAY_LABELS } from "@/lib/constants";
 import {
@@ -90,8 +93,16 @@ export default function CreatePage() {
   const [generateResult, setGenerateResult] = useState("");
   // The proposed schedule awaiting the admin's review (null = not staging).
   const [stagedPlan, setStagedPlan] = useState<StagedPlan | null>(null);
+  // Per-recurring-set tints chosen in the options dialog, handed to the review
+  // modal so each set type's cards read as a block. Preview-only: they aren't
+  // posted anywhere and are forgotten when the review closes.
+  const [planColors, setPlanColors] = useState<TemplateColors>({});
   // The "add weekly set time" popup (opened by "Add" on the templates card).
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  // The row that popup is EDITING (null = it's adding new times instead).
+  const [editingTemplate, setEditingTemplate] = useState<ApiSetTemplate | null>(
+    null
+  );
   // Which page of the Weekly Recurring Sets table is shown (4 rows per page).
   const [templatePage, setTemplatePage] = useState(0);
   // The "Auto schedule" options dialog. Its scope + template picks live inside
@@ -276,9 +287,10 @@ export default function CreatePage() {
   // has already checked that the window and template picks are complete. On
   // success the options dialog closes and the review modal takes over; on
   // failure it stays open showing why, with the picks intact.
-  async function generate(opts: GenerateOptions) {
+  async function generate(opts: GenerateOptions, colors: TemplateColors) {
     setBusyAction("generate");
     setGenerateResult("");
+    setPlanColors(colors);
     try {
       const res = await fetch("/api/admin/generate", {
         method: "POST",
@@ -483,7 +495,25 @@ export default function CreatePage() {
                       {/* Plural — it recurs every week (e.g. "Thursdays"). */}
                       {DAY_LABELS[t.dayOfWeek]}s · {minutesToTimeLabel(t.startMinute)}
                     </td>
-                    <td className="py-2 text-right">
+                    <td className="py-2 text-right whitespace-nowrap">
+                      {/* Edit reopens the add form on this row — same fields
+                          (name, day, times, team, team shape), saved in place.
+                          Sets already generated from it aren't rewritten; the
+                          change lands on the next auto-schedule run. */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        // Indigo the way Delete beside it is red — the app's
+                        // accent (same as the "Auto schedule these" link).
+                        className="text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
+                        onClick={() => {
+                          setEditingTemplate(t);
+                          setTemplateModalOpen(true);
+                        }}
+                        disabled={busyTemplateId === t.id}
+                      >
+                        Edit
+                      </Button>
                       <Button
                         size="sm"
                         variant="ghost"
@@ -503,7 +533,10 @@ export default function CreatePage() {
               accessible name the e2e specs click on. */}
           <button
             type="button"
-            onClick={() => setTemplateModalOpen(true)}
+            onClick={() => {
+              setEditingTemplate(null);
+              setTemplateModalOpen(true);
+            }}
             aria-label="Add weekly set time"
             className="mt-2 w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-gray-600 dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
           >
@@ -947,12 +980,17 @@ export default function CreatePage() {
 
       <TemplateModal
         open={templateModalOpen}
-        onClose={() => setTemplateModalOpen(false)}
+        template={editingTemplate}
+        onClose={() => {
+          setTemplateModalOpen(false);
+          setEditingTemplate(null);
+        }}
         onCreated={reload}
       />
 
       <StagedScheduleModal
         plan={stagedPlan}
+        colors={planColors}
         users={users}
         teams={teams}
         busy={busyAction === "apply"}

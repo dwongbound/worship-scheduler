@@ -132,9 +132,11 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
   await expect(save).toBeVisible();
   await expect(save).toBeDisabled();
 
-  // Stage a notes edit — the one thing every phone user can reach here.
-  const notes = modal.getByPlaceholder("e.g. Communion Sunday");
-  await notes.fill("Phone edit that should not be saved");
+  // Stage an edit reachable with one thumb: the ⋮ menu's Private toggle. (The
+  // notes box isn't staged — its arrow sends immediately — so it can't stand in
+  // for a pending change here.)
+  await modal.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("button", { name: "Private", exact: true }).click();
   await expect(modal.getByText("1 unsaved change")).toBeVisible();
   await expect(save).toBeEnabled();
 
@@ -144,17 +146,17 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
     .last();
-  await expect(warning.getByText("Edited the notes")).toBeVisible();
+  await expect(warning.getByText("Made the set private")).toBeVisible();
   await warning.getByRole("button", { name: "Discard changes" }).click();
   await expect(modal).not.toBeVisible();
 
   // Nothing reached the server.
   const sets = (await (await page.request.get("/api/sets")).json()) as {
     label: string | null;
-    notes: string | null;
+    isPrivate: boolean;
   }[];
   const sunday = sets.find((s) => s.label === "Sunday Morning");
-  expect(sunday?.notes ?? "").not.toContain("Phone edit");
+  expect(sunday?.isPrivate).toBe(false);
 });
 
 test("phone My Sets hides the desktop-only .ics export", async ({ page }) => {
@@ -243,12 +245,16 @@ test("phone: adds and deletes a recurring weekly block via the single-panel adde
     .getByRole("button", { name: "Add recurring block" })
     .click();
 
-  const entry = page.getByText(/Every Tuesday/);
-  await expect(entry).toBeVisible();
+  // The row this test created, not just its text: the Delete below has to be
+  // THIS row's. `page`-wide `Delete.first()` deleted whichever block happened
+  // to sort first — usually but not always this one — so the assertion that
+  // followed was a coin flip on what else the run had left in the list.
+  const entry = page.getByRole("listitem").filter({ hasText: /Every Tuesday/ });
+  await expect(entry.first()).toBeVisible();
 
   // Clean up.
-  await page.getByRole("button", { name: "Delete" }).first().click();
-  await expect(entry).not.toBeVisible();
+  await entry.first().getByRole("button", { name: "Delete" }).click();
+  await expect(entry).toHaveCount(0);
 });
 
 test("phone: submits an availability response and re-opens it for changes", async ({
@@ -268,8 +274,8 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  // The card flips to a "Sent" badge.
-  await expect(page.getByText("Sent", { exact: true })).toBeVisible();
+  // The card flips to a "Completed" badge.
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
   // "Make changes" re-opens it (unsubmits) so the response can be edited.
   await page.getByRole("button", { name: "Make changes" }).click();
@@ -419,4 +425,83 @@ test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async 
 
   await expect(card).toHaveCount(0, { timeout: 15_000 });
   await expect(page).toHaveURL(/\/swaps/);
+});
+
+// The roster-health dot is a phone-only addition to the "My sets" list: on
+// desktop it rides on the month grid's set chips, and the phone has no grid to
+// carry it, so the list row is the only place the information can live. Read
+// only — safe for both device projects to run.
+test("phone My sets rows carry the roster-health dot the month grid can't", async ({
+  page,
+}) => {
+  // nina for the same reason the list test above uses her: nothing mutates her
+  // roster, and the mobile project runs against a db the desktop one has
+  // already worked over.
+  await login(page, "nina");
+
+  // Prove we're on the phone path — the month grid (and its "Today" nav) is
+  // gone, so any dot we find belongs to the list.
+  await expect(page.getByRole("button", { name: "Today" })).toHaveCount(0);
+
+  // Every dot names its own state, since colour alone can't say which red it
+  // is (see components/StatusDot.tsx).
+  const dots = page.getByLabel(
+    /^(Cover requested|Needs people — open slots|Waiting on confirmations|Fully confirmed)$/
+  );
+  await expect(dots.first()).toBeVisible();
+});
+
+// The notes composer on a phone: the arrow sends on tap (no keyboard needed for
+// a one-line note) and the note appears as a bubble under the box. Sending is
+// immediate — it is NOT part of the staged Save, which the staged-edits test
+// above relies on.
+test("phone: sending a note posts it immediately and shows it in the log", async ({
+  page,
+}, testInfo) => {
+  await login(page, "admin");
+
+  // Both device projects run this file against the same seeded db, so the note
+  // carries its project's name — the second run then asserts on its OWN bubble
+  // rather than tripping over the first's.
+  const note = `Phone note from ${testInfo.project.name}`;
+
+  await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  const box = modal.getByPlaceholder("e.g. Communion Sunday");
+  const send = modal.getByRole("button", { name: "Send note" });
+  await expect(send).toBeDisabled(); // nothing to send yet
+
+  await box.fill(note);
+  await expect(send).toBeEnabled();
+  await send.click();
+
+  // Sent, not staged: the box empties and the newest bubble is this note.
+  await expect(box).toHaveValue("");
+  await expect(modal.getByTestId("note-entry").first()).toContainText(note);
+
+  // It really reached the server — reopening the set (a fresh fetch) still
+  // shows it, and the composer comes back empty rather than pre-filled.
+  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(modal).not.toBeVisible();
+  await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
+  await expect(
+    page.getByRole("dialog").getByTestId("note-entry").first()
+  ).toContainText(note);
+  await expect(
+    page.getByRole("dialog").getByPlaceholder("e.g. Communion Sunday")
+  ).toHaveValue("");
+});
+
+test("phone calendar hides the desktop-only Preview Mode button", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/calendar");
+
+  // Preview Mode lives in the month grid's toolbar, and the whole month grid
+  // is desktop-only — the phone gets My Sets instead. It's in the DOM (the
+  // wrapper is `hidden md:block`) but never shown.
+  await expect(page.getByRole("button", { name: "Preview Mode" })).toBeHidden();
 });

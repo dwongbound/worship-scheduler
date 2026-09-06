@@ -48,6 +48,54 @@ function weeklySets(n: number): SchedulerSet[] {
 const who = (result: { setId: string; userId: string }[], setId: string) =>
   result.filter((a) => a.setId === setId).map((a) => a.userId);
 
+describe("isUserAvailable — timezone", () => {
+  // The real bug this guards: a "Friday 7PM" recurring set, materialized by
+  // the server in church time, is Saturday 10AM on a UTC+8 admin's clock. Read
+  // with the runtime's own getDay()/getHours(), the two sides disagreed about
+  // which DAY the set was on — so the scheduler seated someone the review
+  // modal then flagged as unavailable, from identical data.
+  //
+  // Fri 18 Sep 2026, 7:00 PM in America/Los_Angeles:
+  const fridayEveningLA: SchedulerSet = {
+    id: "set-tz",
+    startsAt: new Date("2026-09-19T02:00:00.000Z"),
+    durationMinutes: 60,
+  };
+  // Blocked every Saturday morning, 6am–12pm.
+  const saturdayMornings: UnavailabilityRule[] = [
+    { userId: "u1", type: "RECURRING", dayOfWeek: 6, startMinute: 360, endMinute: 720 },
+  ];
+
+  it("reads the set on the app's clock, not the runtime's", () => {
+    // Church time: it's Friday evening, so a Saturday-morning block misses it.
+    expect(
+      isUserAvailable("u1", fridayEveningLA, saturdayMornings, "America/Los_Angeles")
+    ).toBe(true);
+    // The same instant on a UTC+8 clock IS Saturday 10am — which is exactly
+    // what the browser used to answer, and why it disagreed with the server.
+    expect(
+      isUserAvailable("u1", fridayEveningLA, saturdayMornings, "Asia/Singapore")
+    ).toBe(false);
+  });
+
+  it("compares dated blocks by calendar day in the app's zone", () => {
+    // A specific block on Fri 18 Sep, stored as that day's midnight in LA.
+    const friday: UnavailabilityRule[] = [
+      {
+        userId: "u1",
+        type: "SPECIFIC",
+        startDate: new Date("2026-09-18T07:00:00.000Z"),
+        startMinute: 0,
+        endMinute: 1440,
+      },
+    ];
+    // Church time: same calendar day, so the set is blocked.
+    expect(
+      isUserAvailable("u1", fridayEveningLA, friday, "America/Los_Angeles")
+    ).toBe(false);
+  });
+});
+
 describe("isUserAvailable", () => {
   it("blocks a recurring rule that overlaps the set time", () => {
     const rules: UnavailabilityRule[] = [
@@ -350,6 +398,22 @@ describe("buildSchedule", () => {
     const result = buildSchedule([set], bassists, [], new Map([["b1", 5]]));
     const bass = result.filter((a) => a.role === "BASS");
     expect(bass).toEqual([{ setId: "set-1", userId: "b1", role: "BASS" }]);
+  });
+
+  it("never seats an unavailable MD, even on a required-MD set", () => {
+    // The MD reservation is the one pass that deliberately bends the normal
+    // ordering, so it gets its own guard: m1 is the only MD and is blocked at
+    // this set's time, so the seat goes unled rather than to someone who can't
+    // be there. b2 still fills bass through the ordinary pass.
+    const md = user("m1", ["BASS"], true);
+    const bassist = user("b2", ["BASS"]);
+    const rules: UnavailabilityRule[] = [
+      { userId: "m1", type: "RECURRING", dayOfWeek: 2, startMinute: 0, endMinute: 1440 },
+    ];
+    const set: SchedulerSet = { ...tuesdaySet, requiresMD: true };
+    const result = buildSchedule([set], [md, bassist], rules);
+    expect(result.some((a) => a.userId === "m1")).toBe(false);
+    expect(result).toContainEqual({ setId: "set-1", userId: "b2", role: "BASS" });
   });
 
   it("only seats a required-MD set's MD in an MD-eligible role (not drums)", () => {

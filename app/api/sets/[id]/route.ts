@@ -12,6 +12,9 @@
 // { mdUserId } and { guestTeams } each stay a request of their own: the MD is
 // validated against the set's final roster, and guest teams answer with the
 // resulting rows rather than the set.
+//
+// A notes edit that actually changes the text also writes a NOTES_CHANGED
+// history event — the one thing the set detail modal's History section shows.
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
@@ -22,6 +25,7 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { isValidMD } from "@/lib/md";
 import { parseGroupChatLeadDays, validateSlotCapacities } from "@/lib/constants";
+import { describeNotesChange } from "@/lib/setNotes";
 import {
   MAX_GUEST_TEAMS_PER_SET,
   validateGuestRoles,
@@ -62,8 +66,9 @@ export async function PATCH(
   const set = await prisma.set.findUnique({
     where: { id },
     // teamId comes along for the guest-team edit: a set's OWN team may never
-    // also be listed as a guest on it.
-    select: { orgId: true, teamId: true },
+    // also be listed as a guest on it. notes is the `before` half of the notes
+    // history diff below.
+    select: { orgId: true, teamId: true, notes: true },
   });
   if (!set) {
     return NextResponse.json({ error: "Set not found" }, { status: 404 });
@@ -304,6 +309,26 @@ export async function PATCH(
   }
 
   const updated = await prisma.set.update({ where: { id }, data });
+
+  // Log a real notes edit. This is the ONLY thing the set detail modal's
+  // History section shows, so it's written here rather than left to the generic
+  // roster logging — and only when the text actually changed, since the modal
+  // stages every field together and saves them in one click (an untouched notes
+  // box rides along with every other edit).
+  if (typeof body.notes === "string") {
+    const change = describeNotesChange(set.notes, data.notes as string | null);
+    if (change) {
+      await prisma.setHistoryEvent.create({
+        data: {
+          setId: id,
+          type: "NOTES_CHANGED",
+          actorId: user.id,
+          detail: change,
+        },
+      });
+    }
+  }
+
   return NextResponse.json(updated);
 }
 

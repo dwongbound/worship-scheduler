@@ -90,7 +90,7 @@ const ADMIN_STEPS: Step[] = [
 // Closing step everyone sees last — highlights the user menu.
 const PROFILE_STEP: Step = {
   title: "Your profile",
-  body: "Open the menu under your name to set the instruments and roles you play — you can't be scheduled until you do. Reopen this tour anytime from the \"?\" icon.",
+  body: "Open the menu under your name to check the teams you're on and the roles you play — your org admin sets both, so ask them if something's missing. You can't be scheduled until you have a role. Reopen this tour anytime from the \"?\" icon.",
   target: "profile",
 };
 

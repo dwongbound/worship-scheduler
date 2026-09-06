@@ -119,6 +119,50 @@ describe("openSlotCount", () => {
   });
 });
 
+// ── Acoustic guitar ─────────────────────────────────────────────────────────
+// The one role an empty seat is normal for: it's only ever filled by a seated
+// worship leader or vocalist who also plays it, so an admin can't "fix" an
+// empty one and the set shouldn't read as understaffed over it.
+describe("openSlotCount and acoustic guitar", () => {
+  const ACOUSTIC_CATALOG: TeamRoleDef[] = [
+    ...CATALOG,
+    {
+      key: "ACOUSTIC_GUITAR",
+      label: "Acoustic Guitar",
+      defaultCount: 1,
+      adminOnly: false,
+      order: 2,
+    },
+  ];
+  /** The three-role team, staffed by the given [role, status] pairs. */
+  const acousticSet = (...people: [string, AssignmentStatus][]) => ({
+    assignments: people.map(([role, status]) => ({ role, status })),
+    slotCapacities: null,
+    team: { roles: ACOUSTIC_CATALOG },
+  });
+
+  it("does not count an empty acoustic slot as a hole", () => {
+    const staffed = acousticSet(["DRUMS", "CONFIRMED"], ["BASS", "CONFIRMED"]);
+    expect(openSlotCount(staffed)).toBe(0);
+    expect(setStatus(staffed)).toBe("confirmed");
+  });
+
+  it("still counts every other empty slot", () => {
+    expect(openSlotCount(acousticSet(["DRUMS", "CONFIRMED"]))).toBe(1);
+    expect(setStatus(acousticSet(["DRUMS", "CONFIRMED"]))).toBe("understaffed");
+  });
+
+  it("counts a guest team's acoustic seats — borrowing one is an explicit ask", () => {
+    const borrowed = {
+      ...acousticSet(["DRUMS", "CONFIRMED"], ["BASS", "CONFIRMED"]),
+      guestTeams: [
+        { id: "g1", teamId: "t2", roles: [{ role: "ACOUSTIC_GUITAR", count: 1 }] },
+      ],
+    };
+    expect(openSlotCount(borrowed)).toBe(1);
+  });
+});
+
 describe("setStatus", () => {
   it("is understaffed when nobody is assigned", () => {
     expect(setStatus(set())).toBe("understaffed");

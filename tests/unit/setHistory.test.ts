@@ -42,6 +42,26 @@ describe("describeSetHistoryEvent", () => {
     expect(d.tokens).toEqual(['added "Who Else" (E)']);
   });
 
+  // The other set-level type, same shape: driven by `detail`, no role.
+  it("renders a notes change from its detail, with no role", () => {
+    const d = describeSetHistoryEvent(
+      event("NOTES_CHANGED", {
+        role: null,
+        detail: 'added a note: "Bring extra cables"',
+        actor: { id: "u", name: "Dylan Wong" },
+      })
+    );
+    expect(d.actor).toBe("Dylan Wong");
+    expect(d.tokens).toEqual(['added a note: "Bring extra cables"']);
+  });
+
+  it("falls back to a plain phrase when a notes change has no detail", () => {
+    // Shouldn't happen — the route only logs when describeNotesChange returns a
+    // fragment — but a null detail must still render something readable.
+    const d = describeSetHistoryEvent(event("NOTES_CHANGED", { detail: null }));
+    expect(d.tokens).toEqual(["changed the notes"]);
+  });
+
   // Exhaustiveness guard: a missing switch case would return undefined here.
   it("returns a non-empty descriptor for every event type", () => {
     for (const type of ALL_HISTORY_TYPES) {

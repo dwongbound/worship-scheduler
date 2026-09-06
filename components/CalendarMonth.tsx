@@ -18,38 +18,13 @@ import { createPortal } from "react-dom";
 import { roleLabel } from "@/lib/teamRoles";
 import Link from "next/link";
 import StatusBadge from "./StatusBadge";
+import StatusDot from "./StatusDot";
 import LoadingDots from "./common/LoadingDots";
 import { type AssignmentStatus } from "@/lib/constants";
 import { formatTime } from "@/lib/dates";
-import { setStatus, type SetStatus } from "@/lib/setStatus";
 import type { ApiSet, ApiSwapRequest } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-// A set's overall state → dot color (see lib/setStatus). Red means the roster
-// needs an admin — either a cover request or an unfilled slot (an emptied
-// placeholder set is all unfilled slots, so it reads red too). Amber if
-// everyone's aboard but someone hasn't confirmed; green once all confirmed.
-// What each dot colour means, in words — colour alone can't say whether a red
-// dot is an open slot or a cover request.
-const STATUS_TITLES: Record<SetStatus, string> = {
-  cover: "Cover requested",
-  understaffed: "Needs people — open slots",
-  unconfirmed: "Waiting on confirmations",
-  confirmed: "Fully confirmed",
-};
-
-function setStatusDot(set: ApiSet): string {
-  switch (setStatus(set)) {
-    case "cover":
-    case "understaffed":
-      return "bg-red-500";
-    case "unconfirmed":
-      return "bg-amber-500";
-    default:
-      return "bg-green-500";
-  }
-}
 
 // Local-time day key, e.g. "2026-6-3". Groups sets by the day they start.
 function dayKey(d: Date): string {
@@ -385,7 +360,6 @@ function SlotChip({
   // Cover requests on this set the current user could take (may be empty).
   covers: ApiSwapRequest[];
 }) {
-  const dot = setStatusDot(set);
   const myAssignments = myId
     ? set.assignments.filter((a) => a.user.id === myId)
     : [];
@@ -482,11 +456,7 @@ function SlotChip({
           past ? "opacity-50 grayscale-[35%] hover:opacity-100" : ""
         }`}
       >
-        <span
-          title={STATUS_TITLES[setStatus(set)]}
-          aria-label={STATUS_TITLES[setStatus(set)]}
-          className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
-        />
+        <StatusDot set={set} />
         <span className="truncate">
           <span className={mine ? "opacity-90" : "opacity-70"}>
             {formatTime(set.startsAt)}

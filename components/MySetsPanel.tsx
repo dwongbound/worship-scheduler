@@ -14,6 +14,7 @@ import LoadingDots from "./common/LoadingDots";
 import Select from "./common/Select";
 import RequestCoverModal from "./RequestCoverModal";
 import StatusBadge from "./StatusBadge";
+import StatusDot from "./StatusDot";
 import { SWAPS_CHANGED_EVENT } from "./Navbar";
 import { formatDay, formatTime } from "@/lib/dates";
 import { selectUpcomingSets } from "@/lib/sets";
@@ -126,6 +127,11 @@ export default function MySetsPanel({
               className="w-full text-left"
             >
               <div className="flex flex-wrap items-center gap-2">
+                {/* Phones don't get the month grid, so this list is the only
+                    place a roster's health shows up there — same dot, same
+                    meaning, as the one on a calendar chip. Slightly bigger
+                    than the chip's: it's leading a card, not a 12px label. */}
+                {!asSidebar && <StatusDot set={set} className="h-2 w-2" />}
                 <p className="font-medium text-gray-900 dark:text-gray-100">
                   {set.label ?? "Worship Set"}
                 </p>

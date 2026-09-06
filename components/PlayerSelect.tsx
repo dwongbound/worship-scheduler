@@ -21,6 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
 
@@ -73,6 +74,10 @@ interface PlayerSelectProps {
     // Their nearby serve count, same as an option's — including this set, since
     // they're on it. Omit to leave the ×n off (callers that don't count).
     count?: number;
+    // A short marker drawn inside the control after the name (e.g. "(MD)").
+    // It belongs to the PERSON in the slot, so it rides in the box with them
+    // rather than trailing off the right edge and pushing the box around.
+    tag?: ReactNode;
   } | null;
   // Assignable candidates (excludes whoever is already in `selected`), already
   // sorted available-first by the caller.
@@ -286,7 +291,34 @@ export default function PlayerSelect({
                 : "border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800"
           }`}
       >
-        <span className="truncate">{selected ? selected.name : "None"}</span>
+        {/* The name plus the flags that describe THIS pick. They live inside
+            the box (not beside it) so every control in a column ends at the
+            same edge whether or not its person is flagged — and so the flag
+            can't be read as belonging to the next thing along the row. */}
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate">{selected ? selected.name : "None"}</span>
+          {selected?.available === false && (
+            <span
+              className="shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400"
+              title="Unavailable at this set's time"
+            >
+              (unavailable)
+            </span>
+          )}
+          {selected?.inactive && (
+            <span
+              className="shrink-0 text-xs text-gray-500 dark:text-gray-400"
+              title="Paused on this team — not auto-scheduled"
+            >
+              (inactive)
+            </span>
+          )}
+          {selected?.tag && (
+            <span className="shrink-0 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+              {selected.tag}
+            </span>
+          )}
+        </span>
         <Chevron open={open} />
       </button>
 
@@ -311,8 +343,8 @@ function OptionRow({
   // Dimmed but still clickable (e.g. an unavailable person an admin may
   // override). `disabled` blocks selection; `muted` only greys the row.
   muted?: boolean;
-  // Times already scheduled in the surrounding weeks; shown as a muted badge so
-  // admins can see why the list is ordered the way it is.
+  // Times already scheduled in the caller's chosen window; shown as a muted
+  // badge so admins can see why the list is ordered the way it is.
   count?: number;
   onClick: () => void;
 }) {
@@ -337,7 +369,9 @@ function OptionRow({
         {count !== undefined && count > 0 && (
           <span
             className="shrink-0 text-xs text-gray-400 dark:text-gray-500"
-            title={`Scheduled ${count} time${count === 1 ? "" : "s"} within ±2 weeks`}
+            // The window itself is the caller's to choose (the set detail
+            // modal has a picker for it), so this just states the number.
+            title={`Scheduled ${count} time${count === 1 ? "" : "s"} in the selected window`}
           >
             ×{count}
           </span>

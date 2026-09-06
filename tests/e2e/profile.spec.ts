@@ -1,5 +1,6 @@
 // E2E: profile editing — teams, and the READ-ONLY view of the per-team roles a
-// user can be scheduled for (an admin assigns those from the Team tab).
+// user can be scheduled for. Both are the org admin's to set from the Team tab:
+// a plain member sees no join/leave controls, an admin manages their own.
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
@@ -46,41 +47,31 @@ test("a brand-new member is told to ask an admin for their roles", async ({
   await expect(page.getByLabel("Drums")).toHaveCount(0);
 });
 
-test("a user joins a team via the Add-a-team modal, then leaves it", async ({
-  page,
-}) => {
+test("a member can't add or remove themselves from a team", async ({ page }) => {
+  // Team membership is an org admin's call, so a plain member gets neither
+  // control — the panel is a read-only list of where they already serve.
   await login(page, "carol");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  // Carol is on the Sunday Team only, so Prayer Room Team is joinable.
-  const teamSelect = page.getByTestId("profile-team-select");
-  await expect(teamSelect).not.toContainText("Prayer Room Team");
+  await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
+  await expect(page.getByRole("button", { name: "Add a team" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Leave this team" })).toHaveCount(0);
+});
 
-  await page.getByRole("button", { name: "Add a team" }).click();
-  const modal = page.getByRole("dialog");
-  await modal.getByLabel("Prayer Room Team").check();
-  await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.url().includes("/api/me/teams/") && r.request().method() === "PUT"
-    ),
-    modal.getByRole("button", { name: "Add", exact: true }).click(),
-  ]);
+test("not even an admin can add themselves to a team from their profile", async ({
+  page,
+}) => {
+  // Adding anyone to a team — yourself included — happens in the Team tab, so
+  // the profile panel offers no way in. Leaving is the one write left, and an
+  // admin of the team's org keeps it.
+  await login(page, "admin");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  // Joined: it's in the dropdown now, and auto-selected (roles panel shows).
-  await expect(teamSelect).toContainText("Prayer Room Team");
+  await expect(page.getByRole("button", { name: "Add a team" })).toHaveCount(0);
+  await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
   await expect(page.getByRole("button", { name: "Leave this team" })).toBeVisible();
-
-  // Leave it to restore the shared seed state.
-  await Promise.all([
-    page.waitForResponse(
-      (r) =>
-        r.url().includes("/api/me/teams/") && r.request().method() === "DELETE"
-    ),
-    page.getByRole("button", { name: "Leave this team" }).click(),
-  ]);
-  await expect(teamSelect).not.toContainText("Prayer Room Team");
 });
 
 test("an established member sees no profile-setup nudge", async ({ page }) => {

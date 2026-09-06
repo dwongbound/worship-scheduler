@@ -188,6 +188,7 @@ export async function POST(req: NextRequest) {
       requiresMD: boolean;
       groupChatLeadDays: number | null;
       teamId: string | null;
+      templateId: string;
       existing: boolean;
     }
   >();
@@ -227,6 +228,9 @@ export async function POST(req: NextRequest) {
         requiresMD: template.requiresMD,
         groupChatLeadDays: template.groupChatLeadDays,
         teamId: template.teamId,
+        // Which recurring set this came from, so the review modal can tint the
+        // occurrences of one set type together.
+        templateId: template.id,
         existing: existingByKey.has(matchKey),
       });
     }
@@ -293,6 +297,7 @@ export async function POST(req: NextRequest) {
         slotCapacities: s.capacities,
         groupChatLeadDays: s.groupChatLeadDays,
         teamId: s.teamId,
+        templateId: s.templateId,
         existing: s.existing,
         assignments,
       };

@@ -20,6 +20,7 @@ import Checkbox from "@/components/common/Checkbox";
 import DateSelect, { toYmd } from "@/components/common/DateSelect";
 import Dropdown from "@/components/common/Dropdown";
 import InfoTooltip from "@/components/common/InfoTooltip";
+import Input from "@/components/common/Input";
 import TeamActivityModal from "@/components/TeamActivityModal";
 import LoadingDots from "@/components/common/LoadingDots";
 import Toggle from "@/components/common/Toggle";
@@ -104,7 +105,7 @@ function SetBreakdown({
 // Wrapped in Suspense (below) because useSearchParams() requires a boundary —
 // without one the whole route bails out of prerendering at build time.
 function UsersPageInner() {
-  const { data: session, status } = useSession();
+  const { data: session, status, update: updateSession } = useSession();
   const [users, setUsers] = useState<ApiAdminUser[] | null>(null);
   // Ministry teams (read-only here — full management lives on the Org page).
   const [teams, setTeams] = useState<ApiTeam[] | null>(null);
@@ -129,6 +130,13 @@ function UsersPageInner() {
   // this page you can't undo with another click.
   const [removeConfirm, setRemoveConfirm] = useState<ApiAdminUser | null>(null);
   const [removing, setRemoving] = useState(false);
+  // "Edit details" (also from the cog menu): whose details are open, the name
+  // draft, and the in-flight/error state of the save. Only the name is editable
+  // for now, so an empty draft is the one thing that can be wrong.
+  const [detailsFor, setDetailsFor] = useState<ApiAdminUser | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingDetails, setSavingDetails] = useState(false);
+  const [detailsError, setDetailsError] = useState<string | null>(null);
   // The team whose roster + per-team roles the page is focused on ("all" = show
   // everyone, with role editing off since roles are per-team).
   const [teamFilter, setTeamFilter] = useState("all");
@@ -361,6 +369,61 @@ function UsersPageInner() {
     },
     [load, adminOrgId]
   );
+
+  // Open "Edit details" for one member, seeded with their current name.
+  function startDetailsEdit(user: ApiAdminUser) {
+    setDetailsFor(user);
+    setNameDraft(user.name);
+    setDetailsError(null);
+  }
+
+  // Save the details modal. Unlike the toggles on this page it is NOT
+  // optimistic: it's a typed value with a real failure mode (a blank name the
+  // server rejects), so the modal stays open until the write lands and the
+  // error has somewhere to show.
+  async function saveDetails() {
+    if (!detailsFor) return;
+    const name = nameDraft.trim().replace(/\s+/g, " ");
+    if (!name) {
+      setDetailsError("Name is required.");
+      return;
+    }
+    if (name === detailsFor.name) {
+      setDetailsFor(null);
+      return;
+    }
+    setSavingDetails(true);
+    setDetailsError(null);
+    try {
+      const res = await fetch(`/api/admin/users/${detailsFor.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...orgHeaders(adminOrgId),
+        },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setDetailsError(data.error ?? "Couldn't save that name.");
+        return;
+      }
+      // The list is sorted by name, so re-sort rather than patching in place —
+      // a rename can move the card.
+      setUsers(
+        (prev) =>
+          prev
+            ?.map((u) => (u.id === detailsFor.id ? { ...u, name } : u))
+            .sort((a, b) => a.name.localeCompare(b.name)) ?? prev
+      );
+      // Renaming yourself (only a super-admin can, since the cog is hidden on
+      // your own card otherwise) — refresh the session so the navbar agrees.
+      if (detailsFor.id === myId) await updateSession({ name });
+      setDetailsFor(null);
+    } finally {
+      setSavingDetails(false);
+    }
+  }
 
   // Set a member's roles ON A SPECIFIC TEAM (roles are per-team). Optimistic
   // local update, then PATCH teamRoles; reload on failure.
@@ -822,6 +885,13 @@ function UsersPageInner() {
                         >
                           <button
                             type="button"
+                            onClick={() => startDetailsEdit(user)}
+                            className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                          >
+                            Edit details
+                          </button>
+                          <button
+                            type="button"
                             onClick={() =>
                               setAdminConfirm({ user, next: !user.isAdmin })
                             }
@@ -1090,6 +1160,56 @@ function UsersPageInner() {
         onSaved={load}
         onClose={() => setOpenTeamId(null)}
       />
+
+      {/* Edit details — for now just the display name, which is global to the
+          person rather than per-org (see the PATCH route). */}
+      {detailsFor && (
+        <Modal
+          open
+          onClose={() => (savingDetails ? undefined : setDetailsFor(null))}
+          title={`Edit ${detailsFor.name}`}
+          footer={
+            <>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setDetailsFor(null)}
+                disabled={savingDetails}
+              >
+                Cancel
+              </Button>
+              <Button size="sm" onClick={saveDetails} disabled={savingDetails}>
+                {savingDetails ? <LoadingDots size="sm" /> : "Save"}
+              </Button>
+            </>
+          }
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              saveDetails();
+            }}
+          >
+            <Input
+              label="Name"
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              autoFocus
+              disabled={savingDetails}
+            />
+          </form>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            Signs in as{" "}
+            <span className="font-medium">{detailsFor.username}</span>. Renaming
+            someone doesn&rsquo;t change how they sign in, and the new name shows
+            everywhere they appear — rosters, history, and any other org they
+            serve in.
+          </p>
+          {detailsError && (
+            <p className="mt-2 text-sm text-red-600">{detailsError}</p>
+          )}
+        </Modal>
+      )}
 
       {/* Granting/revoking admin rights — confirmed, never a bare toggle. */}
       {adminConfirm && (

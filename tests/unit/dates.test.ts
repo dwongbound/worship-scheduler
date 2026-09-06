@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   dateRangeLabel,
   durationBetween,
+  minutesToShortTimeLabel,
   minutesToTimeInput,
   occurrencesInRange,
+  shortDateTimeLabel,
   shortRangeLabel,
   startOfWeekMonday,
   upcomingOccurrences,
+  zonedParts,
 } from "@/lib/dates";
 
 describe("range labels collapse single days", () => {
@@ -99,6 +102,32 @@ describe("occurrencesInRange", () => {
   });
 });
 
+describe("shortDateTimeLabel", () => {
+  it("renders a padded numeric date next to the time", () => {
+    // A local Date, so the stamp doesn't move with the runner's timezone.
+    expect(shortDateTimeLabel(new Date(2026, 5, 3, 20, 42))).toBe(
+      "06/03/2026 8:42 PM"
+    );
+    expect(shortDateTimeLabel(new Date(2026, 11, 25, 9, 5))).toBe(
+      "12/25/2026 9:05 AM"
+    );
+  });
+});
+
+describe("minutesToShortTimeLabel", () => {
+  it("drops the :00 on the hour and the space before AM/PM", () => {
+    expect(minutesToShortTimeLabel(7 * 60)).toBe("7AM");
+    expect(minutesToShortTimeLabel(19 * 60)).toBe("7PM");
+    expect(minutesToShortTimeLabel(19 * 60 + 30)).toBe("7:30PM");
+  });
+
+  it("renders both noon and midnight as 12", () => {
+    expect(minutesToShortTimeLabel(0)).toBe("12AM");
+    expect(minutesToShortTimeLabel(12 * 60)).toBe("12PM");
+    expect(minutesToShortTimeLabel(12 * 60 + 5)).toBe("12:05PM");
+  });
+});
+
 describe("minutesToTimeInput", () => {
   it("renders a zero-padded 24-hour time", () => {
     expect(minutesToTimeInput(0)).toBe("00:00");
@@ -160,5 +189,37 @@ describe("startOfWeekMonday", () => {
   it("drops the time component", () => {
     const d = startOfWeekMonday(new Date(2026, 6, 16, 19, 30));
     expect([d.getHours(), d.getMinutes()]).toEqual([0, 0]);
+  });
+});
+
+describe("zonedParts", () => {
+  // Fri 18 Sep 2026, 7:00 PM in America/Los_Angeles.
+  const instant = new Date("2026-09-19T02:00:00.000Z");
+
+  it("reads an instant on a named zone's wall clock", () => {
+    expect(zonedParts(instant, "America/Los_Angeles")).toEqual({
+      year: 2026,
+      month: 9,
+      day: 18,
+      ymd: 20260918,
+      weekday: 5, // Friday
+      minuteOfDay: 19 * 60,
+    });
+  });
+
+  it("gives a different day and hour for the same instant elsewhere", () => {
+    // The whole point: one instant, two clocks. UTC+8 calls this Saturday 10am.
+    expect(zonedParts(instant, "Asia/Singapore")).toMatchObject({
+      ymd: 20260919,
+      weekday: 6, // Saturday
+      minuteOfDay: 10 * 60,
+    });
+  });
+
+  it("reports midnight as minute 0, not 24 hours in", () => {
+    // hourCycle h23 — some implementations report midnight as hour 24.
+    expect(
+      zonedParts(new Date("2026-09-18T07:00:00.000Z"), "America/Los_Angeles")
+    ).toMatchObject({ ymd: 20260918, minuteOfDay: 0 });
   });
 });

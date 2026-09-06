@@ -1,6 +1,8 @@
 // GET  /api/availability — my unavailability entries + completion status.
-// POST /api/availability — add an entry (RECURRING or SPECIFIC); RECURRING
-//      also takes a `blocks` array to add several weekday/window blocks at once.
+// POST /api/availability — add an entry (RECURRING or SPECIFIC). Both take a
+//      batch form so one gesture in the form is one request: RECURRING a
+//      `blocks` array of weekday/window blocks, SPECIFIC a `windows` array of
+//      time windows over the same date (or date range).
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { targetsUser } from "@/lib/availabilityTargets";
@@ -183,16 +185,28 @@ export async function POST(req: NextRequest) {
     // time window. It MAY be tied to a request (requestId) — a standalone block
     // (e.g. drag-to-block on the calendar) has no requestId, in which case we
     // skip the request-window check.
-    const { requestId, startMinute, endMinute } = body;
+    const { requestId } = body;
     const date = parseLocalDate(body.date);
     // endDate is optional — omit it for a single-day block.
     const endDate = body.endDate ? parseLocalDate(body.endDate) : null;
+    // Two shapes, like RECURRING above: one window ({startMinute, endMinute}) or
+    // a batch ({ windows: [...] }). The form asks for a date and the times of
+    // day to block on it, so "Friday morning AND evening" is one gesture — and
+    // now one request, rather than one per window.
+    const isBatch = Array.isArray(body.windows);
+    const windows: { startMinute: unknown; endMinute: unknown }[] = isBatch
+      ? body.windows
+      : [{ startMinute: body.startMinute, endMinute: body.endMinute }];
+    const validWindow = (w: { startMinute: unknown; endMinute: unknown }) =>
+      !!w &&
+      typeof w.startMinute === "number" &&
+      typeof w.endMinute === "number" &&
+      w.startMinute < w.endMinute;
     if (
       isNaN(date.getTime()) ||
       (endDate && (isNaN(endDate.getTime()) || endDate < date)) ||
-      typeof startMinute !== "number" ||
-      typeof endMinute !== "number" ||
-      startMinute >= endMinute
+      windows.length === 0 ||
+      !windows.every(validWindow)
     ) {
       return NextResponse.json(
         { error: "Invalid specific block" },
@@ -223,18 +237,26 @@ export async function POST(req: NextRequest) {
         );
       }
     }
-    const entry = await prisma.unavailability.create({
-      data: {
+    const rows = (windows as { startMinute: number; endMinute: number }[]).map(
+      (w) => ({
         userId: user.id,
-        type: "SPECIFIC",
+        type: "SPECIFIC" as const,
         startDate: date,
         endDate,
-        startMinute,
-        endMinute,
+        startMinute: w.startMinute,
+        endMinute: w.endMinute,
         requestId: typeof requestId === "string" ? requestId : null,
-      },
-    });
-    return NextResponse.json(entry, { status: 201 });
+      })
+    );
+
+    // The single-window form still answers with the row it created — callers
+    // that post one window read it back.
+    if (!isBatch) {
+      const entry = await prisma.unavailability.create({ data: rows[0] });
+      return NextResponse.json(entry, { status: 201 });
+    }
+    await prisma.unavailability.createMany({ data: rows });
+    return NextResponse.json({ created: rows.length }, { status: 201 });
   }
 
   if (body.type === "DATE_RANGE") {

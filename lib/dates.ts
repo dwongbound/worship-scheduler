@@ -1,5 +1,68 @@
 // Date helpers shared by the schedule generator and the UI.
 // upcomingOccurrences is pure + unit-tested (tests/unit/dates.test.ts).
+import { APP_TZ } from "./appTz";
+
+// One Intl formatter per timezone — building one is expensive and
+// isUserAvailable calls this per set, per rule, per render.
+const ZONED_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function zonedFormatter(timeZone: string): Intl.DateTimeFormat {
+  let fmt = ZONED_FORMATTERS.get(timeZone);
+  if (!fmt) {
+    fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      hourCycle: "h23", // 00–23, so midnight is 0 rather than 12 or 24
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    ZONED_FORMATTERS.set(timeZone, fmt);
+  }
+  return fmt;
+}
+
+/**
+ * What an instant reads as ON THE WALL CLOCK of a given timezone — the app's
+ * by default.
+ *
+ * This is what lets the browser agree with the server about which day and hour
+ * a set falls on. `getDay()`/`getHours()` answer in whatever zone the RUNTIME
+ * happens to be in, which is the server's timezone on one side and the admin's
+ * on the other; those are the same only by luck.
+ *
+ * `ymd` is a comparable calendar-day number (2026-09-19 → 20260919), so day
+ * ranges compare with < and > without any more Date math.
+ */
+export function zonedParts(
+  value: Date,
+  timeZone: string = APP_TZ
+): {
+  year: number;
+  month: number;
+  day: number;
+  ymd: number;
+  weekday: number; // 0 = Sunday, matching Date#getDay
+  minuteOfDay: number;
+} {
+  const parts = zonedFormatter(timeZone).formatToParts(value);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((p) => p.type === type)?.value ?? 0);
+  const year = part("year");
+  const month = part("month");
+  const day = part("day");
+  return {
+    year,
+    month,
+    day,
+    ymd: year * 10000 + month * 100 + day,
+    // Derived from the zoned Y/M/D through UTC, so the weekday is the one that
+    // calendar date has — never the runtime's idea of the same instant.
+    weekday: new Date(Date.UTC(year, month - 1, day)).getUTCDay(),
+    minuteOfDay: part("hour") * 60 + part("minute"),
+  };
+}
 
 /**
  * Local `yyyy-mm-dd` for a Date — the same string the native <input type=date>
@@ -157,6 +220,32 @@ export function minutesToTimeLabel(minutes: number): string {
     minute: "2-digit",
     hour12: true,
   });
+}
+
+/**
+ * "06/03/2026 8:42 PM" — the compact stamp for a log row, where the full
+ * "Saturday, September 5, 2026" spelling crowds out the message next to it.
+ */
+export function shortDateTimeLabel(value: Date | string): string {
+  const d = new Date(value);
+  const date = d.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+  return `${date} ${formatTime(d)}`;
+}
+
+/**
+ * 1140 → "7PM", 1170 → "7:30PM". The compact form for tight rows: on-the-hour
+ * times drop ":00" and there's no space before the AM/PM.
+ */
+export function minutesToShortTimeLabel(minutes: number): string {
+  const hour24 = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  const suffix = hour24 < 12 ? "AM" : "PM";
+  return `${hour12}${mins ? `:${String(mins).padStart(2, "0")}` : ""}${suffix}`;
 }
 
 /** "19:00" (from an <input type=time>) → 1140 minutes from midnight. */

@@ -55,11 +55,15 @@ export interface SetSnapshot {
   guestTeams: { teamId: string; teamName: string; roles: GuestRoleSpec[] }[];
 }
 
-/** The roster changes as the three API calls they need. */
+/**
+ * The roster changes, in the shape PATCH /api/admin/sets/:id/roster takes —
+ * the whole diff goes to that one endpoint, which applies it as a single
+ * transaction.
+ */
 export interface AssignmentOps {
-  removed: string[]; // DELETE /api/admin/assignments/:id
-  reassigned: { id: string; userId: string }[]; // PATCH — same seat, new person
-  added: { role: string; userId: string; guestTeamId?: string | null }[]; // POST
+  removed: string[]; // assignment ids to delete
+  reassigned: { id: string; userId: string }[]; // same seat, new person
+  added: { role: string; userId: string; guestTeamId?: string | null }[];
 }
 
 /**

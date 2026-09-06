@@ -1,5 +1,5 @@
 // Shared e2e helpers.
-import { Locator, Page, expect } from "@playwright/test";
+import { Locator, Page, TestInfo, expect } from "@playwright/test";
 
 // Local YYYY-MM-DD, matching lib/dates.toYmd (the format the picker's cells use
 // in their data-date). Inlined so this test helper needs no app import.
@@ -169,4 +169,16 @@ export async function requestAvailability(page: Page) {
     data: { startDate: "2026-07-01", endDate: "2026-12-31" },
   });
   expect(res.ok()).toBeTruthy();
+}
+
+/**
+ * A token unique to this ATTEMPT, for names/labels a test creates.
+ *
+ * global-setup reseeds once per RUN, not per test, so a retry inherits whatever
+ * its failed attempt already created — and a test that asserts on a *fresh*
+ * thing (an empty log, a name nobody has yet) then fails on every retry for the
+ * wrong reason. Tagging what the test creates keeps each attempt independent.
+ */
+export function attemptTag(testInfo: TestInfo): string {
+  return testInfo.retry ? `R${testInfo.retry}` : "";
 }

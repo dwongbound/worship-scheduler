@@ -5,7 +5,9 @@
 //   1. Requests — one card per availability request across every org, each
 //      showing whether you still owe an answer. Picking one doesn't navigate:
 //      it LENSES the calendar below onto that request's window (rings its days,
-//      dims the rest) and puts Submit on the card.
+//      dims the rest) and puts Submit on the card. A Todo / All switch decides
+//      which cards are listed; Todo (the default) hides the ones you've already
+//      answered, so the section reads as a to-do list.
 //   2. My availability — the standing picture that ANSWERS those requests: the
 //      calendar (click/drag to block whole days), the deletable list of blocks,
 //      and the only form that creates them (a specific date/range, or weekly
@@ -18,6 +20,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
 import WeekStrip from "@/components/WeekStrip";
+import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
@@ -100,6 +103,17 @@ function blockKindClass(active: boolean): string {
     active
       ? "border-indigo-600 text-indigo-700 dark:border-indigo-400 dark:text-indigo-300"
       : "border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:border-gray-600 dark:hover:text-gray-200"
+  }`;
+}
+
+// One half of the Requests "Todo / All" switch. Same bordered-box-with-
+// dividers shape as the weekday strip below, so the page has one segmented
+// look rather than a second style of small filter.
+function requestTabClass(active: boolean): string {
+  return `flex items-center gap-1.5 border-l border-gray-300 px-3 py-1.5 text-sm font-medium transition-colors first:border-l-0 dark:border-gray-600 ${
+    active
+      ? "bg-indigo-600 text-white"
+      : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
   }`;
 }
 
@@ -205,6 +219,10 @@ export default function SchedulePage() {
   const [responses, setResponses] = useState<AvailabilityResponse[]>([]);
   // The TimeRange the specific-blocks section is currently focused on.
   const [selectedRequestId, setSelectedRequestId] = useState<string>("");
+  // Which requests the list shows. "todo" is the default because this section
+  // is a to-do list first — once you've answered a request it's history, and
+  // leaving it in the list only makes the ones you still owe harder to find.
+  const [requestFilter, setRequestFilter] = useState<"todo" | "all">("todo");
   // Which control is mid-update (inline dots) — never a full-page loader.
   const [busyAction, setBusyAction] = useState<
     "specific" | "complete" | "block" | null
@@ -380,19 +398,19 @@ export default function SchedulePage() {
     }
     setBusyAction("block");
     try {
-      for (const w of specWindows) {
-        await fetch("/api/availability", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "SPECIFIC",
-            date: blockStart,
-            endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
-            startMinute: w.startMinute,
-            endMinute: w.endMinute,
-          }),
-        });
-      }
+      // All the windows in ONE request, the way the recurring branch above
+      // sends its blocks — "Friday morning and evening" is one gesture, so it
+      // shouldn't be a round trip per window.
+      await fetch("/api/availability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "SPECIFIC",
+          date: blockStart,
+          endDate: blockEnd && blockEnd !== blockStart ? blockEnd : undefined,
+          windows: specWindows,
+        }),
+      });
       setBlockStart("");
       setBlockEnd("");
       await reload();
@@ -529,6 +547,17 @@ export default function SchedulePage() {
   if (!entries) return null;
 
   const selectedRequest = requests.find((r) => r.id === selectedRequestId);
+  // Answered = there's a response row with a completedAt for it.
+  const isAnswered = (requestId: string) =>
+    responses.some((x) => x.requestId === requestId && x.completedAt);
+  const todoRequests = requests.filter((r) => !isAnswered(r.id));
+  // Under "Todo" the selected card stays on screen even once it's answered —
+  // otherwise submitting would yank the card (and its "Make changes" button)
+  // out from under you the instant you clicked Submit.
+  const visibleRequests =
+    requestFilter === "all"
+      ? requests
+      : requests.filter((r) => !isAnswered(r.id) || r.id === selectedRequestId);
   // The selected request's window, as the day pickers want it: rings its days
   // (and dims the rest, on the calendar). Null = showing everything.
   const lensRange = selectedRequest
@@ -579,12 +608,56 @@ export default function SchedulePage() {
           anywhere: it LENSES the calendar below onto that request's window, so
           the ask and the schedule that answers it are never separated. */}
       <section data-tour="avail-editors" className="space-y-3">
-        <div className="flex items-center gap-1.5">
-          <h2 className="text-xl font-bold">Requests</h2>
-          <InfoTooltip
-            side="bottom"
-            text="Pick a request to see its dates on the calendar below, block the days you can't serve, then submit. Times you've already blocked count automatically."
-          />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-xl font-bold">Requests</h2>
+            <InfoTooltip
+              side="bottom"
+              text="Pick a request to see its dates on the calendar below, block the days you can't serve, then submit. Times you've already blocked count automatically."
+            />
+            {/* Whether you owe anyone an answer is the whole reason to open
+                this page, so say it on the heading — the Todo tab's count is
+                only visible once you look at the filter. Sits after the (i) so
+                the heading and its tooltip stay one unit. */}
+            {todoRequests.length > 0 && (
+              <AttentionDot
+                label={`${todoRequests.length} request${
+                  todoRequests.length === 1 ? "" : "s"
+                } still need${todoRequests.length === 1 ? "s" : ""} an answer`}
+                className="ml-1 h-2 w-2"
+              />
+            )}
+          </div>
+          {/* Todo / All, with counts so the filter says what it's hiding. */}
+          {requests.length > 0 && (
+            <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-gray-300 dark:border-gray-600">
+              {(
+                [
+                  { key: "todo", label: "Todo", count: todoRequests.length },
+                  { key: "all", label: "All", count: requests.length },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.key}
+                  type="button"
+                  aria-pressed={requestFilter === tab.key}
+                  onClick={() => setRequestFilter(tab.key)}
+                  className={requestTabClass(requestFilter === tab.key)}
+                >
+                  {tab.label}
+                  <span
+                    className={`rounded-full px-1.5 text-xs ${
+                      requestFilter === tab.key
+                        ? "bg-white/20"
+                        : "bg-gray-200 dark:bg-gray-700"
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {requests.length === 0 ? (
@@ -594,9 +667,22 @@ export default function SchedulePage() {
               out any dates below.
             </p>
           </Card>
+        ) : visibleRequests.length === 0 ? (
+          <Card>
+            <p className="text-sm text-gray-500">
+              You&apos;re all caught up — every request has been answered.{" "}
+              <button
+                type="button"
+                onClick={() => setRequestFilter("all")}
+                className="rounded text-indigo-600 underline underline-offset-2 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200"
+              >
+                Show all requests
+              </button>
+            </p>
+          </Card>
         ) : (
           <div className="space-y-2">
-            {requests.map((r) => {
+            {visibleRequests.map((r) => {
               const response = responses.find((x) => x.requestId === r.id);
               const done = !!response?.completedAt;
               const active = r.id === selectedRequestId;
@@ -634,10 +720,12 @@ export default function SchedulePage() {
                         )}
                         {done ? (
                           <Badge tone="green">
-                            {response!.edited ? "Updated" : "Sent"}
+                            {response!.edited ? "Updated" : "Completed"}
                           </Badge>
                         ) : (
-                          <Badge tone="amber">Not sent</Badge>
+                          // "Todo" rather than "Not sent" — the same word the
+                          // filter tab above uses for exactly these cards.
+                          <Badge tone="amber">Todo</Badge>
                         )}
                       </div>
                       {/* The description line. On the SELECTED card it also
