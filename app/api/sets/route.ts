@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { resolveOrgScope, requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
+import { SET_INCLUDE, withPendingOwners } from "@/lib/setPayload";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 import { resolveSetsWindow, visibleSetsFilter } from "@/lib/sets";
 
@@ -48,42 +48,17 @@ export async function GET(req: NextRequest) {
       }),
     },
     orderBy: { startsAt: "asc" },
-    include: {
-      org: { select: { id: true, name: true } },
-      // The team's role catalog rides along: the roster, capacity editor and
-      // auto-fill all read a set's roles from ITS team, never a fixed list.
-      team: {
-        select: {
-          id: true,
-          name: true,
-          roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
-        },
-      },
-      assignments: {
-        include: { user: { select: { id: true, name: true, isMD: true } } },
-      },
-      // Teams lending people to this set. Each carries its OWN catalog, since
-      // borrowed seats are named and filled from the guest team's roles rather
-      // than the owning team's (see lib/guestTeams.ts).
-      guestTeams: {
-        select: {
-          id: true,
-          teamId: true,
-          roles: true,
-          team: {
-            select: {
-              id: true,
-              name: true,
-              roles: { select: TEAM_ROLE_FIELDS, orderBy: { order: "asc" } },
-            },
-          },
-        },
-      },
-      songs: { orderBy: { order: "asc" } },
-    },
+    include: SET_INCLUDE,
   });
 
-  return NextResponse.json(sets);
+  // A seat mid-handoff (a taken cover or an accepted swap awaiting approval)
+  // already shows the taker, but still belongs to its original owner — resolve
+  // them once for the whole window so the client can tell the two apart. The
+  // MD rules need it most: without it a set whose MD asked for cover reads as
+  // having no MD the moment someone offers to take the slot.
+  const withOwners = await withPendingOwners(sets);
+
+  return NextResponse.json(withOwners);
 }
 
 export async function POST(req: NextRequest) {

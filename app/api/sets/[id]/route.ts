@@ -1,3 +1,8 @@
+// GET /api/sets/:id — one set, in exactly the shape GET /api/sets returns each
+// of its rows. It exists for the ?set=<id> deep link: a link can point at a set
+// outside the window the calendar has loaded (a Slack DM about something months
+// out), and this is how the page finds out when that set is so it can widen its
+// window and open the modal. Same visibility rules as the list.
 // PATCH /api/sets/:id — edit a set's notes (org admins + the set's worship
 // leader, who runs it), its designated MD (org admins only), its private flag
 // (org admins only), whether it requires an MD (org admins only), its team
@@ -18,12 +23,15 @@
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
-import { requireOrgAdminFor } from "@/lib/org";
+import { getSessionUser, isSuperAdmin } from "@/lib/auth";
+import { requireOrgAdminFor, resolveOrgScope } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { visibleSetsFilter } from "@/lib/sets";
+import { SET_INCLUDE, withPendingOwners } from "@/lib/setPayload";
 // Value import (not `import type`) — Prisma.DbNull is a runtime sentinel.
 import { Prisma } from "@/lib/generated/prisma/client";
 import { isValidMD } from "@/lib/md";
+import { loadForMD } from "@/lib/setMd";
 import { parseGroupChatLeadDays, validateSlotCapacities } from "@/lib/constants";
 import { describeNotesChange } from "@/lib/setNotes";
 import {
@@ -31,6 +39,37 @@ import {
   validateGuestRoles,
   type GuestRoleSpec,
 } from "@/lib/guestTeams";
+
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Scoped to the orgs this person can see, then filtered by the same
+  // private-set rule as the list — a link to a set they aren't allowed to see
+  // is a 404, exactly as if it didn't exist.
+  const scope = await resolveOrgScope(user.id, null);
+  const set = await prisma.set.findFirst({
+    where: {
+      id,
+      orgId: { in: scope },
+      ...visibleSetsFilter({
+        userId: user.id,
+        isSuperAdmin: isSuperAdmin(user.email),
+      }),
+    },
+    include: SET_INCLUDE,
+  });
+  if (!set) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const [withOwners] = await withPendingOwners([set]);
+  return NextResponse.json(withOwners);
+}
 
 export async function PATCH(
   req: NextRequest,
@@ -212,19 +251,12 @@ export async function PATCH(
       return NextResponse.json({ error: "Invalid mdUserId" }, { status: 400 });
     }
     // A non-null MD must be an eligible assignee (isMD, MD-capable role, not WL).
+    // loadForMD reads the roster the way the MD rules do — a seat awaiting
+    // approval still counts for the person handing it over, so the set's MD can
+    // stay themselves while their cover request is pending.
     if (mdUserId !== null) {
-      const assignments = await prisma.assignment.findMany({
-        where: { setId: id },
-        select: { userId: true, role: true, user: { select: { isMD: true } } },
-      });
-      const eligible = isValidMD(
-        mdUserId,
-        assignments.map((a) => ({
-          userId: a.userId,
-          role: a.role,
-          isMD: a.user.isMD,
-        }))
-      );
+      const data = await loadForMD(id);
+      const eligible = isValidMD(mdUserId, data?.roster ?? []);
       if (!eligible) {
         return NextResponse.json(
           { error: "That person can't be the MD of this set." },

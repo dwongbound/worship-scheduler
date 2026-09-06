@@ -73,6 +73,11 @@ export interface ApiAssignment {
   // keys are only unique within a team, so this is what tells a guest CHOIR
   // seat apart from the owning team's own CHOIR seat.
   guestTeamId?: string | null;
+  // While a handoff waits on an admin (status PENDING_APPROVAL) the seat shows
+  // the taker above, but it still belongs to this person until the approval
+  // lands — that's who the MD rules count (see lib/md.ts, lib/pendingHandoff.ts).
+  // Null/absent on a settled seat, and on endpoints that don't resolve it.
+  pendingFromUser?: ApiUserRef | null;
 }
 
 // One team lending its people to a set (see lib/guestTeams.ts). `roles` says
@@ -366,6 +371,11 @@ export interface StagedAssignment {
   // away and re-proposed. Clearing the slot (picking "None") drops the lock
   // with the assignment. Never persisted — apply only reads userId/role.
   locked?: boolean;
+  // Set when this seat is mid-handoff: the person it still belongs to until an
+  // admin approves the cover/swap that moved it (see lib/pendingHandoff.ts).
+  // Only Preview Mode sets it, and only the MD rules read it — the seat itself
+  // is the taker's (userId above), as the calendar already shows.
+  pendingFromUserId?: string | null;
 }
 
 // A set the generator would create (or fill), with its proposed roster.

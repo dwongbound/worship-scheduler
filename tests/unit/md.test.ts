@@ -67,3 +67,48 @@ describe("isValidMD", () => {
     expect(isValidMD(null, roster)).toBe(false);
   });
 });
+
+describe("seats mid-handoff (pendingFrom)", () => {
+  // The set's MD asked for cover on their keys slot and someone took it; the
+  // seat shows the taker, but an admin hasn't approved the handoff yet.
+  const pendingKeys = (takerId: string, takerIsMD = false): MDAssignment => ({
+    ...a(takerId, "KEYS", takerIsMD),
+    pendingFrom: { userId: "md", isMD: true },
+  });
+
+  it("keeps the MD eligible while their cover is awaiting approval", () => {
+    const roster = [pendingKeys("taker"), a("d", "DRUMS")];
+    expect(eligibleMDIds(roster)).toEqual(["md"]);
+    expect(isValidMD("md", roster)).toBe(true);
+  });
+
+  it("doesn't make the taker eligible until the handoff is approved", () => {
+    // The taker is an MD themselves, but the seat isn't really theirs yet.
+    const roster = [pendingKeys("taker", true)];
+    expect(eligibleMDIds(roster)).toEqual(["md"]);
+    expect(isValidMD("taker", roster)).toBe(false);
+    // Approved: the seat is the taker's, and the MD is off the set.
+    const settled = [a("taker", "KEYS", true)];
+    expect(eligibleMDIds(settled)).toEqual(["taker"]);
+    expect(isValidMD("md", settled)).toBe(false);
+  });
+
+  it("judges the pending owner on their own MD flag, not the taker's", () => {
+    // A non-MD hands their keys slot to an MD: neither can lead the set.
+    const roster: MDAssignment[] = [
+      { ...a("taker", "KEYS", true), pendingFrom: { userId: "owner", isMD: false } },
+    ];
+    expect(eligibleMDIds(roster)).toEqual([]);
+  });
+
+  it("counts a pending worship-leader seat against its original owner", () => {
+    // The WL handed their slot over; they still can't MD from the keys seat
+    // they also hold, and the taker isn't barred by a seat that isn't theirs.
+    const roster: MDAssignment[] = [
+      { ...a("taker", "WORSHIP_LEADER"), pendingFrom: { userId: "wl", isMD: true } },
+      a("wl", "KEYS", true),
+      a("k", "ELECTRIC_GUITAR", true),
+    ];
+    expect(eligibleMDIds(roster)).toEqual(["k"]);
+  });
+});

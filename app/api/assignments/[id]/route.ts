@@ -66,6 +66,9 @@ export async function PATCH(
       actorId: user.id,
       targetUserId: user.id,
       type: ACTION_TO_HISTORY_TYPE[action],
+      // Keep the cover note on the log line too, so the activity log carries
+      // the same "why" the Slack DM does. Null for confirm/cancel.
+      detail: swapReason,
     },
   });
 

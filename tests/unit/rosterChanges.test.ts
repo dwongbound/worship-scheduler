@@ -37,12 +37,11 @@ describe("describeRosterChanges", () => {
             kind: "reassigned",
             role: "KEYS",
             name: "Ivy Ito",
-            previousName: "Carol Chen",
           },
         ],
         label
       )
-    ).toBe("\u{1F501} Keys: Ivy Ito is now covering for Carol Chen.");
+    ).toBe("\u{1F501} Ivy Ito is now playing Keys.");
   });
 
   // The whole point of the batch: one message per save, not one per seat.
@@ -55,7 +54,6 @@ describe("describeRosterChanges", () => {
           kind: "reassigned",
           role: "KEYS",
           name: "Ivy Ito",
-          previousName: "Carol Chen",
         },
       ],
       label
@@ -65,9 +63,7 @@ describe("describeRosterChanges", () => {
     expect(lines).toHaveLength(4); // header + one per change
     expect(lines[1]).toBe("\u{2795} Kate Kim was added on Drums.");
     expect(lines[2]).toBe("\u{2796} Dave Diaz is no longer on Bass.");
-    expect(lines[3]).toBe(
-      "\u{1F501} Keys: Ivy Ito is now covering for Carol Chen."
-    );
+    expect(lines[3]).toBe("\u{1F501} Ivy Ito is now playing Keys.");
   });
 
   it("uses the team's own label for a role, not the raw key", () => {

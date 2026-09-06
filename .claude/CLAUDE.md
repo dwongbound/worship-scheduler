@@ -12,7 +12,7 @@ Playwright (e2e) · Docker.
 
 ## Layout
 
-- `app/` — App Router pages: home dashboard (`page.tsx`), `calendar`, `swaps`,
+- `app/` — App Router pages: home dashboard (`page.tsx`), `calendar`, `set-manager`,
   `schedule`, `create` (admin), `users` (admin team management — grant/revoke admin,
   edit instruments), `profile`, `login`, plus `api/**` route handlers.
   `layout.tsx` holds the pre-hydration theme script; `loading.tsx` renders the

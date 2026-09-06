@@ -17,8 +17,6 @@ export interface RosterChange {
   role: string;
   /** Who holds the seat now (added/reassigned) or who left it (removed). */
   name: string;
-  /** Reassigned only: who held it before. */
-  previousName?: string;
 }
 
 // Per-kind prefix, matching the emoji the one-at-a-time notices used so the
@@ -49,7 +47,10 @@ export function describeRosterChanges(
     if (c.kind === "removed") {
       return `${MARKS.removed} ${c.name} is no longer on ${role}.`;
     }
-    return `${MARKS.reassigned} ${role}: ${c.name} is now covering for ${c.previousName}.`;
+    // Just who is in the seat now. The person they replaced isn't named: an
+    // admin reassignment is not a cover, and the chat only needs the roster as
+    // it now stands.
+    return `${MARKS.reassigned} ${c.name} is now playing ${role}.`;
   };
 
   if (changes.length === 1) return line(changes[0]);

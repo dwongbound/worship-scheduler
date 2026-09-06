@@ -74,7 +74,12 @@ import {
   teamSupportsMD,
 } from "@/lib/teamRoles";
 import { formatDay, formatTime, shortDateTimeLabel } from "@/lib/dates";
-import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
+import {
+  defaultMDId,
+  eligibleMDIds,
+  isValidMD,
+  type MDAssignment,
+} from "@/lib/md";
 import {
   availableGuestMembers,
   buildSchedule,
@@ -109,6 +114,21 @@ import type {
   ApiSetHistoryEvent,
   ApiTeam,
 } from "@/lib/types";
+
+// One roster seat as lib/md.ts reads it. A seat waiting on an admin's approval
+// (a taken cover, an accepted swap) already shows the taker, but still belongs
+// to the person handing it over — so the MD stays with them until the handoff
+// is real, instead of vanishing the moment someone offers to cover.
+function mdSeat(a: ApiAssignment): MDAssignment {
+  return {
+    userId: a.user.id,
+    role: a.role,
+    isMD: a.user.isMD,
+    pendingFrom: a.pendingFromUser
+      ? { userId: a.pendingFromUser.id, isMD: a.pendingFromUser.isMD }
+      : null,
+  };
+}
 
 interface SetDetailModalProps {
   set: ApiSet | null; // null = closed
@@ -464,11 +484,7 @@ export default function SetDetailModal({
 
   // MD picker data. Eligible = an assignee who is an MD, plays an MD-capable
   // role (keys/electric/bass), and isn't the worship leader (see lib/md.ts).
-  const mdAssignments = set.assignments.map((a) => ({
-    userId: a.user.id,
-    role: a.role,
-    isMD: a.user.isMD,
-  }));
+  const mdAssignments = set.assignments.map(mdSeat);
   // MD is a catalog role now, so a team can simply not have one — and then no
   // MD surface appears on its sets at all: no picker, no "* (MD)" marker, no
   // warning, and no "Require MD" in Change Roles. A leftover requiresMD flag on
@@ -485,6 +501,17 @@ export default function SetDetailModal({
   const distinctAssignees = Array.from(
     new Map(set.assignments.map((a) => [a.user.id, a.user])).values()
   );
+  // Everyone the MD line might have to name. That's the assignees plus anyone
+  // still owed a seat that's mid-handoff: they stay the MD until an admin
+  // approves the handoff, but the roster already shows the taker in their place.
+  const mdNameById = new Map<string, string>([
+    ...set.assignments.map((a) => [a.user.id, a.user.name] as const),
+    ...set.assignments.flatMap((a) =>
+      a.pendingFromUser
+        ? [[a.pendingFromUser.id, a.pendingFromUser.name] as const]
+        : []
+    ),
+  ]);
 
   // This set as the scheduler sees it, for availability checks.
   const calcSet = {
@@ -727,11 +754,7 @@ export default function SetDetailModal({
     // hand-picked MD is left exactly as it is.
     patchDraft((current) => {
       const assignments = [...current.assignments, ...seats];
-      const roster = assignments.map((a) => ({
-        userId: a.user.id,
-        role: a.role,
-        isMD: a.user.isMD,
-      }));
+      const roster = assignments.map(mdSeat);
       const needsNewMD =
         supportsMD && current.requiresMD && !isValidMD(current.mdUserId, roster);
       return {
@@ -1816,12 +1839,7 @@ export default function SetDetailModal({
                 <PlayerSelect
                   selected={
                     mdUserId
-                      ? {
-                          id: mdUserId,
-                          name:
-                            distinctAssignees.find((u) => u.id === mdUserId)
-                              ?.name ?? "",
-                        }
+                      ? { id: mdUserId, name: mdNameById.get(mdUserId) ?? "" }
                       : null
                   }
                   // Only eligible assignees are offered (ineligible people can't
@@ -1837,10 +1855,7 @@ export default function SetDetailModal({
           ) : (
             <p className="text-sm">
               <span className="font-medium">Musical director:</span>{" "}
-              {mdUserId
-                ? distinctAssignees.find((u) => u.id === mdUserId)?.name ??
-                  "—"
-                : "none yet"}
+              {mdUserId ? mdNameById.get(mdUserId) ?? "—" : "none yet"}
             </p>
           )}
         </div>

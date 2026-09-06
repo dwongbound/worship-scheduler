@@ -50,12 +50,14 @@ function isAllDay(b: { startMinute: number | null; endMinute: number | null }) {
 }
 
 // Does a weekly recurring rule still apply on this day? (Mirrors the calendar's
-// own reading: matching weekday, and not past the rule's stop date.)
+// own reading: matching weekday, and inside the span the rule repeats over —
+// startDate/endDate are its first/last days, null = open-ended that way.)
 function recurringCovers(
-  rule: { dayOfWeek: number | null; endDate: Date | null },
+  rule: { dayOfWeek: number | null; startDate: Date | null; endDate: Date | null },
   day: Date
 ): boolean {
   if (day.getDay() !== rule.dayOfWeek) return false;
+  if (rule.startDate && day < startOfDay(rule.startDate)) return false;
   return !rule.endDate || day <= startOfDay(rule.endDate);
 }
 
@@ -179,7 +181,7 @@ export async function POST(req: NextRequest) {
   // standing on those days and let the caller explain it.
   const recurring = await prisma.unavailability.findMany({
     where: { userId: user.id, type: "RECURRING" },
-    select: { dayOfWeek: true, endDate: true },
+    select: { dayOfWeek: true, startDate: true, endDate: true },
   });
   let recurringDays = 0;
   for (const key of targetDays) {

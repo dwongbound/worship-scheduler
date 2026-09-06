@@ -158,7 +158,14 @@ export function toStagedSet(
       .filter((a) => !a.guestTeamId)
       // The row id rides along so a SAVE can tell "same seat, new person"
       // (an update) from "a seat that wasn't there" (an insert).
-      .map((a) => ({ userId: a.user.id, role: a.role, assignmentId: a.id })),
+      .map((a) => ({
+        userId: a.user.id,
+        role: a.role,
+        assignmentId: a.id,
+        // Who the seat still belongs to while a cover/swap on it waits for
+        // approval — the MD rules count them, not the taker (lib/md.ts).
+        pendingFromUserId: a.pendingFromUser?.id ?? null,
+      })),
   };
 }
 

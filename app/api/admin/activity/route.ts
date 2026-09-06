@@ -48,6 +48,11 @@ export async function GET(req: NextRequest) {
       id: e.id,
       type: e.type,
       role: e.role,
+      // The human summary: what changed in the setlist/notes, or the note
+      // someone left when asking for cover. Without it every one of those rows
+      // fell back to a generic phrase ("changed the setlist"), so the org-wide
+      // log said less than the per-set one and less than the Slack notice.
+      detail: e.detail,
       actor: e.actor,
       targetUser: e.targetUser,
       previousUser: e.previousUser,

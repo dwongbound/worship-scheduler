@@ -163,14 +163,16 @@ export function isUserAvailable(
     if (rule.userId !== userId) continue;
 
     if (rule.type === "RECURRING" || rule.type === "SPECIFIC") {
-      // RECURRING applies on every matching weekday, up to its optional
-      // endDate. SPECIFIC applies on its startDate, or across
+      // RECURRING applies on every matching weekday, inside its optional
+      // [startDate, endDate] span. SPECIFIC applies on its startDate, or across
       // [startDate, endDate] when an end date is set (a multi-day block).
       // Both then check time-window overlap.
       if (rule.type === "RECURRING") {
         if (when.weekday !== rule.dayOfWeek) continue;
-        // A recurring block can stop repeating: `endDate` is the last day it
-        // applies (null = forever).
+        // A recurring block can repeat over a limited span: `startDate` is the
+        // first day it applies and `endDate` the last (null on either end =
+        // open-ended that way, so both null = forever).
+        if (rule.startDate && when.ymd < ruleDay(rule.startDate)) continue;
         if (rule.endDate && when.ymd > ruleDay(rule.endDate)) continue;
       } else {
         if (!rule.startDate) continue;

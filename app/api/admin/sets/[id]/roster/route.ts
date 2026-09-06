@@ -171,7 +171,6 @@ export async function PATCH(
     kind: "added" | "removed";
     role: string;
     catalog: TeamRoleDef[];
-    counterpart?: string;
   }[] = [];
   // Everyone newly seated by this save — the MD promotion below considers them.
   const seatedUserIds: string[] = [];
@@ -226,24 +225,21 @@ export async function PATCH(
       kind: "reassigned",
       role: was.role,
       name: nameByUserId.get(r.userId)!,
-      previousName: was.user.name,
     });
     seatedUserIds.push(r.userId);
     // A reassignment is a removal and an addition from the two people's point
-    // of view, so both get their own DM naming the other.
+    // of view, so both get their own DM about their own seat.
     dms.push({
       userId: was.userId,
       kind: "removed",
       role: was.role,
       catalog: ownCatalog,
-      counterpart: nameByUserId.get(r.userId),
     });
     dms.push({
       userId: r.userId,
       kind: "added",
       role: was.role,
       catalog: ownCatalog,
-      counterpart: was.user.name,
     });
   }
 
@@ -319,7 +315,6 @@ export async function PATCH(
       kind: dm.kind,
       role: dm.role,
       catalog: dm.catalog,
-      counterpart: dm.counterpart,
     });
   }
 

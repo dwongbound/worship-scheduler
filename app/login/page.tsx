@@ -18,6 +18,11 @@ import {
   type NameConflict,
   parseNameConflicts,
 } from "@/lib/nameConflict";
+import {
+  peekPostLogin,
+  rememberPostLogin,
+  safeInternalPath,
+} from "@/lib/postLogin";
 
 // useSearchParams() (used inside LoginForm to read ?callbackUrl) must sit
 // under a Suspense boundary, so the page export just wraps the form in one.
@@ -31,10 +36,35 @@ export default function LoginPage() {
 
 function LoginForm() {
   const router = useRouter();
-  // Where to go after a successful login. Middleware appends ?callbackUrl when
-  // it bounces you here from a protected page; otherwise default to /calendar.
+  // Where to go after a successful login. proxy.ts appends ?callbackUrl when it
+  // bounces you here from a protected page — following a link to a set while
+  // signed out lands here with `/calendar?set=…` on the query string, and that
+  // is where you end up once you're in.
+  //
+  // The param is also stashed for this tab (lib/postLogin.ts), because it can't
+  // survive every route through this page: Google's duplicate-name check
+  // bounces back with its own params and no callbackUrl. `stashed` is read once
+  // on mount so the first render doesn't touch sessionStorage.
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/calendar";
+  const rawCallback = searchParams.get("callbackUrl");
+  const [stashed, setStashed] = useState<string | null>(null);
+  useEffect(() => {
+    if (rawCallback) {
+      rememberPostLogin(rawCallback);
+      return;
+    }
+    setStashed(peekPostLogin());
+  }, [rawCallback]);
+  // Sanitized: a callbackUrl is attacker-controllable, so only in-app paths are
+  // ever followed (see safeInternalPath).
+  const callbackUrl = safeInternalPath(rawCallback ?? stashed);
+  // Send them on. The stash is deliberately NOT cleared here: an account with
+  // no org yet is bounced to /join before it can reach anything, and that gate
+  // is what consumes it (otherwise it just expires).
+  const goAfterLogin = () => {
+    router.push(callbackUrl);
+    router.refresh();
+  };
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [googleAvailable, setGoogleAvailable] = useState(false);
   const [error, setError] = useState("");
@@ -80,8 +110,14 @@ function LoginForm() {
     if (!email || found.length === 0) return;
     setGoogleEmail(email);
     setConflicts(found);
-    router.replace("/login");
-  }, [searchParams, router]);
+    // Strip the conflict params, but keep any destination: this bounce is
+    // mid-journey, and "Continue anyway" re-runs Google with it.
+    router.replace(
+      rawCallback
+        ? `/login?callbackUrl=${encodeURIComponent(rawCallback)}`
+        : "/login"
+    );
+  }, [searchParams, router, rawCallback]);
 
   function switchMode(next: "signin" | "signup") {
     setMode(next);
@@ -142,8 +178,7 @@ function LoginForm() {
     if (result?.error) {
       setError("Invalid username or password.");
     } else {
-      router.push(callbackUrl);
-      router.refresh();
+      goAfterLogin();
     }
   }
 
@@ -203,8 +238,7 @@ function LoginForm() {
       setError("Account created — please sign in.");
       switchMode("signin");
     } else {
-      router.push(callbackUrl);
-      router.refresh();
+      goAfterLogin();
     }
   }
 

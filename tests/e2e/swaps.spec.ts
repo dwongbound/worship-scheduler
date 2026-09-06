@@ -47,7 +47,7 @@ test("kate takes the cover; it awaits admin approval, then an admin approves it"
   page,
 }) => {
   await login(page, "kate");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   await page
     .locator("li")
@@ -78,7 +78,7 @@ test("kate takes the cover; it awaits admin approval, then an admin approves it"
 
   // Kate's slot is now confirmed.
   await login(page, "kate");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   await expect(
     page
       .locator("li")
@@ -90,7 +90,7 @@ test("kate takes the cover; it awaits admin approval, then an admin approves it"
 
 test("kate confirms all pending sets at once", async ({ page }) => {
   await login(page, "kate");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   await page
     .getByRole("button", { name: /Confirm all pending/ })
@@ -110,7 +110,7 @@ test("kate confirms all pending sets at once", async ({ page }) => {
 
 test("a teammate on the set's team sees the team-scoped cover", async ({ page }) => {
   await login(page, "jack"); // Prayer Room + plays keys
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   const request = page
     .locator("li")
@@ -121,7 +121,7 @@ test("a teammate on the set's team sees the team-scoped cover", async ({ page })
 
 test("someone off the set's team never sees the cover", async ({ page }) => {
   await login(page, "carol"); // plays keys, but Sunday Team only (not Prayer Room)
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   // Carol plays the right instrument and is in the same org, but the cover is
   // team-scoped, so it must not appear for her.
@@ -141,7 +141,7 @@ test("someone off the set's team never sees the cover", async ({ page }) => {
 
 test("a teammate can take the team-scoped cover", async ({ page }) => {
   await login(page, "jack");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   await page
     .locator("li")
@@ -177,7 +177,7 @@ test("an admin rejects the cover-take and it re-opens for others", async ({
   // Reject re-opens the cover (back to the original owner as SWAP_REQUESTED),
   // so jack — a Prayer Room keys player — sees it as takeable again.
   await login(page, "jack");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   await expect(
     page
       .locator("li")

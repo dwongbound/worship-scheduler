@@ -40,8 +40,8 @@ const COMMON_STEPS: Step[] = [
   {
     title: "My Sets",
     body: "My Sets is every set you're on, split by what it's waiting on: covers and swaps in flight, sets pending your confirmation, and confirmed ones you can export to your calendar.",
-    target: "/swaps",
-    href: "/swaps",
+    target: "/set-manager",
+    href: "/set-manager",
   },
   {
     title: "Availabilities",

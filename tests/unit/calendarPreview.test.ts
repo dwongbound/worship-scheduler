@@ -209,10 +209,30 @@ describe("toStagedSet", () => {
       templateId: "tpl-sunday",
       existing: true,
       assignments: [
-        { userId: "u1", role: "KEYS", assignmentId: "a1" },
-        { userId: "u2", role: "DRUMS", assignmentId: "a2" },
+        { userId: "u1", role: "KEYS", assignmentId: "a1", pendingFromUserId: null },
+        { userId: "u2", role: "DRUMS", assignmentId: "a2", pendingFromUserId: null },
       ],
     });
+  });
+
+  it("keeps the owner of a seat that's waiting on an approval", () => {
+    // Carol asked for cover on keys and Dave took it: the seat shows Dave, but
+    // it's Carol's until an admin approves — and Carol may be the set's MD.
+    const set = apiSet({
+      startsAt: SUNDAY,
+      assignments: [
+        {
+          id: "a1",
+          role: "KEYS",
+          status: "PENDING_APPROVAL",
+          user: { id: "u4", name: "Dave" },
+          pendingFromUser: { id: "u1", name: "Carol", isMD: true },
+        },
+      ],
+    });
+    expect(toStagedSet(set, templates, TZ).assignments).toEqual([
+      { userId: "u4", role: "KEYS", assignmentId: "a1", pendingFromUserId: "u1" },
+    ]);
   });
 
   it("drops borrowed guest-team seats — the card has no column for them", () => {
@@ -235,7 +255,7 @@ describe("toStagedSet", () => {
       ],
     });
     expect(toStagedSet(set, templates, TZ).assignments).toEqual([
-      { userId: "u1", role: "KEYS", assignmentId: "a1" },
+      { userId: "u1", role: "KEYS", assignmentId: "a1", pendingFromUserId: null },
     ]);
   });
 

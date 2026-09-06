@@ -14,7 +14,9 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import Link from "next/link";
 import { formatDay, formatTime } from "@/lib/dates";
+import { setLinkPath } from "@/lib/setLink";
 import type { ApiApproval, SwapSetRef } from "@/lib/types";
 
 export default function ApprovalsPage() {
@@ -86,8 +88,7 @@ export default function ApprovalsPage() {
                     <>
                       <p className="flex flex-wrap items-center gap-2 font-semibold">
                         <Badge tone="indigo">Cover</Badge>
-                        {item.set.label ?? "Worship Set"} —{" "}
-                        {roleLabel(item.role)}
+                        <SetName set={item.set} /> — {roleLabel(item.role)}
                       </p>
                       <p className="text-sm text-gray-600 dark:text-gray-400">
                         {when(item.set)} · <strong>{item.taker.name}</strong>{" "}
@@ -103,9 +104,9 @@ export default function ApprovalsPage() {
                       </p>
                       <p className="text-sm text-gray-600 dark:text-gray-400">
                         <strong>{item.recipient.name}</strong> takes{" "}
-                        {item.receive.label ?? "Worship Set"} ({when(item.receive)});{" "}
+                        <SetName set={item.receive} /> ({when(item.receive)});{" "}
                         <strong>{item.requester.name}</strong> takes{" "}
-                        {item.giveUp.label ?? "Worship Set"} ({when(item.giveUp)})
+                        <SetName set={item.giveUp} /> ({when(item.giveUp)})
                       </p>
                     </>
                   )}
@@ -139,6 +140,21 @@ export default function ApprovalsPage() {
         </ul>
       )}
     </div>
+  );
+}
+
+// A set's name, linking to its roster: the calendar opens with that set's
+// detail modal already up (?set=<id>), so an approval about a set is one click
+// from seeing who's actually on it.
+function SetName({ set }: { set: SwapSetRef }) {
+  return (
+    <Link
+      href={setLinkPath(set.id)}
+      className="underline decoration-dotted underline-offset-2
+        hover:text-indigo-600 dark:hover:text-indigo-400"
+    >
+      {set.label ?? "Worship Set"}
+    </Link>
   );
 }
 

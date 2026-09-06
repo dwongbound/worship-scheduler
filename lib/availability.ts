@@ -7,6 +7,24 @@ import type { ApiUnavailability } from "@/lib/types";
 // A day with no time window on it is "all day" — 24h in minutes-from-midnight.
 export const FULL_DAY_MIN = 24 * 60;
 
+// Midnight of the calendar day `value` (an ISO instant) falls on, locally.
+function startOfLocalDay(value: string | Date): Date {
+  const d = new Date(value);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/**
+ * Is `date` inside the window a weekly rule repeats over? A recurring block may
+ * carry a startDate (the first day it repeats) and/or an endDate (the last);
+ * either being null means it's open-ended on that side, so a block with neither
+ * repeats forever. Weekday matching is the caller's job.
+ */
+function withinRecurringWindow(e: ApiUnavailability, date: Date): boolean {
+  if (e.startDate && date < startOfLocalDay(e.startDate)) return false;
+  if (e.endDate && date > startOfLocalDay(e.endDate)) return false;
+  return true;
+}
+
 /**
  * How much of one calendar day is blocked, given every unavailability entry:
  *   "full"    — an all-day block covers it (a whole-day window, or a legacy
@@ -27,15 +45,11 @@ export function dayBlockLevel(
   let partial = false;
   for (const e of entries) {
     if (e.type === "RECURRING") {
-      // Recurring blocks apply to every date on their weekday, up to their
-      // optional endDate (the last day they repeat; null = forever).
+      // Recurring blocks apply to every date on their weekday, inside their
+      // optional [startDate, endDate] window (the first and last days they
+      // repeat; null on either end = open-ended that way).
       if (date.getDay() !== e.dayOfWeek) continue;
-      if (e.endDate) {
-        const stop = new Date(e.endDate);
-        if (date > new Date(stop.getFullYear(), stop.getMonth(), stop.getDate())) {
-          continue;
-        }
-      }
+      if (!withinRecurringWindow(e, date)) continue;
     } else {
       // SPECIFIC / DATE_RANGE: the date must fall in [startDate, endDate].
       if (!e.startDate) continue;
@@ -66,12 +80,12 @@ export function dayIsRepeating(
 ): boolean {
   const [y, m, d] = ymd.split("-").map(Number);
   const date = new Date(y, m - 1, d);
-  return entries.some((e) => {
-    if (e.type !== "RECURRING" || date.getDay() !== e.dayOfWeek) return false;
-    if (!e.endDate) return true; // repeats forever
-    const stop = new Date(e.endDate);
-    return date <= new Date(stop.getFullYear(), stop.getMonth(), stop.getDate());
-  });
+  return entries.some(
+    (e) =>
+      e.type === "RECURRING" &&
+      date.getDay() === e.dayOfWeek &&
+      withinRecurringWindow(e, date)
+  );
 }
 
 /**
@@ -277,12 +291,20 @@ export function applyDayEdit(
 }
 
 // One weekly recurring block: a weekday plus a time-of-day window, and
-// optionally the last day it repeats ("YYYY-MM-DD"; null = forever).
+// optionally the days it repeats between ("YYYY-MM-DD"; null on either end =
+// open-ended that way, so both null = forever).
 export interface RecurringBlock {
   dayOfWeek: number;
   startMinute: number;
   endMinute: number;
+  startDate: string | null;
   endDate: string | null;
+}
+
+// The span a set of recurring blocks repeats over, as the form collects it.
+export interface RecurringRange {
+  startDate?: string | null; // first day it repeats (null = from now on)
+  endDate?: string | null; // last day it repeats (null = forever)
 }
 
 /**
@@ -323,16 +345,20 @@ export function mergeWindows(
  * crossed with any number of time windows — into the individual recurring
  * blocks to store, one per weekday per merged window, ordered day then time.
  * "Mon–Fri mornings and afternoons" goes in as one gesture and comes out as
- * five blocks (the two windows merge into one). `endDate` (the last day they
- * repeat) rides along on every block.
+ * five blocks (the two windows merge into one). The `range` (the first and last
+ * days they repeat) rides along on every block.
  */
 export function expandRecurringBlocks(
   days: number[],
   windows: { startMinute: number; endMinute: number }[],
-  endDate: string | null = null
+  range: RecurringRange = {}
 ): RecurringBlock[] {
   const merged = mergeWindows(windows);
+  const startDate = range.startDate ?? null;
+  const endDate = range.endDate ?? null;
   return [...days]
     .sort((a, b) => a - b)
-    .flatMap((dayOfWeek) => merged.map((w) => ({ dayOfWeek, ...w, endDate })));
+    .flatMap((dayOfWeek) =>
+      merged.map((w) => ({ dayOfWeek, ...w, startDate, endDate }))
+    );
 }
