@@ -1,6 +1,7 @@
 "use client";
-// Admin-only "add a weekly set time" form (Create tab). It's the same form as
-// the calendar's ad-hoc CreateSetModal — via the shared SetFormFields — but
+// Admin-only "weekly set time" form (Create tab), used both to ADD new times
+// and to EDIT an existing one (`template` set = edit mode). It's the same form
+// as the calendar's ad-hoc CreateSetModal — via the shared SetFormFields — but
 // recurring: instead of a fixed date it carries a day-of-week, and generating
 // the schedule later expands it into concrete sets.
 import { FormEvent, useEffect, useState } from "react";
@@ -11,16 +12,19 @@ import LoadingDots from "./common/LoadingDots";
 import SetFormFields, { SetFormState, emptySetForm } from "./SetFormFields";
 import { useOrgs } from "./OrgProvider";
 import { DAY_LABELS } from "@/lib/constants";
-import { timeStringToMinutes } from "@/lib/dates";
+import { minutesToTimeInput, timeStringToMinutes } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import type { ApiTeam } from "@/lib/types";
+import type { ApiSetTemplate, ApiTeam } from "@/lib/types";
 
 export default function TemplateModal({
   open,
+  template,
   onClose,
   onCreated,
 }: {
   open: boolean;
+  // The row being edited, or null/undefined to add new ones.
+  template?: ApiSetTemplate | null;
   onClose: () => void;
   onCreated: () => void | Promise<void>;
 }) {
@@ -34,15 +38,29 @@ export default function TemplateModal({
   // Which org the cached team list belongs to (refetched after an org switch).
   const [teamsOrg, setTeamsOrg] = useState("");
 
-  // Reset each time the modal opens. Teams are fetched on the first open per
-  // admin org (they rarely change) and the picker defaults to the first one.
-  // Deps are [open] on purpose: adding `teams` would re-run this after the
-  // fetch lands and wipe whatever the admin already typed.
+  // Reset each time the modal opens — to the edited row's values, or to a
+  // blank form. Teams are fetched on the first open per admin org (they rarely
+  // change) and the picker defaults to the first one.
+  // Deps are [open, template] on purpose: adding `teams` would re-run this
+  // after the fetch lands and wipe whatever the admin already typed.
   useEffect(() => {
     if (!open || !adminOrgId) return;
-    setDays([]);
+    setDays(template ? [template.dayOfWeek] : []);
     const cached = teamsOrg === adminOrgId;
-    setForm({ ...emptySetForm(), teamId: cached ? teams[0]?.id ?? "" : "" });
+    setForm(
+      template
+        ? {
+            label: template.label,
+            startTime: minutesToTimeInput(template.startMinute),
+            duration: template.durationMinutes,
+            requiresMD: template.requiresMD,
+            isPrivate: false, // templates have no private flag
+            groupChatLeadDays: template.groupChatLeadDays,
+            capacities: template.slotCapacities,
+            teamId: template.teamId ?? "",
+          }
+        : { ...emptySetForm(), teamId: cached ? teams[0]?.id ?? "" : "" }
+    );
     if (!cached) {
       fetchJsonArray<ApiTeam>(`/api/teams?orgId=${adminOrgId}`).then((ts) => {
         setTeams(ts);
@@ -51,11 +69,17 @@ export default function TemplateModal({
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, adminOrgId]);
+  }, [open, adminOrgId, template]);
 
   if (!open) return null;
 
   function toggleDay(day: number) {
+    // Editing touches ONE existing row, so picking a day MOVES it rather than
+    // adding a second one; adding is multi-select (one row per checked day).
+    if (template) {
+      setDays([day]);
+      return;
+    }
     setDays((prev) =>
       prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
     );
@@ -77,15 +101,34 @@ export default function TemplateModal({
         slotCapacities: form.capacities ?? undefined,
         teamId: form.teamId,
       };
-      await Promise.all(
-        days.map((dayOfWeek) =>
-          fetch("/api/admin/templates", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", ...orgHeaders(adminOrgId) },
-            body: JSON.stringify({ ...shared, dayOfWeek }),
-          })
-        )
-      );
+      if (template) {
+        // Edit: one row, one day. `slotCapacities: null` is sent explicitly so
+        // turning a custom shape back off clears it (undefined would keep it).
+        await fetch(`/api/admin/templates/${template.id}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            ...orgHeaders(adminOrgId),
+          },
+          body: JSON.stringify({
+            ...shared,
+            slotCapacities: form.capacities,
+            dayOfWeek: days[0],
+          }),
+        });
+      } else {
+        // Every picked day in ONE request: the route creates them together, so
+        // a failure can't leave half the days made (which the old POST-per-day
+        // could, having already committed the ones before it).
+        await fetch("/api/admin/templates", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...orgHeaders(adminOrgId),
+          },
+          body: JSON.stringify({ ...shared, daysOfWeek: days }),
+        });
+      }
       await onCreated();
       onClose();
     } finally {
@@ -94,7 +137,11 @@ export default function TemplateModal({
   }
 
   return (
-    <Modal open onClose={onClose} title="Add weekly set time">
+    <Modal
+      open
+      onClose={onClose}
+      title={template ? "Edit weekly set time" : "Add weekly set time"}
+    >
       <form onSubmit={submit} className="space-y-3">
         <SetFormFields
           state={form}
@@ -105,9 +152,10 @@ export default function TemplateModal({
           scheduleField={
             <fieldset disabled={busy}>
               <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Days of week
+                {template ? "Day of week" : "Days of week"}
               </legend>
-              {/* Multi-select: a template is created for each checked day. */}
+              {/* Adding is multi-select — a template is created for each
+                  checked day. Editing is single-select: it moves the one row. */}
               <div className="flex flex-wrap gap-x-4 gap-y-2">
                 {DAY_LABELS.map((d, i) => (
                   <Checkbox
@@ -134,7 +182,13 @@ export default function TemplateModal({
           </Button>
           {/* Blocked until the teams list loads — every template needs a team. */}
           <Button type="submit" disabled={busy || !form.teamId}>
-            {busy ? <LoadingDots size="sm" /> : "Add template"}
+            {busy ? (
+              <LoadingDots size="sm" />
+            ) : template ? (
+              "Save changes"
+            ) : (
+              "Add template"
+            )}
           </Button>
         </div>
       </form>

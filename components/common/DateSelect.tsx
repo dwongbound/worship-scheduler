@@ -1,13 +1,30 @@
 "use client";
 // Custom-styled date picker — a drop-in replacement for <input type="date">.
 // The native control renders an OS-specific "mm/dd/yyyy" box + calendar that
-// ignores our theme; this opens a styled calendar *directly below* the field
-// (same popup pattern as PlayerSelect) so light/dark and spacing stay on-brand.
+// ignores our theme; this opens a styled calendar pinned to the field so
+// light/dark and spacing stay on-brand.
+//
+// The calendar renders in a PORTAL on document.body, positioned with fixed
+// coordinates measured off the field — the same treatment Dropdown and
+// InfoTooltip get, and for the same reason. As an ordinary absolute child it
+// was clipped by the first `overflow-hidden` ancestor: on a phone the
+// Availabilities form's card cut off the half of the calendar that opened
+// above the field, leaving those days invisible AND untappable (the week
+// strip behind it swallowed the taps). At body level nothing clips it, and a
+// z-index above modals keeps it over a dialog's backdrop too.
 //
 // Values are yyyy-mm-dd strings (same as the native input emitted), so callers
 // only swap the onChange signature: (e) => setX(e.target.value) becomes
 // (v) => setX(v). `min`/`max` are also yyyy-mm-dd and gate selectable days.
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { toYmd } from "@/lib/dates";
 
 // Re-exported so the many `import { toYmd } from "@/components/common/DateSelect"`
@@ -93,12 +110,20 @@ export default function DateSelect({
     return new Date();
   };
   const [view, setView] = useState(initialView);
-  // Open above the field when there isn't room below (e.g. near the bottom of
-  // the page) — otherwise the calendar spills off-screen and clips.
-  const [dropUp, setDropUp] = useState(false);
+  // Where the portaled calendar sits, in viewport coordinates. Null while
+  // closed. It opens below the field, or above it when there isn't room below
+  // (near the bottom of the page) — otherwise the calendar runs off-screen.
+  const [popupPos, setPopupPos] = useState<{
+    top: number;
+    left: number;
+    width: number;
+  } | null>(null);
   // While picking a range's end, the day under the cursor previews the range.
   const [hoverYmd, setHoverYmd] = useState<string | null>(null);
   const ref = useRef<HTMLDivElement>(null);
+  // The portaled panel lives outside `ref`'s subtree, so the outside-click
+  // check below needs its own handle on it.
+  const popupRef = useRef<HTMLDivElement>(null);
 
   // Re-center whenever the picker (re)opens.
   useEffect(() => {
@@ -106,23 +131,65 @@ export default function DateSelect({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, value]);
 
-  // On open, pick the direction with more room. The popup is ~340px tall
-  // (month header + 6-week grid + footer); flip up only when below can't fit
-  // it but above can.
-  useEffect(() => {
-    if (!open || !ref.current) return;
+  // Measure the field and pin the calendar to it. Called on open and again
+  // whenever anything moves the field underneath.
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const MARGIN = 8; // smallest gap we'll leave against any screen edge
+    // The popup is ~340px tall (month header + 6-week grid + footer); flip it
+    // above the field only when below can't fit it but above can.
     const POPUP_HEIGHT = 340;
-    const rect = ref.current.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
-    const spaceAbove = rect.top;
-    setDropUp(spaceBelow < POPUP_HEIGHT && spaceAbove > spaceBelow);
-  }, [open]);
+    const dropUp = spaceBelow < POPUP_HEIGHT && rect.top > spaceBelow;
+
+    // w-72 (288px), narrowed on a phone too small for it.
+    const width = Math.min(288, window.innerWidth - MARGIN * 2);
+    // Left-aligned with the field, then clamped so it can't run off either edge.
+    const left = Math.max(
+      MARGIN,
+      Math.min(rect.left, window.innerWidth - MARGIN - width)
+    );
+    setPopupPos({
+      top: dropUp ? rect.top - 4 - POPUP_HEIGHT : rect.bottom + 4,
+      left,
+      width,
+    });
+  }, []);
+
+  // Before paint, so the calendar never flashes at a stale position.
+  useLayoutEffect(() => {
+    if (open) measure();
+    else setPopupPos(null);
+  }, [open, measure]);
+
+  useEffect(() => {
+    if (!open) return;
+    const reposition = () => measure();
+    // Capture phase: the field may live inside a scrollable modal body, whose
+    // scroll events don't bubble to window.
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+    return () => {
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, [open, measure]);
 
   // Close on outside click or Escape (mirrors PlayerSelect).
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      // Two subtrees now — the field and the portaled calendar. Without the
+      // second check, every click inside the calendar would close it.
+      if (
+        !ref.current?.contains(target) &&
+        !popupRef.current?.contains(target)
+      ) {
+        setOpen(false);
+      }
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setOpen(false);
@@ -243,125 +310,134 @@ export default function DateSelect({
           />
         )}
 
-        {open && (
-          <div
-            role="dialog"
-            className={`absolute left-0 z-20 w-72 rounded-lg border border-indigo-200 bg-indigo-50 p-3 shadow-xl dark:border-indigo-700 dark:bg-indigo-900 ${
-              dropUp ? "bottom-full mb-1" : "top-full mt-1"
-            }`}
-          >
-            {/* Month header + prev/next navigation. */}
-            <div className="mb-2 flex items-center justify-between">
-              <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                {MONTHS[view.getMonth()]} {view.getFullYear()}
-              </span>
-              <div className="flex gap-1">
-                <NavButton label="Previous month" onClick={() => shiftMonth(-1)}>
-                  <path d="M12 15l-4-5 4-5" />
-                </NavButton>
-                <NavButton label="Next month" onClick={() => shiftMonth(1)}>
-                  <path d="M8 5l4 5-4 5" />
-                </NavButton>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-7 gap-0.5 text-center">
-              {WEEKDAYS.map((w, i) => (
-                <span
-                  key={i}
-                  className="py-1 text-xs font-medium text-gray-500 dark:text-gray-400"
-                >
-                  {w}
+        {open &&
+          popupPos &&
+          createPortal(
+            <div
+              ref={popupRef}
+              role="dialog"
+              // Fixed at the measured coordinates; z above modals (z-50) so the
+              // picker still works inside a dialog.
+              style={{
+                top: popupPos.top,
+                left: popupPos.left,
+                width: popupPos.width,
+              }}
+              className="fixed z-[60] rounded-lg border border-indigo-200 bg-indigo-50 p-3 shadow-xl dark:border-indigo-700 dark:bg-indigo-900"
+            >
+              {/* Month header + prev/next navigation. */}
+              <div className="mb-2 flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                  {MONTHS[view.getMonth()]} {view.getFullYear()}
                 </span>
-              ))}
-              {cells.map((d) => {
-                const ymd = toYmd(d);
-                const inMonth = d.getMonth() === view.getMonth();
-                const isToday = highlightToday && ymd === todayYmd;
-                const blocked = !!outOfRange(ymd);
-                // Range highlight: the two endpoints are "selected"; days
-                // between them get a lighter fill. Single mode keeps its one
-                // selected day.
-                const inRange =
-                  !!rangeLo && !!rangeHi && ymd >= rangeLo && ymd <= rangeHi;
-                const isEndpoint = ymd === rangeLo || ymd === rangeHi;
-                const selected = range ? inRange && isEndpoint : ymd === value;
-                const midRange = range && inRange && !isEndpoint;
-                // Existing-block dot (only for in-month days, to avoid clutter).
-                const marker = inMonth && dayMarker ? dayMarker(ymd) : null;
-                return (
-                  <button
-                    key={ymd}
-                    type="button"
-                    // Stable per-cell date hook: each cell's full date is unique,
-                    // so tests can target the in-month day unambiguously (matching
-                    // by day number alone collides with adjacent-month padding).
-                    data-date={ymd}
-                    disabled={blocked}
-                    onClick={() => pick(d)}
-                    onMouseEnter={() => {
-                      if (pickingEnd && !blocked) setHoverYmd(ymd);
-                    }}
-                    className={`relative h-8 rounded text-sm transition-colors
-                      ${blocked ? "cursor-not-allowed text-gray-300 dark:text-gray-600" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
-                      ${!inMonth && !blocked ? "text-gray-400 dark:text-gray-500" : ""}
-                      ${inMonth && !blocked && !selected && !midRange ? "text-gray-800 dark:text-gray-100" : ""}
-                      ${midRange && !selected ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-800/60 dark:text-indigo-100" : ""}
-                      ${selected ? "bg-indigo-600 font-semibold text-white hover:bg-indigo-600 dark:bg-indigo-500" : ""}
-                      ${isToday && !selected && !midRange && !blocked ? "font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-400 dark:text-indigo-300" : ""}`}
+                <div className="flex gap-1">
+                  <NavButton label="Previous month" onClick={() => shiftMonth(-1)}>
+                    <path d="M12 15l-4-5 4-5" />
+                  </NavButton>
+                  <NavButton label="Next month" onClick={() => shiftMonth(1)}>
+                    <path d="M8 5l4 5-4 5" />
+                  </NavButton>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-7 gap-0.5 text-center">
+                {WEEKDAYS.map((w, i) => (
+                  <span
+                    key={i}
+                    className="py-1 text-xs font-medium text-gray-500 dark:text-gray-400"
                   >
-                    {d.getDate()}
-                    {marker && (
-                      <span
-                        aria-hidden="true"
-                        className={`pointer-events-none absolute bottom-0.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full ${
-                          marker === "full" ? "bg-rose-500" : "bg-amber-500"
-                        }`}
-                      />
-                    )}
+                    {w}
+                  </span>
+                ))}
+                {cells.map((d) => {
+                  const ymd = toYmd(d);
+                  const inMonth = d.getMonth() === view.getMonth();
+                  const isToday = highlightToday && ymd === todayYmd;
+                  const blocked = !!outOfRange(ymd);
+                  // Range highlight: the two endpoints are "selected"; days
+                  // between them get a lighter fill. Single mode keeps its one
+                  // selected day.
+                  const inRange =
+                    !!rangeLo && !!rangeHi && ymd >= rangeLo && ymd <= rangeHi;
+                  const isEndpoint = ymd === rangeLo || ymd === rangeHi;
+                  const selected = range ? inRange && isEndpoint : ymd === value;
+                  const midRange = range && inRange && !isEndpoint;
+                  // Existing-block dot (only for in-month days, to avoid clutter).
+                  const marker = inMonth && dayMarker ? dayMarker(ymd) : null;
+                  return (
+                    <button
+                      key={ymd}
+                      type="button"
+                      // Stable per-cell date hook: each cell's full date is unique,
+                      // so tests can target the in-month day unambiguously (matching
+                      // by day number alone collides with adjacent-month padding).
+                      data-date={ymd}
+                      disabled={blocked}
+                      onClick={() => pick(d)}
+                      onMouseEnter={() => {
+                        if (pickingEnd && !blocked) setHoverYmd(ymd);
+                      }}
+                      className={`relative h-8 rounded text-sm transition-colors
+                        ${blocked ? "cursor-not-allowed text-gray-300 dark:text-gray-600" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
+                        ${!inMonth && !blocked ? "text-gray-400 dark:text-gray-500" : ""}
+                        ${inMonth && !blocked && !selected && !midRange ? "text-gray-800 dark:text-gray-100" : ""}
+                        ${midRange && !selected ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-800/60 dark:text-indigo-100" : ""}
+                        ${selected ? "bg-indigo-600 font-semibold text-white hover:bg-indigo-600 dark:bg-indigo-500" : ""}
+                        ${isToday && !selected && !midRange && !blocked ? "font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-400 dark:text-indigo-300" : ""}`}
+                    >
+                      {d.getDate()}
+                      {marker && (
+                        <span
+                          aria-hidden="true"
+                          className={`pointer-events-none absolute bottom-0.5 left-1/2 h-1.5 w-1.5 -translate-x-1/2 rounded-full ${
+                            marker === "full" ? "bg-rose-500" : "bg-amber-500"
+                          }`}
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* While mid-range, nudge the user to complete it. */}
+              {pickingEnd && (
+                <p className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-300">
+                  Now pick the end date (or the same day for a single day).
+                </p>
+              )}
+
+              {/* Clear (only when there's a value to clear) + jump to today. */}
+              <div className="mt-2 flex items-center justify-between text-sm">
+                {value && (!required || range) ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (range) {
+                        onRangeChange?.("", ""); // stay open to re-pick the start
+                      } else {
+                        onChange?.("");
+                        setOpen(false);
+                      }
+                    }}
+                    className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    Clear
                   </button>
-                );
-              })}
-            </div>
-
-            {/* While mid-range, nudge the user to complete it. */}
-            {pickingEnd && (
-              <p className="mt-2 text-xs font-medium text-indigo-600 dark:text-indigo-300">
-                Now pick the end date (or the same day for a single day).
-              </p>
-            )}
-
-            {/* Clear (only when there's a value to clear) + jump to today. */}
-            <div className="mt-2 flex items-center justify-between text-sm">
-              {value && (!required || range) ? (
+                ) : (
+                  <span />
+                )}
                 <button
                   type="button"
-                  onClick={() => {
-                    if (range) {
-                      onRangeChange?.("", ""); // stay open to re-pick the start
-                    } else {
-                      onChange?.("");
-                      setOpen(false);
-                    }
-                  }}
-                  className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                  disabled={!!outOfRange(todayYmd)}
+                  onClick={() => pick(new Date())}
+                  className="font-medium text-indigo-600 hover:underline disabled:opacity-40 dark:text-indigo-400"
                 >
-                  Clear
+                  Today
                 </button>
-              ) : (
-                <span />
-              )}
-              <button
-                type="button"
-                disabled={!!outOfRange(todayYmd)}
-                onClick={() => pick(new Date())}
-                className="font-medium text-indigo-600 hover:underline disabled:opacity-40 dark:text-indigo-400"
-              >
-                Today
-              </button>
-            </div>
-          </div>
-        )}
+              </div>
+            </div>,
+            document.body
+          )}
       </div>
     </label>
   );

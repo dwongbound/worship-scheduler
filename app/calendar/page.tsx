@@ -5,6 +5,13 @@
 // The open set is mirrored in the URL as ?set=<id>, so its modal is the single
 // source of truth: link a set (copy the URL) and it reopens straight to that
 // set's roster.
+//
+// Admins also get "Preview Mode" (desktop only — it lives in the month grid's
+// toolbar, which phones don't render): pick which set types to show, and the
+// Create tab's review workspace opens over the sets that ALREADY exist, so a
+// whole season's rosters read (and edit) as one screen. Edits are staged in the
+// browser and only reach the calendar on "Save Changes", which pushes each
+// changed set's roster diff through PATCH /api/admin/sets/:id/roster.
 import { useSession } from "next-auth/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +23,10 @@ import SetDetailModal from "@/components/SetDetailModal";
 import CreateSetModal from "@/components/CreateSetModal";
 import MySetsPanel from "@/components/MySetsPanel";
 import ExportModal from "@/components/ExportModal";
+import PreviewModeModal from "@/components/PreviewModeModal";
+import StagedScheduleModal from "@/components/StagedScheduleModal";
+import ShieldIcon from "@/components/common/ShieldIcon";
+import type { SetTypeColors } from "@/components/SetTypePicker";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
@@ -25,7 +36,21 @@ import {
 } from "@/lib/constants";
 import { toYmd } from "@/lib/dates";
 import { setStatus, type SetStatus } from "@/lib/setStatus";
-import type { ApiAdminUser, ApiSet, ApiSwapRequest } from "@/lib/types";
+import {
+  buildPreviewPlan,
+  previewCandidates,
+  previewSaves,
+  previewSetTypes,
+} from "@/lib/calendarPreview";
+import type {
+  ApiAdminUser,
+  ApiSet,
+  ApiSetTemplate,
+  ApiSwapRequest,
+  ApiTeam,
+  StagedPlan,
+  StagedSet,
+} from "@/lib/types";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -66,6 +91,22 @@ function CalendarView() {
   const [panelOpen, setPanelOpen] = useState(false);
   // Whether the export dialog (range picker + .ics/Excel) is open.
   const [exportOpen, setExportOpen] = useState(false);
+  // ── Preview Mode (admin) ──────────────────────────────────────────────
+  // Step 1 (the set-type picker) is open, and step 2's staged plan once
+  // "See preview" builds it. `previewRefs` holds the recurring sets + team
+  // catalogs the preview needs; they're fetched on the FIRST open rather than
+  // with the page, since most visits never open this.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewRefs, setPreviewRefs] = useState<{
+    orgId: string;
+    templates: ApiSetTemplate[];
+    teams: ApiTeam[];
+  } | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewPlan, setPreviewPlan] = useState<StagedPlan | null>(null);
+  const [previewColors, setPreviewColors] = useState<SetTypeColors>({});
+  // A "Save Changes" from the preview is in flight.
+  const [previewSaving, setPreviewSaving] = useState(false);
   // Sidebar width; defaults to ~30% of the screen once mounted.
   const [panelWidth, setPanelWidth] = useState(420);
   // Per-org admin user lists (assignment dropdowns are scoped to the open
@@ -93,7 +134,7 @@ function CalendarView() {
 
   // Org context: the navbar switcher's view filter ("all" or one org), and
   // which orgs I administer (gates the admin affordances per set).
-  const { orgs, viewOrgId, isAdminOf, isAdminAny } = useOrgs();
+  const { orgs, viewOrgId, adminOrgId, isAdminOf, isAdminAny } = useOrgs();
   const isAdmin = isAdminAny;
 
   // Switching the org view recreates refetchSets and re-runs its effect, so two
@@ -124,6 +165,31 @@ function CalendarView() {
     setSets(fresh);
     setTakeableSwaps(swaps);
   }, [orgs, viewOrgId, setsWindow]);
+
+  // The org Preview Mode works in. Recurring sets and role catalogs are per
+  // org, so the preview is always ONE org's: the one being viewed when that's
+  // an org I administer, else my admin org (the Create tab's).
+  const previewOrgId =
+    viewOrgId !== "all" && isAdminOf(viewOrgId) ? viewOrgId : adminOrgId;
+
+  // Open step 1, fetching that org's recurring sets + teams the first time
+  // (and again whenever the preview org changes).
+  const openPreview = useCallback(async () => {
+    setPreviewOpen(true);
+    if (!previewOrgId || previewRefs?.orgId === previewOrgId) return;
+    setPreviewLoading(true);
+    try {
+      const [templates, teams] = await Promise.all([
+        fetchJsonArray<ApiSetTemplate>("/api/admin/templates", {
+          headers: orgHeaders(previewOrgId),
+        }),
+        fetchJsonArray<ApiTeam>(`/api/teams?orgId=${previewOrgId}`),
+      ]);
+      setPreviewRefs({ orgId: previewOrgId, templates, teams });
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [previewOrgId, previewRefs]);
 
   // Confirm one of my assignments straight from its calendar hover popover
   // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot
@@ -276,6 +342,56 @@ function CalendarView() {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  // Preview Mode's raw material: the upcoming sets the calendar has already
+  // loaded for the preview org, and the set types they fall into (one row per
+  // recurring set, plus "Other"). Deliberately NOT run through the page's
+  // filters — the picker in the dialog is this view's filter.
+  const previewSets = previewOrgId ? previewCandidates(sets, previewOrgId) : [];
+  const previewTypes = previewSetTypes(previewSets, previewRefs?.templates ?? []);
+
+  // "Save Changes" in the preview: push each EDITED set's roster diff through
+  // the same endpoint the set detail modal saves with — one request per set,
+  // each applied as one transaction with one grouped Slack notice. Sets the
+  // admin didn't touch produce no diff and so aren't touched here either.
+  //
+  // The MD goes in a second request per set, and only where it changed: the
+  // roster endpoint re-derives the MD as a side effect of applying a roster,
+  // so an explicit choice has to land after it.
+  const savePreview = async (edited: StagedSet[]) => {
+    if (!previewPlan) return;
+    setPreviewSaving(true);
+    try {
+      for (const save of previewSaves(previewPlan.sets, edited)) {
+        await fetch(`/api/admin/sets/${save.setId}/roster`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(save.ops),
+        });
+        if ("mdUserId" in save) {
+          await fetch(`/api/sets/${save.setId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ mdUserId: save.mdUserId }),
+          });
+        }
+      }
+      setPreviewPlan(null);
+      await refetchSets();
+    } finally {
+      setPreviewSaving(false);
+    }
+  };
+
+  // Step 1 → step 2: turn the picked types into the staged plan the review
+  // workspace reads. Purely local — nothing is fetched, nothing is saved.
+  const startPreview = (typeIds: string[], colors: SetTypeColors) => {
+    setPreviewPlan(
+      buildPreviewPlan(previewSets, previewRefs?.templates ?? [], typeIds)
+    );
+    setPreviewColors(colors);
+    setPreviewOpen(false);
+  };
+
   // Header + calendar. Rendered either centered (panel closed) or as the
   // flex-1 left side that the sidebar pushes over (panel open).
   const mainColumn = (
@@ -334,6 +450,15 @@ function CalendarView() {
 
         {/* Actions: right-aligned, bottom-aligned with the dropdown controls. */}
         <div className="ml-auto flex items-center gap-2">
+          {/* Admin-only, and desktop-only for free: this whole toolbar lives
+              inside the md+ month-grid column (phones get MySetsPanel alone).
+              Amber + shield is how the app marks admin surfaces. */}
+          {isAdmin && (
+            <Button variant="admin" onClick={openPreview}>
+              <ShieldIcon />
+              Preview Mode
+            </Button>
+          )}
           {/* Opens the export dialog (range picker + .ics/Excel). The chevron
               bounces on hover to signal it opens a menu, not a direct download. */}
           <Button
@@ -442,6 +567,30 @@ function CalendarView() {
         open={exportOpen}
         onClose={() => setExportOpen(false)}
         sets={visibleSets}
+      />
+
+      {/* Preview Mode, step 1: which set types to draw (+ their tints). */}
+      <PreviewModeModal
+        open={previewOpen}
+        setTypes={previewTypes}
+        loading={previewLoading}
+        onPreview={startPreview}
+        onClose={() => setPreviewOpen(false)}
+      />
+
+      {/* Step 2: the Create tab's review workspace, opened over the real
+          rosters. Edits stay local until "Save Changes" (onApply) writes the
+          diff back; leaving with unsaved edits asks first, inside the modal. */}
+      <StagedScheduleModal
+        plan={previewPlan}
+        mode="preview"
+        orgId={previewOrgId}
+        users={adminUsersByOrg[previewOrgId] ?? []}
+        teams={previewRefs?.teams ?? []}
+        colors={previewColors}
+        busy={previewSaving}
+        onApply={savePreview}
+        onClose={() => setPreviewPlan(null)}
       />
     </>
   );

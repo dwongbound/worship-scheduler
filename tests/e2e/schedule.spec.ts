@@ -225,8 +225,8 @@ test("submits availability and re-opens it for changes", async ({ page }) => {
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  // The card flips to a "Sent" badge with the date it went.
-  await expect(page.getByText("Sent", { exact: true })).toBeVisible();
+  // The card flips to a "Completed" badge with the date it went.
+  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
 
   // "Make changes" re-opens it (unsubmits).
   await page.getByRole("button", { name: "Make changes" }).click();

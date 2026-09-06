@@ -50,11 +50,13 @@ import LoadingDots from "./common/LoadingDots";
 import Checkbox from "./common/Checkbox";
 import Select from "./common/Select";
 import SlackIcon from "./common/SlackIcon";
+import AttentionDot from "./common/AttentionDot";
 import Toast, { type ToastMessage } from "./common/Toast";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
 import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
 import {
+  ACOUSTIC_GUITAR,
   GROUP_CHAT_LEAD_OPTIONS,
   MAX_SONGS_PER_SET,
   MAX_SONG_TITLE_LENGTH,
@@ -272,6 +274,9 @@ export default function SetDetailModal({
     setNotesHistory([]);
     if (!openSetId) return;
     refetchNotesHistory(openSetId);
+    // Deps are the set id alone. refetchNotesHistory is redefined every render,
+    // so listing it (as the rule wants) would re-fetch the log on every
+    // keystroke in the composer above it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSetId]);
 
@@ -361,19 +366,26 @@ export default function SetDetailModal({
       // this modal, it just won't be remembered.
     }
   };
-  // Tallies keyed by the window that asked for them. Cleared when a different
-  // set opens: the neighbourhood windows ("this set's month", "±2 weeks") are
-  // measured around THAT set's date, so another set's numbers aren't reusable.
+  // Tallies keyed by SET + window. The set has to be part of the key because
+  // the neighbourhood windows ("this set's month", "±2 weeks") are measured
+  // around THAT set's date, so another set's numbers aren't reusable.
+  //
+  // Keying beats clearing on a set change: this modal stays mounted between
+  // sets, and a clear-on-open effect could only empty the cache in a LATER
+  // render than the fetch effect reads it in — so opening a second set found a
+  // stale hit, skipped its fetch, and then had the hit cleared out from under
+  // it, leaving the ×n badges blank until the admin re-picked the window.
   const [loadCache, setLoadCache] = useState<
     Record<string, Record<string, number>>
   >({});
-  useEffect(() => setLoadCache({}), [savedSet?.id]);
 
   const setStartsAt = set?.startsAt;
   const loadOrgId = set?.org?.id;
+  // One cache entry per (set, window) pair — see loadCache above.
+  const loadCacheKey = `${savedSet?.id ?? ""}:${metricKey}`;
   useEffect(() => {
     // Only admins see the ×n at all, and the endpoint is admin-only.
-    if (!isAdmin || !loadOrgId || !setStartsAt || loadCache[metricKey]) return;
+    if (!isAdmin || !loadOrgId || !setStartsAt || loadCache[loadCacheKey]) return;
     let cancelled = false;
     const params = new URLSearchParams({
       metric: metricKey,
@@ -384,23 +396,26 @@ export default function SetDetailModal({
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("failed"))))
       .then((d) => {
         if (!cancelled) {
-          setLoadCache((prev) => ({ ...prev, [metricKey]: d.counts ?? {} }));
+          setLoadCache((prev) => ({ ...prev, [loadCacheKey]: d.counts ?? {} }));
         }
       })
       // A failed window just means no ×n — the dropdowns still work, they're
       // only ordered by availability and name instead.
       .catch(() => {
-        if (!cancelled) setLoadCache((prev) => ({ ...prev, [metricKey]: {} }));
+        if (!cancelled) setLoadCache((prev) => ({ ...prev, [loadCacheKey]: {} }));
       });
     return () => {
       cancelled = true;
     };
+    // loadCache is read above but deliberately not a dep: it's the "have we
+    // already got this window?" guard, and listing it would re-run this effect
+    // on every write to the cache — including its own.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin, loadOrgId, setStartsAt, metricKey]);
+  }, [isAdmin, loadOrgId, setStartsAt, loadCacheKey]);
 
   // Undefined until the window lands — buildPlayerOptions then leaves the ×n
   // off entirely rather than showing one window's numbers under another's name.
-  const windowCounts = loadCache[metricKey];
+  const windowCounts = loadCache[loadCacheKey];
   const serveCounts = useMemo<Map<string, number> | undefined>(
     () => (windowCounts ? new Map(Object.entries(windowCounts)) : undefined),
     [windowCounts]
@@ -934,13 +949,15 @@ export default function SetDetailModal({
   const dirty = changes.length > 0;
 
   // Save every staged change. Ordering is load-bearing:
-  //   1. seats that went away, so a shrunk role is never briefly over-full;
-  //   2. guest teams, because a seat borrowed from a team added in this
+  //   1. guest teams, because a seat borrowed from a team added in this
   //      session needs that team's REAL row id, which only exists after this;
-  //   3. the set's own plain fields, all in one PATCH;
-  //   4. the roster — swaps, then the new seats;
-  //   5. the MD, which the server validates against the FINAL roster;
-  //   6. the setlist.
+  //   2. the set's own plain fields, all in one PATCH;
+  //   3. the roster — every removal, swap and addition in ONE request, applied
+  //      server-side as a single transaction (see the roster route). Removals
+  //      no longer have to go first to keep a shrunk role from being briefly
+  //      over-full: nothing observes the middle of a transaction;
+  //   4. the MD, which the server validates against the FINAL roster;
+  //   5. the setlist.
   const saveAll = async () => {
     setBusy(true);
     setToast(null);
@@ -948,7 +965,9 @@ export default function SetDetailModal({
       const ops = diffAssignments(before.assignments, after.assignments);
       // A failed call stops the save where it is and leaves the draft intact,
       // so a half-applied save doesn't quietly read as a finished one — the
-      // admin sees what went wrong with their edits still on screen.
+      // admin sees what went wrong with their edits still on screen. The roster
+      // step below is all-or-nothing on its own (one server transaction), so a
+      // failure there changes no seats at all.
       const send = async (url: string, init?: RequestInit) => {
         const res = await fetch(url, init);
         if (!res.ok) {
@@ -963,10 +982,6 @@ export default function SetDetailModal({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-
-      for (const id of ops.removed) {
-        await send(`/api/admin/assignments/${id}`, { method: "DELETE" });
-      }
 
       // teamId → the guest row id the server ended up with.
       const guestIdByTeam = new Map<string, string>();
@@ -1003,32 +1018,35 @@ export default function SetDetailModal({
       }
       if (Object.keys(fields).length > 0) await patchSet(fields);
 
-      for (const r of ops.reassigned) {
-        await send(`/api/admin/assignments/${r.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: r.userId }),
-        });
-      }
       // A borrowed seat points at a guest ROW. If that row was only staged
       // locally, the guest PATCH above has just created it for real, so the
       // local id has to be swapped for the one the server assigned.
       const serverGuestId = (localId: string | null | undefined) => {
-        if (!localId) return undefined;
+        if (!localId) return null;
         const row = (set.guestTeams ?? []).find((g) => g.id === localId);
         if (!row) return localId;
         return guestIdByTeam.get(row.teamId) ?? localId;
       };
 
-      for (const a of ops.added) {
-        await send("/api/admin/assignments", {
-          method: "POST",
+      // The whole roster diff in one request. It used to be a call per seat,
+      // which made an eight-slot auto-fill eight round trips — and eight
+      // separate Slack messages for one click on Save.
+      const rosterChanged =
+        ops.removed.length > 0 ||
+        ops.reassigned.length > 0 ||
+        ops.added.length > 0;
+      if (rosterChanged) {
+        await send(`/api/admin/sets/${currentSetId}/roster`, {
+          method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            setId: currentSetId,
-            userId: a.userId,
-            role: a.role,
-            guestTeamId: serverGuestId(a.guestTeamId),
+            removed: ops.removed,
+            reassigned: ops.reassigned,
+            added: ops.added.map((a) => ({
+              role: a.role,
+              userId: a.userId,
+              guestTeamId: serverGuestId(a.guestTeamId),
+            })),
           }),
         });
       }
@@ -1491,6 +1509,12 @@ export default function SetDetailModal({
           // hidden entirely — no point showing an empty "0/0" row.
           if (capacity === 0 && filled.length === 0) return null;
 
+          // An empty seat here is what makes the calendar's dot red, so mark
+          // the role with the same red to say WHICH hole it is. Acoustic is
+          // exempt for the reason setStatus ignores it (lib/setStatus.ts): an
+          // empty acoustic seat is the normal outcome, not a hole to fill.
+          const isHole = openSlots > 0 && role !== ACOUSTIC_GUITAR;
+
           return (
             <li key={role} className="text-sm">
               <span className="font-medium">
@@ -1499,6 +1523,12 @@ export default function SetDetailModal({
                   <span className="ml-1 text-xs text-gray-500">
                     ({filled.length}/{capacity})
                   </span>
+                )}
+                {isHole && (
+                  <AttentionDot
+                    label="Open slot — this is why the set shows red"
+                    className="ml-1.5 h-1.5 w-1.5"
+                  />
                 )}
               </span>
 
@@ -1675,6 +1705,15 @@ export default function SetDetailModal({
                             ? `(${filled.length}/${spec.count})`
                             : ""}
                       </span>
+                      {/* A borrowed seat nobody's in counts toward the set's
+                          red the same way an own-team one does — including
+                          acoustic, since borrowing it is an explicit ask. */}
+                      {openSeats(spec, filled.length) > 0 && (
+                        <AttentionDot
+                          label="Open slot — this is why the set shows red"
+                          className="ml-1.5 h-1.5 w-1.5"
+                        />
+                      )}
                     </span>
 
                     <ul className="mt-1 space-y-1 pl-4">

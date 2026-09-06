@@ -12,7 +12,11 @@ import {
   resolveTeamCapacities,
   type TeamRoleDef,
 } from "./teamRoles";
-import type { AssignmentStatus, SlotCapacityMap } from "./constants";
+import {
+  ACOUSTIC_GUITAR,
+  type AssignmentStatus,
+  type SlotCapacityMap,
+} from "./constants";
 import { openSeats, type GuestTeamConfig } from "./guestTeams";
 
 export type SetStatus = "understaffed" | "confirmed" | "unconfirmed" | "cover";
@@ -36,6 +40,13 @@ export type StatusSet = {
  * guest role marked `allAvailable` is skipped: it has no target number, so it
  * can't be short, and a set that borrows "however many singers are free" never
  * reads as understaffed on that account.
+ *
+ * ACOUSTIC GUITAR is skipped too, for the host team. Nobody is ever scheduled
+ * onto it as their only job — the auto-fill seats it last and only from a
+ * worship leader or vocalist who happens to play it (ACOUSTIC_HOST_ROLES), so
+ * an empty acoustic slot is the normal outcome when none of them do, not a
+ * hole an admin can go and fix. Counting it painted a fully-staffed set red.
+ * A guest team's acoustic seats DO count: borrowing one is an explicit ask.
  */
 export function openSlotCount(set: StatusSet): number {
   const catalog = set.team?.roles ?? DEFAULT_TEAM_ROLES;
@@ -44,6 +55,7 @@ export function openSlotCount(set: StatusSet): number {
   // The owning team's own seats — assignments borrowed from a guest team don't
   // fill them, so only non-guest assignments count here.
   for (const { key } of slottedRoles(catalog)) {
+    if (key === ACOUSTIC_GUITAR) continue; // never a hole — see above
     const filled = set.assignments.filter(
       (a) => a.role === key && !a.guestTeamId
     ).length;

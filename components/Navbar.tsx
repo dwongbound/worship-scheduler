@@ -6,6 +6,7 @@ import { signOut, useSession } from "next-auth/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Dropdown from "./common/Dropdown";
 import Banner from "./common/Banner";
+import ShieldIcon from "./common/ShieldIcon";
 import Logo from "./Logo";
 import OrgSwitcher from "./OrgSwitcher";
 import GuidedTour from "./GuidedTour";
@@ -782,15 +783,3 @@ function ChevronIcon({ className = "" }: { className?: string }) {
   );
 }
 
-// Small shield marking an admin-only tab.
-function ShieldIcon() {
-  return (
-    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" className="h-3.5 w-3.5">
-      <path
-        fillRule="evenodd"
-        d="M10 1.5l6 2.25v4.5c0 3.9-2.55 7.35-6 8.25-3.45-.9-6-4.35-6-8.25v-4.5L10 1.5zm0 2.13L6 5.13v3.12c0 2.86 1.77 5.4 4 6.2 2.23-.8 4-3.34 4-6.2V5.13l-4-1.5z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}

@@ -215,7 +215,7 @@ async function handleSwap(
       historyFor(to.setId, to.role, type, adminId),
     ]);
     // The trade is final now — tell each set's chat who ended up in the slot.
-    // (Same set on both sides just means two lines in one chat.)
+    // Both sides on the same set means one message with two lines.
     const [fromUser, toUser] = await Promise.all([
       prisma.assignment.findUnique({
         where: { id: from.id },
@@ -226,16 +226,20 @@ async function handleSwap(
         select: { user: { select: { name: true } } },
       }),
     ]);
-    await notifySetChange(
-      from.setId,
+    const fromLine =
       `\u{1F501} ${roleLabel(from.role)}: ${fromUser?.user.name ?? "Someone"} ` +
-        `is now on this set (approved swap).`
-    );
-    await notifySetChange(
-      to.setId,
+      `is now on this set (approved swap).`;
+    const toLine =
       `\u{1F501} ${roleLabel(to.role)}: ${toUser?.user.name ?? "Someone"} ` +
-        `is now on this set (approved swap).`
-    );
+      `is now on this set (approved swap).`;
+    if (from.setId === to.setId) {
+      // A trade WITHIN one set: both halves land in the same chat, so they go
+      // as one message rather than two consecutive notices about one approval.
+      await notifySetChange(from.setId, `${fromLine}\n${toLine}`);
+    } else {
+      await notifySetChange(from.setId, fromLine);
+      await notifySetChange(to.setId, toLine);
+    }
   } else {
     // Undo the exchange: put each set back with its original owner + status.
     await prisma.$transaction([
