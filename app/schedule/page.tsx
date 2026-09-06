@@ -30,6 +30,7 @@ import InfoTooltip from "@/components/common/InfoTooltip";
 import Input from "@/components/common/Input";
 import LoadingDots from "@/components/common/LoadingDots";
 import { usePageLoading } from "@/components/LoadingProvider";
+import { usePullToRefresh } from "@/components/PullToRefresh";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { AVAILABILITY_CHANGED_EVENT } from "@/components/Navbar";
@@ -79,12 +80,16 @@ const ALL_DAY_PRESET = TIME_PRESETS.findIndex(
 );
 const EXCLUSIVE_PRESETS = [ALL_DAY_PRESET, CUSTOM_PRESET];
 
-// How long a recurring block keeps repeating. "Forever" is the default — the
-// other two stamp a stop date (endDate) on each block.
-const REPEAT_OPTIONS: { value: "forever" | "weeks" | "until"; label: string }[] = [
+// How long a recurring block keeps repeating. "Forever" is the default; the
+// others stamp a stop date (endDate) on each block, and "Time Range" also
+// stamps a first day (startDate) so the repeat doesn't start until then —
+// that's what a term-time or a trip away looks like.
+type RepeatMode = "forever" | "weeks" | "until" | "range";
+const REPEAT_OPTIONS: { value: RepeatMode; label: string }[] = [
   { value: "forever", label: "Forever" },
   { value: "weeks", label: "For a number of weeks" },
   { value: "until", label: "Until a date" },
+  { value: "range", label: "Time Range" },
 ];
 
 // Human label for a request in summaries (the short form: name if it has
@@ -246,10 +251,13 @@ export default function SchedulePage() {
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([2]); // Tuesday
   const [presetIndexes, setPresetIndexes] = useState<number[]>([ALL_DAY_PRESET]);
   // How long the recurring blocks keep repeating: forever (default), a number
-  // of weeks from today, or up to a date you pick.
-  const [repeats, setRepeats] = useState<"forever" | "weeks" | "until">("forever");
+  // of weeks from today, up to a date you pick, or across a range of dates.
+  const [repeats, setRepeats] = useState<RepeatMode>("forever");
   const [repeatWeeks, setRepeatWeeks] = useState("4");
   const [repeatUntil, setRepeatUntil] = useState("");
+  // "Time Range": the first and last days the weekly block repeats.
+  const [repeatFrom, setRepeatFrom] = useState("");
+  const [repeatTo, setRepeatTo] = useState("");
   const [customStart, setCustomStart] = useState("09:00");
   const [customEnd, setCustomEnd] = useState("12:00");
   const [blockStart, setBlockStart] = useState(""); // specific range start
@@ -287,6 +295,9 @@ export default function SchedulePage() {
     reload();
   }, [reload]);
 
+  // Pulling down on a phone refetches this tab in place.
+  usePullToRefresh(reload);
+
   // Pick/unpick one time window. An exclusive preset replaces whatever was
   // picked; the part-of-day ones stack with each other.
   function toggleWindow(index: number) {
@@ -318,7 +329,9 @@ export default function SchedulePage() {
         setBlockError("The custom end time must be after the start time.");
         return;
       }
-      // Where the repeat stops: null = forever.
+      // The span the repeat covers: null on either end = open-ended that way,
+      // so "forever" is both null.
+      let startDate: string | null = null;
       let endDate: string | null = null;
       if (repeats === "weeks") {
         const weeks = Number(repeatWeeks);
@@ -333,8 +346,22 @@ export default function SchedulePage() {
           return;
         }
         endDate = repeatUntil;
+      } else if (repeats === "range") {
+        if (!repeatFrom || !repeatTo) {
+          setBlockError("Pick the first and last days these blocks should repeat.");
+          return;
+        }
+        if (repeatFrom > repeatTo) {
+          setBlockError("The last day must be on or after the first day.");
+          return;
+        }
+        startDate = repeatFrom;
+        endDate = repeatTo;
       }
-      const blocks = expandRecurringBlocks(daysOfWeek, windows, endDate);
+      const blocks = expandRecurringBlocks(daysOfWeek, windows, {
+        startDate,
+        endDate,
+      });
       // Drop the ones already stored (the server skips them too) so the
       // message is accurate when everything picked is a repeat.
       const fresh = blocks.filter(
@@ -345,6 +372,8 @@ export default function SchedulePage() {
               entry.dayOfWeek === block.dayOfWeek &&
               entry.startMinute === block.startMinute &&
               entry.endMinute === block.endMinute &&
+              (entry.startDate ? toYmd(new Date(entry.startDate)) : null) ===
+                (block.startDate ?? null) &&
               (entry.endDate ? toYmd(new Date(entry.endDate)) : null) ===
                 (block.endDate ?? null)
           )
@@ -495,8 +524,21 @@ export default function SchedulePage() {
         <>
           Every <strong>{DAY_LABELS[entry.dayOfWeek!]}</strong>,{" "}
           {timeWindowLabel(entry.startMinute!, entry.endMinute!)}
-          {/* Blocks that stop repeating say when; open-ended ones say nothing. */}
-          {entry.endDate && <> · until {shortDateLabel(entry.endDate)}</>}
+          {/* Blocks that repeat over a limited span say so; open-ended ones say
+              nothing. Both bounds set reads as a range, one bound as "from"/
+              "until". */}
+          {entry.startDate && entry.endDate && (
+            <>
+              {" "}
+              · {shortDateLabel(entry.startDate)} – {shortDateLabel(entry.endDate)}
+            </>
+          )}
+          {entry.startDate && !entry.endDate && (
+            <> · from {shortDateLabel(entry.startDate)}</>
+          )}
+          {!entry.startDate && entry.endDate && (
+            <> · until {shortDateLabel(entry.endDate)}</>
+          )}
         </>
       );
     }
@@ -1021,6 +1063,25 @@ export default function SchedulePage() {
                         required
                       />
                     )}
+                    {repeats === "range" && (
+                      // One range calendar rather than two fields: picking a
+                      // start then an end in the same grid is the gesture the
+                      // specific-dates form already uses, and it's the one that
+                      // works on a phone.
+                      <DateSelect
+                        range
+                        highlightToday={false}
+                        label="Days it repeats between"
+                        value={repeatFrom}
+                        endValue={repeatTo}
+                        min={toYmd(new Date())}
+                        onRangeChange={(start, end) => {
+                          setRepeatFrom(start);
+                          setRepeatTo(end);
+                        }}
+                        required
+                      />
+                    )}
                   </div>
                   {/* mt-auto drops the submit to the bottom of the panel
                       however tall the fields above it end up. */}
@@ -1035,7 +1096,9 @@ export default function SchedulePage() {
                       disabled={
                         busyAction === "block" ||
                         daysOfWeek.length === 0 ||
-                        presetIndexes.length === 0
+                        presetIndexes.length === 0 ||
+                        // A half-picked range has no end day yet.
+                        (repeats === "range" && (!repeatFrom || !repeatTo))
                       }
                     >
                       {busyAction === "block" ? (

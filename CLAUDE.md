@@ -46,12 +46,12 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   scarce-first pass — everything reads roles via `orderedRoles`/`slottedRoles`. `adminOnly` still marks a role as admin-granted, but WHO
   plays WHAT is admin-only across the board now: only the Team tab
   (`PATCH /api/admin/users/[id]`, `teamRoles`) writes a member's roles.
-  WHO IS ON a team is admin-only too, and there is NO self-join at all: the
-  `PUT /api/me/teams/[teamId]` route is gone and /profile has no "Add a team"
-  — everyone (admins included) is added from the Team tab via `PATCH
-  /api/admin/users/[id]` (`teamIds`). `DELETE /api/me/teams/[teamId]` (leave
-  your own membership) survives and requires org admin. /profile lists teams +
-  roles read-only with an (i) pointing at your org admin.
+  WHO IS ON a team is admin-only too, and there is NO self-service either way:
+  the whole `api/me/teams` route is gone — nobody joins or leaves a team from
+  their own account, admins included. Everyone is added (and removed) from the
+  Team tab via `PATCH /api/admin/users/[id]` (`teamIds`), so the roster has one
+  owner. /profile lists teams + roles read-only with an (i) pointing at your
+  org admin.
 - **TeamMember** — the user↔team join, carrying that person's per-team `roles`
   and `active` flag. Inactive = not auto-scheduled on that team (both scheduler
   callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
@@ -84,9 +84,14 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
   replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
   ordinary counted role.
-- **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute),
+- **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute, plus an
+  optional startDate/endDate bounding the span it repeats over — the /schedule
+  form's Repeats: Forever · N weeks · Until a date · Time Range),
   `SPECIFIC` (startDate + time window, tied to a request), or `DATE_RANGE`
   (startDate/endDate, legacy). Times = minutes from midnight, day 0=Sun.
+  Every reader of a recurring rule honours BOTH bounds: `lib/availability.ts`
+  (`dayBlockLevel`/`dayIsRepeating`), `lib/scheduler.ts isUserAvailable`,
+  `AvailabilityCalendar`, and `api/availability{,/block-days}`.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
@@ -117,7 +122,7 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 ## Pages (`app/*/page.tsx`)
 
-`login` · `page.tsx` (home) · `calendar` · `schedule` · `swaps` · `profile` ·
+`login` · `page.tsx` (home) · `calendar` · `schedule` · `set-manager` · `profile` ·
 `create` (admin) · `users` (admin team mgmt — grant/revoke admin, instruments).
 `layout.tsx` = pre-hydration theme script; `loading.tsx` = splash; `providers.tsx`.
 
@@ -125,8 +130,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 - Auth: `auth/[...nextauth]`, `auth/allow-duplicate-name` (consent cookie for
   the duplicate-name warning on the Google path), `signup`, `me`.
-- Sets/assignments: `sets`, `sets/[id]`, `assignments`, `assignments/[id]`,
-  `assignments/confirm-all`.
+- Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
+  list row has — what a `?set=` deep link resolves through), `assignments`,
+  `assignments/[id]`, `assignments/confirm-all`.
 - Swaps: `swaps`, `swaps/[id]/take`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Availability: `availability`, `availability/[id]`, `availability/complete`,
@@ -197,6 +203,35 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   with `nameConflicts` (override: `allowDuplicateName`), and the Google signIn
   callback bounces to `/login?nameConflict=…` (override: the cookie dropped by
   `POST /api/auth/allow-duplicate-name`). ✅tested
+- `setLink.ts` — `SET_PARAM` / `setLinkPath(setId)`: the ONE spelling of a link
+  to a set (`/calendar?set=<id>`, or `setLinkPath(id, "set-manager")`). The two
+  tabs read the SAME param but answer differently: the calendar opens that set's
+  detail modal (its open set IS the URL), while the set-manager scrolls to the
+  set's ROW and rings it for a few seconds, leaving that row's own button in
+  reach — which is why the cover/swap DMs link there. A set outside what either
+  has loaded is resolved through `GET /api/sets/[id]`: the calendar widens its
+  window and switches org, the set-manager widens its horizon (or says why it
+  can't). Roster DMs, digest bullets and the Approvals tab use the calendar
+  form. ✅tested
+- `notificationPrefs.ts` — the per-org switches for the bot's PERSONAL DMs:
+  `NOTIFICATION_TYPES` (the catalog the Org settings → Notifications list draws),
+  `notificationEnabled` (unrecorded = ON, so nothing goes quiet by accident),
+  `parse`/`validate`/`mergeNotificationPrefs`. Stored on `Org.notificationPrefs`;
+  enforced by `orgDmContext()` in `lib/slack.ts` — ONE org read that answers
+  both "is this type still on?" and "which bot token?", which every DM sender
+  starts with. Channel posts aren't covered. ✅tested
+- `pendingHandoff.ts` — who a seat mid-handoff STILL belongs to (cover-take →
+  `Assignment.pendingCoverFromUserId`; accepted swap → the SwapProposal). Feeds
+  `pendingFromUser` on the wire and the MD rules, so a pending cover can't
+  unseat a set's MD before an admin approves it.
+- `setPayload.ts` — `SET_INCLUDE` + `withPendingOwners()`: the one prisma shape
+  both `GET /api/sets` and `GET /api/sets/[id]` return.
+- `postLogin.ts` — surviving the login door: `safeInternalPath()` (only in-app
+  paths are ever redirected to — a `?callbackUrl` is attacker-controllable ✅tested)
+  plus a short-lived per-tab stash (`remember`/`peek`/`clearPostLogin`) for the
+  two places that param can't reach: Google's duplicate-name bounce back through
+  /login, and the /join gate a brand-new account passes through. So a set link
+  followed while signed out still opens that set afterwards.
 - `auth.ts` — `authOptions`, `getSessionUser()`, `getAdminUser()`.
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
@@ -220,7 +255,11 @@ no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFie
 `GenerateModal` (auto-schedule options — window, which recurring sets, and an
 optional per-set-type color) → `StagedScheduleModal` (the preview; a set type's
 color tints its cards at 10%, matched via `StagedSet.templateId`),
-`Navbar`, `Logo`,
+`Navbar`, `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
+`app/layout.tsx` around `SwipePager`; a page registers its own refetch with
+`usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that
+doesn't falls back to `location.reload()`. A surface with its own drag gesture
+opts out with `data-no-pull`),
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
 Primitives in `components/common/`: `Badge Banner Button Card Checkbox
 ColorPicker Dropdown Input Modal Select Stepper LoadingDots LoadingScreen`.

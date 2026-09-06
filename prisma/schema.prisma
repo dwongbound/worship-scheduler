@@ -123,6 +123,13 @@ model Org {
   // one running monthly. See DIGEST_UPCOMING_DAYS for the default + bounds.
   digestUpcomingDays Int @default(7)
 
+  // Which of the bot's personal DM notifications this org sends: a key→bool map
+  // over lib/notificationPrefs.ts NOTIFICATION_TYPES. Only the switched-OFF ones
+  // need recording — a missing key (and a null column, i.e. every org that
+  // predates the setting) means the notification is sent. Channel posts (set
+  // group chats, weekly team summaries) aren't covered by this.
+  notificationPrefs Json?
+
   memberships          OrgMembership[]
   teams                Team[]
   sets                 Set[]
@@ -626,7 +633,9 @@ model SetHistoryEvent {
 }
 
 // Times a user CANNOT serve. Three shapes share one table:
-//   RECURRING : dayOfWeek + startMinute..endMinute (minutes from midnight)
+//   RECURRING : dayOfWeek + startMinute..endMinute (minutes from midnight),
+//               optionally bounded by startDate..endDate (the first/last days
+//               it repeats; null on either end = open-ended that way)
 //   SPECIFIC  : startDate (the day) + startMinute..endMinute, tied to a request
 //   DATE_RANGE: startDate..endDate (inclusive) — legacy
 model Unavailability {
@@ -641,7 +650,8 @@ model Unavailability {
   startMinute Int?
   endMinute   Int?
 
-  // SPECIFIC uses startDate as the single day; DATE_RANGE uses both.
+  // SPECIFIC uses startDate as the single day; DATE_RANGE uses both; RECURRING
+  // uses either/both/neither to bound the span it repeats over.
   startDate DateTime?
   endDate   DateTime?
 

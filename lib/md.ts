@@ -19,6 +19,24 @@ export interface MDAssignment {
   userId: string;
   role: Instrument;
   isMD?: boolean;
+  // Set while this seat is mid-handoff (an open cover someone has taken, or an
+  // accepted targeted swap) and an admin hasn't approved it yet: the seat
+  // already shows the taker, but it still BELONGS to this person. Null/absent
+  // on a settled seat.
+  pendingFrom?: { userId: string; isMD?: boolean } | null;
+}
+
+// The roster as the MD rules read it: a seat awaiting approval counts for the
+// person who still owns it, not the one hoping to take it. Without this an MD
+// who asks for cover stops being eligible the moment someone offers to cover —
+// the set reads as unled, and the detail modal stages a "cleared the MD" edit
+// nobody made. The taker becomes eligible when the handoff is approved.
+function effectiveHolders(assignments: MDAssignment[]): MDAssignment[] {
+  return assignments.map((a) =>
+    a.pendingFrom
+      ? { userId: a.pendingFrom.userId, role: a.role, isMD: a.pendingFrom.isMD }
+      : a
+  );
 }
 
 // userIds assigned as worship leader on this set — never eligible to also MD.
@@ -31,7 +49,8 @@ function worshipLeaderIds(assignments: MDAssignment[]): Set<string> {
 // Distinct userIds eligible to be the MD, in MD-role preference order (then by
 // userId) so the "best" candidate comes first. A person with several slots
 // appears once, keyed to their most preferred MD-capable role.
-export function eligibleMDIds(assignments: MDAssignment[]): string[] {
+export function eligibleMDIds(input: MDAssignment[]): string[] {
+  const assignments = effectiveHolders(input);
   const wl = worshipLeaderIds(assignments);
   const seen = new Set<string>();
   const ids: string[] = [];

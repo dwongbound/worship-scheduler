@@ -85,6 +85,62 @@ describe("describeSetHistoryEvent", () => {
     expect(describeSetHistoryEvent(event("APPROVED")).actor).toBe("Alice Admin");
     expect(describeSetHistoryEvent(event("REJECTED")).actor).toBe("Alice Admin");
   });
+
+  // Everything below guards that the log carries the same detail the Slack
+  // notifications do — names on both sides, and the requester's note.
+
+  it("quotes the cover note on a cover request, and omits it when absent", () => {
+    expect(
+      describeSetHistoryEvent(event("SWAP_REQUESTED", { detail: "Away that week" }))
+        .tokens
+    ).toEqual(["requested cover for", "Drums", '· "Away that week"']);
+    expect(
+      describeSetHistoryEvent(event("SWAP_REQUESTED", { detail: null })).tokens
+    ).toEqual(["requested cover for", "Drums"]);
+  });
+
+  it("names both sides of an approved cover, striking the owner it left", () => {
+    expect(describeSetHistoryEvent(event("APPROVED")).tokens).toEqual([
+      "approved",
+      { name: "Tara Target" },
+      "covering for",
+      { name: "Pat Previous", struck: true },
+      "· Drums",
+    ]);
+  });
+
+  // A rejected cover goes BACK to its owner, so the taker is the struck chip.
+  it("strikes the taker on a rejected cover", () => {
+    expect(describeSetHistoryEvent(event("REJECTED")).tokens).toEqual([
+      "rejected",
+      { name: "Pat Previous", struck: true },
+      "covering for",
+      { name: "Tara Target" },
+      "· Drums",
+    ]);
+  });
+
+  // A targeted swap's approval row carries no people at all (see the approvals
+  // route's historyFor), which is what tells it apart from a cover's.
+  it("falls back to swap wording when a decision names nobody", () => {
+    const bare = { targetUser: null, previousUser: null };
+    expect(describeSetHistoryEvent(event("APPROVED", bare)).tokens).toEqual([
+      "approved the swap for",
+      "Drums",
+    ]);
+    expect(describeSetHistoryEvent(event("REJECTED", bare)).tokens).toEqual([
+      "rejected the swap for",
+      "Drums",
+    ]);
+  });
+
+  it("names the other party on an accepted swap", () => {
+    expect(describeSetHistoryEvent(event("SWAP_ACCEPTED")).tokens).toEqual([
+      "accepted a swap with",
+      { name: "Pat Previous" },
+      "· Drums · awaiting approval",
+    ]);
+  });
 });
 
 describe("history + status label completeness", () => {

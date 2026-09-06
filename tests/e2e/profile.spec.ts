@@ -1,6 +1,6 @@
 // E2E: profile editing — teams, and the READ-ONLY view of the per-team roles a
 // user can be scheduled for. Both are the org admin's to set from the Team tab:
-// a plain member sees no join/leave controls, an admin manages their own.
+// nobody — member or admin — gets a join/leave control here.
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
@@ -59,19 +59,18 @@ test("a member can't add or remove themselves from a team", async ({ page }) => 
   await expect(page.getByRole("button", { name: "Leave this team" })).toHaveCount(0);
 });
 
-test("not even an admin can add themselves to a team from their profile", async ({
+test("not even an admin can join or leave a team from their profile", async ({
   page,
 }) => {
-  // Adding anyone to a team — yourself included — happens in the Team tab, so
-  // the profile panel offers no way in. Leaving is the one write left, and an
-  // admin of the team's org keeps it.
+  // Team membership — yours included — is only ever changed from the Team tab,
+  // so this panel offers no way in OR out, whoever is looking at it.
   await login(page, "admin");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
   await expect(page.getByRole("button", { name: "Add a team" })).toHaveCount(0);
   await page.getByTestId("profile-team-select").selectOption({ label: "Sunday Team" });
-  await expect(page.getByRole("button", { name: "Leave this team" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Leave this team" })).toHaveCount(0);
 });
 
 test("an established member sees no profile-setup nudge", async ({ page }) => {

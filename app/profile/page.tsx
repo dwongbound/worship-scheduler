@@ -3,11 +3,9 @@
 // future Slack integration. The Teams & roles panel is a READ-ONLY list for
 // everyone: which teams you're on AND the roles you play on them are an org
 // admin's call, set from the Team tab, so the panel lists them with a note
-// pointing at your admin. NOBODY adds themselves to a team from here, admins
-// included — an admin who wants to be on a team puts themselves there from the
-// Team tab like anyone else, so the roster always has one owner. The only write
-// left is "Leave this team", and an admin of that team's org gets it (the API
-// enforces the same rule, so hiding the control isn't the whole guard).
+// pointing at your admin. Nobody joins or leaves a team from here, admins
+// included — the roster has exactly one owner, and an admin who wants on or off
+// a team does it from the Team tab like anyone else.
 // Password changes happen in a separate modal that requires typing the new
 // password twice.
 import { useSession } from "next-auth/react";
@@ -25,7 +23,6 @@ import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
-import { PROFILE_CHANGED_EVENT } from "@/components/Navbar";
 import { DEFAULT_TEAM_ROLES, orderedRoles } from "@/lib/teamRoles";
 import type { ApiTeamRole } from "@/lib/types";
 
@@ -45,7 +42,7 @@ type Membership = {
 const SLACK_CONNECT_MESSAGE = "slack-connect-result";
 
 export default function ProfilePage() {
-  const { data: session, update } = useSession();
+  const { update } = useSession();
   const { me } = useMe();
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
@@ -56,8 +53,6 @@ export default function ProfilePage() {
   // The team whose roles the editor is showing. Defaults to the first team
   // once they load ("" only while I'm on no teams at all).
   const [selectedTeamId, setSelectedTeamId] = useState("");
-  // True while a leave is in flight (shows inline dots).
-  const [savingRoles, setSavingRoles] = useState(false);
   // OAuth-only accounts (e.g. Google) have no password to change.
   const [hasPassword, setHasPassword] = useState(true);
   // Daily morning Slack digest, on by default. The send time is fixed, so this
@@ -119,15 +114,10 @@ export default function ProfilePage() {
     );
   }, [teams]);
 
-  // This panel is a read-only list: the teams I'm on and the roles I play on
-  // them are both an org admin's to change, from the Team tab. Leaving is the
-  // only write left here, and only an admin of that team's org (or a platform
-  // super-admin) gets it — the API enforces the same rule.
+  // This panel is a read-only list, with no exceptions: the teams I'm on and
+  // the roles I play on them are both an org admin's to change, from the Team
+  // tab.
   const selectedTeam = teams.find((t) => t.id === selectedTeamId) ?? null;
-  const isSuperAdmin = Boolean(session?.user?.isSuperAdmin);
-  // Admin of ONE org — a team is only mine to change if I run the org it's in.
-  const canManageTeamsIn = (orgId?: string) =>
-    isSuperAdmin || memberships.some((m) => m.isAdmin && m.orgId === orgId);
   // Something in the Teams & roles panel is keeping me off the schedule: I'm
   // on no team at all, or on one where I hold no roles. Both are an admin's to
   // fix, so the dot's job is to get me to the text saying who to ask — it isn't
@@ -142,18 +132,6 @@ export default function ProfilePage() {
     const org = memberships.find((m) => m.orgId === orgId)?.orgName;
     return org ? `${name} (${org})` : name;
   };
-
-  async function leaveTeam(teamId: string) {
-    setSavingRoles(true);
-    try {
-      await fetch(`/api/me/teams/${teamId}`, { method: "DELETE" });
-      setTeams((prev) => prev.filter((t) => t.id !== teamId));
-      setSelectedTeamId("");
-      window.dispatchEvent(new Event(PROFILE_CHANGED_EVENT));
-    } finally {
-      setSavingRoles(false);
-    }
-  }
 
   // Flip the daily-digest preference. Optimistic (the checkbox responds at
   // once) and reverted if the PUT fails, like the role toggles above.
@@ -363,8 +341,8 @@ export default function ProfilePage() {
 
       {/* Teams & roles — its own panel. Pick a team to see the roles you play
           on it. A list, not an editor: an admin decides both which teams you're
-          on and what you play on them, from the Team tab. Only "Leave this
-          team" is offered, and only to an admin of that team's org. */}
+          on and what you play on them, from the Team tab. There is no way to
+          join or leave a team from here, for anyone. */}
       <Card>
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -381,9 +359,7 @@ export default function ProfilePage() {
                 className="ml-1 h-1.5 w-1.5"
               />
             )}
-            {savingRoles ? (
-              <LoadingDots size="sm" />
-            ) : saved ? (
+            {saved ? (
               <span
                 className="text-green-600"
                 aria-label="Saved"
@@ -456,15 +432,6 @@ export default function ProfilePage() {
                     No roles on this team yet — ask your org admin to add the
                     ones you play so you can be scheduled.
                   </p>
-                )}
-                {canManageTeamsIn(selectedTeam.orgId) && (
-                  <button
-                    type="button"
-                    onClick={() => leaveTeam(selectedTeam.id)}
-                    className="mt-3 text-sm text-red-600 hover:underline dark:text-red-400"
-                  >
-                    Leave this team
-                  </button>
                 )}
               </div>
             ) : (

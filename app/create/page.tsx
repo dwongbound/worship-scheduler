@@ -343,10 +343,14 @@ export default function CreatePage() {
   function formatUnavailability(entry: AdminUnavailabilityEntry): string {
     if (entry.type === "RECURRING") {
       const base = `Every ${DAY_LABELS[entry.dayOfWeek!]} from ${minutesToTimeLabel(entry.startMinute!)} to ${minutesToTimeLabel(entry.endMinute!)}`;
-      // A recurring block can stop repeating; say when if it does.
-      return entry.endDate
-        ? `${base} (until ${new Date(entry.endDate).toLocaleDateString()})`
-        : base;
+      // A recurring block can repeat over a limited span; say which if it does.
+      const day = (value: string) => new Date(value).toLocaleDateString();
+      if (entry.startDate && entry.endDate) {
+        return `${base} (${day(entry.startDate)} – ${day(entry.endDate)})`;
+      }
+      if (entry.startDate) return `${base} (from ${day(entry.startDate)})`;
+      if (entry.endDate) return `${base} (until ${day(entry.endDate)})`;
+      return base;
     }
     if (entry.type === "SPECIFIC") {
       return `${new Date(entry.startDate!).toLocaleDateString()} ${minutesToTimeLabel(entry.startMinute!)} to ${minutesToTimeLabel(entry.endMinute!)}`;
@@ -395,8 +399,11 @@ export default function CreatePage() {
           const reqStart = new Date(selectedRequest.startDate);
           const reqEnd = new Date(selectedRequest.endDate);
           if (entry.type === "RECURRING") {
-            // Repeats forever unless it was given a stop date.
-            return !entry.endDate || new Date(entry.endDate) >= reqStart;
+            // Repeats forever unless it was given a span; when it has one,
+            // it's only relevant if that span overlaps the request's window.
+            if (entry.endDate && new Date(entry.endDate) < reqStart) return false;
+            if (entry.startDate && new Date(entry.startDate) > reqEnd) return false;
+            return true;
           }
           if (!entry.startDate) return false;
           const start = new Date(entry.startDate);

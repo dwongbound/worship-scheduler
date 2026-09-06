@@ -56,17 +56,27 @@ export function describeSetHistoryEvent(
     case "CONFIRMED":
       return { actor: target, tokens: ["confirmed", role] };
     case "SWAP_REQUESTED":
-      return { actor: target, tokens: ["requested a swap for", role] };
+      // `detail` is the note they left when asking (the same one the Slack DM
+      // quotes). Shown when there is one, so the log answers "why" too.
+      return {
+        actor: target,
+        tokens: event.detail
+          ? ["requested cover for", role, `· "${event.detail}"`]
+          : ["requested cover for", role],
+      };
     case "SWAP_CANCELED":
-      return { actor: target, tokens: ["canceled their swap request for", role] };
+      // "Cover", not "swap", to match the filter label and the request line.
+      return { actor: target, tokens: ["canceled their cover request for", role] };
     case "SWAP_TAKEN":
-      // Now a pending state — the take awaits an admin's approval.
+      // Now a pending state — the take awaits an admin's approval. Worded like
+      // the Slack DM ("<name> is covering your <role> slot") so the log and the
+      // notification describe the same moment the same way.
       return {
         actor: target,
         tokens: [
-          "took over",
+          "is covering",
           role,
-          "from",
+          "for",
           { name: previous, struck: true },
           "· awaiting approval",
         ],
@@ -74,16 +84,52 @@ export function describeSetHistoryEvent(
     case "SWAP_PROPOSED":
       return { actor: target, tokens: ["proposed a swap for", role] };
     case "SWAP_ACCEPTED":
-      // The recipient accepted; the trade awaits an admin's approval.
+      // The recipient accepted; the trade awaits an admin's approval. The row
+      // knows the other party, so name them rather than saying "a swap".
       return {
         actor: target,
-        tokens: ["accepted a swap for", role, "· awaiting approval"],
+        tokens: event.previousUser
+          ? [
+              "accepted a swap with",
+              { name: previous },
+              `· ${role} · awaiting approval`,
+            ]
+          : ["accepted a swap for", role, "· awaiting approval"],
       };
     // Admin decisions on a pending cover/swap (actor = the admin).
+    //
+    // A cover decision carries both people (the taker and the owner they took
+    // it from); a targeted swap's decision carries neither, so the presence of
+    // those chips is what tells the two apart. Naming them matches the detail
+    // the admin's own approval DM gave them.
     case "APPROVED":
-      return { actor, tokens: ["approved the change for", role] };
+      return event.targetUser && event.previousUser
+        ? {
+            actor,
+            tokens: [
+              "approved",
+              { name: target },
+              "covering for",
+              { name: previous, struck: true },
+              `· ${role}`,
+            ],
+          }
+        : { actor, tokens: ["approved the swap for", role] };
     case "REJECTED":
-      return { actor, tokens: ["rejected the change for", role] };
+      // On a rejected cover the slot went BACK to its owner, so the taker
+      // (previousUser here) is the struck chip — they're the one who lost it.
+      return event.targetUser && event.previousUser
+        ? {
+            actor,
+            tokens: [
+              "rejected",
+              { name: previous, struck: true },
+              "covering for",
+              { name: target },
+              `· ${role}`,
+            ],
+          }
+        : { actor, tokens: ["rejected the swap for", role] };
     // Setlist edits: `detail` already reads as a sentence fragment ("added
     // \"Who Else\" (E)"), so it's the whole of line 2.
     case "SETLIST_CHANGED":

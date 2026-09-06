@@ -65,7 +65,7 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
 
   // ── erin proposes the trade. ────────────────────────────────────────────
   await login(page, "erin");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   const erinCard = page
     .locator("li")
     .filter({ hasText: "Sunday Morning — Electric Guitar" })
@@ -98,7 +98,7 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
 
   // ── omar accepts from his Covers / Swaps section. ───────────────────────────────
   await login(page, "omar");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   const incoming = page.locator("li").filter({ hasText: "Erin Evans" }).first();
   await expect(incoming).toBeVisible();
   await incoming.getByRole("button", { name: "Accept", exact: true }).click();
@@ -125,7 +125,7 @@ test("targeted swap: erin trades her set to omar; both confirm; stats update", a
   await expect(swapItem).not.toBeVisible();
 
   await login(page, "omar");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   await expect(
     page
       .locator("li")

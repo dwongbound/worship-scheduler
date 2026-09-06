@@ -50,6 +50,7 @@ export default function CalendarMonth({
   isAdmin = false,
   onCreateOnDay,
   onViewMonthChange,
+  focusMonth,
 }: {
   sets: ApiSet[];
   myId?: string;
@@ -57,7 +58,7 @@ export default function CalendarMonth({
   // Confirm one of my assignments straight from its calendar popover.
   onConfirm?: (assignmentId: string) => Promise<void>;
   // Open cover requests the current user could take (from /api/swaps). A chip
-  // whose set has one shows a "you can cover this" popover linking to /swaps.
+  // whose set has one shows a "you can cover this" popover linking to /set-manager.
   takeableSwaps?: ApiSwapRequest[];
   isAdmin?: boolean;
   // Admin only: clicking a day cell's hover "+" opens the create form there.
@@ -66,6 +67,12 @@ export default function CalendarMonth({
   // uses it to widen its /api/sets window, so paging into a month outside the
   // default ±3 months loads that month's sets instead of showing it empty.
   onViewMonthChange?: (firstOfMonth: Date) => void;
+  // A month the grid should jump to, chosen from outside: the calendar page
+  // passes the month of a set opened by a ?set=<id> link, so following a link
+  // to next month's set doesn't leave this month on screen behind the modal.
+  // Only moves the grid when it names a different month than the one in view;
+  // paging by hand is never overridden (the page only sets it for links).
+  focusMonth?: Date | null;
 }) {
   const today = new Date();
   // Midnight today — anything strictly before this is a past day.
@@ -118,6 +125,20 @@ export default function CalendarMonth({
     }
     return map;
   }, [takeableSwaps]);
+
+  // Follow `focusMonth` each time the parent asks for one. Deliberately keyed
+  // on the REQUEST (the object it passes), not on the month in view: keeping
+  // viewMonth in the comparison would drag the grid back every time someone
+  // paged away by hand. Kept as an effect rather than a render-time set because
+  // it also has to tell the parent, which widens its fetch window to match.
+  const honoredFocus = useRef<Date | null>(null);
+  useEffect(() => {
+    if (!focusMonth || honoredFocus.current === focusMonth) return;
+    honoredFocus.current = focusMonth;
+    const first = new Date(focusMonth.getFullYear(), focusMonth.getMonth(), 1);
+    setViewMonth(first);
+    onViewMonthChange?.(first);
+  }, [focusMonth, onViewMonthChange]);
 
   const monthLabel = viewMonth.toLocaleDateString(undefined, {
     month: "long",
@@ -532,7 +553,7 @@ function SlotChip({
                       </ul>
                     )}
                     <Link
-                      href={`/swaps#cover-${covers[0].id}`}
+                      href={`/set-manager#cover-${covers[0].id}`}
                       className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
                     >
                       Take this set →

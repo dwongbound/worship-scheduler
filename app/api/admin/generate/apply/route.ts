@@ -199,6 +199,7 @@ export async function POST(req: NextRequest) {
         newSeats.push({
           userId: a.userId,
           role: a.role,
+          setId: set.id,
           set: { label: set.label, startsAt: set.startsAt },
           catalog,
         });

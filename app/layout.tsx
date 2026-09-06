@@ -5,6 +5,7 @@ import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import Providers from "./providers";
 import Navbar from "@/components/Navbar";
+import PullToRefresh from "@/components/PullToRefresh";
 import SwipePager from "@/components/SwipePager";
 import { SwipeProvider } from "@/components/SwipeProvider";
 import ScrollToTopButton from "@/components/ScrollToTopButton";
@@ -99,7 +100,12 @@ export default function RootLayout({
                 Extra bottom padding on phones so content can scroll clear of
                 the floating bottom nav bar (see Navbar.tsx). */}
             <main className="mx-auto max-w-7xl px-4 pb-24 pt-6 sm:px-6 sm:pb-6 lg:px-8">
-              <SwipePager>{children}</SwipePager>
+              {/* Pull-to-refresh wraps the pager (not the other way round) so
+                  the two gestures transform different elements and can never
+                  fight over one. */}
+              <PullToRefresh>
+                <SwipePager>{children}</SwipePager>
+              </PullToRefresh>
             </main>
           </SwipeProvider>
           <ScrollToTopButton />

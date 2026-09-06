@@ -22,8 +22,14 @@ import {
   type Instrument,
 } from "./constants";
 import { buildOrgDigest, renderDigestText } from "./digest";
+import {
+  notificationEnabled,
+  parseNotificationPrefs,
+  type NotificationType,
+} from "./notificationPrefs";
 import { formatDay, formatTime, shortDateLabel } from "./dates";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
+import { setLinkPath } from "./setLink";
 import { createRateLimiter } from "./rateLimit";
 
 const SLACK_API = "https://slack.com/api";
@@ -72,12 +78,48 @@ async function orgBotToken(orgId: string): Promise<string | null> {
     where: { id: orgId },
     select: { slackBotToken: true },
   });
-  if (!org?.slackBotToken) return null;
+  return decryptBotToken(org?.slackBotToken);
+}
+
+// The stored token is encrypted at rest; a key rotation (or a corrupt value)
+// reads as "not connected" rather than throwing mid-notification.
+function decryptBotToken(stored: string | null | undefined): string | null {
+  if (!stored) return null;
   try {
-    return decryptSecret(org.slackBotToken);
+    return decryptSecret(stored);
   } catch {
-    return null; // key rotated or corrupt — treat as not connected
+    return null;
   }
+}
+
+/**
+ * The two things every personal DM has to know, from ONE read of the org row:
+ * whether this kind of message is still switched on (Org settings →
+ * Notifications, see lib/notificationPrefs.ts) and which bot token to send it
+ * with. They're always needed together, so asking separately meant two queries
+ * for the same row on every notification.
+ *
+ * null means "don't send" — the type is switched off for this org, or Slack
+ * isn't connected and we're not in dry-run. The token inside can still be null
+ * in dry-run, where nothing is actually sent.
+ *
+ * Only DMs are gated this way. A set's group chat and a team's weekly summary
+ * are a room's messages rather than a person's, and aren't in the catalog.
+ */
+async function orgDmContext(
+  orgId: string,
+  type: NotificationType
+): Promise<{ token: string | null } | null> {
+  const org = await prisma.org.findUnique({
+    where: { id: orgId },
+    select: { slackBotToken: true, notificationPrefs: true },
+  });
+  const prefs = parseNotificationPrefs(org?.notificationPrefs);
+  if (!notificationEnabled(prefs, type)) return null;
+
+  const token = decryptBotToken(org?.slackBotToken);
+  if (!token && !slackDryRun()) return null;
+  return { token };
 }
 
 // Dry-run mode (SLACK_DRY_RUN=1): run every Slack code path — queries,
@@ -411,6 +453,9 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
   const assignment = await prisma.assignment.findUnique({
     where: { id: assignmentId },
     include: {
+      // The requester's name and their note (swapReason) both go in the DM, so
+      // the ask reads as coming from a person rather than from the system.
+      user: { select: { name: true } },
       set: {
         select: {
           label: true,
@@ -423,9 +468,8 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
     },
   });
   if (!assignment) return;
-
-  const token = await orgBotToken(assignment.set.orgId);
-  if (!token && !slackDryRun()) return;
+  const dm = await orgDmContext(assignment.set.orgId, "COVER_REQUESTED");
+  if (!dm) return;
 
   // Same eligibility rule as GET /api/swaps: plays this role, isn't the
   // requester, is in the set's org, is on the set's team (a team-less set is
@@ -492,16 +536,21 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
     return isUserAvailable(m.userId, schedulerSet, rules);
   });
 
-  const url = appUrl("/swaps");
+  // Deep link: the tab opens with this set's roster up and its row ringed, so
+  // "take it" is right there rather than somewhere down a list.
+  const url = appUrl(setLinkPath(assignment.setId, "set-manager"));
+  // The note is optional, so it either replaces the closing full stop or the
+  // sentence just ends — never a dangling `: ""`.
+  const note = assignment.swapReason ? `: "${assignment.swapReason}"` : ".";
   const text =
-    `🎚️ A ${roleLabel(assignment.role)} slot on ` +
-    `${setLabel(assignment.set)} just opened up for swap.` +
+    `🎚️ ${assignment.user.name} is requesting someone to cover for ` +
+    `${setLabel(assignment.set)}${note}` +
     (url ? ` Take it here: ${url}` : "");
 
   // Queued through the shared rate limiter (lib/rateLimit), so this fans out in
   // call order at a safe pace rather than as one burst.
   await Promise.all(
-    available.map((m) => postDirectMessageTo(token, m, text))
+    available.map((m) => postDirectMessageTo(dm.token, m, text))
   );
 }
 
@@ -520,9 +569,8 @@ export async function notifySwapTaken(
     include: { set: { select: { label: true, startsAt: true, orgId: true } } },
   });
   if (!assignment) return;
-
-  const token = await orgBotToken(assignment.set.orgId);
-  if (!token && !slackDryRun()) return;
+  const dm = await orgDmContext(assignment.set.orgId, "COVER_TAKEN");
+  if (!dm) return;
 
   const owner = await prisma.orgMembership.findUnique({
     where: { userId_orgId: { userId: previousOwnerId, orgId: assignment.set.orgId } },
@@ -530,15 +578,19 @@ export async function notifySwapTaken(
   });
   if (!owner?.slackUserId) return;
 
+  // "Pending approval" is the honest state: the take moved the seat, but an
+  // admin can still reject it and hand the slot straight back to this person.
   const text =
-    `✅ ${takerName} took your ${roleLabel(assignment.role)} slot on ` +
-    `${setLabel(assignment.set)}. You're off the hook!`;
-  await postDirectMessageTo(token, owner, text);
+    `✅ ${takerName} is covering your ${roleLabel(assignment.role)} slot on ` +
+    `${setLabel(assignment.set)}! Now pending approval from admins.`;
+  await postDirectMessageTo(dm.token, owner, text);
 }
 
 // A proposal's two sets + the org they share, plus each party's per-org Slack
-// id. Shared by the targeted-swap notifications below.
-async function loadProposalSlack(proposalId: string) {
+// id and the token to DM with. Shared by the targeted-swap notifications below,
+// which differ only in who they message and about what — so the "should this
+// org still send this?" check happens here too, keyed by `type`.
+async function loadProposalSlack(proposalId: string, type: NotificationType) {
   const p = await prisma.swapProposal.findUnique({
     where: { id: proposalId },
     include: {
@@ -546,12 +598,16 @@ async function loadProposalSlack(proposalId: string) {
       fromAssignment: {
         select: {
           role: true,
+          // setId on both sides: the DMs below link to whichever set is the
+          // recipient's business (see setLinkPath).
+          setId: true,
           set: { select: { label: true, startsAt: true, orgId: true } },
         },
       },
       toAssignment: {
         select: {
           userId: true,
+          setId: true,
           user: { select: { name: true } },
           set: { select: { label: true, startsAt: true } },
         },
@@ -560,8 +616,10 @@ async function loadProposalSlack(proposalId: string) {
   });
   if (!p) return null;
   const orgId = p.fromAssignment.set.orgId;
-  const token = await orgBotToken(orgId);
-  if (!token && !slackDryRun()) return null;
+  // The type is passed in because both DMs below load a proposal exactly the
+  // same way — only which switch they answer to differs.
+  const dm = await orgDmContext(orgId, type);
+  if (!dm) return null;
   // Per-org Slack ids for the two parties.
   const memberships = await prisma.orgMembership.findMany({
     where: { orgId, userId: { in: [p.requestedById, p.toAssignment.userId] } },
@@ -570,7 +628,7 @@ async function loadProposalSlack(proposalId: string) {
   // The membership row (not just the Slack id) so DMs can use the cached channel.
   const memberFor = (userId: string) =>
     memberships.find((m) => m.userId === userId && m.slackUserId) ?? null;
-  return { p, token, memberFor };
+  return { p, token: dm.token, memberFor };
 }
 
 /**
@@ -578,13 +636,15 @@ async function loadProposalSlack(proposalId: string) {
  * they can accept or reject it. No-op if they haven't linked Slack.
  */
 export async function notifySwapProposed(proposalId: string): Promise<void> {
-  const loaded = await loadProposalSlack(proposalId);
+  const loaded = await loadProposalSlack(proposalId, "SWAP_PROPOSED");
   if (!loaded) return;
   const { p, token, memberFor } = loaded;
   const member = memberFor(p.toAssignment.userId);
   if (!member) return;
 
-  const url = appUrl("/swaps");
+  // Their row on that tab is the incoming proposal, keyed to the set they'd
+  // take on — so that's the set the link opens.
+  const url = appUrl(setLinkPath(p.fromAssignment.setId, "set-manager"));
   const text =
     `🔁 ${p.requestedBy.name} wants to swap their ` +
     `${roleLabel(p.fromAssignment.role)} slot on ` +
@@ -602,19 +662,29 @@ export async function notifySwapResolved(
   proposalId: string,
   accepted: boolean
 ): Promise<void> {
-  const loaded = await loadProposalSlack(proposalId);
+  const loaded = await loadProposalSlack(proposalId, "SWAP_RESOLVED");
   if (!loaded) return;
   const { p, token, memberFor } = loaded;
   const member = memberFor(p.requestedById);
   if (!member) return;
 
   const who = p.toAssignment.user.name;
-  const text = accepted
-    ? `✅ ${who} accepted your swap — you're now on ` +
-      `${setLabel(p.toAssignment.set)} and they've got ` +
-      `${setLabel(p.fromAssignment.set)}.`
-    : `🚫 ${who} declined your swap for ` +
-      `${setLabel(p.fromAssignment.set)}. Your slot is unchanged.`;
+  // Either way the link goes to the set that's THEIRS now: the one they took on
+  // if it was accepted, the one they kept if it wasn't.
+  const url = appUrl(
+    setLinkPath(
+      accepted ? p.toAssignment.setId : p.fromAssignment.setId,
+      "set-manager"
+    )
+  );
+  const text =
+    (accepted
+      ? `✅ ${who} accepted your swap — you're now on ` +
+        `${setLabel(p.toAssignment.set)} and they've got ` +
+        `${setLabel(p.fromAssignment.set)}.`
+      : `🚫 ${who} declined your swap for ` +
+        `${setLabel(p.fromAssignment.set)}. Your slot is unchanged.`) +
+    (url ? ` See it here: ${url}` : "");
   await postDirectMessageTo(token, member, text);
 }
 
@@ -630,8 +700,8 @@ export async function notifyAvailabilityRequest(request: {
   // The teams the request targets; empty = the whole org (lib/availabilityTargets).
   teams: { id: string }[];
 }): Promise<void> {
-  const token = await orgBotToken(request.orgId);
-  if (!token && !slackDryRun()) return;
+  const dm = await orgDmContext(request.orgId, "AVAILABILITY_REQUEST");
+  if (!dm) return;
 
   const teamIds = request.teams.map((t) => t.id);
   const members = await prisma.orgMembership.findMany({
@@ -654,7 +724,7 @@ export async function notifyAvailabilityRequest(request: {
     `📅 Please enter your availability for *${label}*.` +
     (url ? ` ${url}` : "");
 
-  await Promise.all(members.map((m) => postDirectMessageTo(token, m, text)));
+  await Promise.all(members.map((m) => postDirectMessageTo(dm.token, m, text)));
 }
 
 /**
@@ -664,10 +734,15 @@ export async function notifyAvailabilityRequest(request: {
  */
 export async function notifyAdminsPendingApproval(
   orgId: string,
-  info: { kind: "cover" | "swap"; role: Instrument; set: SetLike }
+  // A cover names both sides (who is covering for whom) — that's the whole
+  // decision the admin is making. A targeted swap is still described by role,
+  // since "covering for" doesn't fit a two-way trade.
+  info:
+    | { kind: "cover"; set: SetLike; taker: string; previousOwner: string }
+    | { kind: "swap"; role: Instrument; set: SetLike }
 ): Promise<void> {
-  const token = await orgBotToken(orgId);
-  if (!token && !slackDryRun()) return;
+  const dm = await orgDmContext(orgId, "APPROVAL_PENDING");
+  if (!dm) return;
 
   const admins = await prisma.orgMembership.findMany({
     where: { orgId, isAdmin: true, slackUserId: { not: null } },
@@ -676,13 +751,16 @@ export async function notifyAdminsPendingApproval(
   if (admins.length === 0) return;
 
   const url = appUrl("/approvals");
-  const what = info.kind === "cover" ? "cover" : "swap";
   const text =
-    `🛎️ A ${roleLabel(info.role)} ${what} on ${setLabel(info.set)} ` +
-    `is awaiting your approval.` +
-    (url ? ` Review it here: ${url}` : "");
+    info.kind === "cover"
+      ? `🛎️ ${info.taker} is covering for ${info.previousOwner} on ` +
+        `${setLabel(info.set)}. Waiting for your approval` +
+        (url ? `, review it here: ${url}` : ".")
+      : `🛎️ A ${roleLabel(info.role)} swap on ${setLabel(info.set)} ` +
+        `is awaiting your approval.` +
+        (url ? ` Review it here: ${url}` : "");
 
-  await Promise.all(admins.map((m) => postDirectMessageTo(token, m, text)));
+  await Promise.all(admins.map((m) => postDirectMessageTo(dm.token, m, text)));
 }
 
 /**
@@ -712,9 +790,6 @@ export async function notifyAssignmentChange(
     // The team catalog the role key belongs to, so it reads in that team's own
     // words. Omit and roleLabel falls back to the built-in/humanized name.
     catalog?: TeamRoleDef[];
-    // Who they're covering for (added) or who took over (removed), when this
-    // was a reassignment rather than a plain add/remove.
-    counterpart?: string;
   }
 ): Promise<void> {
   try {
@@ -723,9 +798,8 @@ export async function notifyAssignmentChange(
       select: { label: true, startsAt: true, orgId: true },
     });
     if (!set || set.startsAt < new Date()) return;
-
-    const token = await orgBotToken(set.orgId);
-    if (!token && !slackDryRun()) return;
+    const dm = await orgDmContext(set.orgId, "ROSTER_CHANGE");
+    if (!dm) return;
 
     const member = await prisma.orgMembership.findUnique({
       where: { userId_orgId: { userId, orgId: set.orgId } },
@@ -735,16 +809,20 @@ export async function notifyAssignmentChange(
 
     const role = roleLabel(change.role, change.catalog);
     const where = setLabel(set);
-    const url = appUrl("/calendar");
+    // Deep link: this opens the calendar with THIS set's detail modal already
+    // up, rather than dropping someone on today's month to hunt for it.
+    const url = appUrl(setLinkPath(setId));
+    // Deliberately says nothing about who else was involved. An admin swapping
+    // one person for another is NOT a cover — the person who asked for cover is
+    // the one who started it — so naming a counterpart here read as if someone
+    // had requested something they never did.
     const text =
       change.kind === "added"
-        ? `\u{1F3B8} You're on *${role}* for ${where}` +
-          (change.counterpart ? `, covering for ${change.counterpart}.` : ".") +
+        ? `\u{1F3B8} You're on *${role}* for ${where}.` +
           (url ? ` Details here: ${url}` : "")
-        : `\u{1F44B} You're off *${role}* for ${where}` +
-          (change.counterpart ? ` — ${change.counterpart} is covering.` : ".");
+        : `\u{1F44B} You're no longer on ${where}.`;
 
-    await postDirectMessageTo(token, member, text);
+    await postDirectMessageTo(dm.token, member, text);
   } catch (err) {
     console.error("[slack] assignment-change DM failed", err);
   }
@@ -756,6 +834,8 @@ export async function notifyAssignmentChange(
 export type NewSeat = {
   userId: string;
   role: Instrument;
+  // The set's id — what makes each line in the DM a link to that set's modal.
+  setId: string;
   set: SetLike;
   // The catalog the role key belongs to, so it reads in that team's own words.
   catalog?: TeamRoleDef[];
@@ -782,9 +862,8 @@ export async function notifyAssignmentsAdded(
     const now = new Date();
     const upcoming = seats.filter((s) => s.set.startsAt >= now);
     if (upcoming.length === 0) return;
-
-    const token = await orgBotToken(orgId);
-    if (!token && !slackDryRun()) return;
+    const dm = await orgDmContext(orgId, "ROSTER_CHANGE");
+    if (!dm) return;
 
     // Group by person, then order each person's list by date so their message
     // reads as a schedule rather than whatever order the plan happened to be in.
@@ -804,18 +883,26 @@ export async function notifyAssignmentsAdded(
       select: { ...DM_FIELDS, userId: true },
     });
 
-    const url = appUrl("/calendar");
+    const calendarUrl = appUrl("/calendar");
     await Promise.all(
       members.map((m) => {
         const list = byUser.get(m.userId) ?? [];
-        const lines = list.map(
-          (seat) => `\u{2022} *${roleLabel(seat.role, seat.catalog)}* — ${setLabel(seat.set)}`
-        );
+        // Each line's set is a link to its own detail modal (Slack mrkdwn
+        // <url|text>), so a five-set message is five ways in rather than one
+        // trip to the calendar and a hunt for the right day.
+        const lines = list.map((seat) => {
+          const when = setLabel(seat.set);
+          const link = appUrl(setLinkPath(seat.setId));
+          return (
+            `\u{2022} *${roleLabel(seat.role, seat.catalog)}* — ` +
+            (link ? `<${link}|${when}>` : when)
+          );
+        });
         const text =
           `\u{1F3B8} You've been scheduled for ${list.length} ` +
           `set${list.length === 1 ? "" : "s"}:\n${lines.join("\n")}` +
-          (url ? `\nConfirm here: ${url}` : "");
-        return postDirectMessageTo(token, m, text);
+          (calendarUrl ? `\nConfirm here: ${calendarUrl}` : "");
+        return postDirectMessageTo(dm.token, m, text);
       })
     );
   } catch (err) {
@@ -1204,7 +1291,13 @@ export async function sendDailyDigests(
       user: { select: { id: true, name: true } },
       // digestUpcomingDays is the org's own look-ahead window (Org settings) —
       // it decides what the digest counts AND what its copy says.
-      org: { select: { name: true, digestUpcomingDays: true } },
+      org: {
+        select: {
+          name: true,
+          digestUpcomingDays: true,
+          notificationPrefs: true,
+        },
+      },
     },
   });
 
@@ -1216,6 +1309,18 @@ export async function sendDailyDigests(
 
   for (const m of due) {
     try {
+      // The org switched the morning summary off for everyone (Org settings →
+      // Notifications). Deliberately not stamped as sent, so switching it back
+      // on still delivers today's.
+      if (
+        !notificationEnabled(
+          parseNotificationPrefs(m.org.notificationPrefs),
+          "DAILY_DIGEST"
+        )
+      ) {
+        skipped++;
+        continue;
+      }
       if (!tokens.has(m.orgId)) tokens.set(m.orgId, await orgBotToken(m.orgId));
       const token = tokens.get(m.orgId) ?? null;
       if (!token && !slackDryRun()) {

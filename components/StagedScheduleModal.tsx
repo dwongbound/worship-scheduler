@@ -63,7 +63,12 @@ import {
   type Instrument,
 } from "@/lib/constants";
 import { formatDay, formatTime, startOfWeekMonday } from "@/lib/dates";
-import { defaultMDId, eligibleMDIds, isValidMD } from "@/lib/md";
+import {
+  defaultMDId,
+  eligibleMDIds,
+  isValidMD,
+  type MDAssignment,
+} from "@/lib/md";
 import { buildPlayerOptions } from "@/lib/playerOptions";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import {
@@ -194,6 +199,19 @@ export default function StagedScheduleModal({
     const mds = new Set(users.filter((u) => u.isMD).map((u) => u.id));
     return (id: string) => mds.has(id);
   }, [users]);
+
+  // A staged roster in the shape lib/md.ts reads. A seat waiting on an admin's
+  // approval (a taken cover, an accepted swap) still belongs to the person
+  // handing it over, so the set's MD doesn't move before the handoff is real.
+  const mdRoster = (list: StagedSet["assignments"]): MDAssignment[] =>
+    list.map((x) => ({
+      userId: x.userId,
+      role: x.role,
+      isMD: isMdOf(x.userId),
+      pendingFrom: x.pendingFromUserId
+        ? { userId: x.pendingFromUserId, isMD: isMdOf(x.pendingFromUserId) }
+        : null,
+    }));
 
   // Every user's unavailability flattened into scheduler rules once, so both the
   // dropdowns and the conflict markers can tell who can't serve at a set's time.
@@ -485,11 +503,7 @@ export default function StagedScheduleModal({
           // still eligible survives, otherwise the best of the new roster.
           mdUserId: s.requiresMD
             ? (() => {
-                const a = merged.map((x) => ({
-                  userId: x.userId,
-                  role: x.role,
-                  isMD: isMdOf(x.userId),
-                }));
+                const a = mdRoster(merged);
                 return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
               })()
             : null,
@@ -582,11 +596,7 @@ export default function StagedScheduleModal({
         // survives, otherwise the best of the newly-complete roster.
         mdUserId: s.requiresMD
           ? (() => {
-              const a = merged.map((x) => ({
-                userId: x.userId,
-                role: x.role,
-                isMD: isMdOf(x.userId),
-              }));
+              const a = mdRoster(merged);
               return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
             })()
           : null,
@@ -601,11 +611,7 @@ export default function StagedScheduleModal({
   // MD eligibility for a staged set, mirroring lib/md with our local isMD info:
   // eligible assignees, and the current pick if it's still valid.
   const mdInfo = (set: StagedSet) => {
-    const a = set.assignments.map((x) => ({
-      userId: x.userId,
-      role: x.role,
-      isMD: isMdOf(x.userId),
-    }));
+    const a = mdRoster(set.assignments);
     return {
       eligibleIds: new Set(eligibleMDIds(a)),
       mdUserId: isValidMD(set.mdUserId, a) ? set.mdUserId : null,
@@ -618,11 +624,7 @@ export default function StagedScheduleModal({
   const applySets = (): StagedSet[] =>
     sets.map((s) => {
       if (!s.requiresMD) return { ...s, mdUserId: null };
-      const a = s.assignments.map((x) => ({
-        userId: x.userId,
-        role: x.role,
-        isMD: isMdOf(x.userId),
-      }));
+      const a = mdRoster(s.assignments);
       return {
         ...s,
         mdUserId: isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a),

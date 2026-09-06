@@ -223,7 +223,7 @@ export default function Navbar() {
   const tabs = [
     { href: "/calendar", label: "Calendar", icon: CALENDAR_ICON },
     {
-      href: "/swaps",
+      href: "/set-manager",
       label: "My Sets",
       icon: SWAP_ICON,
       dot: openSwapCount > 0,

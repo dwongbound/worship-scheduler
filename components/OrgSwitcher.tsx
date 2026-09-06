@@ -1,7 +1,7 @@
 "use client";
 // The navbar org dropdown, next to the profile menu. Its behavior depends on
 // the page:
-//   /calendar, /swaps — a VIEW filter: "All orgs" + each of my orgs.
+//   /calendar, /set-manager — a VIEW filter: "All orgs" + each of my orgs.
 //   /create, /users   — the ADMIN org: exactly one of my admin orgs (no All).
 //   /schedule, /profile, /platform — locked to "All orgs" (these pages aren't
 //                       scoped to a single org): the menu lists the orgs
