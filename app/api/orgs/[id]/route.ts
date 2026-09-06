@@ -2,7 +2,10 @@
 // PATCH /api/orgs/[id] — update them. Two independent changes live here:
 //   • the join key — rotate it (`rotateKey:true`) or set an explicit one
 //     (`joinKey:"…"`);
-//   • `digestUpcomingDays` — how far ahead this org's daily digest looks.
+//   • `digestUpcomingDays` — how far ahead this org's daily digest looks;
+//   • `notificationPrefs` — which of the bot's personal DMs this org sends. The
+//     body carries only the switches that changed; they're merged over what's
+//     stored (see lib/notificationPrefs.ts).
 // Each is applied only when present, so the settings page can send one field
 // without disturbing the other.
 // Org-admin gated via requireOrgAdminFor, so a regular org admin can manage
@@ -15,6 +18,12 @@ import {
   DIGEST_UPCOMING_DAYS_MAX,
   DIGEST_UPCOMING_DAYS_MIN,
 } from "@/lib/constants";
+import {
+  mergeNotificationPrefs,
+  parseNotificationPrefs,
+  validateNotificationPrefs,
+  type NotificationPrefs,
+} from "@/lib/notificationPrefs";
 
 // What both handlers return — the org's editable settings.
 const ORG_FIELDS = {
@@ -22,6 +31,7 @@ const ORG_FIELDS = {
   name: true,
   joinKey: true,
   digestUpcomingDays: true,
+  notificationPrefs: true,
 } as const;
 
 export async function GET(
@@ -37,7 +47,12 @@ export async function GET(
     select: ORG_FIELDS,
   });
   if (!org) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(org);
+  // The Json column goes out as a validated map — the settings page shouldn't
+  // have to defend itself against whatever a hand-edited row holds.
+  return NextResponse.json({
+    ...org,
+    notificationPrefs: parseNotificationPrefs(org.notificationPrefs),
+  });
 }
 
 export async function PATCH(
@@ -49,7 +64,11 @@ export async function PATCH(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
   const body = await req.json().catch(() => ({}));
-  const data: { joinKey?: string; digestUpcomingDays?: number } = {};
+  const data: {
+    joinKey?: string;
+    digestUpcomingDays?: number;
+    notificationPrefs?: NotificationPrefs;
+  } = {};
 
   // rotateKey:true mints a fresh random key; or set an explicit one. Absent
   // both, the key is simply left alone (this may be a digest-only update).
@@ -78,6 +97,27 @@ export async function PATCH(
     data.digestUpcomingDays = days;
   }
 
+  // Notification switches. Only the ones that changed travel, so they're merged
+  // over the stored map rather than replacing it — two admins toggling different
+  // rows can't wipe each other's change.
+  if (body.notificationPrefs !== undefined) {
+    const update = validateNotificationPrefs(body.notificationPrefs);
+    if (!update) {
+      return NextResponse.json(
+        { error: "Unknown notification setting." },
+        { status: 400 }
+      );
+    }
+    const current = await prisma.org.findUnique({
+      where: { id },
+      select: { notificationPrefs: true },
+    });
+    data.notificationPrefs = mergeNotificationPrefs(
+      parseNotificationPrefs(current?.notificationPrefs),
+      update
+    );
+  }
+
   if (Object.keys(data).length === 0) {
     return NextResponse.json(
       { error: "Nothing to update." },
@@ -91,7 +131,10 @@ export async function PATCH(
       data,
       select: ORG_FIELDS,
     });
-    return NextResponse.json(org);
+    return NextResponse.json({
+      ...org,
+      notificationPrefs: parseNotificationPrefs(org.notificationPrefs),
+    });
   } catch {
     // The @unique on Org.joinKey means a collision lands here.
     return NextResponse.json(

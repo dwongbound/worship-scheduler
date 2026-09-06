@@ -20,6 +20,7 @@ import {
   windowPhrase,
 } from "./constants";
 import { formatTime, shortRangeLabel } from "./dates";
+import { setLinkPath } from "./setLink";
 
 /** One bullet: a sentence plus the app path it links to. */
 export type DigestItem = {
@@ -158,7 +159,9 @@ export async function buildOrgDigest(
         setsToday.length === 1
           ? `You have 1 set today, at ${when}`
           : `You have ${setsToday.length} sets today: ${when}`,
-      path: "/calendar",
+      // One set today = link straight to its roster; several and the bullet is
+      // about the day, so it stays the calendar.
+      path: setsToday.length === 1 ? setLinkPath(setsToday[0].id) : "/calendar",
     });
   }
 

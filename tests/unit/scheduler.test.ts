@@ -149,6 +149,35 @@ describe("isUserAvailable", () => {
     expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(false);
   });
 
+  it("ignores a recurring rule that hasn't started repeating yet", () => {
+    const rules: UnavailabilityRule[] = [
+      {
+        userId: "u1",
+        type: "RECURRING",
+        dayOfWeek: 2,
+        startMinute: 1080,
+        endMinute: 1200,
+        startDate: new Date(2026, 1, 1), // starts a month after the set
+      },
+    ];
+    expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(true);
+  });
+
+  it("blocks a recurring rule whose date-range span covers the set", () => {
+    const rules: UnavailabilityRule[] = [
+      {
+        userId: "u1",
+        type: "RECURRING",
+        dayOfWeek: 2,
+        startMinute: 1080,
+        endMinute: 1200,
+        startDate: new Date(2026, 0, 1),
+        endDate: new Date(2026, 0, 31),
+      },
+    ];
+    expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(false);
+  });
+
   it("blocks a date range containing the set (inclusive end date)", () => {
     const rules: UnavailabilityRule[] = [
       {

@@ -25,7 +25,7 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   await expect(setsTab).toBeVisible();
   await setsTab.click();
 
-  await expect(page).toHaveURL(/\/swaps/);
+  await expect(page).toHaveURL(/\/set-manager/);
   await expect(page.getByRole("heading", { name: "Confirmed" })).toBeVisible();
 });
 
@@ -97,7 +97,7 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
   // "Prayer Cover Mobile" is jack's open keys cover on the Prayer Room team.
   // paul (Prayer Room + keys) sees it; carol (keys, Sunday-only) does not.
   await login(page, "paul");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   await expect(
     page
       .locator("li")
@@ -106,7 +106,7 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
   ).toBeVisible();
 
   await login(page, "carol");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
   await expect(page.getByText("Prayer Cover Mobile")).toHaveCount(0);
 });
 
@@ -161,7 +161,7 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
 
 test("phone My Sets hides the desktop-only .ics export", async ({ page }) => {
   await login(page, "bob");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   await expect(page.getByRole("heading", { name: "Confirmed" })).toBeVisible();
   // The export button is desktop-only (hidden sm:block) — present but not shown.
@@ -393,7 +393,7 @@ test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async (
   await proposeSwapTo(page, "erin", "Omar Osei");
 
   await login(page, "omar");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   const card = page.locator("li").filter({ hasText: "Erin Evans" }).first();
   await expect(card).toBeVisible();
@@ -406,7 +406,7 @@ test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async (
   // "freezes" (the busy spinner never clears, a stray swipe navigates away, or
   // the full-screen loader latches on) this is what fails.
   await expect(card).toHaveCount(0, { timeout: 15_000 });
-  await expect(page).toHaveURL(/\/swaps/);
+  await expect(page).toHaveURL(/\/set-manager/);
   // The accepted slot is now omar's, awaiting an admin's sign-off.
   await expect(page.getByText("Pending approval").first()).toBeVisible();
 });
@@ -417,14 +417,14 @@ test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async 
   await proposeSwapTo(page, "erin", "Omar Osei");
 
   await login(page, "omar");
-  await page.goto("/swaps");
+  await page.goto("/set-manager");
 
   const card = page.locator("li").filter({ hasText: "Erin Evans" }).first();
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "Reject" }).tap();
 
   await expect(card).toHaveCount(0, { timeout: 15_000 });
-  await expect(page).toHaveURL(/\/swaps/);
+  await expect(page).toHaveURL(/\/set-manager/);
 });
 
 // The roster-health dot is a phone-only addition to the "My sets" list: on

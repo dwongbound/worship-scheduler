@@ -55,13 +55,15 @@ interface DayBlocks {
   repeating: boolean; // any of them comes from a weekly rule
 }
 
-// Does `rule` block `day`? RECURRING matches by weekday, until its endDate if
-// it has one (the last day it repeats; null = forever); SPECIFIC and
-// DATE_RANGE match when the day falls within [startDate, endDate] (endDate
-// defaults to startDate for a single-day specific block).
+// Does `rule` block `day`? RECURRING matches by weekday, inside its optional
+// [startDate, endDate] span (the first and last days it repeats; null on either
+// end = open-ended that way); SPECIFIC and DATE_RANGE match when the day falls
+// within [startDate, endDate] (endDate defaults to startDate for a single-day
+// specific block).
 function ruleAppliesOn(rule: ApiUnavailability, day: Date): boolean {
   if (rule.type === "RECURRING") {
     if (day.getDay() !== rule.dayOfWeek) return false;
+    if (rule.startDate && day < startOfDay(new Date(rule.startDate))) return false;
     return !rule.endDate || day <= startOfDay(new Date(rule.endDate));
   }
   if (!rule.startDate) return false;
@@ -335,6 +337,9 @@ export default function AvailabilityCalendar({
       <div
         className="grid grid-cols-7"
         ref={gridRef}
+        // Dragging across cells paints days here, so the page's pull-to-refresh
+        // must keep its hands off touches that start in the grid.
+        data-no-pull
         onContextMenu={(e) => {
           if (interactive) e.preventDefault();
         }}

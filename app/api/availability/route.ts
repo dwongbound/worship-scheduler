@@ -18,13 +18,23 @@ function parseLocalDate(value: string): Date {
   return new Date(y, m - 1, d);
 }
 
-// One weekly recurring block as it arrives from the client. `endDate` is the
-// last day it applies ("YYYY-MM-DD"); absent/null = repeats forever.
+// One weekly recurring block as it arrives from the client. `startDate` is the
+// first day it applies and `endDate` the last (both "YYYY-MM-DD"); absent/null
+// on either end = open-ended that way, so neither set = repeats forever.
 interface RecurringInput {
   dayOfWeek: number;
   startMinute: number;
   endMinute: number;
+  startDate?: string | null;
   endDate?: string | null;
+}
+
+// A "YYYY-MM-DD" bound is optional, but if present it has to parse.
+function isValidBound(value: string | null | undefined): boolean {
+  return (
+    value == null ||
+    (typeof value === "string" && !isNaN(parseLocalDate(value).getTime()))
+  );
 }
 
 function isValidRecurring(block: RecurringInput): boolean {
@@ -36,9 +46,10 @@ function isValidRecurring(block: RecurringInput): boolean {
     typeof block.startMinute === "number" &&
     typeof block.endMinute === "number" &&
     block.startMinute < block.endMinute &&
-    (block.endDate == null ||
-      (typeof block.endDate === "string" &&
-        !isNaN(parseLocalDate(block.endDate).getTime())))
+    isValidBound(block.startDate) &&
+    isValidBound(block.endDate) &&
+    // A span that ends before it begins would never fire at all.
+    !(block.startDate && block.endDate && block.startDate > block.endDate)
   );
 }
 
@@ -47,17 +58,17 @@ function recurringKey(block: {
   dayOfWeek: number | null;
   startMinute: number | null;
   endMinute: number | null;
+  startDate?: Date | string | null;
   endDate?: Date | string | null;
 }): string {
-  // A block that stops on a different date is a different block.
-  const end = block.endDate
-    ? toYmd(
-        block.endDate instanceof Date
-          ? block.endDate
-          : parseLocalDate(block.endDate)
-      )
-    : "forever";
-  return `${block.dayOfWeek}-${block.startMinute}-${block.endMinute}-${end}`;
+  // A block that repeats over a different span is a different block.
+  const day = (value: Date | string | null | undefined, fallback: string) =>
+    value
+      ? toYmd(value instanceof Date ? value : parseLocalDate(value))
+      : fallback;
+  const start = day(block.startDate, "always");
+  const end = day(block.endDate, "forever");
+  return `${block.dayOfWeek}-${block.startMinute}-${block.endMinute}-${start}-${end}`;
 }
 
 // The db row for one recurring block (its stop date as a local-midnight Date).
@@ -66,6 +77,7 @@ function toRecurringRow(block: RecurringInput) {
     dayOfWeek: block.dayOfWeek,
     startMinute: block.startMinute,
     endMinute: block.endMinute,
+    startDate: block.startDate ? parseLocalDate(block.startDate) : null,
     endDate: block.endDate ? parseLocalDate(block.endDate) : null,
   };
 }
@@ -125,10 +137,11 @@ export async function POST(req: NextRequest) {
     // Keep only the fields we store — the single-block shape arrives as the
     // whole request body.
     const incoming: RecurringInput[] = raw.map(
-      ({ dayOfWeek, startMinute, endMinute, endDate }) => ({
+      ({ dayOfWeek, startMinute, endMinute, startDate, endDate }) => ({
         dayOfWeek,
         startMinute,
         endMinute,
+        startDate: startDate ?? null,
         endDate: endDate ?? null,
       })
     );
@@ -142,6 +155,7 @@ export async function POST(req: NextRequest) {
         dayOfWeek: true,
         startMinute: true,
         endMinute: true,
+        startDate: true,
         endDate: true,
       },
     });

@@ -39,7 +39,12 @@ function specific(
 }
 function recurring(
   dayOfWeek: number,
-  opts: { startMinute?: number; endMinute?: number; endDate?: string } = {}
+  opts: {
+    startMinute?: number;
+    endMinute?: number;
+    startDate?: string;
+    endDate?: string;
+  } = {}
 ): ApiUnavailability {
   return {
     id: `r${seq++}`,
@@ -47,7 +52,7 @@ function recurring(
     dayOfWeek,
     startMinute: opts.startMinute ?? null,
     endMinute: opts.endMinute ?? null,
-    startDate: null,
+    startDate: opts.startDate ?? null,
     endDate: opts.endDate ?? null,
     requestId: null,
     note: null,
@@ -355,9 +360,9 @@ describe("expandRecurringBlocks", () => {
       ]
     );
     expect(blocks).toEqual([
-      { dayOfWeek: 1, startMinute: 360, endMinute: 1020, endDate: null },
-      { dayOfWeek: 2, startMinute: 360, endMinute: 1020, endDate: null },
-      { dayOfWeek: 3, startMinute: 360, endMinute: 1020, endDate: null },
+      { dayOfWeek: 1, startMinute: 360, endMinute: 1020, startDate: null, endDate: null },
+      { dayOfWeek: 2, startMinute: 360, endMinute: 1020, startDate: null, endDate: null },
+      { dayOfWeek: 3, startMinute: 360, endMinute: 1020, startDate: null, endDate: null },
     ]);
   });
 
@@ -377,9 +382,24 @@ describe("expandRecurringBlocks", () => {
     const blocks = expandRecurringBlocks(
       [1, 2],
       [{ startMinute: 0, endMinute: 1440 }],
-      "2026-09-30"
+      { endDate: "2026-09-30" }
     );
     expect(blocks.every((b) => b.endDate === "2026-09-30")).toBe(true);
+    expect(blocks.every((b) => b.startDate === null)).toBe(true);
+  });
+
+  it("stamps both ends of a date-range span on every block", () => {
+    const blocks = expandRecurringBlocks(
+      [1, 2],
+      [{ startMinute: 0, endMinute: 1440 }],
+      { startDate: "2026-09-01", endDate: "2026-09-30" }
+    );
+    expect(blocks).toHaveLength(2);
+    expect(
+      blocks.every(
+        (b) => b.startDate === "2026-09-01" && b.endDate === "2026-09-30"
+      )
+    ).toBe(true);
   });
 
   it("returns nothing when either axis is empty", () => {
@@ -402,6 +422,38 @@ describe("recurring blocks that stop repeating", () => {
   it("repeats forever without an end date", () => {
     const entries = [recurring(WED)];
     expect(dayBlockLevel(entries, "2027-07-21")).toBe("full");
+  });
+
+  it("doesn't apply before its first day", () => {
+    const entries = [recurring(WED, { startDate: isoDay(2026, 7, 15) })];
+    expect(dayBlockLevel(entries, "2026-07-08")).toBeNull(); // not started
+    expect(dayBlockLevel(entries, "2026-07-15")).toBe("full"); // inclusive
+    expect(dayBlockLevel(entries, "2026-07-22")).toBe("full"); // and onward
+  });
+
+  it("applies only inside a date-range span", () => {
+    const entries = [
+      recurring(WED, {
+        startDate: isoDay(2026, 7, 15),
+        endDate: isoDay(2026, 7, 22),
+      }),
+    ];
+    expect(dayBlockLevel(entries, "2026-07-08")).toBeNull(); // before
+    expect(dayBlockLevel(entries, "2026-07-15")).toBe("full");
+    expect(dayBlockLevel(entries, "2026-07-22")).toBe("full");
+    expect(dayBlockLevel(entries, "2026-07-29")).toBeNull(); // after
+  });
+
+  it("marks a day repeating only inside the span", () => {
+    const entries = [
+      recurring(WED, {
+        startDate: isoDay(2026, 7, 15),
+        endDate: isoDay(2026, 7, 22),
+      }),
+    ];
+    expect(dayIsRepeating(entries, "2026-07-08")).toBe(false);
+    expect(dayIsRepeating(entries, "2026-07-15")).toBe(true);
+    expect(dayIsRepeating(entries, "2026-07-29")).toBe(false);
   });
 });
 

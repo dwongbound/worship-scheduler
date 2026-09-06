@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { roleLabel } from "@/lib/teamRoles";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
+import { reconcileMD } from "@/lib/setMd";
 import { notifySetChange } from "@/lib/slack";
 
 const setSelect = {
@@ -146,6 +147,10 @@ async function handleCover(
         },
       }),
     ]);
+    // The handoff is final, so the seat has really changed hands: if the person
+    // who left was the MD, hand the job to the taker when they can lead, else to
+    // whoever else on the set can (see lib/setMd.ts reconcileMD).
+    await reconcileMD(a.setId, a.userId);
     // Only NOW is the handoff real (the take itself was pending approval), so
     // this is the first and only time the group chat hears about it.
     const previous = await prisma.user.findUnique({
@@ -214,6 +219,10 @@ async function handleSwap(
       historyFor(from.setId, from.role, type, adminId),
       historyFor(to.setId, to.role, type, adminId),
     ]);
+    // Each slot has really changed hands now, so re-settle each set's MD around
+    // whoever ended up there (the recipient took `from`, the requester `to`).
+    await reconcileMD(from.setId, p.recipientId);
+    if (to.setId !== from.setId) await reconcileMD(to.setId, p.requestedById);
     // The trade is final now — tell each set's chat who ended up in the slot.
     // Both sides on the same set means one message with two lines.
     const [fromUser, toUser] = await Promise.all([

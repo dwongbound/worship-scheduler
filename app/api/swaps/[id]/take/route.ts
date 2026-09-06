@@ -22,6 +22,9 @@ export async function POST(
   const assignment = await prisma.assignment.findUnique({
     where: { id },
     include: {
+      // The current owner — captured before the update reassigns the row, and
+      // named in the admins' approval DM ("<taker> is covering for <owner>").
+      user: { select: { name: true } },
       set: { select: { orgId: true, teamId: true, label: true, startsAt: true } },
     },
   });
@@ -83,6 +86,8 @@ export async function POST(
 
   // Capture the original owner before we reassign the row away from them.
   const previousOwnerId = assignment.userId;
+  const previousOwnerName = assignment.user.name ?? "someone";
+  const takerName = user.name ?? "Someone";
 
   // The slot moves to the taker immediately, but as PENDING_APPROVAL — an admin
   // still has to approve it. pendingCoverFromUserId remembers the original owner
@@ -111,11 +116,12 @@ export async function POST(
   // Tell the person who gave up the slot that it's covered (pending approval),
   // and ping the org's admins that a cover now needs approval. Both are
   // non-throwing and no-op when Slack isn't configured.
-  await notifySwapTaken(updated.id, previousOwnerId, user.name ?? "Someone");
+  await notifySwapTaken(updated.id, previousOwnerId, takerName);
   await notifyAdminsPendingApproval(assignment.set.orgId, {
     kind: "cover",
-    role: assignment.role,
     set: { label: assignment.set.label, startsAt: assignment.set.startsAt },
+    taker: takerName,
+    previousOwner: previousOwnerName,
   });
 
   return NextResponse.json(updated);

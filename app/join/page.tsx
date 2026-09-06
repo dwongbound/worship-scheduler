@@ -8,6 +8,11 @@ import { useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
+import {
+  clearPostLogin,
+  peekPostLogin,
+  safeInternalPath,
+} from "@/lib/postLogin";
 
 export default function JoinPage() {
   const router = useRouter();
@@ -32,9 +37,13 @@ export default function JoinPage() {
         return;
       }
       // Refresh the JWT's membership hints so the navbar tabs appear
-      // immediately, then enter the app.
+      // immediately, then enter the app — at whatever this account was trying
+      // to reach when it got sent here, if anything (a set link followed while
+      // signed out survives login and this gate; see lib/postLogin.ts).
       await update();
-      router.replace("/calendar");
+      const destination = safeInternalPath(peekPostLogin());
+      clearPostLogin();
+      router.replace(destination);
       router.refresh();
     } finally {
       setSubmitting(false);

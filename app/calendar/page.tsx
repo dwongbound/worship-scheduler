@@ -15,8 +15,10 @@
 import { useSession } from "next-auth/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Select from "@/components/common/Select";
+import { usePullToRefresh } from "@/components/PullToRefresh";
 import { usePageLoading } from "@/components/LoadingProvider";
 import CalendarMonth from "@/components/CalendarMonth";
 import SetDetailModal from "@/components/SetDetailModal";
@@ -35,6 +37,7 @@ import {
   SETS_WINDOW_MAX_DAYS,
 } from "@/lib/constants";
 import { toYmd } from "@/lib/dates";
+import { SET_PARAM } from "@/lib/setLink";
 import { setStatus, type SetStatus } from "@/lib/setStatus";
 import {
   buildPreviewPlan,
@@ -81,11 +84,18 @@ function CalendarView() {
   const [takeableSwaps, setTakeableSwaps] = useState<ApiSwapRequest[]>([]);
   // The open set is derived from the URL's ?set=<id>, not its own state — that
   // way the URL and the modal can never drift apart.
-  const selectedSetId = searchParams.get("set");
+  const selectedSetId = searchParams.get(SET_PARAM);
   const selectedSet = useMemo(
     () => (selectedSetId ? sets?.find((s) => s.id === selectedSetId) ?? null : null),
     [sets, selectedSetId]
   );
+  // Deep-link plumbing (see the effects below): the month a linked set pushes
+  // the grid to, why a link couldn't be opened, which ids have already been
+  // looked up, and which were opened by a click rather than a link.
+  const [linkedMonth, setLinkedMonth] = useState<Date | null>(null);
+  const [linkError, setLinkError] = useState("");
+  const resolvedLinks = useRef<Set<string>>(new Set());
+  const clickedSetIds = useRef<Set<string>>(new Set());
   // Day whose inline "+" (admin) create form is open, or null.
   const [createDate, setCreateDate] = useState<Date | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -134,7 +144,8 @@ function CalendarView() {
 
   // Org context: the navbar switcher's view filter ("all" or one org), and
   // which orgs I administer (gates the admin affordances per set).
-  const { orgs, viewOrgId, adminOrgId, isAdminOf, isAdminAny } = useOrgs();
+  const { orgs, viewOrgId, setViewOrg, adminOrgId, isAdminOf, isAdminAny } =
+    useOrgs();
   const isAdmin = isAdminAny;
 
   // Switching the org view recreates refetchSets and re-runs its effect, so two
@@ -208,9 +219,15 @@ function CalendarView() {
   );
 
   // Open a set: mirror its id into the URL so the modal can be linked/shared.
+  // The id is remembered as a CLICK, because a set opened from the grid already
+  // has its month on screen — only a set that arrived as a link moves the view
+  // (see the deep-link effects below).
   const selectSet = useCallback(
     (set: ApiSet) => {
-      router.replace(`${pathname}?set=${set.id}`, { scroll: false });
+      clickedSetIds.current.add(set.id);
+      router.replace(`${pathname}?${SET_PARAM}=${encodeURIComponent(set.id)}`, {
+        scroll: false,
+      });
     },
     [router, pathname]
   );
@@ -243,12 +260,71 @@ function CalendarView() {
     router.replace(pathname, { scroll: false });
   }, [router, pathname]);
 
+  // ── ?set=<id> deep links ──────────────────────────────────────────────
+  // A link can name a set this page hasn't loaded: one outside the fetch window
+  // (a Slack DM about a set months out) or one in an org the view filter is
+  // hiding. Ask the server where that set is, then move the page to it — switch
+  // the org view, widen the window — and let the ordinary fetch bring it in.
+  // The modal still opens from `sets`, so the open set has one source of truth.
+  useEffect(() => {
+    if (!selectedSetId || sets === null) return; // wait for the first load
+    if (sets.some((s) => s.id === selectedSetId)) return; // already here
+    if (resolvedLinks.current.has(selectedSetId)) return; // asked once already
+    resolvedLinks.current.add(selectedSetId);
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/sets/${selectedSetId}`);
+      if (cancelled) return;
+      if (!res.ok) {
+        // A 404 covers both "gone" and "not yours to see" — the endpoint
+        // deliberately doesn't say which.
+        setLinkError(
+          "That set couldn't be opened. It may have been deleted, or it isn't one you can see."
+        );
+        return;
+      }
+      const linked: ApiSet = await res.json();
+      if (cancelled) return;
+      const when = new Date(linked.startsAt);
+      // A link wins over the org filter — otherwise the modal never opens and
+      // nothing on screen explains why.
+      if (linked.org && viewOrgId !== "all" && linked.org.id !== viewOrgId) {
+        setViewOrg(linked.org.id);
+      }
+      handleViewMonthChange(new Date(when.getFullYear(), when.getMonth(), 1));
+    })().catch(() => {
+      if (!cancelled) setLinkError("That set couldn't be loaded — try again.");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSetId, sets, viewOrgId, setViewOrg, handleViewMonthChange]);
+
+  // Move the grid to a LINKED set's month, so closing the modal leaves you
+  // looking at the set you followed rather than at today. Clicks are exempt:
+  // their month is already the one on screen.
+  useEffect(() => {
+    if (!selectedSetId || clickedSetIds.current.has(selectedSetId)) return;
+    const linked = sets?.find((s) => s.id === selectedSetId);
+    if (!linked) return; // not loaded yet — the effect above is fetching it
+    const when = new Date(linked.startsAt);
+    // A fresh object each time: CalendarMonth honours a REQUEST rather than a
+    // month, so re-asking for the same month after paging away still works.
+    setLinkedMonth(new Date(when.getFullYear(), when.getMonth(), 1));
+  }, [selectedSetId, sets]);
+
+  // A fresh ?set= gets a fresh chance to report its own problem.
+  useEffect(() => setLinkError(""), [selectedSetId]);
+
   useEffect(() => {
     refetchSets();
     // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
     window.addEventListener(ORGS_CHANGED_EVENT, refetchSets);
     return () => window.removeEventListener(ORGS_CHANGED_EVENT, refetchSets);
   }, [refetchSets]);
+
+  // Pulling down on a phone refetches this tab in place.
+  usePullToRefresh(refetchSets);
 
   // One admin-users fetch per org I admin (the header names the org).
   useEffect(() => {
@@ -492,6 +568,7 @@ function CalendarView() {
           isAdmin={isAdmin}
           onCreateOnDay={setCreateDate}
           onViewMonthChange={handleViewMonthChange}
+          focusMonth={linkedMonth}
         />
       </div>
     </div>
@@ -499,6 +576,14 @@ function CalendarView() {
 
   return (
     <>
+      {/* A ?set= link that couldn't be opened says so — otherwise following a
+          dead link just shows the calendar, with nothing to explain why. */}
+      {linkError && (
+        <Banner tone="amber" onDismiss={() => setLinkError("")}>
+          {linkError}
+        </Banner>
+      )}
+
       {/* Mobile: the month grid is far too dense for a phone and the resize
           sidebar needs a pointer, so we drop both and show just the "My sets"
           list (tap a set for its full roster / to confirm / request cover).

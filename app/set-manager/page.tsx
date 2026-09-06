@@ -9,9 +9,19 @@
 // also sizes the /api/sets fetch, so every row shown can open its Details
 // modal. Anything past it is counted next to the dropdown, never silently
 // dropped.
-import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ReactNode,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useSearchParams } from "next/navigation";
 import { roleLabel } from "@/lib/teamRoles";
 import { useSession } from "next-auth/react";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import LoadingDots from "@/components/common/LoadingDots";
@@ -20,6 +30,7 @@ import RequestCoverModal from "@/components/RequestCoverModal";
 import SetDetailModal from "@/components/SetDetailModal";
 import SwapModal from "@/components/SwapModal";
 import { usePageLoading } from "@/components/LoadingProvider";
+import { usePullToRefresh } from "@/components/PullToRefresh";
 import StatusBadge from "@/components/StatusBadge";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
@@ -27,6 +38,7 @@ import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import Select from "@/components/common/Select";
 import { SET_MANAGER_HORIZONS } from "@/lib/constants";
 import { formatDay, formatTime, toYmd } from "@/lib/dates";
+import { SET_PARAM } from "@/lib/setLink";
 import type {
   ApiAdminUser,
   ApiIncomingSwap,
@@ -35,7 +47,30 @@ import type {
   ApiSwapRequest,
 } from "@/lib/types";
 
-export default function SwapsPage() {
+// How long a linked row keeps its ring once you're done with the modal.
+const HIGHLIGHT_MS = 4000;
+
+// Would a horizon of N months from today include this set? Built the same way
+// as the page's own horizonEnd, so "widen far enough to cover it" and the list
+// itself always agree about what's in range.
+function withinMonths(startsAt: string, months: number): boolean {
+  const end = new Date();
+  end.setMonth(end.getMonth() + months);
+  end.setHours(23, 59, 59, 999);
+  return new Date(startsAt).getTime() <= end.getTime();
+}
+
+// useSearchParams() must sit under a Suspense boundary, so the page export just
+// wraps the real component in one (same shape as the calendar).
+export default function SetManagerPage() {
+  return (
+    <Suspense>
+      <SetManagerView />
+    </Suspense>
+  );
+}
+
+function SetManagerView() {
   const [mine, setMine] = useState<ApiMyAssignment[] | null>(null);
   const [openSwaps, setOpenSwaps] = useState<ApiSwapRequest[] | null>(null);
   // Targeted trades awaiting MY accept/reject (shown under Covers / Swaps).
@@ -50,9 +85,22 @@ export default function SwapsPage() {
   // /api/swaps payloads omit assignments, so we fetch the sets alongside them
   // and look one up by id when a Details button is clicked.
   const [allSets, setAllSets] = useState<ApiSet[] | null>(null);
-  // The set whose roster modal is open (its id), or null. adminUsersByOrg feeds
-  // the modal's assignment dropdowns for orgs I administer (empty = read-only).
+  // The set whose roster modal is open (its id), or null. Opened by a row's
+  // "Details" button and nothing else — unlike the calendar, a link into THIS
+  // tab points at a row, not at a modal (see below). adminUsersByOrg feeds the
+  // modal's assignment dropdowns for orgs I administer (empty = read-only).
   const [detailSetId, setDetailSetId] = useState<string | null>(null);
+  // ?set=<id> means "show me this set in the list": the row is scrolled to and
+  // ringed, and nothing opens over it — the point of landing here rather than
+  // on the calendar is the button ON that row (take a cover, accept a swap,
+  // confirm a spot). `linkError` explains a link we can't honour; the refs
+  // below keep the lookup and the scroll to once each.
+  const searchParams = useSearchParams();
+  const linkedSetId = searchParams.get(SET_PARAM);
+  const [linkError, setLinkError] = useState("");
+  const [highlightSetId, setHighlightSetId] = useState<string | null>(null);
+  const resolvedLinks = useRef<Set<string>>(new Set());
+  const scrolledFor = useRef<string | null>(null);
   const [adminUsersByOrg, setAdminUsersByOrg] = useState<
     Record<string, ApiAdminUser[]>
   >({});
@@ -167,6 +215,99 @@ export default function SwapsPage() {
     return () => window.removeEventListener(ORGS_CHANGED_EVENT, reload);
   }, [reload]);
 
+  // Pulling down on a phone refetches this tab in place.
+  usePullToRefresh(reload);
+
+  // Every list the page draws from. Nothing renders until all four have landed,
+  // so this is also what tells the deep-link effect below that an absent row is
+  // genuinely absent rather than merely not painted yet.
+  const listsReady = Boolean(mine && openSwaps && allSets && incoming);
+
+  // Is this set on the page right now? Asked of the DOM rather than of the
+  // three lists separately, because "is there a row for it" is exactly what the
+  // highlight cares about — every row below is tagged with its set's id.
+  const rowExistsFor = (setId: string) =>
+    document.querySelector(`[data-set-row="${CSS.escape(setId)}"]`) !== null;
+
+  // ── ?set=<id> links ───────────────────────────────────────────────────
+  // A link here points at a ROW, not a modal: it scrolls to the set and rings
+  // it, leaving that row's own button (take, accept, confirm) in reach. The
+  // ring fades on its own — see HIGHLIGHT_MS.
+  useEffect(() => {
+    if (!linkedSetId) return;
+    setHighlightSetId(linkedSetId);
+  }, [linkedSetId]);
+
+  // Scroll to it once its row exists — which may be after the horizon widens
+  // below, so this waits on the data rather than firing on the id alone.
+  useEffect(() => {
+    if (!highlightSetId || scrolledFor.current === highlightSetId) return;
+    const row = document.querySelector(
+      `[data-set-row="${CSS.escape(highlightSetId)}"]`
+    );
+    if (!row) return; // no row yet — either still loading, or there'll never be
+    scrolledFor.current = highlightSetId;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlightSetId, mine, openSwaps, incoming, allSets]);
+
+  // The ring is temporary: long enough to catch the eye on arrival, then gone.
+  useEffect(() => {
+    if (!highlightSetId) return;
+    const timer = setTimeout(() => setHighlightSetId(null), HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [highlightSetId]);
+
+  // A linked set with no row on this page needs explaining rather than silence.
+  // The list runs from today to the horizon, so the set may be further out (in
+  // which case widening the horizon brings it in — the same move the "further
+  // out" hint asks for by hand) or simply not one of mine.
+  useEffect(() => {
+    if (!linkedSetId || !listsReady) return; // nothing drawn yet
+    if (rowExistsFor(linkedSetId)) return; // it's on the page — nothing to do
+    if (resolvedLinks.current.has(linkedSetId)) return; // asked once already
+    resolvedLinks.current.add(linkedSetId);
+    let cancelled = false;
+    (async () => {
+      const res = await fetch(`/api/sets/${linkedSetId}`);
+      if (cancelled) return;
+      if (!res.ok) {
+        // A 404 covers both "gone" and "not yours to see" — the endpoint
+        // deliberately doesn't say which.
+        setLinkError(
+          "That set couldn't be found. It may have been deleted, or it isn't one you can see."
+        );
+        return;
+      }
+      const found: ApiSet = await res.json();
+      if (cancelled) return;
+      // Only a set in the FUTURE can be pulled in by widening — the list starts
+      // at today, so a past set is missing no matter how far ahead we look.
+      const upcoming = new Date(found.startsAt).getTime() >= Date.now();
+      const wider = upcoming
+        ? SET_MANAGER_HORIZONS.find(
+            (h) =>
+              h.months > horizonMonths && withinMonths(found.startsAt, h.months)
+          )
+        : undefined;
+      if (wider) {
+        setHorizonMonths(wider.months);
+        return; // the reload will bring its row in
+      }
+      setLinkError(
+        "That set isn't in this list — it's outside the range shown here, or " +
+          "you're not on it. Open it on the calendar to see its roster."
+      );
+    })().catch(() => {
+      if (!cancelled) setLinkError("That set couldn't be loaded — try again.");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [linkedSetId, listsReady, horizonMonths]);
+
+  // A fresh ?set= gets a fresh chance to report its own problem.
+  useEffect(() => setLinkError(""), [linkedSetId]);
+
   // PATCH one of my assignments: confirm / requestSwap / cancelSwap. Only the
   // acted-on row shows a loading state (busyId); the page stays mounted.
   // `reason` is the optional cover note (requestSwap only).
@@ -206,7 +347,9 @@ export default function SwapsPage() {
 
   // Full-page loader only for the initial data load — never for mutations.
   // Wait on allSets too so a Details click always finds its full set.
-  usePageLoading(!mine || !openSwaps || !allSets || !incoming);
+  usePageLoading(!listsReady);
+  // Spelled out rather than `!listsReady`: this is also what narrows the four
+  // states to non-null for everything below it.
   if (!mine || !openSwaps || !allSets || !incoming) return null;
 
   // The horizon, as one test every list on the page runs through. Rows are
@@ -247,8 +390,32 @@ export default function SwapsPage() {
   // The full set behind the open Details modal (null = closed / not found).
   const detailSet = allSets.find((s) => s.id === detailSetId) ?? null;
 
+  // Everything a set's row needs to be found and lit up: the id a ?set= link
+  // looks for, room to scroll clear of the sticky navbar, and the temporary
+  // ring while this is the linked set. Spread onto the <li> of every row.
+  const rowProps = (setId: string) => {
+    const highlighted = highlightSetId === setId;
+    const ring = highlighted
+      ? "ring-2 ring-indigo-400 ring-offset-2 dark:ring-indigo-500 dark:ring-offset-gray-900"
+      : "";
+    return {
+      "data-set-row": setId,
+      // Reflects the ring for tests, which shouldn't have to read class names.
+      "data-highlighted": highlighted ? "true" : undefined,
+      className: `scroll-mt-24 block rounded-xl transition-shadow duration-500 ${ring}`,
+    };
+  };
+
   return (
     <div className="space-y-8">
+      {/* A ?set= link that couldn't be opened says so — otherwise following a
+          dead link just shows the list, with nothing to explain why. */}
+      {linkError && (
+        <Banner tone="amber" onDismiss={() => setLinkError("")}>
+          {linkError}
+        </Banner>
+      )}
+
       {/* How far ahead the whole page looks. It sits above the sections rather
           than inside one because it governs all three — and it sizes the
           /api/sets fetch too, so widening it loads the sets behind the newly
@@ -301,7 +468,7 @@ export default function SwapsPage() {
         {visibleIncoming.length > 0 && (
           <ul className="mb-3 space-y-3">
             {visibleIncoming.map((s) => (
-              <li key={s.id}>
+              <li key={s.id} {...rowProps(s.receive.id)}>
                 <Card className="flex flex-wrap items-center justify-between gap-3 border-indigo-200 dark:border-indigo-800">
                   <div>
                     <p className="flex flex-wrap items-center gap-2 font-semibold">
@@ -353,7 +520,7 @@ export default function SwapsPage() {
             {visibleOpenSwaps.map((swap) => (
               // id anchors the calendar's "Take this set →" link (#cover-<id>);
               // scroll-mt keeps it clear of the sticky navbar when jumped to.
-              <li key={swap.id} id={`cover-${swap.id}`} className="scroll-mt-24">
+              <li key={swap.id} id={`cover-${swap.id}`} {...rowProps(swap.set.id)}>
                 <Card className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="flex flex-wrap items-center gap-2 font-semibold">
@@ -401,7 +568,7 @@ export default function SwapsPage() {
         {inFlight.length > 0 && (
           <ul className="mt-3 space-y-3">
             {inFlight.map((a) => (
-              <li key={a.id}>
+              <li key={a.id} {...rowProps(a.set.id)}>
                 <AssignmentRow
                   a={a}
                   busy={busyId === a.id}
@@ -442,7 +609,7 @@ export default function SwapsPage() {
         ) : (
           <ul className="space-y-3">
             {pending.map((a) => (
-              <li key={a.id}>
+              <li key={a.id} {...rowProps(a.set.id)}>
                 <AssignmentRow
                   a={a}
                   busy={busyId === a.id}
@@ -477,7 +644,7 @@ export default function SwapsPage() {
         ) : (
           <ul className="space-y-3">
             {confirmed.map((a) => (
-              <li key={a.id}>
+              <li key={a.id} {...rowProps(a.set.id)}>
                 <AssignmentRow
                   a={a}
                   busy={busyId === a.id}
