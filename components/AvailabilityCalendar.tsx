@@ -15,6 +15,11 @@ import type { ApiUnavailability } from "@/lib/types";
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const FULL_DAY_END = 24 * 60; // minutes — a block reaching this covers the day
 
+// A block chip on a day that's already gone. Neutral instead of rose/amber:
+// the words still say what was blocked, but nothing about it invites a click,
+// because a past day can't be edited (see `canBlock`).
+const PAST_CHIP = "bg-gray-200 text-gray-500 dark:bg-gray-700/60 dark:text-gray-400";
+
 // A blocked window, written the way you'd say it: "6a", "9:30a", "5p". Short
 // enough to sit in a day cell, unlike "6:00 AM", and unambiguous — unlike the
 // sunrise/sun/sunset icons this replaced, which couldn't tell 6a–5p apart from
@@ -368,7 +373,11 @@ export default function AvailabilityCalendar({
               className={`relative ${
                 compact ? "min-h-[54px] p-1" : "min-h-[92px] p-1.5"
               } select-none border-b border-r border-gray-100 dark:border-gray-700/60 ${
-                lensed && !inWindow ? "opacity-40" : ""
+                // ONE opacity decision per cell: two `opacity-*` utilities on
+                // the same element would fight over stylesheet order. Outside
+                // the lens wins (it's the stronger "not what you're looking
+                // at"), then a past day, which can't be edited at all.
+                lensed && !inWindow ? "opacity-40" : isPast ? "opacity-60" : ""
               } ${
                 inWindow
                   ? "ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/60"
@@ -381,7 +390,10 @@ export default function AvailabilityCalendar({
                     "cursor-pointer hover:ring-2 hover:ring-inset hover:ring-indigo-500 dark:hover:ring-indigo-400"
                   : ""
               } ${
-                !inMonth || (isPast && !blocked)
+                // A past day reads as disabled whether or not it's blocked:
+                // showing it in live rose/amber made a date nobody can edit
+                // look exactly like one they can.
+                !inMonth || isPast
                   ? "bg-gray-50 text-gray-400 dark:bg-gray-900/50"
                   : blocks.fullDay
                     ? "bg-rose-50 dark:bg-rose-950/40"
@@ -431,9 +443,11 @@ export default function AvailabilityCalendar({
                   it (a repeat can't be cleared for a single date). */}
               {inMonth && blocks.fullDay && (
                 <div
-                  className={`relative flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 font-medium text-rose-700 dark:bg-rose-900/50 dark:text-rose-300 ${
-                    compact ? "text-[11px]" : "text-xs"
-                  }`}
+                  className={`relative flex items-center gap-1 rounded px-1.5 py-0.5 font-medium ${
+                    isPast
+                      ? PAST_CHIP
+                      : "bg-rose-100 text-rose-700 dark:bg-rose-900/50 dark:text-rose-300"
+                  } ${compact ? "text-[11px]" : "text-xs"}`}
                 >
                   <span className="truncate">All day</span>
                   {blocks.repeating && <RepeatIcon />}
@@ -444,9 +458,11 @@ export default function AvailabilityCalendar({
                   {blocks.labels.slice(0, 2).map((label) => (
                     <div
                       key={label}
-                      className={`flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 font-medium leading-tight text-amber-800 dark:bg-amber-900/50 dark:text-amber-300 ${
-                        compact ? "text-[10px]" : "text-xs"
-                      }`}
+                      className={`flex items-center gap-1 rounded px-1.5 py-0.5 font-medium leading-tight ${
+                        isPast
+                          ? PAST_CHIP
+                          : "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+                      } ${compact ? "text-[10px]" : "text-xs"}`}
                     >
                       <span className="truncate tabular-nums">{label}</span>
                       {blocks.repeating && <RepeatIcon />}
@@ -454,9 +470,11 @@ export default function AvailabilityCalendar({
                   ))}
                   {blocks.labels.length > 2 && (
                     <div
-                      className={`px-1 text-amber-700 dark:text-amber-400 ${
-                        compact ? "text-[10px]" : "text-xs"
-                      }`}
+                      className={`px-1 ${
+                        isPast
+                          ? "text-gray-500 dark:text-gray-400"
+                          : "text-amber-700 dark:text-amber-400"
+                      } ${compact ? "text-[10px]" : "text-xs"}`}
                     >
                       +{blocks.labels.length - 2} more
                     </div>
@@ -468,7 +486,7 @@ export default function AvailabilityCalendar({
         })}
       </div>
 
-      {/* Three states, named. Cheaper than making people infer them from
+      {/* Every state, named. Cheaper than making people infer them from
           colour, and it's where the ↻ gets explained. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-gray-200 px-4 py-2.5 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         <span className="flex items-center gap-1.5">
@@ -493,6 +511,12 @@ export default function AvailabilityCalendar({
           />
           <RepeatIcon />
           Repeats every week
+        </span>
+        {/* Named for the same reason as the rest: the grey is only obvious once
+            you know it means "gone, nothing to edit here". */}
+        <span className="flex items-center gap-1.5 opacity-60">
+          <span className="h-3 w-3 rounded-sm bg-gray-200 ring-1 ring-gray-300 dark:bg-gray-700 dark:ring-gray-600" />
+          Past &mdash; can&rsquo;t be changed
         </span>
       </div>
     </div>
