@@ -279,3 +279,121 @@ test("admin sees everyone's availability completion status", async ({ page }) =>
   await expect(page.getByRole("cell", { name: "Kate Kim" })).toBeVisible();
   expect(await page.getByText("Not yet").count()).toBeGreaterThan(0);
 });
+
+// Last in the file, and it deletes the template it makes: generated plans are
+// built from templates, so one left behind would change what every later
+// generate in the run sees.
+test("re-running the preview settles MDs on a plan that requires them", async ({
+  page,
+}) => {
+  // The MD path, end to end. The smoke test earlier in this file clicks the
+  // same button but never reaches this code: no SEED template sets requiresMD,
+  // so its plan has no director to designate — it passed happily against the
+  // crash that took the modal down. This one builds a template that DOES
+  // require an MD, so re-running walks the chained pass in lib/stagedPlan
+  // designateMDs for real.
+  const pageErrors: string[] = [];
+  page.on("pageerror", (err) => pageErrors.push(err.message));
+
+  await login(page, "admin");
+  await page.goto("/create");
+  await expect(page.getByRole("heading", { name: "Create Sets" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await modal.getByLabel("Label").fill("MD Rotation Check");
+  // Sunday Team holds every seeded user, which is where the two musical
+  // directors (jack + paul, both on keys) live.
+  await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
+  // By role: getByLabel("Sunday") also matches the Team select, whose
+  // accessible name concatenates its option text.
+  await modal.getByRole("checkbox", { name: "Sunday" }).check();
+  await modal.getByLabel("Start time").fill("14:00");
+  await modal.getByLabel("End time").fill("15:30");
+  // The whole point — generated sets from this template want a director.
+  await modal.getByRole("checkbox", { name: "Add MD" }).check();
+  await modal.getByRole("button", { name: "Add template" }).click();
+
+  // The template table pages at four rows and earlier tests in this file add
+  // their own, so a new row isn't necessarily on page 1 — walk the pages to it
+  // rather than assuming. (Asserting against page 1 alone passed in isolation
+  // and failed in a full run, which is exactly the sort of order-dependence
+  // worth not baking in.)
+  // The page has two paged tables (templates, then availability status), so an
+  // unscoped "Next" is a strict-mode violation — and the pager renders OUTSIDE
+  // the Recurring <section>, so scoping to that section finds no pager at all
+  // and silently never turns the page. Templates are the first table on the
+  // page, so take the first pager.
+  const nextTemplatePage = page.getByRole("button", { name: "Next" }).first();
+  const findTemplateRow = async (name: RegExp) => {
+    for (;;) {
+      const row = page.getByRole("row", { name });
+      if (await row.count()) return row.first();
+      if (await nextTemplatePage.isDisabled()) {
+        throw new Error(`No template row matching ${name} on any page`);
+      }
+      await nextTemplatePage.click();
+    }
+  };
+  await expect(await findTemplateRow(/MD Rotation Check/)).toBeVisible();
+
+  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  const options = page.getByRole("dialog");
+  const weeks = options.getByRole("spinbutton", { name: "Weeks ahead" });
+  await weeks.fill("4");
+  await options.getByRole("button", { name: "Generate preview" }).click();
+
+  const review = page.getByRole("dialog");
+  const heading = review.getByRole("heading", {
+    name: "Review generated schedule",
+  });
+  await expect(heading).toBeVisible();
+
+  // The server designated MDs on the way out — the "* (MD)" marker rides inside
+  // the chosen person's box. Seeing it here proves the plan actually carries
+  // MD-requiring sets, which is what the earlier smoke test lacks.
+  await expect(review.getByText("* (MD)").first()).toBeVisible();
+
+  // Clearing first is what makes this bite. Re-running over a plan whose MDs
+  // are still VALID keeps each existing pick and never re-derives anything — so
+  // the chained pass is skipped and the crash stays hidden (this test passed
+  // against the bug until this step was added). Emptying the plan invalidates
+  // every director, so the re-run has to pick them all again from scratch.
+  await review.getByRole("button", { name: "Clear all people" }).click();
+  await expect(review.getByText("* (MD)")).toHaveCount(0);
+
+  // Now the button that crashed, on a plan that must re-derive every MD,
+  // chaining each set's pick off the one before it.
+  await review.getByRole("button", { name: /Auto schedule all|Re-run auto schedule/ }).click();
+
+  // Directors are back, the modal survived, and nothing blew up getting there.
+  await expect(heading).toBeVisible();
+  await expect(review.getByText("* (MD)").first()).toBeVisible();
+  expect(pageErrors).toEqual([]);
+
+  // Deliberately NOT asserting that consecutive sets get different directors.
+  // Both seeded MDs also play worship leader, and a WL can't direct the same
+  // set — so whenever the filler seats one of them as WL, the other is the only
+  // eligible director and correctly leads again (instrument beats person). The
+  // rotation itself is pinned in tests/unit/stagedPlan.test.ts, where the
+  // roster is controlled.
+  await review.getByRole("button", { name: "Discard" }).click();
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard this preview?" });
+  await confirm.getByRole("button", { name: "Discard" }).click();
+
+  // Clean up so the template can't leak into another spec's generate. Waiting
+  // on the DELETE itself rather than on the row disappearing: deletion can
+  // collapse the paging, which would make the row vanish from view whether or
+  // not the request succeeded.
+  const deleted = page.waitForResponse(
+    (r) =>
+      r.url().includes("/api/admin/templates/") &&
+      r.request().method() === "DELETE" &&
+      r.ok()
+  );
+  const row = await findTemplateRow(/MD Rotation Check/);
+  await row.getByRole("button", { name: "Delete" }).click();
+  await deleted;
+});
