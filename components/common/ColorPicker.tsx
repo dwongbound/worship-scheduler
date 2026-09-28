@@ -245,7 +245,12 @@ export default function ColorPicker({
             ? { backgroundColor: value }
             : { backgroundImage: NO_COLOR_SLASH }
         }
-        className="h-6 w-6 shrink-0 rounded border border-gray-300 dark:border-gray-500"
+        // 20px square: the height of one line of label text, so a row of
+        // checkboxes stays the same height with or without a swatch on it.
+        // `block` is part of that — an inline-level button sits on the text
+        // baseline and its line box reserves room underneath for a descender,
+        // which silently makes the row that holds it a few px taller.
+        className="block h-5 w-5 shrink-0 rounded border border-gray-300 dark:border-gray-500"
       />
       {panel && typeof document !== "undefined"
         ? createPortal(panel, document.body)

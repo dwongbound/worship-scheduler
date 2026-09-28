@@ -2,6 +2,7 @@
 // Kept prisma/react-free so they're trivially unit-testable (see
 // tests/unit/stagedPlan.test.ts) and can be shared by the UI.
 import type { StagedSet } from "./types";
+import { defaultMDId, isValidMD, type MDAssignment } from "./md";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
 import type { Instrument } from "./constants";
 import {
@@ -221,4 +222,83 @@ export function totalConflicts(
     }
   }
   return total;
+}
+
+/**
+ * Who led the most recent set BEFORE this one on the same team — the person the
+ * next set's MD pick should pass over, so nobody directs two in a row. Mirrors
+ * the chained pass in app/api/admin/generate, so a re-run in the review modal
+ * reproduces what a fresh server run would produce instead of drifting from it.
+ *
+ * `earlier` is the sets already settled, in date order; this only ever looks
+ * backwards through it, so the caller can pass the prefix it has built so far.
+ * It deliberately does NOT take the current set's index — an earlier version did,
+ * and crashed the moment a caller passed a prefix that didn't yet contain the
+ * set being decided. The team is the caller's to state.
+ *
+ * Per team, because two teams meeting the same week rotate independently. A set
+ * nobody could lead is skipped rather than treated as a break in the chain, so
+ * the rotation carries past it. `seed` covers the first set of a run, whose
+ * predecessor is a real set from before the window the client never loaded.
+ */
+export function previousMDForTeam(
+  earlier: StagedSet[],
+  teamId: string | null | undefined,
+  seed?: Record<string, string | null>
+): string | null {
+  const teamKey = teamId ?? "";
+  for (let i = earlier.length - 1; i >= 0; i--) {
+    const set = earlier[i];
+    if ((set.teamId ?? "") !== teamKey) continue;
+    if (set.mdUserId) return set.mdUserId;
+  }
+  return seed?.[teamKey] ?? null;
+}
+
+/**
+ * Settle every set's musical director down an ordered run, so the same person
+ * doesn't direct two in a row.
+ *
+ * This is the whole rule in one place, shared by the review modal's "Re-run auto
+ * schedule" and by what it finally applies — so what gets saved is what was
+ * previewed. It mirrors the chained pass in app/api/admin/generate.
+ *
+ * A still-valid existing pick is always kept; this only fills an empty MD or
+ * replaces one the roster no longer supports. Sets that don't want an MD carry
+ * none. Each decision looks back at what has ALREADY been settled, not at the
+ * incoming list, so a chain of re-picks stays consistent with itself.
+ */
+export function designateMDs(
+  sets: StagedSet[],
+  // Whether a user is flagged a musical director (User.isMD), and who led each
+  // team's last set before this run — see previousMDForTeam.
+  opts: { isMD: (userId: string) => boolean; seed?: Record<string, string | null> }
+): StagedSet[] {
+  // The roster as the MD rules read it: a seat awaiting approval counts for the
+  // person who still owns it, not the one hoping to take it.
+  const mdRoster = (list: StagedSet["assignments"]): MDAssignment[] =>
+    list.map((x) => ({
+      userId: x.userId,
+      role: x.role,
+      isMD: opts.isMD(x.userId),
+      pendingFrom: x.pendingFromUserId
+        ? { userId: x.pendingFromUserId, isMD: opts.isMD(x.pendingFromUserId) }
+        : null,
+    }));
+
+  const settled: StagedSet[] = [];
+  for (const set of sets) {
+    if (!set.requiresMD) {
+      settled.push({ ...set, mdUserId: null });
+      continue;
+    }
+    const roster = mdRoster(set.assignments);
+    settled.push({
+      ...set,
+      mdUserId: isValidMD(set.mdUserId, roster)
+        ? set.mdUserId
+        : defaultMDId(roster, previousMDForTeam(settled, set.teamId, opts.seed)),
+    });
+  }
+  return settled;
 }

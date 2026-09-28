@@ -1,6 +1,6 @@
 // E2E: the admin-only Team page — access control + editing a person's per-team
 // roles (which auto-saves).
-import { expect, test } from "@playwright/test";
+import { Page, expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
 test("non-admins can't see or open the Team page", async ({ page }) => {
@@ -77,8 +77,52 @@ test("Slack member id entry is gated on the org having Slack connected", async (
   ).toHaveCount(0);
 });
 
+/**
+ * Put `person` back on `teamName` if they aren't already, through the API.
+ *
+ * The removal test below takes someone off a team and puts them back at the
+ * end — so when it fails in between (a slow dev-server compile once swallowed
+ * the re-add's PATCH), the shared seed is left with that person team-less, and
+ * every retry then fails on the test's opening assertion instead of on
+ * whatever actually went wrong. Asserting the precondition into place makes a
+ * poisoned database heal itself on the next attempt rather than compounding.
+ *
+ * Must run as an org admin: these are admin routes, scoped by x-org-id.
+ */
+async function ensureOnTeam(page: Page, personName: string, teamName: string) {
+  const orgs = (await (await page.request.get("/api/orgs")).json()) as {
+    id: string;
+    isAdmin: boolean;
+  }[];
+  const org = orgs.find((o) => o.isAdmin);
+  expect(org, "admin has no admin org").toBeTruthy();
+  const headers = { "x-org-id": org!.id };
+
+  const users = (await (
+    await page.request.get("/api/admin/users", { headers })
+  ).json()) as { id: string; name: string; teams: { id: string }[] }[];
+  const person = users.find((u) => u.name === personName);
+  expect(person, `no user named ${personName}`).toBeTruthy();
+
+  const teams = (await (
+    await page.request.get(`/api/teams?orgId=${org!.id}`)
+  ).json()) as { id: string; name: string }[];
+  const team = teams.find((t) => t.name === teamName);
+  expect(team, `no team named ${teamName}`).toBeTruthy();
+
+  if (person!.teams.some((t) => t.id === team!.id)) return; // already there
+  const res = await page.request.patch(`/api/admin/users/${person!.id}`, {
+    headers,
+    data: { teamIds: [...person!.teams.map((t) => t.id), team!.id] },
+  });
+  expect(res.ok(), "could not restore the seeded team membership").toBeTruthy();
+}
+
 test("admin removes a person from a team via the chip's x", async ({ page }) => {
   await login(page, "admin");
+  // The seed puts Bob on the Sunday Team; a previous run that died between
+  // this test's removal and its restore would have left him off it.
+  await ensureOnTeam(page, "Bob Baker", "Sunday Team");
   await page.goto("/users");
 
   const savePatch = () =>

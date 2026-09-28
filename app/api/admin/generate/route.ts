@@ -105,7 +105,7 @@ export async function POST(req: NextRequest) {
   // sets also steer away from people already serving just before/after it.
   const spacingStart = new Date(windowStart.getTime() - 8 * MS_PER_DAY);
   const spacingEnd = new Date(windowEnd.getTime() + 8 * MS_PER_DAY);
-  const [templates, users, rules, existingSets, existing, booked] =
+  const [templates, users, rules, existingSets, lastLedSets, existing, booked] =
     await Promise.all([
     prisma.setTemplate.findMany({
       where: { orgId: admin.orgId, ...templateFilter },
@@ -142,6 +142,21 @@ export async function POST(req: NextRequest) {
         label: true,
         _count: { select: { assignments: true } },
       },
+    }),
+    // The most recent LED set before this window, per team — the seed for the
+    // "don't lead two running" rotation below. Without it the first set of a
+    // plan can hand the job straight back to whoever led the week before it,
+    // which is the one boundary the in-plan chaining can't see. Ordered
+    // ascending so a later row overwrites an earlier one and the map ends up
+    // holding each team's LAST set.
+    prisma.set.findMany({
+      where: {
+        orgId: admin.orgId,
+        startsAt: { lt: windowStart },
+        mdUserId: { not: null },
+      },
+      orderBy: { startsAt: "asc" },
+      select: { teamId: true, mdUserId: true },
     }),
     // Existing upcoming load per user, so the proposal stays balanced — and
     // the same rows split by team, which feeds the per-team tiebreak. One
@@ -284,16 +299,9 @@ export async function POST(req: NextRequest) {
         label: s.label,
         durationMinutes: s.durationMinutes,
         requiresMD: s.requiresMD,
-        // Auto-pick the MD only for sets that want one (see lib/md.ts).
-        mdUserId: s.requiresMD
-          ? defaultMDId(
-              assignments.map((a) => ({
-                userId: a.userId,
-                role: a.role,
-                isMD: isMDById.get(a.userId) ?? false,
-              }))
-            )
-          : null,
+        // Filled in by the chained pass below — it needs the sets in date
+        // order, which only happens after the .sort() at the end of this map.
+        mdUserId: null,
         slotCapacities: s.capacities,
         groupChatLeadDays: s.groupChatLeadDays,
         teamId: s.teamId,
@@ -303,6 +311,41 @@ export async function POST(req: NextRequest) {
       };
     })
     .sort((a, b) => a.startsAt.localeCompare(b.startsAt));
+
+  // Designate each set's MD in date order, remembering who led the previous set
+  // on that TEAM — so nobody leads two in a row. Per team because a different
+  // team's director is irrelevant: two teams meeting the same week each rotate
+  // on their own. Seeded from the last led set before this window, so the plan's
+  // first set doesn't hand the job straight back to whoever led last week.
+  //
+  // It's a preference, not a rule: the pick stays instrument-first, so a lone
+  // electric guitarist simply leads again (see lib/md.ts eligibleMDIds).
+  const previousMDSeed = new Map<string, string | null>(
+    lastLedSets.map((s: { teamId: string | null; mdUserId: string | null }) => [
+      s.teamId ?? "",
+      s.mdUserId,
+    ])
+  );
+  // The loop below advances as it goes, so copy the seed rather than mutating
+  // it — the plan ships the STARTING state, which is what lets the modal
+  // reproduce this run instead of continuing from its end.
+  const previousMDByTeam = new Map(previousMDSeed);
+  for (const set of sets) {
+    if (!set.requiresMD) continue;
+    const teamKey = set.teamId ?? "";
+    set.mdUserId = defaultMDId(
+      set.assignments.map((a) => ({
+        userId: a.userId,
+        role: a.role,
+        isMD: isMDById.get(a.userId) ?? false,
+      })),
+      previousMDByTeam.get(teamKey) ?? null
+    );
+    // Only a set that actually got a director advances the rotation; one that
+    // couldn't find anyone leaves the previous name standing, so the set after
+    // it still avoids them.
+    if (set.mdUserId) previousMDByTeam.set(teamKey, set.mdUserId);
+  }
 
   const plan: StagedPlan = {
     sets,
@@ -316,6 +359,8 @@ export async function POST(req: NextRequest) {
         userId: b.userId,
         startsAt: b.set.startsAt.toISOString(),
       })),
+      // Seed for the MD rotation, so the modal's re-run starts where this did.
+      previousMDByTeam: Object.fromEntries(previousMDSeed),
     },
   };
   return NextResponse.json(plan);

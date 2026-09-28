@@ -31,7 +31,11 @@ Playwright (e2e) · Docker.
   applied via `prisma migrate deploy`). A `Set` has `Assignment`s; each
   assignment = one `User` in one role slot, and one user may fill several roles
   on a set (unique key = `setId + userId + role`). `seed.ts` wipes and reseeds
-  demo data (`password123`) — dev/test only, never run in prod.
+  demo data (`password123`) — dev/test only, and it enforces that itself: it
+  refuses a non-local host, a `*prod*` db name, or `NODE_ENV=production`
+  (`SEED_FORCE=1` overrides). It is never run automatically — `--profile dev up`
+  does not seed, so it can't erase your dev data; run `npm run db:seed` when you
+  want demo data or a clean slate.
 - `tests/unit/` (vitest, lib logic only) · `tests/e2e/` (playwright).
 
 ## Commands (need node 20; on this machine node runs inside Docker)

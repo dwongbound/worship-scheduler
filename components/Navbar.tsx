@@ -30,6 +30,28 @@ export const PROFILE_CHANGED_EVENT = "profile-changed";
 // team" reminder dot/banner refresh immediately instead of on the next poll.
 export const TEAMS_CHANGED_EVENT = "teams-changed";
 
+// How often to re-ask for the reminder badges while someone is actually around.
+// Every reminder-changing action in the app fires one of the events above for an
+// instant refresh, so this poll only covers changes OTHER people make — two
+// minutes is plenty for that, and it's a fifth of the traffic the old 60s
+// interval generated (one tab left open was ~60 requests an hour, which kept the
+// database awake around the clock).
+const POLL_INTERVAL_MS = 2 * 60_000;
+
+// How long we keep polling after the last sign of life.
+//
+// Visibility alone never stopped the overnight traffic: `visibilityState` only
+// goes "hidden" when a tab is backgrounded or the window is minimised, NOT when
+// the window is simply sitting behind other windows or open on a second monitor.
+// A machine left on this tab therefore polled all night while reporting itself
+// perfectly visible. After this long with no input we stand down entirely; the
+// next interaction picks straight back up with an immediate refresh.
+const IDLE_AFTER_MS = 15 * 60_000;
+
+// What counts as a sign of life. Deliberately coarse and passive — enough to
+// notice someone is at the keyboard without listening to every mousemove.
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "scroll", "focus"] as const;
+
 export default function Navbar() {
   const pathname = usePathname();
   const { data: session } = useSession();
@@ -172,13 +194,59 @@ export default function Navbar() {
     refreshNotifications();
     // Poll so the dots stay fresh without a reload; every reminder-changing
     // action also fires an event below for an instant refresh.
-    const interval = setInterval(refreshNotifications, 60_000);
+    //
+    // Two conditions have to hold to spend a request. The tab must be visible —
+    // a phone left on this tab in the background asks for nothing. And someone
+    // must have been here recently: a visible-but-unattended window reports
+    // itself visible forever, so visibility alone left it polling all night.
+    let lastActivity = Date.now();
+    let idle = false;
+
+    const poll = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastActivity > IDLE_AFTER_MS) {
+        // Nobody's here. Stop asking until they come back.
+        idle = true;
+        return;
+      }
+      refreshNotifications();
+    };
+
+    // Any sign of life resets the idle clock. Coming back FROM idle refreshes at
+    // once, so the dots are right by the time they're looked at — the only
+    // moment the skipped polls would have mattered. While already active this
+    // just bumps the clock, so typing doesn't fire a request per keystroke.
+    const noteActivity = () => {
+      lastActivity = Date.now();
+      if (!idle) return;
+      idle = false;
+      refreshNotifications();
+    };
+
+    // Returning to the tab is both a sign of life and the one moment stale dots
+    // are most visible, so it always refreshes rather than only on idle→active.
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      lastActivity = Date.now();
+      idle = false;
+      refreshNotifications();
+    };
+
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    for (const event of ACTIVITY_EVENTS) {
+      window.addEventListener(event, noteActivity, { passive: true });
+    }
     window.addEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(TEAMS_CHANGED_EVENT, refreshNotifications);
     return () => {
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+      for (const event of ACTIVITY_EVENTS) {
+        window.removeEventListener(event, noteActivity);
+      }
       window.removeEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
@@ -328,11 +396,14 @@ export default function Navbar() {
           <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
             <Logo className="h-9 w-9" />
           </Link>
-          {/* Desktop tab area — hidden on phones, where the floating bottom bar
-              (below) takes over. The Admin dropdown sits OUTSIDE the scrolling
-              strip: `overflow-x-auto` there forces overflow-y to clip too, which
-              would cut off the dropdown panel dropping below the bar. */}
-          <div className="hidden items-center gap-1 sm:flex">
+          {/* Desktop tab area — hidden on phones AND tablets, where the
+              floating bottom bar (below) takes over. The `lg` gate is shared
+              with that bar and with the touch gestures; see
+              lib/layout.ts BOTTOM_NAV_MAX_WIDTH. The Admin dropdown sits
+              OUTSIDE the scrolling strip: `overflow-x-auto` there forces
+              overflow-y to clip too, which would cut off the dropdown panel
+              dropping below the bar. */}
+          <div className="hidden items-center gap-1 lg:flex">
           {/* Main tabs strip — `overflow-x-auto` guards awkward mid-size widths.
               Clipping overflow-y would cut off the notification dots that stick
               out past each tab's top-right corner, so `p-2 -m-2` pads all four
@@ -615,12 +686,15 @@ export default function Navbar() {
       )}
     </div>
 
-    {/* Phone-only bottom bar: an app-style floating pill fixed above the
+    {/* Touch-width bottom bar: an app-style floating pill fixed above the
         bottom edge (respecting the iOS home-indicator safe area). Same tabs
         and red dots as the top strip, but icon-first with short labels.
+        Shown below `lg` — phones and tablets alike, since a tablet held in
+        the hand reaches the bottom far more easily than the top (the number
+        behind that `lg` is lib/layout.ts BOTTOM_NAV_MAX_WIDTH).
         The top strip's dots keep the data-testids; duplicating them here
         would break Playwright's strict single-match lookups. */}
-    <nav className="fixed inset-x-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30 sm:hidden">
+    <nav className="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-30 lg:hidden">
       <div
         className={`mx-auto flex items-stretch rounded-full border border-gray-200/60 bg-white/50 px-1.5 py-1.5 shadow-lg backdrop-blur-xl transition-all duration-300 ease-in-out dark:border-gray-700/60 dark:bg-gray-800/50 ${
           // Scroll down → also pull the pill in horizontally (centered), so it
@@ -685,7 +759,7 @@ function tabClassName(active: boolean, admin: boolean): string {
   }
 
   if (active) {
-    return `${base} bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300`;
+    return `${base} bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300`;
   }
   return `${base} text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700`;
 }
@@ -728,7 +802,7 @@ function bottomTabClassName(active: boolean, admin: boolean): string {
   }
 
   if (active) {
-    return `${base} bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300`;
+    return `${base} bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300`;
   }
   return `${base} text-gray-500 dark:text-gray-400`;
 }

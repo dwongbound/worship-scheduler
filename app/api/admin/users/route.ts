@@ -40,7 +40,9 @@ export async function GET(req: NextRequest) {
       // status panel's TimeRange dropdown.
       availabilityResponses: {
         where: { request: { orgId: admin.orgId } },
-        select: { requestId: true, completedAt: true, edited: true },
+        // `note` is what the person typed when they submitted — shown in the
+        // status panel's per-person modal, and flagged with a dot in the list.
+        select: { requestId: true, completedAt: true, edited: true, note: true },
       },
       // The assignment dropdowns (SetDetailModal) use these to flag people who
       // are unavailable at a given set's time, and the Create tab's

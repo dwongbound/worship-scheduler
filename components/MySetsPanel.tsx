@@ -10,7 +10,6 @@
 import { useMemo, useState } from "react";
 import { roleLabel } from "@/lib/teamRoles";
 import Button from "./common/Button";
-import LoadingDots from "./common/LoadingDots";
 import Select from "./common/Select";
 import RequestCoverModal from "./RequestCoverModal";
 import StatusBadge from "./StatusBadge";
@@ -36,6 +35,9 @@ export default function MySetsPanel({
 }) {
   // Id of the assignment currently updating — only that row shows dots.
   const [busyId, setBusyId] = useState<string | null>(null);
+  // WHICH action it's running, so the dots land on the button that was pressed
+  // rather than the row's whole action area blinking out for one spinner.
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   // Assignment whose "Request cover" reason modal is open, or null.
   const [coverForId, setCoverForId] = useState<string | null>(null);
   // Sort order: soonest upcoming first (default), or float sets I still need
@@ -52,10 +54,17 @@ export default function MySetsPanel({
     [sets, myId, sortBy, scope]
   );
 
+  // The action this row is running, or null for every other row: a row keeps
+  // all its buttons while one is in flight, and only the pressed one shows dots.
+  function runningOn(assignmentId: string): string | null {
+    return busyId === assignmentId ? busyAction : null;
+  }
+
   // PATCH my assignment: confirm / requestSwap / cancelSwap, then refresh.
   // `reason` is the optional cover note (requestSwap only).
   async function act(assignmentId: string, action: string, reason?: string) {
     setBusyId(assignmentId);
+    setBusyAction(action);
     try {
       await fetch(`/api/assignments/${assignmentId}`, {
         method: "PATCH",
@@ -66,6 +75,7 @@ export default function MySetsPanel({
       window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   }
 
@@ -158,33 +168,36 @@ export default function MySetsPanel({
                   {roleLabel(a.role)}
                 </span>
                 <StatusBadge status={a.status} />
-                {busyId === a.id ? (
-                  <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
+                {a.status === "PENDING" && (
+                  <Button
+                    size="sm"
+                    onClick={() => act(a.id, "confirm")}
+                    loading={runningOn(a.id) === "confirm"}
+                    disabled={busyId === a.id}
+                  >
+                    Confirm
+                  </Button>
+                )}
+                {a.status !== "SWAP_REQUESTED" ? (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setCoverForId(a.id)}
+                    // No dots here: the reason prompt stays up through the
+                    // PATCH and wears them itself.
+                    disabled={busyId === a.id}
+                  >
+                    Request cover
+                  </Button>
                 ) : (
-                  <>
-                    {a.status === "PENDING" && (
-                      <Button size="sm" onClick={() => act(a.id, "confirm")}>
-                        Confirm
-                      </Button>
-                    )}
-                    {a.status !== "SWAP_REQUESTED" ? (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => setCoverForId(a.id)}
-                      >
-                        Request cover
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => act(a.id, "cancelSwap")}
-                      >
-                        Cancel cover
-                      </Button>
-                    )}
-                  </>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => act(a.id, "cancelSwap")}
+                    loading={runningOn(a.id) === "cancelSwap"}
+                  >
+                    Cancel cover
+                  </Button>
                 )}
               </div>
             ))}
@@ -199,11 +212,13 @@ export default function MySetsPanel({
       open={coverForId !== null}
       onClose={() => setCoverForId(null)}
       busy={busyId === coverForId}
+      // Closes only once the PATCH is through, so the dots stay in the
+      // dialog you pressed rather than on a row that reappears behind it.
       onConfirm={async (reason) => {
         const id = coverForId;
         if (!id) return;
-        setCoverForId(null);
         await act(id, "requestSwap", reason);
+        setCoverForId(null);
       }}
     />
   );
@@ -231,7 +246,7 @@ export default function MySetsPanel({
     <div className="flex min-h-0 shrink-0 flex-col" style={{ width }}>
       <aside className="flex h-full min-h-0 flex-col rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
             Upcoming sets
           </h2>
           {controls}

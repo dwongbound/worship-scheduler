@@ -15,6 +15,7 @@ import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import OrgNotifications from "@/components/OrgNotifications";
+import OrgRetention from "@/components/OrgRetention";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import Select from "@/components/common/Select";
@@ -25,6 +26,7 @@ import {
   windowPhrase,
 } from "@/lib/constants";
 import type { ApiMeMembership } from "@/lib/types";
+import { invalidateSlackStatus } from "@/lib/slackStatus";
 
 // The "Spotify account" line once an org is connected. Prefers the account's
 // display name, falls back to its Spotify user id, and if we have neither just
@@ -248,7 +250,7 @@ export default function OrgSettingsPage() {
                   onClick={() => setSelectedId(o.id)}
                   className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                     active
-                      ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                      ? "bg-indigo-100 font-semibold text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300"
                       : "text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
                   }`}
                 >
@@ -318,6 +320,10 @@ export default function OrgSettingsPage() {
                               `/api/slack/install?orgId=${selected.id}`,
                               { method: "DELETE" }
                             );
+                            // Every page caches this answer per org — drop it
+                            // so the next reader asks again (connecting is a
+                            // full navigation, so it needs no equivalent).
+                            invalidateSlackStatus(selected.id);
                             await refreshMe();
                           }}
                         >
@@ -518,6 +524,14 @@ export default function OrgSettingsPage() {
                 {selected.isAdmin && (
                   <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
                     <OrgNotifications key={selected.id} orgId={selected.id} />
+                  </div>
+                )}
+
+                {/* How long this workspace keeps its history (admins only).
+                    Last, because it's the only setting here that deletes. */}
+                {selected.isAdmin && (
+                  <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                    <OrgRetention key={selected.id} orgId={selected.id} />
                   </div>
                 )}
               </Card>

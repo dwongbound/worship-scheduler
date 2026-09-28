@@ -46,21 +46,41 @@ function worshipLeaderIds(assignments: MDAssignment[]): Set<string> {
   );
 }
 
-// Distinct userIds eligible to be the MD, in MD-role preference order (then by
-// userId) so the "best" candidate comes first. A person with several slots
-// appears once, keyed to their most preferred MD-capable role.
-export function eligibleMDIds(input: MDAssignment[]): string[] {
+// Distinct userIds eligible to be the MD, best candidate first. A person with
+// several slots appears once, keyed to their most preferred MD-capable role.
+//
+// The order is: MD-role preference, then whoever DIDN'T lead the previous set,
+// then userId for determinism. That priority is deliberate — instrument first,
+// person second: the MD is normally the electric guitarist, so we rotate among
+// the electric guitarists rather than handing the job to a keys player to avoid
+// a repeat. `previousMDId` only sinks someone within their own role group; if
+// they're the sole electric guitarist they still come first and simply lead
+// again, because back-to-back is a preference, not a prohibition.
+export function eligibleMDIds(
+  input: MDAssignment[],
+  // Who led the PREVIOUS set on this team, when the caller knows it. Callers
+  // that pick a single set's MD in isolation pass nothing and get the old
+  // behaviour; the generate flow chains it down the run so nobody leads two in
+  // a row (see app/api/admin/generate).
+  previousMDId?: string | null
+): string[] {
   const assignments = effectiveHolders(input);
   const wl = worshipLeaderIds(assignments);
   const seen = new Set<string>();
   const ids: string[] = [];
   // Walk the MD roles in preference order — electric guitar first, since that's
-  // who normally MDs, and only then keys/bass. Within a role, sort assignees by
-  // id for determinism.
+  // who normally MDs, and only then keys/bass.
   for (const role of MD_ROLES) {
     const inRole = assignments
       .filter((a) => a.role === role && a.isMD && !wl.has(a.userId))
-      .sort((a, b) => a.userId.localeCompare(b.userId));
+      .sort((a, b) => {
+        // Last set's MD goes to the back of their OWN role group — never past
+        // the role boundary, so instrument preference still wins.
+        const aLed = a.userId === previousMDId ? 1 : 0;
+        const bLed = b.userId === previousMDId ? 1 : 0;
+        if (aLed !== bLed) return aLed - bLed;
+        return a.userId.localeCompare(b.userId);
+      });
     for (const a of inRole) {
       if (seen.has(a.userId)) continue;
       seen.add(a.userId);
@@ -71,8 +91,13 @@ export function eligibleMDIds(input: MDAssignment[]): string[] {
 }
 
 // The auto-picked MD: the first eligible person, or null if nobody qualifies.
-export function defaultMDId(assignments: MDAssignment[]): string | null {
-  return eligibleMDIds(assignments)[0] ?? null;
+// Pass `previousMDId` to avoid handing the same person two sets in a row —
+// see eligibleMDIds for exactly how far that preference reaches.
+export function defaultMDId(
+  assignments: MDAssignment[],
+  previousMDId?: string | null
+): string | null {
+  return eligibleMDIds(assignments, previousMDId)[0] ?? null;
 }
 
 // Whether a stored mdUserId is still a valid MD for the set's current roster —

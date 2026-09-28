@@ -25,6 +25,19 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import {
+  VISIBLE_WEEKS,
+  addWeeks,
+  buildWeeks,
+  canStep,
+  SWIPE_STEP_PX,
+  centredWeek,
+  majorityMonth,
+  monthKey,
+  openingWeek,
+  startOfMonth,
+  weekDays,
+} from "@/lib/calendarScroll";
 import { toYmd } from "@/lib/dates";
 
 // Re-exported so the many `import { toYmd } from "@/components/common/DateSelect"`
@@ -47,6 +60,8 @@ function fromYmd(value: string): Date | null {
   if (!y || !m || !d) return null;
   return new Date(y, m - 1, d);
 }
+// How far a finger must travel before a swipe counts as one week's step.
+
 // "Jul 7, 2026" — what the field shows once a day is picked.
 function displayLabel(value: string): string {
   const d = fromYmd(value);
@@ -109,7 +124,10 @@ export default function DateSelect({
     if (max && today > max) return fromYmd(max)!;
     return new Date();
   };
-  const [view, setView] = useState(initialView);
+  // The top row of the five-week window — the only thing that moves. Stepping
+  // it by ±1 is what "scrolling" means here; there is no scroll container, so
+  // no scrollbar can appear and a step is always exactly one week.
+  const [firstWeek, setFirstWeek] = useState(() => openingWeek(initialView()));
   // Where the portaled calendar sits, in viewport coordinates. Null while
   // closed. It opens below the field, or above it when there isn't room below
   // (near the bottom of the page) — otherwise the calendar runs off-screen.
@@ -123,13 +141,16 @@ export default function DateSelect({
   const ref = useRef<HTMLDivElement>(null);
   // The portaled panel lives outside `ref`'s subtree, so the outside-click
   // check below needs its own handle on it.
-  const popupRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
 
-  // Re-center whenever the picker (re)opens.
+  // Re-center when the picker OPENS — and only then. `value` used to be a
+  // dependency too, which meant picking a range's start moved the window under
+  // a popup that stays open. Opening reads the current value anyway, so the
+  // transition is the only moment that matters.
   useEffect(() => {
-    if (open) setView(initialView());
+    if (open) setFirstWeek(openingWeek(initialView()));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, value]);
+  }, [open]);
 
   // Measure the field and pin the calendar to it. Called on open and again
   // whenever anything moves the field underneath.
@@ -137,9 +158,10 @@ export default function DateSelect({
     const el = ref.current;
     if (!el) return;
     const MARGIN = 8; // smallest gap we'll leave against any screen edge
-    // The popup is ~340px tall (month header + 6-week grid + footer); flip it
-    // above the field only when below can't fit it but above can.
-    const POPUP_HEIGHT = 340;
+    // The popup is ~280px tall (heading + weekday row + five 34px week rows +
+    // footer + padding); flip it above the field only when below can't fit it
+    // but above can.
+    const POPUP_HEIGHT = 280;
     const rect = el.getBoundingClientRect();
     const spaceBelow = window.innerHeight - rect.bottom;
     const dropUp = spaceBelow < POPUP_HEIGHT && rect.top > spaceBelow;
@@ -166,7 +188,16 @@ export default function DateSelect({
 
   useEffect(() => {
     if (!open) return;
-    const reposition = () => measure();
+    const reposition = (e: Event) => {
+      // Scrolling INSIDE the calendar is not the page moving. Re-measuring on
+      // it set a fresh popupPos every tick, which re-ran the scroll-to-anchor
+      // effect below and yanked the list back to today — the scroll felt
+      // locked to the current date.
+      if (e.target instanceof Node && popupRef.current?.contains(e.target)) {
+        return;
+      }
+      measure();
+    };
     // Capture phase: the field may live inside a scrollable modal body, whose
     // scroll events don't bubble to window.
     window.addEventListener("scroll", reposition, true);
@@ -202,19 +233,19 @@ export default function DateSelect({
     };
   }, [open]);
 
-  // The 42 cells (6 weeks) of the visible month, including the leading/trailing
-  // spillover days from the neighbouring months so the grid is always full.
-  const cells = useMemo(() => {
-    const year = view.getFullYear();
-    const month = view.getMonth();
-    const firstWeekday = new Date(year, month, 1).getDay();
-    const start = new Date(year, month, 1 - firstWeekday);
-    return Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
-      return d;
-    });
-  }, [view]);
+  // The five rows on screen: consecutive weeks, oldest first. One unbroken run
+  // of days — no per-month grids, no padding cells, nothing to slide.
+  //
+  // Deliberately NOT clamped to [min, max]: a picker whose bounds sit inside a
+  // single month (the Create tab's "From", capped by "To") would have nowhere
+  // to move. Days outside the bounds are dimmed and unclickable instead.
+  const weeks = useMemo(
+    () => buildWeeks(firstWeek, VISIBLE_WEEKS),
+    [firstWeek]
+  );
+  // The month most of the window belongs to: what the heading reads, and which
+  // days render at full strength.
+  const headerMonth = majorityMonth(weeks) ?? startOfMonth(firstWeek);
 
   const todayYmd = toYmd(new Date());
   // Out of the [min, max] window? String compare is safe on fixed-width yyyy-mm-dd.
@@ -241,8 +272,75 @@ export default function DateSelect({
     onChange?.(picked);
     setOpen(false);
   };
-  const shiftMonth = (delta: number) =>
-    setView((v) => new Date(v.getFullYear(), v.getMonth() + delta, 1));
+  // ── Moving through time ────────────────────────────────────────────────
+  // One week per gesture, and never faster than the cooldown. The window is an
+  // index, so a step is exact — no momentum, no partial rows, nothing to snap
+  // back to.
+  const lastStep = useRef(0);
+
+  const step = useCallback((delta: number) => {
+    const now = Date.now();
+    if (!canStep(now, lastStep.current)) return;
+    lastStep.current = now;
+    setFirstWeek((w) => addWeeks(w, delta));
+  }, []);
+
+  // Jump the window to another month — what the ‹ › arrows do, relative to the
+  // month currently on screen.
+  const stepMonth = (delta: number) =>
+    setFirstWeek(
+      openingWeek(
+        new Date(headerMonth.getFullYear(), headerMonth.getMonth() + delta, 1)
+      )
+    );
+
+  // The wheel listener is attached by hand for two reasons, and as a CALLBACK
+  // REF rather than in an effect:
+  //   • by hand, because React's own wheel listener is passive — it can't
+  //     preventDefault, so the page behind the popup would scroll instead;
+  //   • as a callback ref, because the popup lives in a portal that mounts a
+  //     render AFTER `open` flips true (it waits on the measured position). An
+  //     effect keyed on `open` therefore ran while the node was still null and
+  //     attached nothing at all, which is exactly why the wheel did nothing.
+  //     A callback ref fires when the node itself appears, whenever that is.
+  //
+  // It sits on the whole panel, not just the grid, so the wheel works wherever
+  // the cursor happens to be inside the calendar.
+  const detachWheel = useRef<(() => void) | null>(null);
+  const panelRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      detachWheel.current?.();
+      detachWheel.current = null;
+      // Keep the plain ref in step: the outside-click check reads it.
+      popupRef.current = node;
+      if (!node) return;
+      const onWheel = (e: WheelEvent) => {
+        if (e.deltaY === 0) return;
+        e.preventDefault();
+        step(e.deltaY > 0 ? 1 : -1);
+      };
+      node.addEventListener("wheel", onWheel, { passive: false });
+      detachWheel.current = () => node.removeEventListener("wheel", onWheel);
+    },
+    [step]
+  );
+
+  // Touch: a vertical drag steps a week per SWIPE_STEP_PX travelled, rate
+  // limited the same way, so a flick can't run away with the calendar.
+  const touchY = useRef<number | null>(null);
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchY.current = e.touches[0]?.clientY ?? null;
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    const from = touchY.current;
+    const y = e.touches[0]?.clientY;
+    if (from === null || y === undefined) return;
+    const dy = y - from;
+    if (Math.abs(dy) < SWIPE_STEP_PX) return;
+    // Dragging up (negative dy) pulls later weeks into view, as scrolling does.
+    step(dy < 0 ? 1 : -1);
+    touchY.current = y;
+  };
 
   // Drop any stale range hover-preview once the popup closes.
   useEffect(() => {
@@ -314,7 +412,9 @@ export default function DateSelect({
           popupPos &&
           createPortal(
             <div
-              ref={popupRef}
+              ref={panelRef}
+              onTouchStart={onTouchStart}
+              onTouchMove={onTouchMove}
               role="dialog"
               // Fixed at the measured coordinates; z above modals (z-50) so the
               // picker still works inside a dialog.
@@ -323,23 +423,31 @@ export default function DateSelect({
                 left: popupPos.left,
                 width: popupPos.width,
               }}
-              className="fixed z-[60] rounded-lg border border-indigo-200 bg-indigo-50 p-3 shadow-xl dark:border-indigo-700 dark:bg-indigo-900"
+              // touch-none: the panel owns vertical touch, so a swipe anywhere
+              // on it steps the weeks instead of scrolling the page behind it.
+              className="fixed z-[60] touch-none select-none rounded-lg border border-indigo-200 bg-indigo-50 p-3 shadow-xl dark:border-indigo-700 dark:bg-indigo-900"
             >
-              {/* Month header + prev/next navigation. */}
-              <div className="mb-2 flex items-center justify-between">
+              {/* The month heading names whichever month owns most of the five
+                  visible rows, so it changes only once the majority of the
+                  window is in the next one. The arrows jump a whole month
+                  relative to it — stepping week by week to reach next March is
+                  no way to spend an afternoon. */}
+              <div className="mb-1 flex items-center justify-between">
                 <span className="text-sm font-semibold text-gray-800 dark:text-gray-100">
-                  {MONTHS[view.getMonth()]} {view.getFullYear()}
+                  {MONTHS[headerMonth.getMonth()]} {headerMonth.getFullYear()}
                 </span>
                 <div className="flex gap-1">
-                  <NavButton label="Previous month" onClick={() => shiftMonth(-1)}>
+                  <NavButton label="Previous month" onClick={() => stepMonth(-1)}>
                     <path d="M12 15l-4-5 4-5" />
                   </NavButton>
-                  <NavButton label="Next month" onClick={() => shiftMonth(1)}>
+                  <NavButton label="Next month" onClick={() => stepMonth(1)}>
                     <path d="M8 5l4 5-4 5" />
                   </NavButton>
                 </div>
               </div>
 
+              {/* Weekday header, above the rows so the columns stay labelled
+                  however far the window has stepped. */}
               <div className="grid grid-cols-7 gap-0.5 text-center">
                 {WEEKDAYS.map((w, i) => (
                   <span
@@ -349,9 +457,16 @@ export default function DateSelect({
                     {w}
                   </span>
                 ))}
-                {cells.map((d) => {
+              </div>
+
+              {/* Five week rows, days running straight through month
+                  boundaries. Not a scroll container — the window is an index,
+                  stepped a week at a time by the wheel or a swipe — so there is
+                  no scrollbar to show, ever, and no partial row to land on. */}
+              <div className="touch-none select-none overflow-hidden">
+                <div className="grid grid-cols-7 gap-0.5 text-center">
+                {weeks.flatMap(weekDays).map((d) => {
                   const ymd = toYmd(d);
-                  const inMonth = d.getMonth() === view.getMonth();
                   const isToday = highlightToday && ymd === todayYmd;
                   const blocked = !!outOfRange(ymd);
                   // Range highlight: the two endpoints are "selected"; days
@@ -362,15 +477,21 @@ export default function DateSelect({
                   const isEndpoint = ymd === rangeLo || ymd === rangeHi;
                   const selected = range ? inRange && isEndpoint : ymd === value;
                   const midRange = range && inRange && !isEndpoint;
-                  // Existing-block dot (only for in-month days, to avoid clutter).
-                  const marker = inMonth && dayMarker ? dayMarker(ymd) : null;
+                  // Days from the neighbouring months are dimmed — a quiet
+                  // "this row has crossed over", not a disabled state: they're
+                  // as clickable as any other day, and `blocked` below is what
+                  // actually greys a day out of use.
+                  const otherMonth = monthKey(d) !== monthKey(headerMonth);
+                  // Existing-block dot — drawn on every day, since every day on
+                  // screen is one you can pick.
+                  const marker = dayMarker ? dayMarker(ymd) : null;
                   return (
                     <button
                       key={ymd}
                       type="button"
-                      // Stable per-cell date hook: each cell's full date is unique,
-                      // so tests can target the in-month day unambiguously (matching
-                      // by day number alone collides with adjacent-month padding).
+                      // Stable per-cell date hook: the full date is unique
+                      // across the whole scrolling list, where a bare day
+                      // number repeats once per month on screen.
                       data-date={ymd}
                       disabled={blocked}
                       onClick={() => pick(d)}
@@ -379,8 +500,13 @@ export default function DateSelect({
                       }}
                       className={`relative h-8 rounded text-sm transition-colors
                         ${blocked ? "cursor-not-allowed text-gray-300 dark:text-gray-600" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
-                        ${!inMonth && !blocked ? "text-gray-400 dark:text-gray-500" : ""}
-                        ${inMonth && !blocked && !selected && !midRange ? "text-gray-800 dark:text-gray-100" : ""}
+                        ${
+                          !blocked && !selected && !midRange
+                            ? otherMonth
+                              ? "text-gray-400 dark:text-gray-500"
+                              : "text-gray-800 dark:text-gray-100"
+                            : ""
+                        }
                         ${midRange && !selected ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-800/60 dark:text-indigo-100" : ""}
                         ${selected ? "bg-indigo-600 font-semibold text-white hover:bg-indigo-600 dark:bg-indigo-500" : ""}
                         ${isToday && !selected && !midRange && !blocked ? "font-semibold text-indigo-600 ring-1 ring-inset ring-indigo-400 dark:text-indigo-300" : ""}`}
@@ -397,6 +523,7 @@ export default function DateSelect({
                     </button>
                   );
                 })}
+                </div>
               </div>
 
               {/* While mid-range, nudge the user to complete it. */}
@@ -429,7 +556,13 @@ export default function DateSelect({
                 <button
                   type="button"
                   disabled={!!outOfRange(todayYmd)}
-                  onClick={() => pick(new Date())}
+                  // Navigation, not selection: it snaps the window so today's
+                  // week sits in the middle, and leaves the popup open with
+                  // today's cell ringed for you to click. Picking here instead
+                  // closed the popup, which made the jump invisible — and
+                  // "Today" beside "Clear" reads as "take me there", not "fill
+                  // this in for me".
+                  onClick={() => setFirstWeek(centredWeek(new Date()))}
                   className="font-medium text-indigo-600 hover:underline disabled:opacity-40 dark:text-indigo-400"
                 >
                   Today
@@ -443,6 +576,7 @@ export default function DateSelect({
   );
 }
 
+// The ‹ › month jumps in the heading.
 function NavButton({
   label,
   onClick,

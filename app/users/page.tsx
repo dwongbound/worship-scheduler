@@ -37,6 +37,7 @@ import { DEFAULT_TEAM_ROLES, MD_KEY, orderedRoles } from "@/lib/teamRoles";
 import { STAT_RANGES, rangeForDays } from "@/lib/stats";
 import type { UserStats } from "@/app/api/admin/users/stats/route";
 import type { ApiAdminUser, ApiTeam } from "@/lib/types";
+import { fetchSlackStatus } from "@/lib/slackStatus";
 
 // Fixed-width right column of a user card: how many sets they're on in the
 // selected range, broken down by set type (e.g. "Sunday Worship (3)").
@@ -151,10 +152,13 @@ function UsersPageInner() {
   const [slackDraft, setSlackDraft] = useState("");
   const [slackSaving, setSlackSaving] = useState(false);
   const [slackError, setSlackError] = useState<string | null>(null);
-  // Whether THIS org's Slack bot is installed. Manual member-id entry only makes
-  // sense once it is (the id belongs to that workspace, and it's what we'd DM
-  // through) — until then we hide the "Set Slack ID" affordance entirely.
-  const [orgSlackConnected, setOrgSlackConnected] = useState(false);
+  // Whether THIS org has really installed its Slack bot. Manual member-id entry
+  // only makes sense once it has: the id belongs to that workspace, so without
+  // one there's nothing to resolve it against — we hide the "Set Slack ID"
+  // affordance entirely. Deliberately the status endpoint's `installed`, not its
+  // `enabled`: dry-run reports every org as able to send, which would put the
+  // button on orgs that have never connected a workspace.
+  const [orgSlackInstalled, setOrgSlackInstalled] = useState(false);
   const [memberQuery, setMemberQuery] = useState("");
   const [confirmingTeamId, setConfirmingTeamId] = useState<string | null>(null);
   const [teamBusy, setTeamBusy] = useState(false);
@@ -222,14 +226,12 @@ function UsersPageInner() {
     if (switchingOrg && users && teams && stats) setSwitchingOrg(false);
   }, [switchingOrg, users, teams, stats]);
 
-  // Track whether the selected org has Slack connected, to gate manual id entry.
+  // Track whether the selected org has really connected a workspace, to gate
+  // manual member-id entry.
   useEffect(() => {
     if (!adminOrgId) return;
-    setOrgSlackConnected(false);
-    fetch(`/api/slack/status?orgId=${adminOrgId}`)
-      .then((r) => (r.ok ? r.json() : { enabled: false }))
-      .then((d) => setOrgSlackConnected(!!d.enabled))
-      .catch(() => setOrgSlackConnected(false));
+    setOrgSlackInstalled(false);
+    fetchSlackStatus(adminOrgId).then((s) => setOrgSlackInstalled(s.installed));
   }, [adminOrgId]);
 
   // Post one team's "this week's sets" to its Slack channel on demand. Full
@@ -819,7 +821,7 @@ function UsersPageInner() {
                     ) : user.slackConnected ? (
                       // Editable only while the org's bot is installed;
                       // otherwise show the id as a plain read-only badge.
-                      orgSlackConnected ? (
+                      orgSlackInstalled ? (
                         <button
                           type="button"
                           onClick={() => startSlackEdit(user)}
@@ -838,7 +840,7 @@ function UsersPageInner() {
                           <span aria-hidden className="text-xs font-semibold">✓</span>
                         </span>
                       )
-                    ) : orgSlackConnected ? (
+                    ) : orgSlackInstalled ? (
                       <button
                         type="button"
                         onClick={() => startSlackEdit(user)}

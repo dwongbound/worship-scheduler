@@ -2,8 +2,8 @@
 // Create tab (admins only): define weekly set templates, run the
 // auto-scheduler, and see who has finished entering availability.
 import { useSession } from "next-auth/react";
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
+import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
@@ -32,6 +32,7 @@ import {
 import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { requestTargetsTeams } from "@/lib/availabilityTargets";
+import { fetchSlackStatus } from "@/lib/slackStatus";
 import { useOrgs } from "@/components/OrgProvider";
 import type {
   ApiAdminUser,
@@ -42,7 +43,7 @@ import type {
   StagedSet,
 } from "@/lib/types";
 
-// Max rows the Weekly Recurring Sets table shows per page.
+// Max rows the Recurring table shows per page.
 const TEMPLATES_PER_PAGE = 4;
 
 // One-line "team shape" summary for the templates list, e.g.
@@ -103,7 +104,7 @@ export default function CreatePage() {
   const [editingTemplate, setEditingTemplate] = useState<ApiSetTemplate | null>(
     null
   );
-  // Which page of the Weekly Recurring Sets table is shown (4 rows per page).
+  // Which page of the Recurring table is shown (4 rows per page).
   const [templatePage, setTemplatePage] = useState(0);
   // The "Auto schedule" options dialog. Its scope + template picks live inside
   // it (see GenerateModal) — the page only needs to know it's open.
@@ -128,10 +129,7 @@ export default function CreatePage() {
   useEffect(() => {
     if (!adminOrgId) return;
     setOrgSlackConnected(false);
-    fetch(`/api/slack/status?orgId=${adminOrgId}`)
-      .then((r) => (r.ok ? r.json() : { enabled: false }))
-      .then((d) => setOrgSlackConnected(!!d.enabled))
-      .catch(() => setOrgSlackConnected(false));
+    fetchSlackStatus(adminOrgId).then((s) => setOrgSlackConnected(s.enabled));
   }, [adminOrgId]);
 
   const reload = useCallback(async () => {
@@ -267,6 +265,12 @@ export default function CreatePage() {
       const data = await res.json();
       if (res.ok) {
         setReqName("");
+        // Clear the dates too, so the form doesn't sit there looking like it's
+        // still holding an unsent request. (The pair of fields never did this;
+        // with one range field the leftover "Sep 27 – Oct 27" is the most
+        // prominent thing on the card.)
+        setReqStart("");
+        setReqEnd("");
         // Refresh so the status card's Request dropdown picks up (and selects)
         // the just-created request without a page reload.
         await reload();
@@ -385,6 +389,12 @@ export default function CreatePage() {
   });
 
   const selectedUser = sortedUsers.find((u) => u.id === selectedUserId) ?? null;
+  // Their response to the request on screen — whether they've submitted, and
+  // the note they left with it.
+  const selectedResponse =
+    selectedUser?.availabilityResponses.find(
+      (r) => r.requestId === selectedRequestId
+    ) ?? null;
   // The teams the selected request asked (empty = it went to the whole org).
   const selectedRequestTeams = selectedRequest?.teams ?? [];
   // Everything of this person's that TOUCHES the request's window — matched by
@@ -443,20 +453,42 @@ export default function CreatePage() {
     <div className="space-y-8">
       <h1 className="text-2xl font-bold">Create Sets</h1>
 
-      {/* ── Weekly templates ────────────────────────────────────────── */}
+      {/* ── Recurring sets (weekly templates) ───────────────────────── */}
       <section>
         <Card>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-semibold">Weekly Recurring Sets</h2>
-            {/* These rows are only a shape until something expands them, and
-                that something is further down the page — so say where. */}
-            <a
-              href="#auto-schedule"
-              className="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-lg font-semibold">Recurring</h2>
+              {/* These rows are only a shape until something expands them, and
+                  the button beside this is what does it — so the explanation
+                  belongs here, on the thing being expanded. */}
+              <InfoTooltip text="Expands these recurring sets into concrete sets, then auto-assigns people based on the roles they play and their availability. You'll get a preview to review and tweak before anything is saved — nobody is notified until you apply. To change who's assigned on a single set, open it on the Calendar." />
+            </div>
+            {/* The window and the template picks are asked in the dialog, not
+                parked on the page: they're answered once per run, and half of
+                them only apply to one of the three scopes. */}
+            <Button
+              size="sm"
+              onClick={() => {
+                setGenerateResult("");
+                setGenerateOpen(true);
+              }}
+              disabled={templates.length === 0}
+              title={
+                templates.length === 0
+                  ? "Add a recurring set first."
+                  : undefined
+              }
             >
-              Auto schedule these ↓
-            </a>
+              Auto schedule…
+            </Button>
           </div>
+          {/* A failed run reports here, next to the button that started it. */}
+          {generateResult && !generateOpen && (
+            <p className="mb-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">
+              {generateResult}
+            </p>
+          )}
           {templates.length === 0 ? (
             <p className="text-sm text-gray-500">No templates yet.</p>
           ) : (
@@ -511,7 +543,7 @@ export default function CreatePage() {
                         size="sm"
                         variant="ghost"
                         // Indigo the way Delete beside it is red — the app's
-                        // accent (same as the "Auto schedule these" link).
+                        // accent (same as the Edit action beside it).
                         className="text-indigo-600 hover:bg-indigo-50 dark:text-indigo-400 dark:hover:bg-indigo-950/40"
                         onClick={() => {
                           setEditingTemplate(t);
@@ -581,7 +613,7 @@ export default function CreatePage() {
         {/* Left: request the team to enter their availability */}
         <Card>
           <div className="mb-3 flex items-center gap-1.5">
-            <h2 className="font-semibold">Request availabilities</h2>
+            <h2 className="text-lg font-semibold">Request availabilities</h2>
             <InfoTooltip text="Ask the teams you pick to enter when they’re unavailable over a date range. Only their members are notified. Manage an availability request on the right panel." />
           </div>
           <div className="space-y-3">
@@ -591,21 +623,25 @@ export default function CreatePage() {
               onChange={(e) => setReqName(e.target.value)}
               placeholder="e.g. Passion Week 2026"
             />
-            <div className="grid grid-cols-2 gap-3">
-              <DateSelect
-                label="From"
-                value={reqStart}
-                min={toYmd(new Date())}
-                max={reqEnd || undefined}
-                onChange={setReqStart}
-              />
-              <DateSelect
-                label="To (optional)"
-                value={reqEnd}
-                min={reqStart || toYmd(new Date())}
-                onChange={setReqEnd}
-              />
-            </div>
+            {/* ONE range picker rather than a From/To pair: a window is a
+                single idea, and picking it as start-then-end in one calendar
+                shows the days in between highlighting as you go. The pair also
+                had to police itself with min/max — each field capping the
+                other — which left no room to move when both landed in the same
+                month. Leaving the end unpicked still means a one-day request
+                (see requestAvailability). */}
+            <DateSelect
+              range
+              highlightToday={false}
+              label="Dates to ask about"
+              value={reqStart}
+              endValue={reqEnd}
+              min={toYmd(new Date())}
+              onRangeChange={(start, end) => {
+                setReqStart(start);
+                setReqEnd(end);
+              }}
+            />
             {/* Who gets asked. Defaults to every team in the org; only members
                 of the checked teams see the reminder + get the Slack DM. */}
             {teams.length > 0 && (
@@ -674,7 +710,7 @@ export default function CreatePage() {
         {/* Right: who has responded, filtered by TimeRange */}
         <Card>
           <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="font-semibold">Availability status</h2>
+            <h2 className="text-lg font-semibold">Availability status</h2>
             {selectedRequest && (
               <div className="flex items-center gap-2">
                 <Button
@@ -762,6 +798,18 @@ export default function CreatePage() {
                     const done = u.availabilityResponses.find(
                       (r) => r.requestId === selectedRequestId && r.completedAt
                     );
+                    // A note is the one part of a response that can't be read
+                    // off a date, so it gets a dot — click the row to read it.
+                    // Tracked on the response ROW, not on `done`: un-submitting
+                    // keeps the note, and the modal shows it either way, so the
+                    // dot has to agree or the note becomes unfindable.
+                    // Deliberately no re-sorting: the list stays alphabetical /
+                    // done-last so it's still scannable for who hasn't replied.
+                    const hasNote = Boolean(
+                      u.availabilityResponses.find(
+                        (r) => r.requestId === selectedRequestId
+                      )?.note
+                    );
                     return (
                       <tr
                         key={u.id}
@@ -774,9 +822,16 @@ export default function CreatePage() {
                         }}
                         tabIndex={0}
                         role="button"
-                        className={`cursor-pointer border-b border-gray-100 last:border-0 transition-colors hover:bg-indigo-50 dark:border-gray-700/50 dark:hover:bg-indigo-900/20 ${selectedUserId === u.id ? "bg-indigo-50 dark:bg-indigo-900/20" : ""}`}
+                        className={`cursor-pointer border-b border-gray-100 last:border-0 transition-colors hover:bg-indigo-50 dark:border-gray-700/50 dark:hover:bg-indigo-900/20 ${selectedUserId === u.id ? "bg-indigo-100 dark:bg-indigo-900/20" : ""}`}
                       >
-                        <td className="py-2 pr-4 font-medium">{u.name}</td>
+                        <td className="py-2 pr-4 font-medium">
+                          <span className="inline-flex items-center gap-1.5">
+                            {u.name}
+                            {hasNote && (
+                              <AttentionDot label={`${u.name} left a note`} />
+                            )}
+                          </span>
+                        </td>
                         <td className="py-2">
                           {done ? (
                             <Badge tone="green">
@@ -795,49 +850,6 @@ export default function CreatePage() {
             </div>
           )}
         </Card>
-      </div>
-
-      {/* ── Auto schedule ───────────────────────────────────────────── */}
-      {/* id is the jump target for the Weekly Recurring Sets link above;
-          scroll-mt keeps the heading clear of the sticky navbar on arrival. */}
-      <div id="auto-schedule" className="scroll-mt-24">
-      <Card>
-        {/* The card is one button now, so what it does rides on the heading
-            rather than taking three lines above it. */}
-        <div className="mb-3 flex items-center gap-1.5">
-          <h2 className="font-semibold">Auto schedule</h2>
-          <InfoTooltip text="Expands the weekly recurring sets into concrete sets, then auto-assigns people based on the roles they play and their availability. You'll get a preview to review and tweak before anything is saved — nobody is notified until you apply." />
-        </div>
-        {/* The window and the template picks are asked in the dialog, not
-            parked on the page: they're answered once per run, and half of
-            them only apply to one of the three scopes. */}
-        <Button
-          onClick={() => {
-            setGenerateResult("");
-            setGenerateOpen(true);
-          }}
-          disabled={templates.length === 0}
-          title={
-            templates.length === 0
-              ? "Add a weekly recurring set first."
-              : undefined
-          }
-        >
-          Auto schedule…
-        </Button>
-        {generateResult && !generateOpen && (
-          <p className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">
-            {generateResult}
-          </p>
-        )}
-        <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
-          Tip: open any set on the{" "}
-          <Link href="/calendar" className="font-medium text-indigo-600 underline dark:text-indigo-400">
-            Calendar
-          </Link>{" "}
-          to manually change who&rsquo;s assigned.
-        </p>
-      </Card>
       </div>
 
       {/* Step 1: the options. Step 2 (StagedScheduleModal) opens on success. */}
@@ -861,11 +873,22 @@ export default function CreatePage() {
             <p className="text-sm text-gray-500">
               {requestLabel(selectedRequest)}
             </p>
-            {Boolean(
-              selectedUser.availabilityResponses.find(
-                (r) => r.requestId === selectedRequestId && r.completedAt
-              )
-            ) ? (
+            {/* Their own words first: a note usually explains the blocks below
+                it ("away the first weekend"), so reading it after them is
+                reading the answer backwards. */}
+            {selectedResponse?.note && (
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 dark:border-amber-900/60 dark:bg-amber-900/20">
+                <p className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                  Note from {selectedUser.name}
+                </p>
+                {/* whitespace-pre-line: they typed it in a textarea, so keep
+                    the line breaks they put there. */}
+                <p className="mt-0.5 whitespace-pre-line text-sm text-gray-700 dark:text-gray-200">
+                  {selectedResponse.note}
+                </p>
+              </div>
+            )}
+            {Boolean(selectedResponse?.completedAt) ? (
               visibleUnavailability.length === 0 ? (
                 <p className="text-sm text-gray-500">
                   They haven&apos;t entered any unavailability blocks for this range.
@@ -988,6 +1011,7 @@ export default function CreatePage() {
       <TemplateModal
         open={templateModalOpen}
         template={editingTemplate}
+        teams={teams}
         onClose={() => {
           setTemplateModalOpen(false);
           setEditingTemplate(null);

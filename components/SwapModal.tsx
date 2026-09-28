@@ -170,13 +170,17 @@ export default function SwapModal({
                 </div>
                 <div className="flex items-center gap-2">
                   <StatusBadge status={c.status} />
-                  {proposingId === c.toAssignmentId ? (
-                    <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
-                  ) : (
-                    <Button size="sm" onClick={() => propose(c)}>
-                      Request swap
-                    </Button>
-                  )}
+                  {/* Dots ride ON the button (it keeps its size) rather than
+                      replacing it, so the candidate row doesn't reflow the
+                      moment you press it. */}
+                  <Button
+                    size="sm"
+                    onClick={() => propose(c)}
+                    loading={proposingId === c.toAssignmentId}
+                    disabled={proposingId !== null}
+                  >
+                    Request swap
+                  </Button>
                 </div>
               </div>
 

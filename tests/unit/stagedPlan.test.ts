@@ -7,7 +7,9 @@ import {
   countAssignments,
   loadRows,
   lockedCounts,
+  designateMDs,
   maxLoad,
+  previousMDForTeam,
   totalLocked,
   totalConflicts,
   totalUnfillable,
@@ -266,5 +268,122 @@ describe("isActiveForSet", () => {
 
   it("is active when the person isn't on the team at all (unknown ≠ paused)", () => {
     expect(isActiveForSet({ id: "u", teams: [] }, "t1")).toBe(true);
+  });
+});
+
+describe("previousMDForTeam", () => {
+  // A led set, reduced to the three fields this helper reads.
+  const led = (
+    startsAt: string,
+    mdUserId: string | null,
+    teamId: string | null = "t1"
+  ): StagedSet => ({ ...stagedSet(startsAt, []), mdUserId, teamId });
+
+  it("returns the MD of the most recent earlier set on the same team", () => {
+    const earlier = [led("2026-01-04", "alice"), led("2026-01-11", "bob")];
+    expect(previousMDForTeam(earlier, "t1")).toBe("bob");
+  });
+
+  it("survives an empty prefix — the first set of a run has no predecessor", () => {
+    // The regression: redesignateMDs decides set i with only sets 0..i-1
+    // settled, so for i=0 it passes an EMPTY list. An earlier version indexed
+    // the list by the current set's position and blew up here the moment
+    // "Auto schedule all" was clicked.
+    expect(previousMDForTeam([], "t1")).toBeNull();
+  });
+
+  it("reads the seed when no earlier set in the run led", () => {
+    // Covers the plan's first set, whose real predecessor is a set from before
+    // the window that the client never loaded.
+    expect(previousMDForTeam([], "t1", { t1: "carol" })).toBe("carol");
+    // An earlier set in the run outranks the seed.
+    expect(previousMDForTeam([led("2026-01-04", "bob")], "t1", { t1: "carol" })).toBe(
+      "bob"
+    );
+  });
+
+  it("ignores other teams — two teams the same week rotate independently", () => {
+    const earlier = [led("2026-01-04", "alice", "t1"), led("2026-01-04", "bob", "t2")];
+    expect(previousMDForTeam(earlier, "t1")).toBe("alice");
+    expect(previousMDForTeam(earlier, "t2")).toBe("bob");
+  });
+
+  it("treats a team-less set as its own rotation, seeded under \"\"", () => {
+    const earlier = [led("2026-01-04", "alice", null)];
+    expect(previousMDForTeam(earlier, null)).toBe("alice");
+    expect(previousMDForTeam(earlier, "t1")).toBeNull();
+    expect(previousMDForTeam([], undefined, { "": "dave" })).toBe("dave");
+  });
+
+  it("carries past a set nobody could lead rather than breaking the chain", () => {
+    const earlier = [led("2026-01-04", "alice"), led("2026-01-11", null)];
+    expect(previousMDForTeam(earlier, "t1")).toBe("alice");
+  });
+});
+
+describe("designateMDs", () => {
+  // Two electric guitarists who can both lead, on one team, week after week.
+  const guitarists: StagedSet["assignments"] = [
+    { userId: "alice", role: "ELECTRIC_GUITAR" as Instrument },
+    { userId: "bob", role: "ELECTRIC_GUITAR" as Instrument },
+  ];
+  const led = (startsAt: string, teamId: string | null = "t1"): StagedSet => ({
+    ...stagedSet(startsAt, guitarists),
+    requiresMD: true,
+    mdUserId: null,
+    teamId,
+  });
+  const bothAreMDs = { isMD: (id: string) => id === "alice" || id === "bob" };
+
+  it("doesn't give the same person two sets in a row", () => {
+    // The behaviour the whole change exists for.
+    const out = designateMDs(
+      ["2026-01-04", "2026-01-11", "2026-01-18", "2026-01-25"].map((d) => led(d)),
+      bothAreMDs
+    );
+    const mds = out.map((s) => s.mdUserId);
+    expect(mds.every(Boolean)).toBe(true);
+    for (let i = 1; i < mds.length; i++) expect(mds[i]).not.toBe(mds[i - 1]);
+  });
+
+  it("settles the FIRST set without crashing", () => {
+    // The regression, at the layer that actually broke: set 0 is decided with
+    // nothing settled before it. The old code indexed that empty prefix by the
+    // current set's position and threw, taking the modal down with it.
+    expect(() => designateMDs([led("2026-01-04")], bothAreMDs)).not.toThrow();
+    expect(designateMDs([led("2026-01-04")], bothAreMDs)[0].mdUserId).toBe("alice");
+  });
+
+  it("starts the rotation from the seed, so set one doesn't repeat last week", () => {
+    const out = designateMDs([led("2026-01-04")], {
+      ...bothAreMDs,
+      seed: { t1: "alice" },
+    });
+    expect(out[0].mdUserId).toBe("bob");
+  });
+
+  it("rotates each team independently", () => {
+    const out = designateMDs(
+      [led("2026-01-04", "t1"), led("2026-01-04", "t2"), led("2026-01-11", "t1")],
+      bothAreMDs
+    );
+    // t1 alternates across ITS OWN two sets; t2's single set is unaffected by
+    // t1 having just picked someone.
+    expect(out[0].mdUserId).toBe("alice");
+    expect(out[1].mdUserId).toBe("alice");
+    expect(out[2].mdUserId).toBe("bob");
+  });
+
+  it("keeps a still-valid pick and clears MDs on sets that don't want one", () => {
+    const kept: StagedSet = { ...led("2026-01-04"), mdUserId: "bob" };
+    const noMD: StagedSet = { ...led("2026-01-11"), requiresMD: false, mdUserId: "alice" };
+    const out = designateMDs([kept, noMD], bothAreMDs);
+    expect(out[0].mdUserId).toBe("bob");
+    expect(out[1].mdUserId).toBeNull();
+  });
+
+  it("leaves mdUserId null when nobody on the roster can lead", () => {
+    const out = designateMDs([led("2026-01-04")], { isMD: () => false });
+    expect(out[0].mdUserId).toBeNull();
   });
 });

@@ -46,7 +46,6 @@ import Modal from "./common/Modal";
 import Button from "./common/Button";
 import Dropdown from "./common/Dropdown";
 import InfoTooltip from "./common/InfoTooltip";
-import LoadingDots from "./common/LoadingDots";
 import Checkbox from "./common/Checkbox";
 import Select from "./common/Select";
 import SlackIcon from "./common/SlackIcon";
@@ -54,7 +53,10 @@ import AttentionDot from "./common/AttentionDot";
 import Toast, { type ToastMessage } from "./common/Toast";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
-import PlayerSelect, { type PlayerOption } from "./PlayerSelect";
+import PlayerSelect, {
+  PLAYER_SELECT_WIDTH,
+  type PlayerOption,
+} from "./PlayerSelect";
 import {
   ACOUSTIC_GUITAR,
   GROUP_CHAT_LEAD_OPTIONS,
@@ -106,6 +108,7 @@ import { describeNotesChange, noteTextFromDetail } from "@/lib/setNotes";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { isUnbounded, openSeats } from "@/lib/guestTeams";
 import GuestTeamsModal, { type GuestTeamDraft } from "./GuestTeamsModal";
+import { fetchSlackStatus } from "@/lib/slackStatus";
 import type {
   ApiAdminUser,
   ApiAssignment,
@@ -328,10 +331,9 @@ export default function SetDetailModal({
     let cancelled = false;
     // Per-org: the "Slack Team" button only works if the set's OWN org has
     // connected Slack, so ask about that org specifically.
-    fetch(`/api/slack/status?orgId=${slackStatusOrgId}`)
-      .then((r) => r.json())
-      .then((d) => !cancelled && setSlackConfigured(!!d.enabled))
-      .catch(() => !cancelled && setSlackConfigured(false));
+    fetchSlackStatus(slackStatusOrgId).then(
+      (s) => !cancelled && setSlackConfigured(s.enabled)
+    );
     return () => {
       cancelled = true;
     };
@@ -523,7 +525,7 @@ export default function SetDetailModal({
   // How the person already in a seat should read in that seat's open list.
   // buildPlayerOptions excludes them from the candidates (they're already
   // here), so PlayerSelect draws their row from this instead — without it the
-  // current pick is the only name in the list with no "(unavailable)" on it.
+  // current pick is the only name in the list with no "unavailable" pill.
   // The ×n counts this set too (the window includes it), so the person in the
   // seat reads on the same scale as the candidates under them rather than
   // looking like they serve less. While the window is still loading there's no
@@ -559,7 +561,7 @@ export default function SetDetailModal({
   // least-scheduled-first, so unavailable/inactive people sink to the bottom
   // (but stay selectable — an admin can override).
   // The set's worship leader(s) can't double as MD, so they never get the
-  // "(MD)" hint even in an MD-capable role's dropdown.
+  // "MD" hint even in an MD-capable role's dropdown.
   const worshipLeaderIds = new Set(
     set.assignments
       .filter((a) => a.role === "WORSHIP_LEADER")
@@ -1273,8 +1275,13 @@ export default function SetDetailModal({
                 >
                   Cancel
                 </Button>
-                <Button size="sm" onClick={saveAll} disabled={busy || !dirty}>
-                  {busy ? <LoadingDots size="sm" /> : "Save"}
+                <Button
+                  size="sm"
+                  onClick={saveAll}
+                  disabled={!dirty}
+                  loading={busy}
+                >
+                  Save
                 </Button>
               </>
             ) : (
@@ -1589,12 +1596,12 @@ export default function SetDetailModal({
                     </li>
                   ) : (
                     // Read-only view: the name sits in a box that mirrors
-                    // PlayerSelect's trigger (same w-48, border, padding and
+                    // PlayerSelect's trigger (same width, border, padding and
                     // radius) so admin and non-admin rosters line up visually.
                     // No chevron and no button element — it isn't interactive,
                     // and a chevron would advertise a menu that doesn't exist.
                     <li key={a.id} className="flex items-center gap-2">
-                      <div className="flex w-48 items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                      <div className={`flex ${PLAYER_SELECT_WIDTH} items-center gap-1 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800`}>
                         <span className="truncate">{a.user.name}</span>
                         {a.user.id === mdUserId && (
                           <span className="shrink-0 font-medium text-indigo-600 dark:text-indigo-400">
@@ -1635,7 +1642,7 @@ export default function SetDetailModal({
                     // interrupted by bare dashes. Mirrors PlayerSelect's
                     // `dashed` empty state.
                     <li key={`empty-${i}`}>
-                      <div className="w-48 rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+                      <div className={`${PLAYER_SELECT_WIDTH} rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400`}>
                         Unfilled
                       </div>
                     </li>
@@ -1766,7 +1773,7 @@ export default function SetDetailModal({
                           </li>
                         ) : (
                           <li key={a.id} className="flex items-center gap-2">
-                            <div className="w-48 rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800">
+                            <div className={`${PLAYER_SELECT_WIDTH} rounded border border-gray-300 bg-white px-2 py-1 text-sm dark:border-gray-600 dark:bg-gray-800`}>
                               <span className="truncate">{a.user.name}</span>
                             </div>
                             <StatusBadge status={a.status} />
@@ -1804,7 +1811,7 @@ export default function SetDetailModal({
                       {!canEditTeam &&
                         Array.from({ length: openRows }).map((_, i) => (
                           <li key={`guest-empty-${i}`}>
-                            <div className="w-48 rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+                            <div className={`${PLAYER_SELECT_WIDTH} rounded border border-dashed border-gray-300 px-2 py-1 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400`}>
                               Unfilled
                             </div>
                           </li>
@@ -2093,8 +2100,8 @@ export default function SetDetailModal({
               >
                 Cancel
               </Button>
-              <Button size="sm" onClick={saveRoles} disabled={busy}>
-                {busy ? <LoadingDots size="sm" /> : "Save"}
+              <Button size="sm" onClick={saveRoles} loading={busy}>
+                Save
               </Button>
             </>
           }
@@ -2185,9 +2192,9 @@ export default function SetDetailModal({
                 size="sm"
                 variant="danger"
                 onClick={deleteSet}
-                disabled={busy}
+                loading={busy}
               >
-                {busy ? <LoadingDots size="sm" /> : "Delete set"}
+                Delete set
               </Button>
             </>
           }

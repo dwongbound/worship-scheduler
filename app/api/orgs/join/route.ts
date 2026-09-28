@@ -5,6 +5,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { redeemOrgKey } from "@/lib/org";
+import { linkSlackIdForUser } from "@/lib/slack";
 
 export async function POST(req: NextRequest) {
   const user = await getSessionUser();
@@ -24,5 +25,10 @@ export async function POST(req: NextRequest) {
       { status: 400 }
     );
   }
+  // Brand-new membership: resolve their Slack member id by email now, so the
+  // org's bot can DM them from their very first set rather than after they
+  // paste an ID into /profile. No-op if this org has no bot installed.
+  await linkSlackIdForUser(user.id).catch(() => {});
+
   return NextResponse.json({ id: joined.orgId, name: joined.name });
 }

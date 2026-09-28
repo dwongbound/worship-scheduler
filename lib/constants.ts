@@ -365,6 +365,14 @@ export function windowPhrase(days: number): string {
 // it changes what an unparameterized fetch returns.
 export const SETS_WINDOW_DEFAULT_DAYS = 92;
 
+// How far AHEAD the Calendar tab asks for on first load. Three months is about
+// as far as anyone plans, and the tab widens as you page past it anyway — so
+// the opening fetch doesn't need to carry half a year nobody scrolled to. Its
+// back edge isn't a span at all: it's the first cell the grid actually shows
+// (see app/calendar/page.tsx), because the one thing the first load must not
+// do is leave days already on screen looking empty.
+export const CALENDAR_WINDOW_AHEAD_DAYS = 92;
+
 // The widest span a caller may request, so a hand-rolled `?from=1900-01-01`
 // can't ask for the whole table. Comfortably covers the year-long option in
 // the Set Manager plus a month of calendar spillover.

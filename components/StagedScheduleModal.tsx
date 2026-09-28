@@ -7,7 +7,10 @@
 //
 // Layout: a near-full-screen workspace. A "Team load" panel across the top
 // shows who is playing how often (so the admin can spot over/under-used
-// people at a glance); below it, the occurrence cards, grouped either way:
+// people at a glance); below it, the occurrence cards, grouped either way by
+// the toggle in the modal's header (left of the ✕, so scrolling the cards
+// can't take it away — and a size up in preview mode, where re-reading the
+// season a different way is the main thing you came to do):
 //   • By set type — one horizontally-scrolling row per recurring set, so you
 //     read one set type's rotation across the weeks.
 //   • Chronological — one row per WEEK, weeks running down the page, so you
@@ -82,7 +85,9 @@ import {
   isActiveForSet,
   loadRows,
   lockedCounts,
+  designateMDs,
   maxLoad,
+  previousMDForTeam,
   totalConflicts,
   totalLocked,
   totalUnfillable,
@@ -170,6 +175,14 @@ export default function StagedScheduleModal({
   const orgId = orgIdProp ?? adminOrgId;
   // Editable copy of the proposal — reset whenever a fresh plan arrives.
   const [sets, setSets] = useState<StagedSet[]>([]);
+  // Who the pointer is resting on, so every OTHER slot holding that person
+  // lights up too. A plan is a wall of names across many cards, and the question
+  // you keep asking is "where else is this person playing?" — this answers it
+  // for a name you can see, and for a candidate you're considering in an open
+  // dropdown, before you commit to them. Desktop-only: the styling is gated
+  // behind `lg:` in PlayerSelect, since it needs a pointer and a screen wide
+  // enough to show several sets at once.
+  const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
   // How the cards are grouped (see the header comment). Per-session, not
   // persisted — it's a reading preference for this one review.
   const [view, setView] = useState<"type" | "chrono">("type");
@@ -212,6 +225,22 @@ export default function StagedScheduleModal({
         ? { userId: x.pendingFromUserId, isMD: isMdOf(x.pendingFromUserId) }
         : null,
     }));
+
+  // Who led the nearest EARLIER set on the same team — the person this set's
+  // auto-pick should pass over, so nobody directs two in a row. Mirrors the
+  // chained pass in app/api/admin/generate so a re-run here reproduces what a
+  // fresh server run would produce instead of drifting from it.
+  //
+  // Per team: two teams meeting the same week rotate independently. Falling
+  // back to the plan's seed covers the first set of the run, whose predecessor
+  // is a real set from before the window that the client never loaded.
+  // Takes the sets ALREADY settled plus the team being decided — never an index
+  // into a list that may not contain that set yet. See lib/stagedPlan.
+  const previousMDFor = (
+    earlier: StagedSet[],
+    teamId: string | null | undefined
+  ): string | null =>
+    previousMDForTeam(earlier, teamId, plan?.baseline?.previousMDByTeam);
 
   // Every user's unavailability flattened into scheduler rules once, so both the
   // dropdowns and the conflict markers can tell who can't serve at a set's time.
@@ -423,6 +452,53 @@ export default function StagedScheduleModal({
       ),
     }));
 
+  // Remove ONE slot of a role from ONE set (capacity − 1). For a filled slot
+  // pass the person in it — they come out of the seat with it. Exactly the edit
+  // SetDetailModal.deleteSlot makes, so the ✕ means the same thing in both
+  // places; empty a role's last slot and the role stops being rendered here,
+  // with the "+ role" chips below as the way back.
+  //
+  // A stale mdUserId needs no cleanup: `mdInfo` re-validates the pick against
+  // the roster on every render, and applySets normalizes it before it ever
+  // reaches the server.
+  const deleteSlot = (idx: number, role: Instrument, userId?: string) =>
+    updateSet(idx, (s) => {
+      // Materialize the shape before editing it: a set with no override is
+      // still following its team's defaults, and lowering one role has to pin
+      // the rest rather than let them silently re-inherit later.
+      const shape = resolveTeamCapacities(catalogFor(s), s.slotCapacities);
+      return {
+        ...s,
+        slotCapacities: {
+          ...shape,
+          [role]: Math.max(0, (shape[role] ?? 0) - 1),
+        },
+        assignments: userId
+          ? s.assignments.filter(
+              (a) => !(a.userId === userId && a.role === role)
+            )
+          : s.assignments,
+      };
+    });
+
+  // Put a removed role back, at the team's default count for it — the way back
+  // from the ✕ above, since a zeroed role isn't rendered any more. The exact
+  // count a template may have overridden is gone with the deletion; the team
+  // default is the honest thing to restore, and the dropdowns take it from
+  // there.
+  const restoreRole = (idx: number, role: Instrument) =>
+    updateSet(idx, (s) => {
+      const catalog = catalogFor(s);
+      const defaults = resolveTeamCapacities(catalog, null);
+      return {
+        ...s,
+        slotCapacities: {
+          ...resolveTeamCapacities(catalog, s.slotCapacities),
+          [role]: Math.max(1, defaults[role] ?? 1),
+        },
+      };
+    });
+
   // Empty every roster in one go: the plan keeps its sets, dates and shapes but
   // nobody on them — placeholder sets an admin fills in later. The MD goes with
   // them, since an MD has to be one of the assignees.
@@ -496,20 +572,13 @@ export default function StagedScheduleModal({
           ...(keptBySet.get(stagingKey(s)) ?? []),
           ...(bySet.get(stagingKey(s)) ?? []),
         ];
-        return {
-          ...s,
-          assignments: merged,
-          // Re-derive the MD the way the server does — a kept pick that's
-          // still eligible survives, otherwise the best of the new roster.
-          mdUserId: s.requiresMD
-            ? (() => {
-                const a = mdRoster(merged);
-                return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
-              })()
-            : null,
-        };
+        return { ...s, assignments: merged };
       })
     );
+    // Re-derive MDs in a SECOND pass, in date order: each set's pick has to see
+    // the one before it to avoid the same person leading twice running, which a
+    // per-set map can't do. A kept pick that's still eligible survives.
+    setSets((list) => redesignateMDs(list));
   };
 
   // Fill ONE card's empty slots and nothing else — the ⟳ button on a set.
@@ -589,16 +658,17 @@ export default function StagedScheduleModal({
         ...s.assignments,
         ...proposals.map((p) => ({ userId: p.userId, role: p.role })),
       ];
+      const a = mdRoster(merged);
       return {
         ...s,
         assignments: merged,
         // Re-derive the MD the way a full run does: a still-eligible pick
-        // survives, otherwise the best of the newly-complete roster.
+        // survives, otherwise the best of the newly-complete roster — passing
+        // over whoever led the set before this one on the same team.
         mdUserId: s.requiresMD
-          ? (() => {
-              const a = mdRoster(merged);
-              return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
-            })()
+          ? isValidMD(s.mdUserId, a)
+            ? s.mdUserId
+            : defaultMDId(a, previousMDFor(sets.slice(0, idx), s.teamId))
           : null,
       };
     });
@@ -621,14 +691,16 @@ export default function StagedScheduleModal({
   // Normalize each set's MD just before applying: keep a still-valid choice,
   // else auto-pick the best eligible one (mirrors the generate default). Sets
   // that don't require an MD carry none.
-  const applySets = (): StagedSet[] =>
-    sets.map((s) => {
-      if (!s.requiresMD) return { ...s, mdUserId: null };
-      const a = mdRoster(s.assignments);
-      return {
-        ...s,
-        mdUserId: isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a),
-      };
+  const applySets = (): StagedSet[] => redesignateMDs(sets);
+
+  // Walk an ordered run of sets and settle every MD, carrying the previous
+  // pick forward per team. ONE place the rule lives, shared by the full re-run
+  // and by apply, so what gets saved is what was previewed. A still-valid
+  // existing pick is always kept — this only fills or replaces a stale one.
+  const redesignateMDs = (list: StagedSet[]): StagedSet[] =>
+    designateMDs(list, {
+      isMD: isMdOf,
+      seed: plan?.baseline?.previousMDByTeam,
     });
 
   // Options for a role's dropdown: users who play `role` and aren't already on
@@ -689,6 +761,38 @@ export default function StagedScheduleModal({
       onClose={requestClose}
       title={title}
       size="full"
+      // Pinned to the header, left of the ✕: it reframes the whole body, and
+      // in a workspace this tall a control parked above the cards is scrolled
+      // away the moment you start reading.
+      headerActions={
+        <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-0.5 dark:border-gray-700">
+          {(
+            [
+              ["type", "By set type"],
+              ["chrono", "Chronological"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setView(value)}
+              aria-pressed={view === value}
+              className={`whitespace-nowrap rounded-md font-medium transition-colors ${
+                // Preview mode is the read-the-season view, where switching how
+                // the calendar is laid out is the main thing you do here — so
+                // its toggle is a size up.
+                preview ? "px-3.5 py-1.5 text-sm" : "px-2.5 py-1 text-xs"
+              } ${
+                view === value
+                  ? "bg-indigo-600 text-white"
+                  : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      }
       footer={
         // Preview mode has nothing to commit, so its footer is the one way
         // out; the generate flow keeps Discard beside Apply.
@@ -845,20 +949,18 @@ export default function StagedScheduleModal({
         </p>
       </div>
 
-      {/* Plan-wide controls: how to read the cards, and the one-click empty.
-          They sit between the stats and the cards because that's what they act
-          on — the load panel is what tells you whether to clear and start over. */}
-      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-        {/* Re-run the fill, or empty the plan. Re-running always refills to
-            exactly what the server proposed (same algorithm, same baseline)
-            EXCEPT around the slots you locked, so neither button is a one-way
-            door. */}
-        {/* Preview mode has no proposal to re-roll: there's no scheduler
-            baseline behind a real calendar, so a re-run would rebalance from
-            zero and read as advice it isn't — and "Clear all people" would
-            look like it emptied the real rosters. Both sit it out; the
-            grouping toggle (the reading aid) stays. */}
-        <div className={`flex flex-wrap items-center gap-2 ${preview ? "hidden" : ""}`}>
+      {/* Plan-wide controls: re-run the fill, or empty the plan. They sit
+          between the stats and the cards because that's what they act on — the
+          load panel is what tells you whether to clear and start over.
+          (The grouping toggle used to share this row; it lives in the modal
+          header now, where scrolling can't take it away.)
+
+          Preview mode has no proposal to re-roll: there's no scheduler
+          baseline behind a real calendar, so a re-run would rebalance from
+          zero and read as advice it isn't — and "Clear all people" would look
+          like it emptied the real rosters. The whole row sits out there. */}
+      {!preview && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant="secondary"
@@ -895,29 +997,7 @@ export default function StagedScheduleModal({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1 rounded-lg border border-gray-200 p-0.5 dark:border-gray-700">
-          {(
-            [
-              ["type", "By set type"],
-              ["chrono", "Chronological"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => setView(value)}
-              aria-pressed={view === value}
-              className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                view === value
-                  ? "bg-indigo-600 text-white"
-                  : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* ── The cards. By set type: one sideways-scrolling row per label,
           reading a rotation across the weeks. Chronological: one section per
@@ -973,6 +1053,14 @@ export default function StagedScheduleModal({
             );
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
+            // Roles the team offers that this set doesn't want (zero slots and
+            // nobody in them) — exactly the ones the card hides below, offered
+            // back as "+ role" chips.
+            const removedRoles = slottedRoles(catalog).filter(
+              ({ key }) =>
+                capacities[key] === 0 &&
+                !set.assignments.some((a) => a.role === key)
+            );
             // This set type's tint, if the admin picked one — a fifth
             // strength in light mode, half that in dark, where the same alpha
             // over a near-black card shouts. Both go in as custom properties
@@ -1074,6 +1162,16 @@ export default function StagedScheduleModal({
                               key={`${a.userId}-${role}`}
                               className="flex items-center gap-1.5"
                             >
+                              {/* Leftmost, the way SetDetailModal's slot ✕ is:
+                                  removes this slot and takes the person in it
+                                  out with it. */}
+                              <SlotDeleteButton
+                                disabled={busy}
+                                label={`Remove ${roleName} slot (${nameOf(
+                                  a.userId
+                                )})`}
+                                onClick={() => deleteSlot(idx, role, a.userId)}
+                              />
                               <LockCell
                                 locked={!!a.locked}
                                 onUnlock={() => unlock(idx, a.userId, role)}
@@ -1102,6 +1200,15 @@ export default function StagedScheduleModal({
                                 // tinted so a hand-picked roster reads apart
                                 // from the auto-filled one at a glance.
                                 locked={a.locked}
+                                highlighted={hoveredUserId === a.userId}
+                                // The control reports WHO is under the pointer
+                                // — its own occupant while closed, or whichever
+                                // option row you're on once it's open — so this
+                                // just follows it. Safe as a direct set: the DOM
+                                // fires the old element's mouseleave before the
+                                // new one's mouseenter, so a clear can't land on
+                                // top of a highlight that just started.
+                                onHoverChange={setHoveredUserId}
                                 widthClass="w-full min-w-0 flex-1"
                                 onChange={(userId) =>
                                   userId
@@ -1115,14 +1222,21 @@ export default function StagedScheduleModal({
 
                           {/* Empty slots: pick someone to fill them. */}
                           {Array.from({ length: openSlots }).map((_, i) => (
-                            /* The same three columns as a filled row — an empty
-                               lock cell and an empty load cell — so an unfilled
+                            /* The same columns as a filled row — an empty lock
+                               cell and an empty load cell — so an unfilled
                                slot's box starts and ends exactly where the
                                filled ones above it do. */
                             <div
                               key={`add-${role}-${i}`}
                               className="flex items-center gap-1.5"
                             >
+                              {/* Nobody to take with it, so no confirm needed
+                                  either — it just drops the empty slot. */}
+                              <SlotDeleteButton
+                                disabled={busy}
+                                label={`Remove empty ${roleName} slot`}
+                                onClick={() => deleteSlot(idx, role)}
+                              />
                               <LockCell locked={false} />
                               <PlayerSelect
                                 selected={null}
@@ -1142,6 +1256,29 @@ export default function StagedScheduleModal({
                     );
                   })}
                 </ul>
+
+                {/* The way back from a ✕ — and the only way to add a role the
+                    template never wanted. Listed only when there IS one to add,
+                    so an untouched card carries nothing extra. */}
+                {removedRoles.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {removedRoles.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        disabled={busy}
+                        onClick={() => restoreRole(idx, key)}
+                        title={`Add ${label} back to this set`}
+                        className="rounded-full border border-dashed border-gray-300 px-2 py-0.5 text-[10px]
+                          leading-4 text-gray-500 hover:border-indigo-400 hover:text-indigo-600
+                          disabled:opacity-50 dark:border-gray-600 dark:text-gray-400
+                          dark:hover:border-indigo-500 dark:hover:text-indigo-400"
+                      >
+                        + {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {/* MD picker: one per set, chosen from the assignees; only those
                     who qualify (an MD on keys/electric/bass, not the WL) are
@@ -1373,6 +1510,34 @@ function LockCell({
 // Fixed at the width of a two-digit count and right-aligned, and drawn (empty)
 // for unfilled slots too — the point is that every dropdown in the column ends
 // at the same edge, not that the number is snug.
+// The ✕ at the head of a slot row: drops that slot from this one set. Same
+// look, hit area and position (leftmost) as SetDetailModal's slot ✕, so the
+// gesture reads the same in both places.
+function SlotDeleteButton({
+  label,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={label}
+      title={label}
+      className="shrink-0 rounded p-0.5 text-xs leading-none text-gray-400
+        hover:bg-red-50 hover:text-red-600 disabled:opacity-50
+        dark:hover:bg-red-900/30 dark:hover:text-red-400"
+    >
+      ✕
+    </button>
+  );
+}
+
 function LoadCell({ count }: { count?: number }) {
   return (
     <span

@@ -323,7 +323,7 @@ export default function AvailabilityCalendar({
           <div
             key={w}
             className={`px-2 py-2 text-center font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400 ${
-              compact ? "text-xs" : "text-[13px]"
+              compact ? "text-xs" : "text-sm"
             }`}
           >
             {w}
@@ -377,7 +377,7 @@ export default function AvailabilityCalendar({
               }}
               className={`relative ${
                 compact ? "min-h-[54px] p-1" : "min-h-[92px] p-1.5"
-              } select-none border-b border-r border-gray-100 dark:border-gray-700/60 ${
+              } select-none border-b border-r border-gray-200 dark:border-gray-700/60 ${
                 // ONE opacity decision per cell: two `opacity-*` utilities on
                 // the same element would fight over stylesheet order. Outside
                 // the lens wins (it's the stronger "not what you're looking
@@ -452,7 +452,7 @@ export default function AvailabilityCalendar({
                     isPast
                       ? PAST_CHIP
                       : "bg-rose-100 text-rose-700 dark:bg-rose-900/50 dark:text-rose-300"
-                  } ${compact ? "text-[11px]" : "text-xs"}`}
+                  } text-xs`}
                 >
                   <span className="truncate">All day</span>
                   {blocks.repeating && <RepeatIcon />}

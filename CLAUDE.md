@@ -18,7 +18,13 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - Unit: `npm run test:unit` (`vitest run`) · watch: `test:unit:watch`
 - E2E: `npm run test:e2e` (needs test db; loads `env/test.env`)
 - All-in-container: `docker compose --profile test up --abort-on-container-exit`
-- `npm run typecheck` · `db:push` · `db:seed` · `db:studio`
+- `npm run typecheck` · `db:push` · `db:seed` (WIPES + reseeds) · `db:studio`
+- Seeding is destructive and NEVER automatic — `--profile dev up` doesn't seed,
+  so it can't erase your dev data. Ask for it:
+  `docker compose exec worship-scheduler-dev npm run db:seed`.
+  `prisma/seed.ts` also refuses any host that isn't local
+  (`db-dev`/`db-test`/localhost), any db named `*prod*`, and
+  `NODE_ENV=production` — override only with `SEED_FORCE=1`.
 - Env: real values in gitignored `env/{dev,test,prod}.env`.
 
 ## Data model (`prisma/schema.prisma`)
@@ -97,7 +103,10 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
   org's "active" request. **AvailabilityResponse** (one per user+request;
   `@@unique([userId, requestId])`) records completion: a row with
-  `completedAt` set = done. A user owes a response per org until each active
+  `completedAt` set = done. It also carries an optional `note` — free text
+  typed in the /schedule submit-confirmation modal, kept across an un-submit,
+  and read by admins in the Create tab's availability status panel (a red
+  `AttentionDot` after the name; the text sits atop the per-person modal). A user owes a response per org until each active
   request has a completed one. Drives the red dot + banner (dot = any org).
 
 Enums: `AssignmentStatus` · `UnavailabilityType`. (`Instrument` is **gone** —
@@ -171,6 +180,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - `playerOptions.ts` — `buildPlayerOptions()`: the assignment dropdown's
   candidate list, shared by SetDetailModal + StagedScheduleModal. Nobody is
   filtered out — unavailable/inactive people are flagged and sink. ✅tested
+  (`components/PlayerSelect.tsx` draws it: the flags are small `Badge size="sm"`
+  pills — amber unavailable · gray inactive · indigo MD — not parenthetical
+  text, the control's default width is its exported `PLAYER_SELECT_WIDTH`
+  (SetDetailModal's read-only boxes mirror it), and the portaled list is at
+  least `MENU_MIN_WIDTH` wide however narrow the control is.)
 - `guestTeams.ts` — guest-team vocabulary: `GuestRoleSpec`, `isUnbounded`,
   `openSeats` (an `allAvailable` seat reports 0, so it never reads as a hole),
   `validateGuestRoles(raw, allowedKeys)`. ✅tested
@@ -213,13 +227,44 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   window and switches org, the set-manager widens its horizon (or says why it
   can't). Roster DMs, digest bullets and the Approvals tab use the calendar
   form. ✅tested
+- `slackStatus.ts` — the client-side cache in front of `GET /api/slack/status`.
+  Four surfaces ask "has this org connected Slack?" (Team, Create, the team
+  members modal, and the set detail modal on every open); caching the PROMISE
+  per org makes that one request and collapses simultaneous askers. Connecting
+  is a full navigation (the cache dies with the page); the one in-app change,
+  Disconnect on Org settings, calls `invalidateSlackStatus(orgId)`. ✅tested
+- `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
+  behind "is this the app-style layout?", shared by the bottom bar's `lg:`
+  classes, SwipePager and PullToRefresh.
 - `notificationPrefs.ts` — the per-org switches for the bot's PERSONAL DMs:
   `NOTIFICATION_TYPES` (the catalog the Org settings → Notifications list draws),
   `notificationEnabled` (unrecorded = ON, so nothing goes quiet by accident),
   `parse`/`validate`/`mergeNotificationPrefs`. Stored on `Org.notificationPrefs`;
-  enforced by `orgDmContext()` in `lib/slack.ts` — ONE org read that answers
-  both "is this type still on?" and "which bot token?", which every DM sender
+  enforced by `orgChatContext()` in `lib/chatProvider.ts` — ONE org read that answers
+  both "is this type still on?" and "which transport?", which every DM sender
   starts with. Channel posts aren't covered. ✅tested
+- `messagingTransport.ts` — the abstract `MessagingTransport`. An INTEGRATION
+  (Slack, Discord) is the whole product; this class is just its messaging
+  surface. OWNS everything providers share — pacing, 429 backoff, dry-run,
+  never-throw, the cached DM channel + its self-healing, per-provider message
+  chunking — leaving a subclass only endpoints, auth, success/limit detection
+  and the ops it supports. `capabilities` records what a provider genuinely
+  CAN'T do: `emailLookup` is false on Discord, which is why auto-linking is
+  Slack-only. ✅tested
+- `messageFormat.ts` — the `MessageFormat` shape (`bold`/`link`/`maxChars`) +
+  `splitMessage`. Pure; concrete formats live with their integrations. ✅tested
+- `orgIntegration.ts` — which integration an org talks through, and the ONE
+  place a provider is chosen: `transportForOrg`/`transportForCredential`/
+  `orgMessagingContext`, plus `isOrgMessagingConnected` (can we send — dry-run
+  counts) vs `isOrgMessagingInstalled` (is a real workspace behind this org —
+  dry-run does NOT count; anything about workspace-scoped identity, like a
+  member id, must ask this one).
+- `integrations/<name>/` — everything ONE integration owns, and the only place
+  its specifics may live: `slack/` (`transport.ts` = `SlackTransport`, the sole
+  implementation today, + `format.ts` = `SLACK_FORMAT`) and `discord/`
+  (`format.ts` only, so far). Integration-specific UI — icons and the like —
+  belongs here too. A new integration = a new folder + one branch in
+  `orgIntegration.ts`.
 - `pendingHandoff.ts` — who a seat mid-handoff STILL belongs to (cover-take →
   `Assignment.pendingCoverFromUserId`; accepted swap → the SwapProposal). Feeds
   `pendingFromUser` on the wire and the MD rules, so a pending cover can't
@@ -254,8 +299,15 @@ no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFie
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
 `GenerateModal` (auto-schedule options — window, which recurring sets, and an
 optional per-set-type color) → `StagedScheduleModal` (the preview; a set type's
-color tints its cards at 10%, matched via `StagedSet.templateId`),
-`Navbar`, `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
+color tints its cards at 10%, matched via `StagedSet.templateId`; every slot row
+leads with a ✕ that drops THAT slot from THAT set — capacity − 1 plus its
+occupant, written into `StagedSet.slotCapacities`, which both apply and the
+preview save persist, the same edit `SetDetailModal.deleteSlot` makes — and a
+role emptied of slots comes back via the card's "+ role" chips),
+`Navbar` (top tab strip at `lg` and up; below that an app-style floating
+bottom bar — phones AND tablets, gated on `lib/layout.ts`
+`BOTTOM_NAV_MAX_WIDTH`, which `SwipePager` and `PullToRefresh` share so the
+gestures can't drift from the bar), `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
 `app/layout.tsx` around `SwipePager`; a page registers its own refetch with
 `usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that
 doesn't falls back to `location.reload()`. A surface with its own drag gesture
@@ -266,7 +318,27 @@ ColorPicker Dropdown Input Modal Select Stepper LoadingDots LoadingScreen`.
 Prefer extending these. (`Stepper` = number field with big − / + either side,
 replacing a native spinner — a plain text box under the hood, digits only, so
 it can be cleared and retyped; `ColorPicker` = a swatch opening a portaled
-presets + hex panel, whose "no color" is null.) `SetFormFields` asks for a start + **end** time; the set still stores
+presets + hex panel, whose "no color" is null; `DateSelect` = a portaled
+STEPPING week grid — five rows of an unbroken run of day numbers through every
+month boundary. NOT a scroll container: the window is an index, moved one week
+per wheel tick / swipe (rate-limited by `canStep`), so no scrollbar can appear
+and a step is always a whole week. ‹ › in the heading jump a month; the heading
+names whichever month owns most of the five rows, and days outside it are
+dimmed but still clickable (only `[min, max]` actually disables). Geometry,
+the majority rule and the rate limit live in `lib/calendarScroll.ts` ✅tested;
+`range` mode highlights start→hovered-day live; `Badge` takes `size="sm"` for a
+pill that rides inside another control; `Button` takes `loading` — dots ON the
+button, label hidden but still holding its width, so a pressed button can't
+resize mid-click (it implies `disabled`); `Checkbox` takes `rowTarget` to make
+the whole row a real `<label>` (off by default: most rows carry chips and text
+you may want to click without flipping a tick); `Input`/`Select` set their own
+`text-base sm:text-sm` — 16px on phones is what stops iOS zooming into a
+focused field — and step aside when the caller passes its own size; `Modal`
+renders into `<body>` (a transformed ancestor — the swipe pager, pull-to-refresh
+— would otherwise be what its `fixed` overlay centres in), takes `headerActions`
+for controls pinned in the header left of the ✕, and accepts `footer` as a
+FUNCTION `({ atEnd }) => …` for an action that must wait until a long body has
+been scrolled to the end — the availability submit's Confirm.) `SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
 
 ## Gotchas

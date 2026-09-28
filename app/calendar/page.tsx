@@ -21,6 +21,8 @@ import Select from "@/components/common/Select";
 import { usePullToRefresh } from "@/components/PullToRefresh";
 import { usePageLoading } from "@/components/LoadingProvider";
 import CalendarMonth from "@/components/CalendarMonth";
+import { startOfMonth, startOfWeek } from "@/lib/calendarScroll";
+import { mergeSetWindows, missingRanges, unionRange } from "@/lib/sets";
 import SetDetailModal from "@/components/SetDetailModal";
 import CreateSetModal from "@/components/CreateSetModal";
 import MySetsPanel from "@/components/MySetsPanel";
@@ -33,7 +35,7 @@ import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import {
-  SETS_WINDOW_DEFAULT_DAYS,
+  CALENDAR_WINDOW_AHEAD_DAYS,
   SETS_WINDOW_MAX_DAYS,
 } from "@/lib/constants";
 import { toYmd } from "@/lib/dates";
@@ -128,15 +130,22 @@ function CalendarView() {
   // sets; "team:<teamId>" = one team's sets (anyone can pick these); otherwise
   // a userId — "My sets" for everyone, and admins can also pick any person.
   // statusFilter: "all" or one SetStatus.
-  // The date window /api/sets is fetched with. It starts at the endpoint's own
-  // default (today ± SETS_WINDOW_DEFAULT_DAYS) so the first fetch is identical
-  // to what this page always sent, and only WIDENS as you page into months
-  // outside it — paging back and forth inside the loaded range refetches
-  // nothing. Kept in ms so the comparisons below are plain numbers.
+  // The date window /api/sets is fetched with. It only ever WIDENS as you page
+  // into months outside it, so paging back and forth inside the loaded range
+  // refetches nothing. Kept in ms so the comparisons below are plain numbers.
+  //
+  // The opening window is deliberately lopsided. Forward, it's three months —
+  // enough for the tab you just opened plus the planning anyone actually does,
+  // and it grows if you scroll past it. Backward, it's not a span but a fact
+  // about the view: the first cell the grid draws on open, which is the Sunday
+  // on or before the 1st. Anything less and the sets from earlier THIS month —
+  // already on screen — would be missing until something widened the window.
   const [setsWindow, setSetsWindow] = useState(() => {
-    const now = Date.now();
-    const span = SETS_WINDOW_DEFAULT_DAYS * MS_PER_DAY;
-    return { start: now - span, end: now + span };
+    const now = new Date();
+    return {
+      start: startOfWeek(startOfMonth(now)).getTime(),
+      end: now.getTime() + CALENDAR_WINDOW_AHEAD_DAYS * MS_PER_DAY,
+    };
   });
 
   const [filter, setFilter] = useState("");
@@ -153,6 +162,29 @@ function CalendarView() {
   // latest commit — otherwise a slow "All orgs" response can land after (and
   // clobber) a newer per-org one, leaving the wrong org's sets on screen.
   const setsReqId = useRef(0);
+
+  // The span actually fetched so far, and the org view it was fetched for.
+  // Widening the window then only has to ask for the days beyond this, rather
+  // than re-downloading months already on screen. A ref, not state: it records
+  // what has happened, and nothing renders from it.
+  const loadedRef = useRef<{
+    scope: string;
+    start: number;
+    end: number;
+  } | null>(null);
+
+  const fetchRange = useCallback(
+    (start: number, end: number) => {
+      const orgParam = viewOrgId === "all" ? `?` : `?orgId=${viewOrgId}&`;
+      const range = `from=${toYmd(new Date(start))}&to=${toYmd(new Date(end))}`;
+      return fetchJsonArray<ApiSet>(`/api/sets${orgParam}${range}`);
+    },
+    [viewOrgId]
+  );
+
+  // The whole window, replacing what's on screen. The honest reload: mount, an
+  // org switch, pull-to-refresh, and after any mutation — every case where
+  // rows already held may have CHANGED, not just cases wanting more of them.
   const refetchSets = useCallback(async () => {
     // Wait until the org context has loaded before fetching. viewOrgId starts
     // at its "all" default and only settles to the persisted org once /api/orgs
@@ -160,12 +192,9 @@ function CalendarView() {
     // again after it settles. `orgs` in the deps re-runs this the moment it does.
     if (!orgs) return;
     const reqId = ++setsReqId.current;
-    const orgParam = viewOrgId === "all" ? `?` : `?orgId=${viewOrgId}&`;
-    const range = `from=${toYmd(new Date(setsWindow.start))}&to=${toYmd(
-      new Date(setsWindow.end)
-    )}`;
+    const { start, end } = setsWindow;
     const [fresh, swaps] = await Promise.all([
-      fetchJsonArray<ApiSet>(`/api/sets${orgParam}${range}`),
+      fetchRange(start, end),
       // /api/swaps has no window — open covers are always "upcoming" and the
       // list is small, so it's fetched whole regardless of the month in view.
       fetchJsonArray<ApiSwapRequest>(
@@ -173,9 +202,10 @@ function CalendarView() {
       ),
     ]);
     if (reqId !== setsReqId.current) return; // superseded by a newer refetch
+    loadedRef.current = { scope: viewOrgId, start, end };
     setSets(fresh);
     setTakeableSwaps(swaps);
-  }, [orgs, viewOrgId, setsWindow]);
+  }, [orgs, viewOrgId, setsWindow, fetchRange]);
 
   // The org Preview Mode works in. Recurring sets and role catalogs are per
   // org, so the preview is always ONE org's: the one being viewed when that's
@@ -317,8 +347,47 @@ function CalendarView() {
   useEffect(() => setLinkError(""), [selectedSetId]);
 
   useEffect(() => {
+    const loaded = loadedRef.current;
+
+    // Same org view, and the window has only grown: ask for the NEW DAYS and
+    // fold them in. Paging into next month used to re-download every month
+    // already on screen, and the bill grew with each step up to the 400-day cap.
+    if (loaded && loaded.scope === viewOrgId) {
+      const gaps = missingRanges(loaded, setsWindow);
+      if (gaps.length === 0) return; // already covered — ask for nothing
+
+      let cancelled = false;
+      void (async () => {
+        const batches = await Promise.all(
+          gaps.map((gap) => fetchRange(gap.start, gap.end))
+        );
+        if (cancelled) return;
+        // Record the UNION: the window slides forward at the 400-day cap, and
+        // sets fetched before it slid are still held.
+        loadedRef.current = {
+          scope: viewOrgId,
+          ...unionRange(loaded, setsWindow),
+        };
+        setSets((prev) => mergeSetWindows(prev ?? [], batches.flat()));
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // First load, or the org view changed — everything, from scratch.
     refetchSets();
-    // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
+  }, [orgs, viewOrgId, setsWindow, fetchRange, refetchSets]);
+
+  // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
+  //
+  // Its OWN effect on purpose. This listener used to live at the end of the
+  // one above, which meant it was only ever registered on the full-load path:
+  // once the first load had happened every re-run took the gap path, returned
+  // early, and left no listener at all — the previous run's cleanup having
+  // already removed it. Joining an org then changed nothing on screen until a
+  // reload. Registration must not depend on which branch a fetch takes.
+  useEffect(() => {
     window.addEventListener(ORGS_CHANGED_EVENT, refetchSets);
     return () => window.removeEventListener(ORGS_CHANGED_EVENT, refetchSets);
   }, [refetchSets]);
@@ -375,6 +444,25 @@ function CalendarView() {
 
   const myId = session?.user?.id;
 
+  // Preview Mode's raw material: the upcoming sets the calendar has loaded for
+  // the preview org, and the set types they fall into (one row per recurring
+  // set, plus "Other"). Deliberately NOT run through the page's filters — the
+  // picker in the dialog is this view's filter.
+  //
+  // Memoised because both walk every loaded set, and because the second is a
+  // PROP of the preview dialog, whose "everything ticked" default re-fires
+  // when the array's identity changes. Up here with the other hooks, not down
+  // with the render helpers: everything below `if (!sets)` is past an early
+  // return, where a hook would run on some renders and not others.
+  const previewSets = useMemo(
+    () => (sets && previewOrgId ? previewCandidates(sets, previewOrgId) : []),
+    [sets, previewOrgId]
+  );
+  const previewTypes = useMemo(
+    () => previewSetTypes(previewSets, previewRefs?.templates ?? []),
+    [previewSets, previewRefs?.templates]
+  );
+
   usePageLoading(!sets);
   if (!sets) return null;
 
@@ -418,13 +506,6 @@ function CalendarView() {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // Preview Mode's raw material: the upcoming sets the calendar has already
-  // loaded for the preview org, and the set types they fall into (one row per
-  // recurring set, plus "Other"). Deliberately NOT run through the page's
-  // filters — the picker in the dialog is this view's filter.
-  const previewSets = previewOrgId ? previewCandidates(sets, previewOrgId) : [];
-  const previewTypes = previewSetTypes(previewSets, previewRefs?.templates ?? []);
-
   // "Save Changes" in the preview: push each EDITED set's roster diff through
   // the same endpoint the set detail modal saves with — one request per set,
   // each applied as one transaction with one grouped Slack notice. Sets the
@@ -437,20 +518,25 @@ function CalendarView() {
     if (!previewPlan) return;
     setPreviewSaving(true);
     try {
-      for (const save of previewSaves(previewPlan.sets, edited)) {
-        await fetch(`/api/admin/sets/${save.setId}/roster`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(save.ops),
-        });
-        if ("mdUserId" in save) {
-          await fetch(`/api/sets/${save.setId}`, {
+      // One set at a time WITHIN a set (the MD has to land after the roster,
+      // which re-derives it), but all the sets at once: they're independent
+      // rows, and a week's plan used to be a dozen round trips in single file.
+      await Promise.all(
+        previewSaves(previewPlan.sets, edited).map(async (save) => {
+          await fetch(`/api/admin/sets/${save.setId}/roster`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ mdUserId: save.mdUserId }),
+            body: JSON.stringify(save.ops),
           });
-        }
-      }
+          if ("mdUserId" in save) {
+            await fetch(`/api/sets/${save.setId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ mdUserId: save.mdUserId }),
+            });
+          }
+        })
+      );
       setPreviewPlan(null);
       await refetchSets();
     } finally {

@@ -7,11 +7,14 @@
 import { describe, expect, it } from "vitest";
 import {
   canViewSet,
-  visibleSetsFilter,
   coverEligibility,
+  mergeSetWindows,
+  missingRanges,
   resolveSetsWindow,
   selectUpcomingSets,
   type CoverEligibilityInput,
+  unionRange,
+  visibleSetsFilter,
 } from "@/lib/sets";
 import type { ApiAssignment, ApiSet } from "@/lib/types";
 import {
@@ -278,5 +281,126 @@ describe("resolveSetsWindow", () => {
   it("recovers from a backwards range instead of returning nothing", () => {
     const { start, end } = resolveSetsWindow("2026-09-30", "2026-09-01", NOW);
     expect(end.getTime()).toBeGreaterThan(start.getTime());
+  });
+});
+
+describe("mergeSetWindows", () => {
+  const set = (id: string, startsAt: string) => ({ id, startsAt });
+
+  it("keeps both windows, in start order", () => {
+    const merged = mergeSetWindows(
+      [set("b", "2026-10-02T18:00:00Z"), set("a", "2026-10-01T09:00:00Z")],
+      [set("c", "2026-10-03T09:00:00Z")]
+    );
+    expect(merged.map((s) => s.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("orders a gap fetched from the PAST into place, not onto the end", () => {
+    const merged = mergeSetWindows(
+      [set("sep", "2026-09-30T18:00:00Z")],
+      [set("aug", "2026-08-02T09:00:00Z")]
+    );
+    expect(merged.map((s) => s.id)).toEqual(["aug", "sep"]);
+  });
+
+  it("lets the incoming copy win, since it is the fresher read", () => {
+    // A gap fetch can overlap a day already held — the roster may have changed
+    // since, and the new one is the one to keep.
+    const merged = mergeSetWindows(
+      [{ id: "a", startsAt: "2026-10-01T09:00:00Z", label: "old" }],
+      [{ id: "a", startsAt: "2026-10-01T09:00:00Z", label: "new" }]
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0].label).toBe("new");
+  });
+
+  it("is a no-op when the gap came back empty", () => {
+    const existing = [set("a", "2026-10-01T09:00:00Z")];
+    expect(mergeSetWindows(existing, [])).toEqual(existing);
+  });
+
+  it("dedupes within the incoming batch too", () => {
+    // Two gaps (one each side) are fetched in parallel and flattened; an
+    // overlap between them must not double a set.
+    const merged = mergeSetWindows(
+      [],
+      [set("a", "2026-10-01T09:00:00Z"), set("a", "2026-10-01T09:00:00Z")]
+    );
+    expect(merged).toHaveLength(1);
+  });
+});
+
+describe("missingRanges", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const loaded = { start: 100 * day, end: 200 * day };
+
+  it("asks for everything when nothing is held yet", () => {
+    const wanted = { start: 0, end: 10 * day };
+    expect(missingRanges(null, wanted)).toEqual([wanted]);
+  });
+
+  it("asks for nothing when the window is already covered", () => {
+    expect(missingRanges(loaded, { start: 120 * day, end: 180 * day })).toEqual(
+      []
+    );
+    // Exactly the same window — the common case, every re-render.
+    expect(missingRanges(loaded, loaded)).toEqual([]);
+  });
+
+  it("asks only for the new days when the window grows forward", () => {
+    expect(missingRanges(loaded, { start: 100 * day, end: 230 * day })).toEqual([
+      { start: 200 * day, end: 230 * day },
+    ]);
+  });
+
+  it("asks only for the new days when it grows backward", () => {
+    expect(missingRanges(loaded, { start: 80 * day, end: 200 * day })).toEqual([
+      { start: 80 * day, end: 100 * day },
+    ]);
+  });
+
+  it("returns both ends when the window grew each way at once", () => {
+    expect(missingRanges(loaded, { start: 90 * day, end: 210 * day })).toEqual([
+      { start: 90 * day, end: 100 * day },
+      { start: 200 * day, end: 210 * day },
+    ]);
+  });
+
+  it("never returns an empty or backwards span", () => {
+    // The boundary case: the window ends exactly where the loaded one does.
+    expect(missingRanges(loaded, { start: 150 * day, end: 200 * day })).toEqual(
+      []
+    );
+    for (const gap of missingRanges(loaded, { start: 90 * day, end: 210 * day })) {
+      expect(gap.end).toBeGreaterThan(gap.start);
+    }
+  });
+
+  it("asks for the whole window when it doesn't overlap what's held", () => {
+    // Not reachable from the calendar (its window only grows outward), but the
+    // honest answer to "what don't I have" is "all of it" — never a gap
+    // spanning the void between them.
+    const far = { start: 900 * day, end: 950 * day };
+    expect(missingRanges(loaded, far)).toEqual([far]);
+    const behind = { start: 0, end: 50 * day };
+    expect(missingRanges(loaded, behind)).toEqual([behind]);
+  });
+});
+
+describe("unionRange", () => {
+  it("covers both spans", () => {
+    expect(unionRange({ start: 5, end: 10 }, { start: 8, end: 20 })).toEqual({
+      start: 5,
+      end: 20,
+    });
+  });
+
+  it("keeps the older edge when the window has slid forward", () => {
+    // At the 400-day cap the window's start moves up, but sets fetched before
+    // it moved are still held — the record has to say so or they'd be re-asked.
+    expect(unionRange({ start: 0, end: 100 }, { start: 40, end: 140 })).toEqual({
+      start: 0,
+      end: 140,
+    });
   });
 });

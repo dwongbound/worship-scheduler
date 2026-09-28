@@ -1,5 +1,6 @@
 "use client";
-// Phone pull-to-refresh. Drag down from the top of a page and the content
+// Touch-width pull-to-refresh (phones and tablets, the same widths that get the
+// bottom nav bar). Drag down from the top of a page and the content
 // follows your finger with a spinner tucked above it; let go past the threshold
 // and the tab reloads its data.
 //
@@ -20,8 +21,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { isBottomNavWidth } from "@/lib/layout";
 
-const MOBILE_MAX = 640; // px — sm breakpoint; the gesture is phones-only
 const START_SLOP = 10; // px of movement before we decide the gesture's axis
 const THRESHOLD = 70; // px of pull that commits to a refresh
 const REST = 48; // px the content holds at while refreshing
@@ -105,7 +106,7 @@ export default function PullToRefresh({ children }: { children: ReactNode }) {
 
     const onStart = (e: TouchEvent) => {
       clear();
-      if (e.touches.length !== 1 || window.innerWidth >= MOBILE_MAX) return;
+      if (e.touches.length !== 1 || !isBottomNavWidth()) return;
       if (refreshingRef.current) return;
       // Only from the very top of the page — mid-scroll, a downward drag is
       // scrolling.

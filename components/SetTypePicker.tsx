@@ -90,15 +90,14 @@ export default function SetTypePicker({
           {options.map((o) => {
             const checked = picked.includes(o.id);
             return (
-              <li key={o.id} className="flex items-center gap-2">
+              // min-h-5 matches the text line and the colour swatch alike, so
+              // a row is the same height whether it's showing a swatch or not
+              // — the list doesn't jump as types are ticked.
+              <li key={o.id} className="flex min-h-5 items-center gap-2">
                 {/* min-w-0 so a long set name truncates rather than shoving the
-                    colour swatch off the row. fitLabel keeps the hit area on
-                    the box and its text — the blank stretch between the name
-                    and the colour swatch used to toggle the row, which is
-                    invisible and easy to hit by accident. */}
+                    colour swatch off the row. */}
                 <span className="min-w-0 flex-1">
                   <Checkbox
-                    fitLabel
                     label={
                       <span className="flex min-w-0 items-center gap-2">
                         <span className="truncate">{o.label}</span>
