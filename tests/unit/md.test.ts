@@ -112,3 +112,56 @@ describe("seats mid-handoff (pendingFrom)", () => {
     expect(eligibleMDIds(roster)).toEqual(["k"]);
   });
 });
+
+describe("avoiding back-to-back MDs (previousMDId)", () => {
+  // Three electric guitarists who can all lead — the case from the generate
+  // preview, where the same person kept leading two sets running.
+  const threeGuitarists = [
+    a("alice", "ELECTRIC_GUITAR", true),
+    a("bob", "ELECTRIC_GUITAR", true),
+    a("carol", "ELECTRIC_GUITAR", true),
+  ];
+
+  it("passes over whoever led the previous set", () => {
+    // Without the hint, "alice" wins on id order every time.
+    expect(defaultMDId(threeGuitarists)).toBe("alice");
+    expect(defaultMDId(threeGuitarists, "alice")).toBe("bob");
+    expect(defaultMDId(threeGuitarists, "bob")).toBe("alice");
+  });
+
+  it("sinks them within their role but still lists them", () => {
+    // Demoted, never excluded — they're a valid pick an admin can still make.
+    expect(eligibleMDIds(threeGuitarists, "alice")).toEqual(["bob", "carol", "alice"]);
+  });
+
+  it("keeps instrument ahead of person: the lone guitarist leads again", () => {
+    // The whole point of "instrument -> person". Rather than hand the job to a
+    // keys player, the only electric guitarist leads a second time.
+    const roster = [a("eg", "ELECTRIC_GUITAR", true), a("keys", "KEYS", true)];
+    expect(defaultMDId(roster, "eg")).toBe("eg");
+  });
+
+  it("rotates within keys when there's no guitarist at all", () => {
+    const roster = [a("k1", "KEYS", true), a("k2", "KEYS", true)];
+    expect(defaultMDId(roster, "k1")).toBe("k2");
+  });
+
+  it("is a no-op when last set's MD isn't on this roster", () => {
+    expect(defaultMDId(threeGuitarists, "someone-else")).toBe("alice");
+    expect(defaultMDId(threeGuitarists, null)).toBe("alice");
+  });
+
+  it("never repeats across a run when someone else can lead", () => {
+    // Chain it the way the generate flow does and no two consecutive sets get
+    // the same MD.
+    let previous: string | null = null;
+    const picks: (string | null)[] = [];
+    for (let i = 0; i < 6; i++) {
+      previous = defaultMDId(threeGuitarists, previous);
+      picks.push(previous);
+    }
+    for (let i = 1; i < picks.length; i++) {
+      expect(picks[i]).not.toBe(picks[i - 1]);
+    }
+  });
+});

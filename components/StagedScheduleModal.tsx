@@ -85,7 +85,9 @@ import {
   isActiveForSet,
   loadRows,
   lockedCounts,
+  designateMDs,
   maxLoad,
+  previousMDForTeam,
   totalConflicts,
   totalLocked,
   totalUnfillable,
@@ -173,6 +175,14 @@ export default function StagedScheduleModal({
   const orgId = orgIdProp ?? adminOrgId;
   // Editable copy of the proposal — reset whenever a fresh plan arrives.
   const [sets, setSets] = useState<StagedSet[]>([]);
+  // Who the pointer is resting on, so every OTHER slot holding that person
+  // lights up too. A plan is a wall of names across many cards, and the question
+  // you keep asking is "where else is this person playing?" — this answers it
+  // for a name you can see, and for a candidate you're considering in an open
+  // dropdown, before you commit to them. Desktop-only: the styling is gated
+  // behind `lg:` in PlayerSelect, since it needs a pointer and a screen wide
+  // enough to show several sets at once.
+  const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
   // How the cards are grouped (see the header comment). Per-session, not
   // persisted — it's a reading preference for this one review.
   const [view, setView] = useState<"type" | "chrono">("type");
@@ -215,6 +225,22 @@ export default function StagedScheduleModal({
         ? { userId: x.pendingFromUserId, isMD: isMdOf(x.pendingFromUserId) }
         : null,
     }));
+
+  // Who led the nearest EARLIER set on the same team — the person this set's
+  // auto-pick should pass over, so nobody directs two in a row. Mirrors the
+  // chained pass in app/api/admin/generate so a re-run here reproduces what a
+  // fresh server run would produce instead of drifting from it.
+  //
+  // Per team: two teams meeting the same week rotate independently. Falling
+  // back to the plan's seed covers the first set of the run, whose predecessor
+  // is a real set from before the window that the client never loaded.
+  // Takes the sets ALREADY settled plus the team being decided — never an index
+  // into a list that may not contain that set yet. See lib/stagedPlan.
+  const previousMDFor = (
+    earlier: StagedSet[],
+    teamId: string | null | undefined
+  ): string | null =>
+    previousMDForTeam(earlier, teamId, plan?.baseline?.previousMDByTeam);
 
   // Every user's unavailability flattened into scheduler rules once, so both the
   // dropdowns and the conflict markers can tell who can't serve at a set's time.
@@ -546,20 +572,13 @@ export default function StagedScheduleModal({
           ...(keptBySet.get(stagingKey(s)) ?? []),
           ...(bySet.get(stagingKey(s)) ?? []),
         ];
-        return {
-          ...s,
-          assignments: merged,
-          // Re-derive the MD the way the server does — a kept pick that's
-          // still eligible survives, otherwise the best of the new roster.
-          mdUserId: s.requiresMD
-            ? (() => {
-                const a = mdRoster(merged);
-                return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
-              })()
-            : null,
-        };
+        return { ...s, assignments: merged };
       })
     );
+    // Re-derive MDs in a SECOND pass, in date order: each set's pick has to see
+    // the one before it to avoid the same person leading twice running, which a
+    // per-set map can't do. A kept pick that's still eligible survives.
+    setSets((list) => redesignateMDs(list));
   };
 
   // Fill ONE card's empty slots and nothing else — the ⟳ button on a set.
@@ -639,16 +658,17 @@ export default function StagedScheduleModal({
         ...s.assignments,
         ...proposals.map((p) => ({ userId: p.userId, role: p.role })),
       ];
+      const a = mdRoster(merged);
       return {
         ...s,
         assignments: merged,
         // Re-derive the MD the way a full run does: a still-eligible pick
-        // survives, otherwise the best of the newly-complete roster.
+        // survives, otherwise the best of the newly-complete roster — passing
+        // over whoever led the set before this one on the same team.
         mdUserId: s.requiresMD
-          ? (() => {
-              const a = mdRoster(merged);
-              return isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a);
-            })()
+          ? isValidMD(s.mdUserId, a)
+            ? s.mdUserId
+            : defaultMDId(a, previousMDFor(sets.slice(0, idx), s.teamId))
           : null,
       };
     });
@@ -671,14 +691,16 @@ export default function StagedScheduleModal({
   // Normalize each set's MD just before applying: keep a still-valid choice,
   // else auto-pick the best eligible one (mirrors the generate default). Sets
   // that don't require an MD carry none.
-  const applySets = (): StagedSet[] =>
-    sets.map((s) => {
-      if (!s.requiresMD) return { ...s, mdUserId: null };
-      const a = mdRoster(s.assignments);
-      return {
-        ...s,
-        mdUserId: isValidMD(s.mdUserId, a) ? s.mdUserId : defaultMDId(a),
-      };
+  const applySets = (): StagedSet[] => redesignateMDs(sets);
+
+  // Walk an ordered run of sets and settle every MD, carrying the previous
+  // pick forward per team. ONE place the rule lives, shared by the full re-run
+  // and by apply, so what gets saved is what was previewed. A still-valid
+  // existing pick is always kept — this only fills or replaces a stale one.
+  const redesignateMDs = (list: StagedSet[]): StagedSet[] =>
+    designateMDs(list, {
+      isMD: isMdOf,
+      seed: plan?.baseline?.previousMDByTeam,
     });
 
   // Options for a role's dropdown: users who play `role` and aren't already on
@@ -1178,6 +1200,15 @@ export default function StagedScheduleModal({
                                 // tinted so a hand-picked roster reads apart
                                 // from the auto-filled one at a glance.
                                 locked={a.locked}
+                                highlighted={hoveredUserId === a.userId}
+                                // The control reports WHO is under the pointer
+                                // — its own occupant while closed, or whichever
+                                // option row you're on once it's open — so this
+                                // just follows it. Safe as a direct set: the DOM
+                                // fires the old element's mouseleave before the
+                                // new one's mouseenter, so a clear can't land on
+                                // top of a highlight that just started.
+                                onHoverChange={setHoveredUserId}
                                 widthClass="w-full min-w-0 flex-1"
                                 onChange={(userId) =>
                                   userId

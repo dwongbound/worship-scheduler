@@ -107,6 +107,17 @@ interface PlayerSelectProps {
   // (staged review modal). Purely cosmetic here — an indigo box, so a locked
   // roster reads apart from an auto-filled one; the caller owns the state.
   locked?: boolean;
+  // Draw this control as "the person under the cursor elsewhere". The staged
+  // review modal sets it on every slot holding the person being hovered, so you
+  // can see at a glance where else they're booked. Desktop-only by design (the
+  // styling is gated behind `lg:`): it answers a question you can only ask with
+  // a pointer, on a screen wide enough to show several sets at once.
+  highlighted?: boolean;
+  // Who the pointer is resting on right now, or null for nobody. Fires for the
+  // person in the CLOSED control, and — once the menu is open — for whichever
+  // option row is under the cursor, so the highlight follows you down the list
+  // and you can see where a candidate is already booked before picking them.
+  onHoverChange?: (userId: string | null) => void;
 }
 
 export default function PlayerSelect({
@@ -116,9 +127,25 @@ export default function PlayerSelect({
   disabled,
   dashed,
   locked,
+  highlighted,
+  onHoverChange,
   widthClass = PLAYER_SELECT_WIDTH,
 }: PlayerSelectProps) {
   const [open, setOpen] = useState(false);
+
+  // Opening or closing ends whatever the pointer was on — the control the
+  // cursor sits over means something different either side of that switch.
+  //
+  // Guarded on the TRANSITION rather than on `open` itself: callers pass an
+  // inline arrow, so this effect re-runs on every render, and an unguarded
+  // clear would wipe the option-row hover below as fast as it was set.
+  const wasOpen = useRef(open);
+  useEffect(() => {
+    if (open === wasOpen.current) return;
+    wasOpen.current = open;
+    onHoverChange?.(null);
+  }, [open, onHoverChange]);
+
   // Type-to-search query, filtering the option list by name while open.
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState<MenuPosition | null>(null);
@@ -257,7 +284,13 @@ export default function PlayerSelect({
         <ul role="listbox" className="min-h-0 flex-1 overflow-auto pb-1">
           {/* "None" and the current occupant only show on an unfiltered list. */}
           {!q && (
-            <OptionRow name="None" active={!selected} onClick={() => choose("")} />
+            <OptionRow
+              name="None"
+              active={!selected}
+              onClick={() => choose("")}
+              // Nobody to trace — hovering the clear row clears the highlight.
+              onHover={() => onHoverChange?.(null)}
+            />
           )}
           {!q && selected && (
             <OptionRow
@@ -274,6 +307,7 @@ export default function PlayerSelect({
               count={selected.count}
               active
               onClick={() => choose(selected.id)}
+              onHover={(hovering) => onHoverChange?.(hovering ? selected.id : null)}
             />
           )}
           {filtered.map((o) => (
@@ -294,6 +328,7 @@ export default function PlayerSelect({
               // an admin can deliberately override and assign them anyway.
               muted={!o.available || o.inactive}
               onClick={() => choose(o.id)}
+              onHover={(hovering) => onHoverChange?.(hovering ? o.id : null)}
             />
           ))}
           {/* Only a real search shows an empty-state; with no query, an empty
@@ -314,6 +349,11 @@ export default function PlayerSelect({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
+        onMouseEnter={() => {
+          // An empty slot has nobody to trace, so it reports nothing.
+          if (!open && selected) onHoverChange?.(selected.id);
+        }}
+        onMouseLeave={() => onHoverChange?.(null)}
         aria-haspopup="listbox"
         aria-expanded={open}
         className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1 text-left text-sm disabled:opacity-50
@@ -321,8 +361,31 @@ export default function PlayerSelect({
             dashed && !selected
               ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
               : locked
-                ? "border-indigo-400 bg-indigo-100 font-medium dark:border-indigo-500 dark:bg-indigo-900/40"
-                : "border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800"
+                ? "border-indigo-400 font-medium dark:border-indigo-500"
+                : "border-gray-300 dark:border-gray-600"
+          }
+          ${
+            // Backgrounds are kept in their own chain so exactly ONE bg utility
+            // is ever emitted here. Two competing bg-* classes on one element
+            // are decided by their order in Tailwind's output, not by the order
+            // they're written in — a coin-flip we don't want to depend on. An
+            // empty dashed box deliberately gets none, so the card's set-type
+            // tint shows through it.
+            dashed && !selected
+              ? ""
+              : locked
+                ? "bg-indigo-100 dark:bg-indigo-900/40"
+                : "bg-white dark:bg-gray-800"
+          }
+          ${
+            // "This is the person you're pointing at, over here too." Filling
+            // the box reads at a glance across a wall of cards in a way a border
+            // doesn't. Safe to stack on the backgrounds above: a breakpoint
+            // variant is emitted after its plain counterpart, so this reliably
+            // wins at lg+ — which is also what keeps the whole effect desktop-
+            // only. Yellow rather than amber: amber is the "unavailable" pill
+            // that sits inside this very box.
+            highlighted ? "lg:bg-yellow-200 lg:dark:bg-yellow-400/25" : ""
           }`}
       >
         {/* The name plus the flags that describe THIS pick. They live inside
@@ -359,6 +422,7 @@ function OptionRow({
   muted,
   count,
   onClick,
+  onHover,
 }: {
   // The name truncates on its own so the pills beside it always stay readable
   // — a single pre-joined string would have cut them off with it.
@@ -373,6 +437,9 @@ function OptionRow({
   // badge so admins can see why the list is ordered the way it is.
   count?: number;
   onClick: () => void;
+  // Pointer entered (true) or left (false) this row. The caller turns that into
+  // the person it represents — "None" has none, so it reports a plain clear.
+  onHover?: (hovering: boolean) => void;
 }) {
   const dim = disabled || muted;
   return (
@@ -381,6 +448,8 @@ function OptionRow({
         type="button"
         disabled={disabled}
         onClick={onClick}
+        onMouseEnter={() => onHover?.(true)}
+        onMouseLeave={() => onHover?.(false)}
         className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm
           ${disabled ? "cursor-not-allowed" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
           ${
