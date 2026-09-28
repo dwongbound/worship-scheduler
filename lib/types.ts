@@ -433,6 +433,11 @@ export interface StagedPlan {
     teamCounts: Record<string, number>;
     // Dates people are already booked on, for the spacing rule.
     booked: { userId: string; startsAt: string }[];
+    // teamId ("" for a team-less set) → who MD'd that team's last set BEFORE
+    // this window. Seeds the "don't lead two running" rotation so the modal's
+    // re-run starts where the server's did, rather than handing set one back to
+    // last week's director.
+    previousMDByTeam?: Record<string, string | null>;
   };
 }
 

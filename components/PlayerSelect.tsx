@@ -107,6 +107,16 @@ interface PlayerSelectProps {
   // (staged review modal). Purely cosmetic here — an indigo box, so a locked
   // roster reads apart from an auto-filled one; the caller owns the state.
   locked?: boolean;
+  // Draw this control as "the person under the cursor elsewhere". The staged
+  // review modal sets it on every slot holding the person being hovered, so you
+  // can see at a glance where else they're booked. Desktop-only by design (the
+  // styling is gated behind `lg:`): it answers a question you can only ask with
+  // a pointer, on a screen wide enough to show several sets at once.
+  highlighted?: boolean;
+  // Fired when the pointer enters/leaves this control while it is CLOSED. An
+  // open control is "engaged" — what's being pointed at is the menu, not the
+  // person — so it reports nothing and clears any standing highlight.
+  onHoverChange?: (hovering: boolean) => void;
 }
 
 export default function PlayerSelect({
@@ -116,9 +126,20 @@ export default function PlayerSelect({
   disabled,
   dashed,
   locked,
+  highlighted,
+  onHoverChange,
   widthClass = PLAYER_SELECT_WIDTH,
 }: PlayerSelectProps) {
   const [open, setOpen] = useState(false);
+
+  // Opening the control ends the hover: from here the pointer is working the
+  // menu, and a highlight left standing across the other cards would be stale
+  // the moment the list covers them.
+  useEffect(() => {
+    if (!open) return;
+    onHoverChange?.(false);
+  }, [open, onHoverChange]);
+
   // Type-to-search query, filtering the option list by name while open.
   const [query, setQuery] = useState("");
   const [position, setPosition] = useState<MenuPosition | null>(null);
@@ -314,6 +335,10 @@ export default function PlayerSelect({
         type="button"
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
+        onMouseEnter={() => {
+          if (!open) onHoverChange?.(true);
+        }}
+        onMouseLeave={() => onHoverChange?.(false)}
         aria-haspopup="listbox"
         aria-expanded={open}
         className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1 text-left text-sm disabled:opacity-50
@@ -321,8 +346,31 @@ export default function PlayerSelect({
             dashed && !selected
               ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
               : locked
-                ? "border-indigo-400 bg-indigo-100 font-medium dark:border-indigo-500 dark:bg-indigo-900/40"
-                : "border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800"
+                ? "border-indigo-400 font-medium dark:border-indigo-500"
+                : "border-gray-300 dark:border-gray-600"
+          }
+          ${
+            // Backgrounds are kept in their own chain so exactly ONE bg utility
+            // is ever emitted here. Two competing bg-* classes on one element
+            // are decided by their order in Tailwind's output, not by the order
+            // they're written in — a coin-flip we don't want to depend on. An
+            // empty dashed box deliberately gets none, so the card's set-type
+            // tint shows through it.
+            dashed && !selected
+              ? ""
+              : locked
+                ? "bg-indigo-100 dark:bg-indigo-900/40"
+                : "bg-white dark:bg-gray-800"
+          }
+          ${
+            // "This is the person you're pointing at, over here too." Filling
+            // the box reads at a glance across a wall of cards in a way a border
+            // doesn't. Safe to stack on the backgrounds above: a breakpoint
+            // variant is emitted after its plain counterpart, so this reliably
+            // wins at lg+ — which is also what keeps the whole effect desktop-
+            // only. Yellow rather than amber: amber is the "unavailable" pill
+            // that sits inside this very box.
+            highlighted ? "lg:bg-yellow-200 lg:dark:bg-yellow-400/25" : ""
           }`}
       >
         {/* The name plus the flags that describe THIS pick. They live inside
