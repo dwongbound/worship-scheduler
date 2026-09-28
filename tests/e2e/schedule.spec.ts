@@ -8,28 +8,16 @@
 // "Block out times" form that creates them.
 // The phone-width pass over this page lives in mobile.spec.ts.
 import { Page, expect, test } from "@playwright/test";
-import { login, requestAvailability, sectionByHeading } from "./helpers";
+import {
+  clearBusyBlocks,
+  login,
+  requestAvailability,
+  sectionByHeading,
+} from "./helpers";
 
 // The calendar is desktop-only (hidden below lg), so make sure the viewport is
 // wide enough for the click-to-block test.
 test.use({ viewport: { width: 1280, height: 900 } });
-
-/**
- * Delete every busy block the logged-in user has.
- *
- * The suite shares one database, so a test that leaves blocks behind changes
- * what the later ones see (a stray all-day block turns "available the whole
- * time" into a list of blocked days). Tests that add blocks call this before
- * they finish.
- */
-async function clearBusyBlocks(page: Page) {
-  const { entries } = (await (
-    await page.request.get("/api/availability")
-  ).json()) as { entries: { id: string }[] };
-  for (const entry of entries) {
-    await page.request.delete(`/api/availability/${entry.id}`);
-  }
-}
 
 test("adds and deletes a recurring weekly block", async ({ page }) => {
   await requestAvailability(page);

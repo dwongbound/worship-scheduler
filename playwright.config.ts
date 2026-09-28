@@ -28,21 +28,26 @@ export default defineConfig({
     baseURL: "http://localhost:3100",
     trace: "retain-on-failure",
   },
-  // Projects by layout. `mobile.spec.ts` is the phone-width pass over the app's
-  // responsive branches (bottom tab bar, the My-sets list that replaces the
-  // month grid, the desktop-only .ics export); every other spec is written
-  // against the desktop layout. testMatch/testIgnore keep each project to its
-  // own half rather than running the whole suite on every device.
+  // Projects by layout. `mobile.spec.ts` is the phone-width pass and
+  // `tablet.spec.ts` the md–lg one; every other spec is written against the
+  // desktop layout. testMatch/testIgnore keep each project to its own slice
+  // rather than running the whole suite on every device.
   //
   // Mobile runs on two real device presets — newest iOS (iPhone 16 Pro) and
   // newest Samsung flagship (Galaxy S24) — so the phone paths are exercised
   // under both engines' user-agent, touch, and DPR, not just a narrow window.
   // Update these two names to bump to a newer preset when Playwright ships one.
+  //
+  // Tablet mirrors that, with one wrinkle: every Android tablet preset
+  // Playwright ships is NARROWER than 768px (Galaxy Tab S4 is 712), which puts
+  // it in the phone layout and tests nothing this file is for. So the second
+  // tablet is that preset's engine, touch and DPR with a viewport set into the
+  // band by hand. The iPad preset needs no such help.
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /mobile\.spec\.ts/,
+      testIgnore: /(mobile|tablet)\.spec\.ts/,
     },
     {
       name: "mobile-ios",
@@ -53,6 +58,23 @@ export default defineConfig({
       name: "mobile-android",
       use: { ...devices["Galaxy S24"] },
       testMatch: /mobile\.spec\.ts/,
+    },
+    {
+      name: "tablet-ipad",
+      // 810×1080 — inside the md–lg band in portrait, WebKit, touch.
+      use: { ...devices["iPad (gen 7)"] },
+      testMatch: /tablet\.spec\.ts/,
+    },
+    {
+      name: "tablet-android",
+      // Chromium engine + touch from the tablet preset, but widened to 820 so
+      // it lands in the band the file is about (the preset's own 712 is phone
+      // territory — see the note above).
+      use: {
+        ...devices["Galaxy Tab S4"],
+        viewport: { width: 820, height: 1180 },
+      },
+      testMatch: /tablet\.spec\.ts/,
     },
   ],
   webServer: {

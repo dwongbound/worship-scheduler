@@ -30,6 +30,28 @@ export const PROFILE_CHANGED_EVENT = "profile-changed";
 // team" reminder dot/banner refresh immediately instead of on the next poll.
 export const TEAMS_CHANGED_EVENT = "teams-changed";
 
+// How often to re-ask for the reminder badges while someone is actually around.
+// Every reminder-changing action in the app fires one of the events above for an
+// instant refresh, so this poll only covers changes OTHER people make — two
+// minutes is plenty for that, and it's a fifth of the traffic the old 60s
+// interval generated (one tab left open was ~60 requests an hour, which kept the
+// database awake around the clock).
+const POLL_INTERVAL_MS = 2 * 60_000;
+
+// How long we keep polling after the last sign of life.
+//
+// Visibility alone never stopped the overnight traffic: `visibilityState` only
+// goes "hidden" when a tab is backgrounded or the window is minimised, NOT when
+// the window is simply sitting behind other windows or open on a second monitor.
+// A machine left on this tab therefore polled all night while reporting itself
+// perfectly visible. After this long with no input we stand down entirely; the
+// next interaction picks straight back up with an immediate refresh.
+const IDLE_AFTER_MS = 15 * 60_000;
+
+// What counts as a sign of life. Deliberately coarse and passive — enough to
+// notice someone is at the keyboard without listening to every mousemove.
+const ACTIVITY_EVENTS = ["pointerdown", "keydown", "scroll", "focus"] as const;
+
 export default function Navbar() {
   const pathname = usePathname();
   const { data: session } = useSession();
@@ -173,23 +195,58 @@ export default function Navbar() {
     // Poll so the dots stay fresh without a reload; every reminder-changing
     // action also fires an event below for an instant refresh.
     //
-    // A hidden tab polls nothing: a phone left on this tab in the background,
-    // or a desktop window behind others, was asking every minute for dots
-    // nobody could see. Coming back runs one immediate refresh, so the dots are
-    // right by the time the tab is looked at — which is the only moment the
-    // skipped polls would have mattered.
-    const refreshIfVisible = () => {
-      if (document.visibilityState === "visible") refreshNotifications();
+    // Two conditions have to hold to spend a request. The tab must be visible —
+    // a phone left on this tab in the background asks for nothing. And someone
+    // must have been here recently: a visible-but-unattended window reports
+    // itself visible forever, so visibility alone left it polling all night.
+    let lastActivity = Date.now();
+    let idle = false;
+
+    const poll = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastActivity > IDLE_AFTER_MS) {
+        // Nobody's here. Stop asking until they come back.
+        idle = true;
+        return;
+      }
+      refreshNotifications();
     };
-    const interval = setInterval(refreshIfVisible, 60_000);
-    document.addEventListener("visibilitychange", refreshIfVisible);
+
+    // Any sign of life resets the idle clock. Coming back FROM idle refreshes at
+    // once, so the dots are right by the time they're looked at — the only
+    // moment the skipped polls would have mattered. While already active this
+    // just bumps the clock, so typing doesn't fire a request per keystroke.
+    const noteActivity = () => {
+      lastActivity = Date.now();
+      if (!idle) return;
+      idle = false;
+      refreshNotifications();
+    };
+
+    // Returning to the tab is both a sign of life and the one moment stale dots
+    // are most visible, so it always refreshes rather than only on idle→active.
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      lastActivity = Date.now();
+      idle = false;
+      refreshNotifications();
+    };
+
+    const interval = setInterval(poll, POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisibility);
+    for (const event of ACTIVITY_EVENTS) {
+      window.addEventListener(event, noteActivity, { passive: true });
+    }
     window.addEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(TEAMS_CHANGED_EVENT, refreshNotifications);
     return () => {
       clearInterval(interval);
-      document.removeEventListener("visibilitychange", refreshIfVisible);
+      document.removeEventListener("visibilitychange", onVisibility);
+      for (const event of ACTIVITY_EVENTS) {
+        window.removeEventListener(event, noteActivity);
+      }
       window.removeEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);

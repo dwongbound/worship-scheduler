@@ -2,10 +2,14 @@ name: CI
 
 # Unit and e2e run as SEPARATE jobs (in parallel) so a flaky e2e doesn't mask
 # unit results and either can be re-run on its own. e2e is further split into
-# desktop (chromium) and mobile (mobile-ios, mobile-android) jobs — Playwright
-# projects that already exist in playwright.config.ts — so the two device
-# classes run concurrently and a failure in one doesn't block re-running the
-# other on its own. All jobs use the same docker compose "test" profile you
+# desktop (chromium), mobile (mobile-ios, mobile-android) and tablet
+# (tablet-ipad, tablet-android) jobs — Playwright projects that already exist in
+# playwright.config.ts — so the three device classes run concurrently and a
+# failure in one doesn't block re-running the others on their own.
+#
+# Every project in playwright.config.ts must appear in exactly one job below:
+# a project no job names is a spec file that silently never runs in CI, which
+# is how tablet.spec.ts went unrun after the tablet projects were added. All jobs use the same docker compose "test" profile you
 # run locally, so the environment (TZ, db, browsers) matches exactly — just
 # with the command overridden per job.
 #
@@ -116,5 +120,42 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-test-results-mobile
+          path: test-results/
+          if-no-files-found: ignore
+
+  e2e-tablet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create env/test.env
+        run: |
+          mkdir -p env
+          cat > env/test.env <<'EOF'
+          POSTGRES_USER=worship
+          POSTGRES_PASSWORD=worship
+          POSTGRES_DB=worship_test
+          DATABASE_URL=postgresql://worship:worship@localhost:5433/worship_test
+          NEXTAUTH_URL=http://localhost:3100
+          NEXTAUTH_SECRET=test-only-secret
+          SEED_ADMIN_USERNAME=admin
+          SEED_ADMIN_PASSWORD=password123
+          ORG_KEYS=Sunday Church:test-sunday-key,Youth Ministry:test-youth-key
+          SUPERADMIN_EMAILS=superadmin@example.com
+          APP_TZ=America/Los_Angeles
+          EOF
+      # Tablet layout only (tablet.spec.ts) — the md–lg band, under both presets
+      # defined in playwright.config.ts (iPad gen 7 on WebKit + a widened
+      # Galaxy Tab S4 on Chromium).
+      - name: E2e tests — tablet (playwright)
+        run: >
+          docker compose --profile test run --rm worship-scheduler-test
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e -- --project=tablet-ipad --project=tablet-android"
+      # Playwright traces/screenshots for debugging a red run.
+      - name: Upload test artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results-tablet
           path: test-results/
           if-no-files-found: ignore

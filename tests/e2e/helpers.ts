@@ -182,3 +182,22 @@ export async function requestAvailability(page: Page) {
 export function attemptTag(testInfo: TestInfo): string {
   return testInfo.retry ? `R${testInfo.retry}` : "";
 }
+
+/**
+ * Delete every availability block the logged-in user has.
+ *
+ * The suite shares one database, so a spec that leaves blocks behind changes
+ * what later ones see — a stray all-day block turns "available the whole time"
+ * into a list of blocked days. Tests that add blocks call this before they
+ * finish AND at the start, because a run that dies in between (a click that
+ * times out mid-test) otherwise leaves residue that makes every retry fail on
+ * the leftover rather than on whatever actually went wrong.
+ */
+export async function clearBusyBlocks(page: Page) {
+  const { entries } = (await (
+    await page.request.get("/api/availability")
+  ).json()) as { entries: { id: string }[] };
+  for (const entry of entries) {
+    await page.request.delete(`/api/availability/${entry.id}`);
+  }
+}
