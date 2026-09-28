@@ -377,10 +377,20 @@ function CalendarView() {
 
     // First load, or the org view changed — everything, from scratch.
     refetchSets();
-    // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
+  }, [orgs, viewOrgId, setsWindow, fetchRange, refetchSets]);
+
+  // Joining a new org (navbar "Add an org…") widens the "All orgs" view.
+  //
+  // Its OWN effect on purpose. This listener used to live at the end of the
+  // one above, which meant it was only ever registered on the full-load path:
+  // once the first load had happened every re-run took the gap path, returned
+  // early, and left no listener at all — the previous run's cleanup having
+  // already removed it. Joining an org then changed nothing on screen until a
+  // reload. Registration must not depend on which branch a fetch takes.
+  useEffect(() => {
     window.addEventListener(ORGS_CHANGED_EVENT, refetchSets);
     return () => window.removeEventListener(ORGS_CHANGED_EVENT, refetchSets);
-  }, [orgs, viewOrgId, setsWindow, fetchRange, refetchSets]);
+  }, [refetchSets]);
 
   // Pulling down on a phone refetches this tab in place.
   usePullToRefresh(refetchSets);

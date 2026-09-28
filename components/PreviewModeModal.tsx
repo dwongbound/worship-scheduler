@@ -12,7 +12,7 @@
 // that actually has sets in view, plus an "Other" bucket for everything that
 // came from no recurring set — private sets, one-offs, sets whose recurring
 // set was since renamed.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Button from "./common/Button";
 import InfoTooltip from "./common/InfoTooltip";
 import LoadingDots from "./common/LoadingDots";
@@ -44,17 +44,38 @@ export default function PreviewModeModal({
   const [picked, setPicked] = useState<string[]>([]);
   // Tints are a per-open choice, so a fresh dialog starts uncoloured.
   const [colors, setColors] = useState<SetTypeColors>({});
-  // Re-default when the set of types CHANGES, not when the array does. The
-  // caller derives this list from the calendar's sets on every render, so a
-  // fresh array arrives constantly — depending on its identity re-ticked
-  // everything on any re-render of the page behind the dialog, and an untick
-  // wouldn't survive the preview's own fetch landing a moment later.
+  // "Everything ticked" is the OPENING state, not a standing rule.
+  //
+  // Two things make that subtle. The caller rebuilds this array on every
+  // render, so the effect is keyed on the list's CONTENTS (typeKey) rather than
+  // its identity. And the contents legitimately change while the dialog is
+  // open — the list starts with just "Other" and grows a row per recurring set
+  // when that fetch lands — which used to re-tick everything and wipe an
+  // untick the admin had already made. So once they've touched the picks, we
+  // keep them and only drop ids that no longer exist.
   const typeKey = setTypes.map((t) => t.id).join("|");
+  const touched = useRef(false);
   useEffect(() => {
-    if (open) setPicked(setTypes.map((t) => t.id));
+    if (open) touched.current = false;
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    if (touched.current) {
+      setPicked((prev) =>
+        prev.filter((id) => setTypes.some((t) => t.id === id))
+      );
+      return;
+    }
+    setPicked(setTypes.map((t) => t.id));
     // setTypes is deliberately not a dep — typeKey stands in for its contents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, typeKey]);
+
+  // Any pick the admin makes themselves is theirs to keep.
+  const choosePicked = (next: string[]) => {
+    touched.current = true;
+    setPicked(next);
+  };
   useEffect(() => {
     if (open) setColors({});
   }, [open]);
@@ -126,7 +147,7 @@ export default function PreviewModeModal({
               badge: t.team?.name,
             }))}
             picked={picked}
-            onPickedChange={setPicked}
+            onPickedChange={choosePicked}
             colors={colors}
             onColorsChange={setColors}
             emptyText="No upcoming sets on the calendar yet — there's nothing to preview."

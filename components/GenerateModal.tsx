@@ -10,7 +10,7 @@
 // Each ticked recurring set also gets an optional COLOUR (none by default),
 // which tints that set type's cards in the preview modal. It's a reading aid
 // for the review step only — nothing colour-related is ever saved.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Button from "./common/Button";
 import DateSelect from "./common/DateSelect";
 import InfoTooltip from "./common/InfoTooltip";
@@ -70,15 +70,38 @@ export default function GenerateModal({
   const [picked, setPicked] = useState<string[]>([]);
   // Preview tint per recurring set. Starts empty — no colour is the default.
   const [colors, setColors] = useState<TemplateColors>({});
-  // Keyed on the list's CONTENTS, not the array's identity — see the same
-  // guard in PreviewModeModal: a caller that rebuilds this array each render
-  // would otherwise re-tick everything the moment anything re-rendered.
+  // "Everything ticked" is the OPENING state, not a standing rule.
+  //
+  // Two things make that subtle. The caller rebuilds this array on every
+  // render, so the effect is keyed on the list's CONTENTS (templateKey) rather than
+  // its identity. And the contents legitimately change while the dialog is
+  // open — the list starts with just "Other" and grows a row per recurring set
+  // when that fetch lands — which used to re-tick everything and wipe an
+  // untick the admin had already made. So once they've touched the picks, we
+  // keep them and only drop ids that no longer exist.
   const templateKey = templates.map((t) => t.id).join("|");
+  const touched = useRef(false);
   useEffect(() => {
-    if (open) setPicked(templates.map((t) => t.id));
-    // templates is deliberately not a dep — templateKey covers its contents.
+    if (open) touched.current = false;
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    if (touched.current) {
+      setPicked((prev) =>
+        prev.filter((id) => templates.some((t) => t.id === id))
+      );
+      return;
+    }
+    setPicked(templates.map((t) => t.id));
+    // templates is deliberately not a dep — templateKey stands in for its contents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, templateKey]);
+
+  // Any pick the admin makes themselves is theirs to keep.
+  const choosePicked = (next: string[]) => {
+    touched.current = true;
+    setPicked(next);
+  };
   // Colours are a per-run choice, so a fresh dialog starts uncoloured.
   useEffect(() => {
     if (open) setColors({});
@@ -233,7 +256,7 @@ export default function GenerateModal({
             badge: t.team?.name,
           }))}
           picked={picked}
-          onPickedChange={setPicked}
+          onPickedChange={choosePicked}
           colors={colors}
           onColorsChange={setColors}
           emptyText="No weekly recurring sets yet — add one first and there’ll be something to expand."
