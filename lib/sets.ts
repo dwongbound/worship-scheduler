@@ -210,3 +210,44 @@ export function mergeSetWindows<T extends { id: string; startsAt: string }>(
   for (const set of incoming) byId.set(set.id, set);
   return [...byId.values()].sort((a, b) => a.startsAt.localeCompare(b.startsAt));
 }
+
+/** A half-open span of time, in epoch ms. */
+export interface MsRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Which parts of `wanted` aren't covered by `loaded` yet — the days a widened
+ * calendar window actually has to ask the server for.
+ *
+ * The calendar's window only ever grows outward from what's on screen, so this
+ * is at most two spans: one off each end. A `loaded` of null means nothing has
+ * been fetched, and the whole of `wanted` is missing.
+ *
+ * Deliberately NOT a general interval-difference: the two windows always
+ * overlap or touch in practice (the new one contains the old), and pretending
+ * otherwise would invite a "gap" the size of a decade if they ever didn't —
+ * so a wanted range that misses `loaded` entirely is returned whole, which is
+ * the honest answer for "what do I not have".
+ */
+export function missingRanges(
+  loaded: MsRange | null,
+  wanted: MsRange
+): MsRange[] {
+  if (!loaded) return [wanted];
+  // No overlap at all: nothing of `wanted` is held, so all of it is missing.
+  if (wanted.end <= loaded.start || wanted.start >= loaded.end) return [wanted];
+
+  const gaps: MsRange[] = [];
+  if (wanted.start < loaded.start) {
+    gaps.push({ start: wanted.start, end: loaded.start });
+  }
+  if (wanted.end > loaded.end) gaps.push({ start: loaded.end, end: wanted.end });
+  return gaps;
+}
+
+/** The span covering both — what's held once a gap fetch lands. */
+export function unionRange(a: MsRange, b: MsRange): MsRange {
+  return { start: Math.min(a.start, b.start), end: Math.max(a.end, b.end) };
+}

@@ -14,6 +14,7 @@ import {
   buildWeeks,
   canStep,
   centredWeek,
+  earliestLiveDay,
   majorityMonth,
   monthKey,
   openingWeek,
@@ -287,5 +288,41 @@ describe("CALENDAR_VISIBLE_WEEKS", () => {
     expect(rows).toBe(6);
     expect(CALENDAR_VISIBLE_WEEKS).toBeGreaterThanOrEqual(rows);
     expect(VISIBLE_WEEKS).toBeLessThan(rows);
+  });
+});
+
+describe("earliestLiveDay", () => {
+  const SEP_28 = new Date(2026, 8, 28);
+
+  it("is today while the window is showing this month", () => {
+    const live = earliestLiveDay(new Date(2026, 8, 1), SEP_28);
+    expect(live.getTime()).toBe(new Date(2026, 8, 28).getTime());
+  });
+
+  it("is the 1st once the window has moved to a later month", () => {
+    // Scrolled into October: September's tail in the top row is behind you.
+    const live = earliestLiveDay(new Date(2026, 9, 1), SEP_28);
+    expect(live.getTime()).toBe(new Date(2026, 9, 1).getTime());
+    // …and November's days, being ahead of October, are not dimmed by it.
+    expect(new Date(2026, 10, 3).getTime()).toBeGreaterThan(live.getTime());
+  });
+
+  it("stays at today when the window is showing a PAST month", () => {
+    // Paging back doesn't make August live again — it's all behind today.
+    const live = earliestLiveDay(new Date(2026, 7, 1), SEP_28);
+    expect(live.getTime()).toBe(new Date(2026, 8, 28).getTime());
+  });
+
+  it("ignores the clock time, so the rule can't shift during the day", () => {
+    const morning = earliestLiveDay(new Date(2026, 8, 1), new Date(2026, 8, 28, 1));
+    const night = earliestLiveDay(new Date(2026, 8, 1), new Date(2026, 8, 28, 23));
+    expect(morning.getTime()).toBe(night.getTime());
+    expect(morning.getHours()).toBe(0);
+  });
+
+  it("takes the month from any day in it, not just the 1st", () => {
+    const fromFirst = earliestLiveDay(new Date(2026, 9, 1), SEP_28);
+    const fromMiddle = earliestLiveDay(new Date(2026, 9, 17), SEP_28);
+    expect(fromMiddle.getTime()).toBe(fromFirst.getTime());
   });
 });

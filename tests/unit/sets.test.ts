@@ -9,9 +9,11 @@ import {
   canViewSet,
   coverEligibility,
   mergeSetWindows,
+  missingRanges,
   resolveSetsWindow,
   selectUpcomingSets,
   type CoverEligibilityInput,
+  unionRange,
   visibleSetsFilter,
 } from "@/lib/sets";
 import type { ApiAssignment, ApiSet } from "@/lib/types";
@@ -325,5 +327,80 @@ describe("mergeSetWindows", () => {
       [set("a", "2026-10-01T09:00:00Z"), set("a", "2026-10-01T09:00:00Z")]
     );
     expect(merged).toHaveLength(1);
+  });
+});
+
+describe("missingRanges", () => {
+  const day = 24 * 60 * 60 * 1000;
+  const loaded = { start: 100 * day, end: 200 * day };
+
+  it("asks for everything when nothing is held yet", () => {
+    const wanted = { start: 0, end: 10 * day };
+    expect(missingRanges(null, wanted)).toEqual([wanted]);
+  });
+
+  it("asks for nothing when the window is already covered", () => {
+    expect(missingRanges(loaded, { start: 120 * day, end: 180 * day })).toEqual(
+      []
+    );
+    // Exactly the same window — the common case, every re-render.
+    expect(missingRanges(loaded, loaded)).toEqual([]);
+  });
+
+  it("asks only for the new days when the window grows forward", () => {
+    expect(missingRanges(loaded, { start: 100 * day, end: 230 * day })).toEqual([
+      { start: 200 * day, end: 230 * day },
+    ]);
+  });
+
+  it("asks only for the new days when it grows backward", () => {
+    expect(missingRanges(loaded, { start: 80 * day, end: 200 * day })).toEqual([
+      { start: 80 * day, end: 100 * day },
+    ]);
+  });
+
+  it("returns both ends when the window grew each way at once", () => {
+    expect(missingRanges(loaded, { start: 90 * day, end: 210 * day })).toEqual([
+      { start: 90 * day, end: 100 * day },
+      { start: 200 * day, end: 210 * day },
+    ]);
+  });
+
+  it("never returns an empty or backwards span", () => {
+    // The boundary case: the window ends exactly where the loaded one does.
+    expect(missingRanges(loaded, { start: 150 * day, end: 200 * day })).toEqual(
+      []
+    );
+    for (const gap of missingRanges(loaded, { start: 90 * day, end: 210 * day })) {
+      expect(gap.end).toBeGreaterThan(gap.start);
+    }
+  });
+
+  it("asks for the whole window when it doesn't overlap what's held", () => {
+    // Not reachable from the calendar (its window only grows outward), but the
+    // honest answer to "what don't I have" is "all of it" — never a gap
+    // spanning the void between them.
+    const far = { start: 900 * day, end: 950 * day };
+    expect(missingRanges(loaded, far)).toEqual([far]);
+    const behind = { start: 0, end: 50 * day };
+    expect(missingRanges(loaded, behind)).toEqual([behind]);
+  });
+});
+
+describe("unionRange", () => {
+  it("covers both spans", () => {
+    expect(unionRange({ start: 5, end: 10 }, { start: 8, end: 20 })).toEqual({
+      start: 5,
+      end: 20,
+    });
+  });
+
+  it("keeps the older edge when the window has slid forward", () => {
+    // At the 400-day cap the window's start moves up, but sets fetched before
+    // it moved are still held — the record has to say so or they'd be re-asked.
+    expect(unionRange({ start: 0, end: 100 }, { start: 40, end: 140 })).toEqual({
+      start: 0,
+      end: 140,
+    });
   });
 });

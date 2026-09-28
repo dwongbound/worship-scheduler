@@ -22,7 +22,7 @@ import { usePullToRefresh } from "@/components/PullToRefresh";
 import { usePageLoading } from "@/components/LoadingProvider";
 import CalendarMonth from "@/components/CalendarMonth";
 import { startOfMonth, startOfWeek } from "@/lib/calendarScroll";
-import { mergeSetWindows } from "@/lib/sets";
+import { mergeSetWindows, missingRanges, unionRange } from "@/lib/sets";
 import SetDetailModal from "@/components/SetDetailModal";
 import CreateSetModal from "@/components/CreateSetModal";
 import MySetsPanel from "@/components/MySetsPanel";
@@ -353,25 +353,20 @@ function CalendarView() {
     // fold them in. Paging into next month used to re-download every month
     // already on screen, and the bill grew with each step up to the 400-day cap.
     if (loaded && loaded.scope === viewOrgId) {
-      const gaps: [number, number][] = [];
-      if (setsWindow.start < loaded.start) {
-        gaps.push([setsWindow.start, loaded.start]);
-      }
-      if (setsWindow.end > loaded.end) gaps.push([loaded.end, setsWindow.end]);
+      const gaps = missingRanges(loaded, setsWindow);
       if (gaps.length === 0) return; // already covered — ask for nothing
 
       let cancelled = false;
       void (async () => {
         const batches = await Promise.all(
-          gaps.map(([from, to]) => fetchRange(from, to))
+          gaps.map((gap) => fetchRange(gap.start, gap.end))
         );
         if (cancelled) return;
         // Record the UNION: the window slides forward at the 400-day cap, and
         // sets fetched before it slid are still held.
         loadedRef.current = {
           scope: viewOrgId,
-          start: Math.min(loaded.start, setsWindow.start),
-          end: Math.max(loaded.end, setsWindow.end),
+          ...unionRange(loaded, setsWindow),
         };
         setSets((prev) => mergeSetWindows(prev ?? [], batches.flat()));
       })();

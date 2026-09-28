@@ -165,3 +165,20 @@ export function canStep(
 ): boolean {
   return now - last >= cooldown;
 }
+
+/**
+ * The earliest day a calendar window should still draw at full strength.
+ *
+ * Today, normally. But once the window has been moved into a LATER month, the
+ * 1st of that month: the tail of the previous month sitting in the top row is
+ * behind where you're looking, and at full strength it competes with the month
+ * you came to see. Days in later months are never dimmed — they're ahead of
+ * you, and sets you can still act on.
+ *
+ * `headerMonth` is the month the heading names (majorityMonth's answer).
+ */
+export function earliestLiveDay(headerMonth: Date, today: Date): Date {
+  const monthStart = startOfMonth(headerMonth);
+  const todayStart = midnight(today);
+  return monthStart.getTime() > todayStart.getTime() ? monthStart : todayStart;
+}

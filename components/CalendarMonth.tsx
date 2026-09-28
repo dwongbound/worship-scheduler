@@ -38,6 +38,7 @@ import {
   addWeeks,
   buildWeeks,
   canStep,
+  earliestLiveDay,
   majorityMonth,
   startOfMonth,
   startOfWeek,
@@ -134,12 +135,6 @@ export default function CalendarMonth({
   focusMonth?: Date | null;
 }) {
   const today = new Date();
-  // Midnight today — anything strictly before this is a past day.
-  const startOfToday = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate()
-  );
   // The top row of the visible window — a Sunday. Everything else about what's
   // on screen falls out of this one date.
   const [firstWeek, setFirstWeek] = useState(() => monthTopRow(today));
@@ -176,14 +171,8 @@ export default function CalendarMonth({
     [weeks, firstWeek]
   );
 
-  // The earliest day that still reads as live. Today, normally — but once
-  // you've scrolled into a later month, the 1st of THAT month: the tail of the
-  // previous month sitting in the top row is behind where you're looking, and
-  // showing it at full strength makes it compete with the month you came to
-  // see. Days in LATER months stay live; they're still ahead of you.
-  const focusMonthStart = startOfMonth(headerMonth);
-  const earliestLive =
-    focusMonthStart > startOfToday ? focusMonthStart : startOfToday;
+  // Everything before this reads as behind you — see earliestLiveDay.
+  const earliestLive = earliestLiveDay(headerMonth, today);
 
   const isMine = (set: ApiSet) =>
     !!myId && set.assignments.some((a) => a.user.id === myId);
