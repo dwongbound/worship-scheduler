@@ -54,6 +54,64 @@ test("admin can generate for an availability request's date range", async ({
   await confirm.getByRole("button", { name: "Discard" }).click();
 });
 
+// Runs before the apply test for the same reason as the one above: it only
+// previews and discards, against the still-pristine request window.
+test("re-running the auto schedule inside the preview doesn't crash it", async ({
+  page,
+}) => {
+  // A smoke test for the plan-wide button: click it and the modal must survive.
+  // A React render crash doesn't leave a tidy error on the page, it leaves a
+  // hole where the UI was, so the assertion that carries the weight is the
+  // uncaught exception itself, not the visibility check after it.
+  //
+  // Scope, honestly: no SEED TEMPLATE sets requiresMD (only the "Saturday
+  // Prayer" set does), so a generated plan has no MD to designate and this does
+  // NOT exercise the MD rotation — verified by reintroducing the crash, which
+  // this test happily passed. The rotation is covered where it belongs, in
+  // tests/unit/stagedPlan.test.ts (designateMDs), which does fail against it.
+  // Making this reach the MD path would mean seeding a requiresMD template.
+  const pageErrors: string[] = [];
+  page.on("pageerror", (err) => pageErrors.push(err.message));
+
+  await login(page, "admin");
+  await page.goto("/create");
+
+  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  const options = page.getByRole("dialog");
+  const scope = options.getByLabel("Schedule for");
+  const reqValue = await scope
+    .locator('option[value^="req:"]')
+    .first()
+    .getAttribute("value");
+  expect(reqValue).toBeTruthy();
+  await scope.selectOption(reqValue!);
+  await expect(options.getByText(/^Scheduling /)).toBeVisible();
+  await options.getByRole("button", { name: "Generate preview" }).click();
+
+  const review = page.getByRole("dialog");
+  const heading = review.getByRole("heading", {
+    name: "Review generated schedule",
+  });
+  await expect(heading).toBeVisible();
+
+  // The plan-wide button reads "Auto schedule all" on an empty plan and
+  // "Re-run auto schedule" once anyone is on it — either way it runs the same
+  // pass, which is the one that used to throw.
+  await review
+    .getByRole("button", { name: /Auto schedule all|Re-run auto schedule/ })
+    .click();
+
+  // Still standing, still showing the plan, and nothing blew up on the way.
+  await expect(heading).toBeVisible();
+  expect(pageErrors).toEqual([]);
+
+  await review.getByRole("button", { name: "Discard" }).click();
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard this preview?" });
+  await confirm.getByRole("button", { name: "Discard" }).click();
+});
+
 test("admin can add a weekly template and generate a schedule", async ({ page }) => {
   await login(page, "admin");
   // The admin tabs live under a hover "Admin" dropdown — reveal it first.

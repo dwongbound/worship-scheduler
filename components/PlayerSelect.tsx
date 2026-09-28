@@ -113,10 +113,11 @@ interface PlayerSelectProps {
   // styling is gated behind `lg:`): it answers a question you can only ask with
   // a pointer, on a screen wide enough to show several sets at once.
   highlighted?: boolean;
-  // Fired when the pointer enters/leaves this control while it is CLOSED. An
-  // open control is "engaged" — what's being pointed at is the menu, not the
-  // person — so it reports nothing and clears any standing highlight.
-  onHoverChange?: (hovering: boolean) => void;
+  // Who the pointer is resting on right now, or null for nobody. Fires for the
+  // person in the CLOSED control, and — once the menu is open — for whichever
+  // option row is under the cursor, so the highlight follows you down the list
+  // and you can see where a candidate is already booked before picking them.
+  onHoverChange?: (userId: string | null) => void;
 }
 
 export default function PlayerSelect({
@@ -132,12 +133,17 @@ export default function PlayerSelect({
 }: PlayerSelectProps) {
   const [open, setOpen] = useState(false);
 
-  // Opening the control ends the hover: from here the pointer is working the
-  // menu, and a highlight left standing across the other cards would be stale
-  // the moment the list covers them.
+  // Opening or closing ends whatever the pointer was on — the control the
+  // cursor sits over means something different either side of that switch.
+  //
+  // Guarded on the TRANSITION rather than on `open` itself: callers pass an
+  // inline arrow, so this effect re-runs on every render, and an unguarded
+  // clear would wipe the option-row hover below as fast as it was set.
+  const wasOpen = useRef(open);
   useEffect(() => {
-    if (!open) return;
-    onHoverChange?.(false);
+    if (open === wasOpen.current) return;
+    wasOpen.current = open;
+    onHoverChange?.(null);
   }, [open, onHoverChange]);
 
   // Type-to-search query, filtering the option list by name while open.
@@ -278,7 +284,13 @@ export default function PlayerSelect({
         <ul role="listbox" className="min-h-0 flex-1 overflow-auto pb-1">
           {/* "None" and the current occupant only show on an unfiltered list. */}
           {!q && (
-            <OptionRow name="None" active={!selected} onClick={() => choose("")} />
+            <OptionRow
+              name="None"
+              active={!selected}
+              onClick={() => choose("")}
+              // Nobody to trace — hovering the clear row clears the highlight.
+              onHover={() => onHoverChange?.(null)}
+            />
           )}
           {!q && selected && (
             <OptionRow
@@ -295,6 +307,7 @@ export default function PlayerSelect({
               count={selected.count}
               active
               onClick={() => choose(selected.id)}
+              onHover={(hovering) => onHoverChange?.(hovering ? selected.id : null)}
             />
           )}
           {filtered.map((o) => (
@@ -315,6 +328,7 @@ export default function PlayerSelect({
               // an admin can deliberately override and assign them anyway.
               muted={!o.available || o.inactive}
               onClick={() => choose(o.id)}
+              onHover={(hovering) => onHoverChange?.(hovering ? o.id : null)}
             />
           ))}
           {/* Only a real search shows an empty-state; with no query, an empty
@@ -336,9 +350,10 @@ export default function PlayerSelect({
         disabled={disabled}
         onClick={() => setOpen((o) => !o)}
         onMouseEnter={() => {
-          if (!open) onHoverChange?.(true);
+          // An empty slot has nobody to trace, so it reports nothing.
+          if (!open && selected) onHoverChange?.(selected.id);
         }}
-        onMouseLeave={() => onHoverChange?.(false)}
+        onMouseLeave={() => onHoverChange?.(null)}
         aria-haspopup="listbox"
         aria-expanded={open}
         className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1 text-left text-sm disabled:opacity-50
@@ -407,6 +422,7 @@ function OptionRow({
   muted,
   count,
   onClick,
+  onHover,
 }: {
   // The name truncates on its own so the pills beside it always stay readable
   // — a single pre-joined string would have cut them off with it.
@@ -421,6 +437,9 @@ function OptionRow({
   // badge so admins can see why the list is ordered the way it is.
   count?: number;
   onClick: () => void;
+  // Pointer entered (true) or left (false) this row. The caller turns that into
+  // the person it represents — "None" has none, so it reports a plain clear.
+  onHover?: (hovering: boolean) => void;
 }) {
   const dim = disabled || muted;
   return (
@@ -429,6 +448,8 @@ function OptionRow({
         type="button"
         disabled={disabled}
         onClick={onClick}
+        onMouseEnter={() => onHover?.(true)}
+        onMouseLeave={() => onHover?.(false)}
         className={`flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm
           ${disabled ? "cursor-not-allowed" : "hover:bg-indigo-100 dark:hover:bg-indigo-800"}
           ${
