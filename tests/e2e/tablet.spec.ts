@@ -34,7 +34,20 @@ test("tablet shows the month grid AND the bottom tab bar", async ({ page }) => {
   await expect(page).toHaveURL(/\/set-manager/);
 });
 
-test("tablet calendar doesn't move under a wheel or a drag", async ({ page }) => {
+test("tablet calendar doesn't move under a wheel or a drag", async ({
+  page,
+  browserName,
+}) => {
+  // Playwright can't emulate a wheel in mobile WebKit ("Mouse wheel is not
+  // supported"), and the wheel is the only gesture it CAN synthesise that the
+  // calendar would otherwise act on — a mouse drag never reaches the touch
+  // listeners on any width, so asserting on one would prove nothing. The
+  // chromium tablet project covers this at the same width.
+  test.skip(
+    browserName === "webkit",
+    "mobile WebKit can't emulate a wheel; tablet-android covers this"
+  );
+
   await login(page, "nina");
   await page.goto("/calendar");
 

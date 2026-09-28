@@ -9,6 +9,7 @@
 // skips it. So don't set a viewport here; each project's device owns it.
 import { expect, test } from "@playwright/test";
 import {
+  clearBusyBlocks,
   login,
   pickSingleDay,
   requestAvailability,
@@ -172,6 +173,10 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
   page,
 }) => {
   await login(page, "carol");
+  // Start from a clean slate: a previous run that died mid-test would have
+  // left a block behind, and this test's own "it's gone again" assertion would
+  // then fail on the leftover rather than on anything it did.
+  await clearBusyBlocks(page);
   await page.goto("/schedule");
 
   // The month calendar is desktop-only (hidden below lg); the phone gets the
@@ -289,6 +294,7 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
 }) => {
   await requestAvailability(page);
   await login(page, "carol");
+  await clearBusyBlocks(page); // see the note in the test above
   await page.goto("/schedule");
 
   // No calendar on a phone, so the general "Block out times" form is the only
