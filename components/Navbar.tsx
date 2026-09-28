@@ -172,13 +172,24 @@ export default function Navbar() {
     refreshNotifications();
     // Poll so the dots stay fresh without a reload; every reminder-changing
     // action also fires an event below for an instant refresh.
-    const interval = setInterval(refreshNotifications, 60_000);
+    //
+    // A hidden tab polls nothing: a phone left on this tab in the background,
+    // or a desktop window behind others, was asking every minute for dots
+    // nobody could see. Coming back runs one immediate refresh, so the dots are
+    // right by the time the tab is looked at — which is the only moment the
+    // skipped polls would have mattered.
+    const refreshIfVisible = () => {
+      if (document.visibilityState === "visible") refreshNotifications();
+    };
+    const interval = setInterval(refreshIfVisible, 60_000);
+    document.addEventListener("visibilitychange", refreshIfVisible);
     window.addEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
     window.addEventListener(TEAMS_CHANGED_EVENT, refreshNotifications);
     return () => {
       clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshIfVisible);
       window.removeEventListener(SWAPS_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(AVAILABILITY_CHANGED_EVENT, refreshNotifications);
       window.removeEventListener(PROFILE_CHANGED_EVENT, refreshNotifications);
@@ -328,11 +339,14 @@ export default function Navbar() {
           <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
             <Logo className="h-9 w-9" />
           </Link>
-          {/* Desktop tab area — hidden on phones, where the floating bottom bar
-              (below) takes over. The Admin dropdown sits OUTSIDE the scrolling
-              strip: `overflow-x-auto` there forces overflow-y to clip too, which
-              would cut off the dropdown panel dropping below the bar. */}
-          <div className="hidden items-center gap-1 sm:flex">
+          {/* Desktop tab area — hidden on phones AND tablets, where the
+              floating bottom bar (below) takes over. The `lg` gate is shared
+              with that bar and with the touch gestures; see
+              lib/layout.ts BOTTOM_NAV_MAX_WIDTH. The Admin dropdown sits
+              OUTSIDE the scrolling strip: `overflow-x-auto` there forces
+              overflow-y to clip too, which would cut off the dropdown panel
+              dropping below the bar. */}
+          <div className="hidden items-center gap-1 lg:flex">
           {/* Main tabs strip — `overflow-x-auto` guards awkward mid-size widths.
               Clipping overflow-y would cut off the notification dots that stick
               out past each tab's top-right corner, so `p-2 -m-2` pads all four
@@ -615,12 +629,15 @@ export default function Navbar() {
       )}
     </div>
 
-    {/* Phone-only bottom bar: an app-style floating pill fixed above the
+    {/* Touch-width bottom bar: an app-style floating pill fixed above the
         bottom edge (respecting the iOS home-indicator safe area). Same tabs
         and red dots as the top strip, but icon-first with short labels.
+        Shown below `lg` — phones and tablets alike, since a tablet held in
+        the hand reaches the bottom far more easily than the top (the number
+        behind that `lg` is lib/layout.ts BOTTOM_NAV_MAX_WIDTH).
         The top strip's dots keep the data-testids; duplicating them here
         would break Playwright's strict single-match lookups. */}
-    <nav className="fixed inset-x-4 bottom-[calc(1.5rem+env(safe-area-inset-bottom))] z-30 sm:hidden">
+    <nav className="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-30 lg:hidden">
       <div
         className={`mx-auto flex items-stretch rounded-full border border-gray-200/60 bg-white/50 px-1.5 py-1.5 shadow-lg backdrop-blur-xl transition-all duration-300 ease-in-out dark:border-gray-700/60 dark:bg-gray-800/50 ${
           // Scroll down → also pull the pill in horizontally (centered), so it
@@ -685,7 +702,7 @@ function tabClassName(active: boolean, admin: boolean): string {
   }
 
   if (active) {
-    return `${base} bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300`;
+    return `${base} bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300`;
   }
   return `${base} text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700`;
 }
@@ -728,7 +745,7 @@ function bottomTabClassName(active: boolean, admin: boolean): string {
   }
 
   if (active) {
-    return `${base} bg-indigo-50 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300`;
+    return `${base} bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300`;
   }
   return `${base} text-gray-500 dark:text-gray-400`;
 }

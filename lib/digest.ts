@@ -21,6 +21,8 @@ import {
 } from "./constants";
 import { formatTime, shortRangeLabel } from "./dates";
 import { setLinkPath } from "./setLink";
+import type { MessageFormat } from "./messageFormat";
+import { SLACK_FORMAT } from "./integrations/slack";
 
 /** One bullet: a sentence plus the app path it links to. */
 export type DigestItem = {
@@ -201,7 +203,7 @@ export async function buildOrgDigest(
 }
 
 /**
- * The digest as Slack mrkdwn: a greeting plus one linked bullet per item.
+ * The digest as chat markup: a greeting plus one linked bullet per item.
  * `baseUrl` is the app's public origin (NEXTAUTH_URL); when it's missing the
  * bullets degrade to plain text rather than emitting broken links.
  *
@@ -210,13 +212,15 @@ export async function buildOrgDigest(
 export function renderDigestText(
   name: string,
   items: DigestItem[],
-  baseUrl: string
+  baseUrl: string,
+  // The provider's markup. Defaults to Slack's so existing output is unchanged;
+  // real callers pass `chat.fmt`. On a provider with no inline links the bullet
+  // becomes "label (url)" rather than a hyperlink — see lib/messageFormat.ts.
+  fmt: MessageFormat = SLACK_FORMAT
 ): string {
   const firstName = name.trim().split(/\s+/)[0] || name;
   const bullets = items.map((item) =>
-    baseUrl
-      ? `• <${baseUrl}${item.path}|${item.text}>`
-      : `• ${item.text}`
+    baseUrl ? `• ${fmt.link(`${baseUrl}${item.path}`, item.text)}` : `• ${item.text}`
   );
   return [`☀️ Good morning ${firstName} — here's your day:`, ...bullets].join(
     "\n"

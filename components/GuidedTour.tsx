@@ -300,7 +300,7 @@ export default function GuidedTour({ isAdmin }: { isAdmin: boolean }) {
               visibility: tipPos ? "visible" : "hidden",
             }}
           >
-            <h2 className="text-base font-semibold">{current.title}</h2>
+            <h2 className="text-lg font-semibold">{current.title}</h2>
             <p className="mt-1.5 text-sm text-gray-600 dark:text-gray-300">
               {current.body}
             </p>

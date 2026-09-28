@@ -342,6 +342,9 @@ export interface ApiAdminUser {
     requestId: string;
     completedAt: string | null;
     edited: boolean;
+    // Free text they left when submitting, or null. Drives the red dot beside
+    // their name in the status panel.
+    note: string | null;
   }[];
   // When this person can't serve — used to flag them in the assignment
   // dropdowns for a set at a conflicting time, and drawn as a read-only month

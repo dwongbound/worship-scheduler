@@ -40,6 +40,12 @@
   body {
     overflow-x: clip;
   }
+  /* Don't move this clip up to `html`, tempting as it looks: the viewport takes
+     its overflow from the ROOT element and only falls back to `body` while the
+     root's is `visible`. A non-visible value on `html` therefore silently
+     disables the modal scroll lock, which works by setting `overflow: hidden`
+     on `body` (common/Modal.tsx). Content that escapes this clip is clipped at
+     the element that transforms it instead — see SwipePager.tsx. */
 }
 
 /* Always-visible, styled scrollbar for capped scroll areas (e.g. the team

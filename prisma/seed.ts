@@ -1,4 +1,12 @@
-// Seed data for dev + e2e tests. Idempotent: wipes and recreates.
+// Seed data for dev + e2e tests. This is a WIPE: every row in every table the
+// app owns is deleted before anything is written. So it is never run for you —
+// `docker compose --profile dev up` leaves your database alone, and seeding is
+// something you ask for by hand:
+//
+//   docker compose exec worship-scheduler-dev npm run db:seed
+//
+// assertSafeToWipe below is the backstop: it refuses any target that isn't
+// plainly a local dev/test database.
 //
 // Default logins (all passwords are "password123"):
 //   admin — Alice Admin (org 1 admin)    paul  — Paul Park (org 1 + 2 admin)
@@ -26,7 +34,9 @@ import bcrypt from "bcryptjs";
 import { parseOrgKeys } from "../lib/orgKeys";
 import { normalizeDatabaseUrl } from "../lib/dbUrl";
 
-const url = process.env.DATABASE_URL;
+// Typed `string` (not `string | undefined`) so the guard below is the only
+// null check anyone needs — control-flow narrowing doesn't reach into main().
+const url: string = process.env.DATABASE_URL ?? "";
 if (!url) throw new Error("DATABASE_URL is required to seed the database.");
 
 const prisma = new PrismaClient({ adapter: new PrismaPg(normalizeDatabaseUrl(url)) });
@@ -103,7 +113,61 @@ function daysFromNow(n: number): Date {
   return d;
 }
 
+// Hosts a wipe is allowed against with no further questions: the compose
+// service names and the ways you reach them from the host. Anything else — a
+// Neon branch, an RDS endpoint, a tunnel — is presumed to be real data.
+const LOCAL_DB_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "host.docker.internal",
+  "db-dev",
+  "db-test",
+  "db-prod", // named so the check below can still refuse it by DB NAME
+]);
+
+/**
+ * Refuse to wipe anything that isn't plainly a throwaway database. Seeding
+ * deletes every row before it writes, so pointing it at production once is
+ * unrecoverable and there is no undo to offer afterwards.
+ *
+ * Three ways to fail: a non-local host, a database named like production, or
+ * NODE_ENV=production. SEED_FORCE=1 overrides all three and says so in the
+ * log — that exists for deliberately reseeding a remote DEV branch, and is
+ * never the right answer for prod.
+ */
+function assertSafeToWipe(databaseUrl: string) {
+  if (process.env.SEED_FORCE) {
+    console.warn("⚠️  SEED_FORCE=1 — skipping the safety checks. This WIPES the target database.");
+    return;
+  }
+  const refuse = (why: string) => {
+    throw new Error(
+      `Refusing to seed: ${why}. This command deletes every row first. ` +
+        `If you are certain the target is a throwaway database, re-run with SEED_FORCE=1.`
+    );
+  };
+  if (process.env.NODE_ENV === "production") refuse("NODE_ENV is production");
+
+  let parsed: URL;
+  try {
+    parsed = new URL(databaseUrl);
+  } catch {
+    refuse("DATABASE_URL could not be parsed");
+    return;
+  }
+  if (!LOCAL_DB_HOSTS.has(parsed.hostname)) {
+    refuse(`"${parsed.hostname}" is not a local dev/test database host`);
+  }
+  // Belt and braces: the compose prod db IS reachable at a known host name, so
+  // the database's own name has to disqualify it too.
+  const dbName = parsed.pathname.replace(/^\//, "");
+  if (/prod/i.test(dbName)) refuse(`"${dbName}" looks like a production database`);
+}
+
 async function main() {
+  assertSafeToWipe(url);
+
   // Wipe in dependency order (assignments cascade from sets/users anyway).
   await prisma.assignment.deleteMany();
   await prisma.unavailability.deleteMany();

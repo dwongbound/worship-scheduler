@@ -59,7 +59,14 @@ interface AvailabilityResponse {
   requestId: string;
   completedAt: string | null;
   edited: boolean;
+  // Free text left with the submission ("away the first weekend"), or null.
+  // Admins read it in the Create tab's availability status panel.
+  note: string | null;
 }
+
+// Longest note the submit-confirmation modal accepts. Mirrors the cap the
+// complete endpoint enforces — keep the two in step.
+const MAX_RESPONSE_NOTE = 500;
 
 // Convenience presets so "all Tuesday mornings" is one click.
 const TIME_PRESETS = [
@@ -72,8 +79,13 @@ const TIME_PRESETS = [
 
 // The two exclusive presets. Each already defines the whole window on its own
 // — "All day" IS every hour, "Custom" is one span picked by hand — so ticking
-// either switches the rest off (and disables them) until it's unticked.
+// either replaces whatever else was ticked.
 // Morning/Afternoon/Evening are the ones that stack with each other.
+//
+// The rows that aren't in play are greyed, but they are NOT disabled: clicking
+// one is how you switch groups (tick "Morning" under "All day" and All day
+// drops out, Morning comes on, and All day is the greyed one now). Disabling
+// them meant untick-then-tick for a move that reads as one.
 const CUSTOM_PRESET = TIME_PRESETS.findIndex((p) => p.start === -1);
 const ALL_DAY_PRESET = TIME_PRESETS.findIndex(
   (p) => p.start === 0 && p.end === 24 * 60
@@ -159,9 +171,16 @@ function TimeWindowPicker({
   onCustomStart: (value: string) => void;
   onCustomEnd: (value: string) => void;
 }) {
-  // Whichever exclusive preset is ticked, if any, is the only one selectable.
-  // (indexOf, not a truthiness check — "All day" is index 0.)
-  const locked = selected.find((i) => EXCLUSIVE_PRESETS.includes(i));
+  // Which group is in effect, so the other one can be greyed (still clickable —
+  // see EXCLUSIVE_PRESETS). `find`, not a truthiness check: "All day" is index 0.
+  const activeExclusive = selected.find((i) => EXCLUSIVE_PRESETS.includes(i));
+  const hasPartOfDay = selected.some((i) => !EXCLUSIVE_PRESETS.includes(i));
+  // An exclusive preset greys everything else; a part-of-day pick greys the two
+  // exclusive ones. Nothing ticked greys nothing — every row is equally open.
+  const isMuted = (i: number) =>
+    activeExclusive !== undefined
+      ? i !== activeExclusive
+      : hasPartOfDay && EXCLUSIVE_PRESETS.includes(i);
   return (
     <fieldset>
       <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -169,7 +188,6 @@ function TimeWindowPicker({
       </legend>
       <div className="space-y-2">
         {TIME_PRESETS.map((preset, i) => {
-          const off = locked !== undefined && i !== locked;
           const isCustom = i === CUSTOM_PRESET;
           return (
             <div
@@ -181,15 +199,18 @@ function TimeWindowPicker({
               <Checkbox
                 label={preset.label}
                 checked={selected.includes(i)}
-                disabled={off}
+                // Greyed, not disabled: clicking it is how you switch groups.
+                muted={isMuted(i)}
+                // Five short text options with nothing else in the row — the
+                // label is the obvious thing to aim at, especially on a phone.
+                // Custom's From/To sit outside the label and are unaffected.
+                rowTarget
                 onChange={() => onToggle(i)}
               />
-              {isCustom && locked === CUSTOM_PRESET && (
+              {isCustom && selected.includes(i) && (
                 // type="time" is what hands a phone its native time picker
                 // (iOS's wheel, Android's dial) — nothing here overrides it.
-                // The 16px font on small screens is the other half of that:
-                // iOS Safari zooms the whole page in on focusing any input
-                // under 16px, and never zooms back out.
+                // (The 16px-on-phones rule that pairs with it lives in Input.)
                 <span className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
                   <Input
                     label="From"
@@ -197,7 +218,7 @@ function TimeWindowPicker({
                     type="time"
                     value={customStart}
                     onChange={(e) => onCustomStart(e.target.value)}
-                    className="w-auto py-1.5 text-base sm:py-1 sm:text-sm"
+                    className="w-auto py-1.5 sm:py-1"
                   />
                   to
                   <Input
@@ -206,7 +227,7 @@ function TimeWindowPicker({
                     type="time"
                     value={customEnd}
                     onChange={(e) => onCustomEnd(e.target.value)}
-                    className="w-auto py-1.5 text-base sm:py-1 sm:text-sm"
+                    className="w-auto py-1.5 sm:py-1"
                   />
                 </span>
               )}
@@ -236,6 +257,10 @@ export default function SchedulePage() {
   // Submit opens a confirmation modal summarizing the days you'll be marked
   // unavailable for the selected request before it's actually sent.
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // The note typed in the submit-confirmation modal. Seeded from whatever was
+  // sent last time each time the modal opens, so re-submitting edits the note
+  // rather than silently starting over.
+  const [responseNote, setResponseNote] = useState("");
 
   // Inline error for the "Block out times" form (e.g. duplicate recurring).
   const [blockError, setBlockError] = useState<string | null>(null);
@@ -249,7 +274,10 @@ export default function SchedulePage() {
   // Recurring is multi-select on both axes: any set of weekdays crossed with
   // any set of time windows, so "Mon–Fri mornings + afternoons" is one submit.
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>([2]); // Tuesday
-  const [presetIndexes, setPresetIndexes] = useState<number[]>([ALL_DAY_PRESET]);
+  // Starts EMPTY: picking the window is part of describing the block, and
+  // pre-ticking "All day" meant the widest possible block was one careless
+  // submit away (and read as already-answered when it wasn't).
+  const [presetIndexes, setPresetIndexes] = useState<number[]>([]);
   // How long the recurring blocks keep repeating: forever (default), a number
   // of weeks from today, up to a date you pick, or across a range of dates.
   const [repeats, setRepeats] = useState<RepeatMode>("forever");
@@ -298,12 +326,15 @@ export default function SchedulePage() {
   // Pulling down on a phone refetches this tab in place.
   usePullToRefresh(reload);
 
-  // Pick/unpick one time window. An exclusive preset replaces whatever was
-  // picked; the part-of-day ones stack with each other.
+  // Pick/unpick one time window. An exclusive preset ("All day" / "Custom")
+  // replaces the whole selection; a part-of-day one stacks with its peers and
+  // evicts any exclusive preset that was on — that eviction is what makes the
+  // greyed rows clickable rather than dead.
   function toggleWindow(index: number) {
     setPresetIndexes((prev) => {
       if (prev.includes(index)) return prev.filter((v) => v !== index);
-      return EXCLUSIVE_PRESETS.includes(index) ? [index] : [...prev, index];
+      if (EXCLUSIVE_PRESETS.includes(index)) return [index];
+      return [...prev.filter((v) => !EXCLUSIVE_PRESETS.includes(v)), index];
     });
   }
 
@@ -325,6 +356,13 @@ export default function SchedulePage() {
             }
           : { startMinute: preset.start, endMinute: preset.end };
       });
+      // Nothing ticked. Without this the empty selection expands to zero
+      // blocks and trips the "those blocks already exist" message below, which
+      // explains the wrong problem.
+      if (windows.length === 0) {
+        setBlockError("Pick at least one time window.");
+        return;
+      }
       if (windows.some((w) => w.startMinute >= w.endMinute)) {
         setBlockError("The custom end time must be after the start time.");
         return;
@@ -492,14 +530,19 @@ export default function SchedulePage() {
   }
 
   // Toggles the selected request's completion (creates ↔ deletes the row).
-  async function toggleComplete() {
+  // `note` is only sent when submitting — leaving it off (the "Make changes"
+  // path) tells the server to keep whatever note is already stored.
+  async function toggleComplete(note?: string) {
     if (!selectedRequestId) return;
     setBusyAction("complete");
     try {
       await fetch("/api/availability/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: selectedRequestId }),
+        body: JSON.stringify({
+          requestId: selectedRequestId,
+          ...(note === undefined ? {} : { note }),
+        }),
       });
       await reload();
       // Clear/refresh the navbar reminder dot + banner right away.
@@ -652,7 +695,7 @@ export default function SchedulePage() {
       <section data-tour="avail-editors" className="space-y-3">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <div className="flex items-center gap-1.5">
-            <h2 className="text-xl font-bold">Requests</h2>
+            <h2 className="text-lg font-bold">Requests</h2>
             <InfoTooltip
               side="bottom"
               text="Pick a request to see its dates on the calendar below, block the days you can't serve, then submit. Times you've already blocked count automatically."
@@ -732,14 +775,18 @@ export default function SchedulePage() {
                 <Card
                   key={r.id}
                   // The whole card is the target — clicking anywhere lenses the
-                  // calendar. Selected gets a left rail + ring so you can tell
-                  // at a glance which window the calendar is showing.
+                  // calendar. The left rail carries status on every card
+                  // (green = answered, amber = todo); the selected one lights
+                  // up whole so you can tell at a glance which window the
+                  // calendar is showing.
                   className={`cursor-pointer border-l-4 transition-colors ${
                     active
-                      ? // The one driving the calendar: accent ground + ring, so
-                        // it reads as selected at a glance rather than by a
-                        // hairline that disappears against a dark card.
-                        "border-l-indigo-500 bg-indigo-50 ring-2 ring-indigo-500 dark:bg-indigo-500/10"
+                      ? // The one driving the calendar: accent ground, and the
+                        // card's OWN border turned accent. A ring here instead
+                        // drew a second outline around the card's border, which
+                        // read as a doubled edge down each side; recoloring the
+                        // border keeps it one panel that simply lights up.
+                        "border-indigo-500 bg-indigo-100 dark:border-indigo-500 dark:bg-indigo-500/10"
                       : done
                         ? "border-l-green-500/60 hover:bg-gray-50 dark:hover:bg-gray-700/40"
                         : "border-l-amber-400 hover:bg-gray-50 dark:hover:bg-gray-700/40"
@@ -843,6 +890,12 @@ export default function SchedulePage() {
                           size="sm"
                           onClick={(e) => {
                             e.stopPropagation();
+                            // Start from what they sent last time (a re-submit
+                            // after "Make changes"), else empty.
+                            setResponseNote(
+                              responses.find((x) => x.requestId === r.id)
+                                ?.note ?? ""
+                            );
                             setConfirmOpen(true);
                           }}
                           disabled={busyAction === "complete"}
@@ -869,7 +922,7 @@ export default function SchedulePage() {
           on one page rather than a second copy behind a tab. */}
       <section className="space-y-3">
         <div className="flex items-center gap-1.5">
-          <h2 className="text-xl font-bold">My availability</h2>
+          <h2 className="text-lg font-bold">My availability</h2>
           <InfoTooltip text="Blocks here apply to every org and every request. Click or drag the calendar to block whole days; use the form for a repeating block or a specific time window." />
         </div>
 
@@ -1243,8 +1296,18 @@ export default function SchedulePage() {
           onClose={() => setConfirmOpen(false)}
           title="Submit your response?"
           subtitle={requestLabel(selectedRequest)}
-          footer={
+          // Confirm waits until the summary has been read to the END. With a
+          // long list of blocked days the button sits below the fold, and
+          // confirming from the top means sending dates you never saw. `atEnd`
+          // is true from the start when there's nothing to scroll, so a short
+          // summary (the common case) is unaffected.
+          footer={({ atEnd }) => (
             <>
+              {!atEnd && (
+                <span className="mr-auto text-xs text-gray-500 dark:text-gray-400">
+                  Scroll down to review everything first.
+                </span>
+              )}
               <Button
                 variant="secondary"
                 onClick={() => setConfirmOpen(false)}
@@ -1254,10 +1317,15 @@ export default function SchedulePage() {
               </Button>
               <Button
                 onClick={async () => {
-                  await toggleComplete();
+                  await toggleComplete(responseNote);
                   setConfirmOpen(false);
                 }}
-                disabled={busyAction === "complete"}
+                disabled={busyAction === "complete" || !atEnd}
+                // Says WHY it's dead, for anyone who reaches for it before
+                // scrolling — and for a screen reader, which has no fold.
+                title={
+                  atEnd ? undefined : "Scroll to the end of the summary first"
+                }
               >
                 {busyAction === "complete" ? (
                   <LoadingDots size="sm" />
@@ -1266,7 +1334,7 @@ export default function SchedulePage() {
                 )}
               </Button>
             </>
-          }
+          )}
         >
           {confirmDays.length === 0 ? (
             <p className="text-sm text-gray-700 dark:text-gray-300">
@@ -1299,6 +1367,34 @@ export default function SchedulePage() {
               </ul>
             </div>
           )}
+          {/* Anything the days can't say — "away the first weekend", "I can
+              do mornings only". Optional, and the only part of a response an
+              admin reads in words, so it sits under the summary rather than
+              competing with it. */}
+          <div className="mt-4 border-t border-gray-200 pt-3 dark:border-gray-700">
+            <label
+              htmlFor="response-note"
+              className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300"
+            >
+              Note for your admin{" "}
+              <span className="font-normal text-gray-500 dark:text-gray-400">
+                (optional)
+              </span>
+            </label>
+            <textarea
+              id="response-note"
+              value={responseNote}
+              onChange={(e) => setResponseNote(e.target.value)}
+              maxLength={MAX_RESPONSE_NOTE}
+              rows={3}
+              placeholder="e.g. Away the first weekend, and mornings only after that."
+              // 16px on phones: iOS Safari zooms the page in on focusing any
+              // input under that and never zooms back out.
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-base
+                focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
+                dark:border-gray-600 dark:bg-gray-800 sm:text-sm"
+            />
+          </div>
         </Modal>
       )}
     </div>

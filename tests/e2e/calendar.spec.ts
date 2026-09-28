@@ -142,8 +142,13 @@ test("admin deletes a set from the detail modal", async ({ page }) => {
   const modal = page.getByRole("dialog").first();
   await expect(modal).toBeVisible();
   await modal.getByRole("button", { name: "Delete set" }).click();
-  // Deleting raises a stacked confirm modal, nested inside the set modal.
-  const confirm = modal.getByRole("dialog");
+  // Deleting raises a stacked confirm modal. Every Modal renders into <body>
+  // (so a transformed ancestor can't become what its `fixed` overlay centres
+  // in), which makes the two dialogs SIBLINGS — find this one by its own
+  // heading rather than by looking inside the set modal.
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Delete this set?" });
   await expect(confirm).toBeVisible();
   await confirm.getByRole("button", { name: "Delete set" }).click();
 
@@ -214,17 +219,17 @@ test("assignment dropdown flags people who are unavailable for the set", async (
     const voxRow = modal.getByRole("listitem").filter({ hasText: "Vox" });
     await voxRow.getByRole("button", { name: "None" }).first().click();
 
-    // Carol is flagged "(unavailable)" so an admin can see the conflict...
-    const carol = page.getByRole("option", { name: /Carol Chen \(unavailable\)/ });
+    // Carol carries an "unavailable" pill so an admin can see the conflict...
+    const carol = page.getByRole("option", { name: /Carol Chen\s+unavailable/ });
     await expect(carol).toBeVisible();
     // ...but she stays selectable — the flag is a warning an admin may override
     // (see PlayerSelect: unavailable people are muted, not disabled).
     await expect(carol.getByRole("button")).toBeEnabled();
-    // An available vocalist carries no "(unavailable)" flag. Scope to the
+    // An available vocalist carries no "unavailable" pill. Scope to the
     // dropdown option's button — "Nina Nguyen" also names an <option> in the
     // calendar's native "Show sets for" <select>, which has no button child.
     await expect(
-      page.getByRole("option", { name: /Nina Nguyen \(unavailable\)/ })
+      page.getByRole("option", { name: /Nina Nguyen\s+unavailable/ })
     ).toHaveCount(0);
     await expect(
       page.getByRole("option", { name: "Nina Nguyen" }).getByRole("button")
@@ -553,4 +558,64 @@ test("a sent note lands in the set's Notes history, and nothing else does", asyn
   await expect(
     reopened.getByPlaceholder("e.g. Communion Sunday")
   ).toHaveValue("");
+});
+
+test("the calendar grid steps a week at a time on the wheel", async ({ page }) => {
+  await login(page, "admin");
+  await page.goto("/calendar");
+
+  // The grid is a window of week rows, so the row under the weekday labels is
+  // what moves. Read the first cell's date, wheel once, read it again.
+  const grid = page.locator("[data-no-pull]").first();
+  await expect(grid).toBeVisible();
+  const firstCellDate = () =>
+    grid.locator("[data-date]").first().getAttribute("data-date");
+
+  const before = await firstCellDate();
+  expect(before).toBeTruthy();
+
+  await grid.hover();
+  await page.mouse.wheel(0, 200);
+  await expect.poll(firstCellDate).not.toBe(before);
+
+  const after = await firstCellDate();
+  // Exactly one week later — not a pixel-scroll, and not a whole month.
+  const days =
+    (new Date(after!).getTime() - new Date(before!).getTime()) / 86_400_000;
+  expect(days).toBe(7);
+
+  // And back again: the window is an index, so a step is reversible exactly.
+  //
+  // Wait out the step cooldown first (lib/calendarScroll STEP_COOLDOWN_MS, 150ms).
+  // A trackpad sends a stream of wheel events and the limiter drops the ones
+  // that come too fast, which is invisible in use — but page.mouse.wheel sends
+  // exactly ONE, so a dropped event here is a step that simply never happens.
+  await page.waitForTimeout(250);
+  await page.mouse.wheel(0, -200);
+  await expect.poll(firstCellDate).toBe(before);
+});
+
+test("the month heading follows the majority of the visible weeks", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/calendar");
+
+  const heading = page.getByRole("heading", { level: 2 }).first();
+  const startedOn = await heading.textContent();
+
+  // One week does not move the heading: it names whichever month owns most of
+  // the six rows, so it changes only when the view genuinely has.
+  const grid = page.locator("[data-no-pull]").first();
+  await grid.hover();
+  await page.mouse.wheel(0, 200);
+  await expect(heading).toHaveText(startedOn!);
+
+  // "Next month" jumps a whole month, and the heading follows immediately.
+  await page.getByRole("button", { name: "Next month" }).click();
+  await expect(heading).not.toHaveText(startedOn!);
+
+  // "Today" comes home.
+  await page.getByRole("button", { name: "Today" }).click();
+  await expect(heading).toHaveText(startedOn!);
 });

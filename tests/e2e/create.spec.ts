@@ -1,6 +1,6 @@
 // E2E: admin-only Create tab — templates, generation, availability status.
 import { expect, test } from "@playwright/test";
-import { login } from "./helpers";
+import { login, pickSingleDay } from "./helpers";
 
 test("non-admins don't see the Create tab and can't use the page", async ({ page }) => {
   await login(page, "bob");
@@ -146,8 +146,8 @@ test("review dropdowns flag people who are unavailable at a set's time", async (
   await expect(review.getByText("Thursday Rehearsal").first()).toBeVisible();
 
   // Scope to a Thursday card (cards carry a testid; the sets are grouped in
-  // per-label rows), open its Vox dropdown, and confirm an "(unavailable)"
-  // candidate is offered (never silently hidden or assigned).
+  // per-label rows), open its Vox dropdown, and confirm an "unavailable"-
+  // flagged candidate is offered (never silently hidden or assigned).
   const card = review
     .getByTestId("staged-set-card")
     .filter({ hasText: "Thursday Rehearsal" })
@@ -155,7 +155,9 @@ test("review dropdowns flag people who are unavailable at a set's time", async (
   const vocalsRow = card
     .getByRole("listitem")
     .filter({ hasText: "Vox" });
-  await vocalsRow.getByRole("button").first().click();
+  // The dropdown trigger specifically — a slot row leads with its ✕ (remove
+  // the slot) and, when locked, a 🔒, so "the first button" is not it.
+  await vocalsRow.locator('button[aria-haspopup="listbox"]').first().click();
   await expect(
     page.getByRole("listbox").getByText(/unavailable/i).first()
   ).toBeVisible();
@@ -190,21 +192,15 @@ test("admin sends an availability request to the team", async ({ page }) => {
   await page.goto("/create");
 
   await page.getByLabel("Name (optional)").fill("Fall 2026 Request");
-  // From/To are custom DateSelect popups (not native date inputs). Their button's
-  // accessible name is exactly "From"/"To (optional)", so open each with an
-  // EXACT label match (getByLabel("To") without exact is ambiguous — "Today"
-  // contains "to") and choose "Today" scoped to the open popup dialog. A
-  // single-day range is valid (startDate <= endDate).
-  const pickToday = async (field: "From" | "To (optional)") => {
-    await page.getByLabel(field, { exact: true }).click();
-    await page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Today", exact: true })
-      .click();
-  };
+  // The dates are ONE custom `range` DateSelect popup (not native date inputs):
+  // open it by its exact label, then pick today as the range start. The form
+  // takes a start alone as a one-day request, which is all this test needs —
+  // pickSingleDay owns the click-and-close dance (it's fiddly on WebKit).
+  await page
+    .getByLabel("Dates to ask about", { exact: true })
+    .click();
+  await pickSingleDay(page);
 
-  await pickToday("From");
-  await pickToday("To (optional)");
   await page.getByRole("button", { name: "Request availabilities" }).click();
   await expect(
     page.getByText("Availability request sent to the team.")

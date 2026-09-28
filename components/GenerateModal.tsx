@@ -70,9 +70,15 @@ export default function GenerateModal({
   const [picked, setPicked] = useState<string[]>([]);
   // Preview tint per recurring set. Starts empty — no colour is the default.
   const [colors, setColors] = useState<TemplateColors>({});
+  // Keyed on the list's CONTENTS, not the array's identity — see the same
+  // guard in PreviewModeModal: a caller that rebuilds this array each render
+  // would otherwise re-tick everything the moment anything re-rendered.
+  const templateKey = templates.map((t) => t.id).join("|");
   useEffect(() => {
     if (open) setPicked(templates.map((t) => t.id));
-  }, [open, templates]);
+    // templates is deliberately not a dep — templateKey covers its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, templateKey]);
   // Colours are a per-run choice, so a fresh dialog starts uncoloured.
   useEffect(() => {
     if (open) setColors({});

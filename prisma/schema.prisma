@@ -130,6 +130,20 @@ model Org {
   // group chats, weekly team summaries) aren't covered by this.
   notificationPrefs Json?
 
+  // How many months of its OWN history this workspace keeps. Sets that started
+  // before the cutoff — and the availability requests that ended before it —
+  // are deleted for good by the weekly sweep (lib/retentionStore), taking their
+  // rosters, songs, guest teams, activity log, swap proposals and responses
+  // with them through the cascades. People, teams, roles and recurring set
+  // types are never touched. See lib/retention.ts for the offered windows;
+  // 12 = the 1-year default every org starts on.
+  retentionMonths Int @default(12)
+
+  // When that sweep last ran for this org. Null = never swept, which makes it
+  // due immediately. Stamped even on a run that deletes nothing, so an org
+  // isn't re-counted every night.
+  lastPrunedAt DateTime?
+
   memberships          OrgMembership[]
   teams                Team[]
   sets                 Set[]
@@ -743,6 +757,11 @@ model AvailabilityResponse {
   completedAt DateTime?
   // True once re-submitted after having been un-submitted at least once.
   edited      Boolean           @default(false)
+  // Optional free-text note the person left when they submitted ("away the
+  // first weekend, back for the rest"). Written from the submit-confirmation
+  // modal and read by admins in the Create tab's availability status panel;
+  // null = they didn't leave one.
+  note        String?
 
   @@unique([userId, requestId])
   @@map("availability_responses")

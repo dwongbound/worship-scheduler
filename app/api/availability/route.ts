@@ -107,7 +107,9 @@ export async function GET() {
     }),
     prisma.availabilityResponse.findMany({
       where: { userId: user.id },
-      select: { requestId: true, completedAt: true, edited: true },
+      // `note` rides along so re-opening the submit modal shows what you wrote
+      // last time rather than an empty box.
+      select: { requestId: true, completedAt: true, edited: true, note: true },
     }),
   ]);
 

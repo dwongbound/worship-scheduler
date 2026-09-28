@@ -97,9 +97,10 @@ export default function RootLayout({
             {/* Plain `pt-6`: Navbar renders an in-flow spacer + banners above
                 this, so the header's space is already reserved by layout. No
                 padding math here, and nothing that can go stale.
-                Extra bottom padding on phones so content can scroll clear of
-                the floating bottom nav bar (see Navbar.tsx). */}
-            <main className="mx-auto max-w-7xl px-4 pb-24 pt-6 sm:px-6 sm:pb-6 lg:px-8">
+                Extra bottom padding wherever the floating bottom nav bar is
+                shown (phones and tablets, i.e. below `lg` — see Navbar.tsx and
+                lib/layout.ts) so content can scroll clear of it. */}
+            <main className="mx-auto max-w-7xl px-4 pb-24 pt-6 sm:px-6 lg:px-8 lg:pb-6">
               {/* Pull-to-refresh wraps the pager (not the other way round) so
                   the two gestures transform different elements and can never
                   fight over one. */}

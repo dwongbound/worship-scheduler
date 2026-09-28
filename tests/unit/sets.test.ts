@@ -7,11 +7,12 @@
 import { describe, expect, it } from "vitest";
 import {
   canViewSet,
-  visibleSetsFilter,
   coverEligibility,
+  mergeSetWindows,
   resolveSetsWindow,
   selectUpcomingSets,
   type CoverEligibilityInput,
+  visibleSetsFilter,
 } from "@/lib/sets";
 import type { ApiAssignment, ApiSet } from "@/lib/types";
 import {
@@ -278,5 +279,51 @@ describe("resolveSetsWindow", () => {
   it("recovers from a backwards range instead of returning nothing", () => {
     const { start, end } = resolveSetsWindow("2026-09-30", "2026-09-01", NOW);
     expect(end.getTime()).toBeGreaterThan(start.getTime());
+  });
+});
+
+describe("mergeSetWindows", () => {
+  const set = (id: string, startsAt: string) => ({ id, startsAt });
+
+  it("keeps both windows, in start order", () => {
+    const merged = mergeSetWindows(
+      [set("b", "2026-10-02T18:00:00Z"), set("a", "2026-10-01T09:00:00Z")],
+      [set("c", "2026-10-03T09:00:00Z")]
+    );
+    expect(merged.map((s) => s.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("orders a gap fetched from the PAST into place, not onto the end", () => {
+    const merged = mergeSetWindows(
+      [set("sep", "2026-09-30T18:00:00Z")],
+      [set("aug", "2026-08-02T09:00:00Z")]
+    );
+    expect(merged.map((s) => s.id)).toEqual(["aug", "sep"]);
+  });
+
+  it("lets the incoming copy win, since it is the fresher read", () => {
+    // A gap fetch can overlap a day already held — the roster may have changed
+    // since, and the new one is the one to keep.
+    const merged = mergeSetWindows(
+      [{ id: "a", startsAt: "2026-10-01T09:00:00Z", label: "old" }],
+      [{ id: "a", startsAt: "2026-10-01T09:00:00Z", label: "new" }]
+    );
+    expect(merged).toHaveLength(1);
+    expect(merged[0].label).toBe("new");
+  });
+
+  it("is a no-op when the gap came back empty", () => {
+    const existing = [set("a", "2026-10-01T09:00:00Z")];
+    expect(mergeSetWindows(existing, [])).toEqual(existing);
+  });
+
+  it("dedupes within the incoming batch too", () => {
+    // Two gaps (one each side) are fetched in parallel and flattened; an
+    // overlap between them must not double a set.
+    const merged = mergeSetWindows(
+      [],
+      [set("a", "2026-10-01T09:00:00Z"), set("a", "2026-10-01T09:00:00Z")]
+    );
+    expect(merged).toHaveLength(1);
   });
 });

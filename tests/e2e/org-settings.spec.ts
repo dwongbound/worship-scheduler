@@ -100,3 +100,69 @@ test("an org admin includes a member in all group chats and it persists", async 
   await Promise.all([savePatch(), bobChip().click()]);
   await expect(bobChip()).toHaveCount(0);
 });
+
+test("changing data retention asks first, and says what it would delete", async ({
+  page,
+}) => {
+  await login(page, "paul");
+  await page.goto("/orgs");
+  await page.getByRole("button", { name: orgName(1) }).click();
+
+  // Every workspace starts on the 1-year default, and the dropdown says so.
+  const window_ = page.getByLabel("Keep data for");
+  await expect(window_).toHaveValue("12");
+  await expect(
+    page.getByRole("option", { name: "1 year (default)" })
+  ).toHaveCount(1);
+
+  // Picking a shorter window doesn't save it — it asks, against real counts.
+  await window_.selectOption("3");
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Change data retention?" });
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByText("Keeping 3 months")).toBeVisible();
+  // The cutoff is spelled out, and the copy names what survives.
+  await expect(confirm.getByText(/will be deleted/)).toBeVisible();
+  await expect(
+    confirm.getByText(/People, teams, roles.*never deleted/)
+  ).toBeVisible();
+
+  // Backing out leaves the stored window alone.
+  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirm).not.toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: orgName(1) }).click();
+  await expect(page.getByLabel("Keep data for")).toHaveValue("12");
+});
+
+test("a confirmed retention change sticks", async ({ page }) => {
+  await login(page, "paul");
+  await page.goto("/orgs");
+  await page.getByRole("button", { name: orgName(1) }).click();
+
+  // Lengthening is the safe direction: nothing is old enough to delete, and
+  // the dialog says so rather than warning about a danger that isn't there.
+  await page.getByLabel("Keep data for").selectOption("48");
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Change data retention?" });
+  await expect(
+    confirm.getByText(/Nothing in this workspace is old enough to delete/)
+  ).toBeVisible();
+  await confirm.getByRole("button", { name: "Save" }).click();
+  await expect(confirm).not.toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: orgName(1) }).click();
+  await expect(page.getByLabel("Keep data for")).toHaveValue("48");
+
+  // Put the seeded default back so file order can't affect a later spec.
+  await page.getByLabel("Keep data for").selectOption("12");
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Change data retention?" })
+    .getByRole("button", { name: /Save|Delete and save/ })
+    .click();
+  await expect(page.getByLabel("Keep data for")).toHaveValue("12");
+});

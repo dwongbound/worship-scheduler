@@ -245,7 +245,7 @@ function LoginForm() {
   return (
     <div className="flex min-h-[70vh] items-center justify-center">
       <Card className="w-full max-w-sm">
-        <h1 className="mb-1 text-center text-xl font-bold text-indigo-600 dark:text-indigo-400">
+        <h1 className="mb-1 text-center text-2xl font-bold text-indigo-600 dark:text-indigo-400">
           Worship Scheduler
         </h1>
         <p className="mb-6 text-center text-sm text-gray-500">
