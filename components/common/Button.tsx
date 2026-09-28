@@ -1,6 +1,7 @@
 "use client";
 // Reusable button. Add variants/sizes here as the app grows.
 import { ButtonHTMLAttributes } from "react";
+import LoadingDots from "./LoadingDots";
 
 type Variant = "primary" | "secondary" | "danger" | "ghost" | "admin";
 type Size = "sm" | "md";
@@ -33,20 +34,49 @@ const SIZE_CLASSES: Record<Size, string> = {
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
   size?: Size;
+  // This button's own action is in flight: it goes un-clickable and wears the
+  // jumping dots. The label STAYS in place, just hidden, and the dots sit on
+  // top of it — swapping the label out for the dots shrank the button to the
+  // width of three dots mid-click, which moves everything beside it.
+  loading?: boolean;
 }
 
 export default function Button({
   variant = "primary",
   size = "md",
   className = "",
+  loading = false,
+  disabled,
+  children,
   ...props
 }: ButtonProps) {
   return (
     <button
-      className={`inline-flex items-center justify-center gap-1.5 rounded-lg font-medium
+      // A button whose action is already running can't be pressed again.
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      // `relative` only while loading, so it can't fight a caller's own
+      // positioning class the rest of the time.
+      className={`${loading ? "relative" : ""} inline-flex items-center justify-center gap-1.5 rounded-lg font-medium
         transition-colors disabled:cursor-not-allowed disabled:opacity-70
         ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`}
       {...props}
-    />
+    >
+      {loading ? (
+        <>
+          {/* `invisible`, not unmounted: the label is what holds the button at
+              its size. The wrapper repeats the button's own flex row so an
+              icon + text label reserves exactly the width it normally takes. */}
+          <span className="invisible inline-flex items-center gap-1.5">
+            {children}
+          </span>
+          <span className="absolute inset-0 flex items-center justify-center">
+            <LoadingDots size="sm" />
+          </span>
+        </>
+      ) : (
+        children
+      )}
+    </button>
   );
 }

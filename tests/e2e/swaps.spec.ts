@@ -22,7 +22,37 @@ test("bob requests a swap on his Sunday set", async ({ page }) => {
   // A modal asks for an optional reason — leave a note, then confirm.
   const modal = page.getByRole("dialog");
   await modal.getByLabel("Reason for cover (optional)").fill("Out of town this week");
+
+  // What this does is on the (i) beside the title, not a paragraph over the
+  // box: the note field is the only thing here you act on.
+  await expect(
+    modal.getByText(/This opens the set for any eligible teammate/)
+  ).toHaveCount(0);
+  await modal.getByLabel("More information").hover();
+  await expect(
+    page.getByRole("tooltip").filter({ hasText: "any eligible teammate" })
+  ).toBeVisible();
+
+  // Hold the PATCH open: the dialog has to stay up (and stay shut) for as long
+  // as the request is in flight, rather than closing and leaving the work
+  // happening invisibly behind it.
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/assignments/**", async (route) => {
+    if (route.request().method() !== "PATCH") return route.fallback();
+    await held;
+    await route.continue();
+  });
+
   await modal.getByRole("button", { name: "Request cover" }).click();
+  await expect(modal).toBeVisible();
+  await expect(modal.getByRole("button", { name: "Cancel" })).toBeDisabled();
+
+  release();
+  await expect(modal).not.toBeVisible();
+  await page.unroute("**/api/assignments/**");
 
   await expect(card.getByText("Requesting cover")).toBeVisible();
 });

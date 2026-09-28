@@ -41,13 +41,11 @@ test("adds and deletes a recurring weekly block", async ({ page }) => {
   // Requests form has its own time picker, so page-level locators are ambiguous.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  // Days are a multi-select strip and times a checkbox list: Tuesday is on
-  // by default, so just
-  // swap the default "All day" window for Morning.
+  // Days are a multi-select strip and times a checkbox list: Tuesday is on by
+  // default, but no time window is — pick Morning.
   await expect(
     blockOutTimes.getByRole("button", { name: "Tuesday" })
   ).toHaveAttribute("aria-pressed", "true");
-  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
   await blockOutTimes.getByRole("checkbox", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
@@ -74,7 +72,6 @@ test("adds several weekly blocks in one submit", async ({ page }) => {
   for (const day of ["Monday", "Tuesday", "Wednesday"]) {
     await blockOutTimes.getByRole("button", { name: day }).click();
   }
-  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click(); // off
   await blockOutTimes.getByRole("checkbox", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("checkbox", { name: "Afternoon (12pm–5pm)" })
@@ -118,6 +115,8 @@ test("stops a weekly block repeating after a number of weeks", async ({ page }) 
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
   await blockOutTimes.getByRole("button", { name: "Tuesday" }).click(); // off
   await blockOutTimes.getByRole("button", { name: "Thursday" }).click();
+  // Nothing is ticked by default, and this block is an all-day one.
+  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
   await blockOutTimes.getByLabel("Repeats").selectOption("weeks");
   // Exact: the "Repeats" <select>'s accessible name includes its option text
   // ("For a number of weeks"), which a substring match would also hit.
@@ -155,29 +154,116 @@ test("All day and Custom each lock out the other windows", async ({ page }) => {
   });
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
 
-  // All day is ticked by default, and it IS every hour — so nothing else is
-  // pickable until it's unticked.
-  await expect(allDay).toBeChecked();
-  await expect(morning).toBeDisabled();
-  await expect(custom).toBeDisabled();
+  // Nothing is ticked to start with — the window is something you say, not
+  // something assumed for you.
+  await expect(allDay).not.toBeChecked();
+  await expect(morning).not.toBeChecked();
+  await expect(custom).not.toBeChecked();
 
-  // Untick it and the part-of-day windows open up, stacking with each other.
+  // "All day" IS every hour, so it holds the selection on its own. The other
+  // rows go grey but stay live: clicking one is how you switch groups, in a
+  // single click rather than untick-then-tick.
   await allDay.click();
-  await expect(morning).toBeEnabled();
+  await expect(allDay).toBeChecked();
   await morning.click();
-  await expect(
-    blockOutTimes.getByRole("checkbox", { name: "Afternoon (12pm–5pm)" })
-  ).toBeEnabled();
+  await expect(allDay).not.toBeChecked();
+  await expect(morning).toBeChecked();
+
+  // Part-of-day windows stack with each other.
+  const afternoon = blockOutTimes.getByRole("checkbox", {
+    name: "Afternoon (12pm–5pm)",
+  });
+  await afternoon.click();
+  await expect(morning).toBeChecked();
+  await expect(afternoon).toBeChecked();
 
   // Custom is exclusive the same way, and brings its own From/To.
-  await morning.click(); // off
   await custom.click();
-  await expect(allDay).toBeDisabled();
-  await expect(morning).toBeDisabled();
+  await expect(morning).not.toBeChecked();
+  await expect(afternoon).not.toBeChecked();
   await expect(blockOutTimes.getByLabel("From")).toBeVisible();
 
   await custom.click(); // off
-  await expect(allDay).toBeEnabled();
+  await expect(custom).not.toBeChecked();
+});
+
+test("a time window toggles from anywhere in its row", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await page.goto("/schedule");
+
+  const blockOutTimes = sectionByHeading(page, "Block out times");
+  await blockOutTimes.getByRole("button", { name: "Every week" }).click();
+  const morning = blockOutTimes.getByRole("checkbox", {
+    name: "Morning (6am–12pm)",
+  });
+  await expect(morning).not.toBeChecked();
+
+  // The LABEL TEXT, not the box: these rows opt into Checkbox's `rowTarget`,
+  // which wraps the row in a real <label> so the whole thing is the target —
+  // a 16px box is a mean thing to aim at on a phone.
+  await blockOutTimes.getByText("Morning (6am–12pm)").click();
+  await expect(morning).toBeChecked();
+  await blockOutTimes.getByText("Morning (6am–12pm)").click();
+  await expect(morning).not.toBeChecked();
+});
+
+test("Confirm waits until a long summary has been scrolled to the end", async ({
+  page,
+}) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+
+  // Block a month of days straight through the API. What's being tested is the
+  // LENGTH of the summary — clicking 28 days through the calendar would be a
+  // slow way to say that. The range starts a week out (so none of it is in the
+  // past) and stays inside the request's own window, which is what decides
+  // which days the confirmation lists (2026-07-01 → 2026-12-31, see
+  // helpers.requestAvailability).
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  const from = new Date();
+  from.setDate(from.getDate() + 7);
+  const to = new Date(from);
+  to.setDate(to.getDate() + 27);
+  const res = await page.request.post("/api/availability", {
+    data: {
+      type: "SPECIFIC",
+      date: ymd(from),
+      endDate: ymd(to),
+      windows: [{ startMinute: 0, endMinute: 24 * 60 }],
+    },
+  });
+  expect(res.ok()).toBeTruthy();
+
+  await page.goto("/schedule");
+  await page.getByRole("button", { name: "Submit response" }).click();
+  const modal = page
+    .getByRole("dialog")
+    .filter({ hasText: "Submit your response?" });
+  const confirm = modal.getByRole("button", { name: "Confirm" });
+
+  // Sending 28 blocked days you haven't read is the thing being prevented.
+  await expect(confirm).toBeDisabled();
+  await expect(
+    modal.getByText("Scroll down to review everything first.")
+  ).toBeVisible();
+
+  // Scroll the modal's own body — found by which child actually overflows,
+  // rather than by a class name the layout is free to change.
+  await modal.evaluate((dialog) => {
+    const scroller = Array.from(dialog.querySelectorAll("div")).find(
+      (d) => d.scrollHeight > d.clientHeight + 1
+    );
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+  });
+
+  await expect(confirm).toBeEnabled();
+  await expect(
+    modal.getByText("Scroll down to review everything first.")
+  ).toHaveCount(0);
+
+  await modal.getByRole("button", { name: "Modify" }).click();
+  await clearBusyBlocks(page);
 });
 
 test("blocks a day by clicking it on the calendar", async ({ page }) => {

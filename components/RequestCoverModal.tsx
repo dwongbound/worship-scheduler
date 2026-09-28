@@ -5,7 +5,7 @@
 // PATCHes the assignment to SWAP_REQUESTED.
 import { useEffect, useState } from "react";
 import Button from "./common/Button";
-import LoadingDots from "./common/LoadingDots";
+import InfoTooltip from "./common/InfoTooltip";
 import Modal from "./common/Modal";
 
 export default function RequestCoverModal({
@@ -29,23 +29,30 @@ export default function RequestCoverModal({
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      // Sealed while the PATCH is in flight: ✕, Escape and the backdrop all
+      // land here, and closing mid-request would take the dots away with it.
+      onClose={busy ? () => {} : onClose}
       title="Request cover"
+      // What this does lives on the (i) beside the title rather than as a
+      // paragraph over the box: it's read once and then in the way, and the
+      // note field is the only thing here you actually act on.
+      titleAccessory={
+        <InfoTooltip
+          side="bottom"
+          text="This opens the set for any eligible teammate to take. Add a note so they know why you need cover (optional)."
+        />
+      }
       footer={
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={onClose}>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => onConfirm(reason)} disabled={busy}>
-            {busy ? <LoadingDots size="sm" label="Requesting" /> : "Request cover"}
+          <Button onClick={() => onConfirm(reason)} loading={busy}>
+            Request cover
           </Button>
         </div>
       }
     >
-      <p className="mb-3 text-sm text-gray-600 dark:text-gray-400">
-        This opens the set for any eligible teammate to take. Add a note so they
-        know why you need cover (optional).
-      </p>
       <textarea
         value={reason}
         onChange={(e) => setReason(e.target.value)}

@@ -3,9 +3,11 @@
 // <select> — whose option list the OS positions however it likes (often
 // centered over the control on macOS) — this opens a styled list *directly
 // below* the box. It also marks people who can't serve at this set's time:
-// they stay in the list (so you can see who they are) but are disabled and
-// labelled "(unavailable)", and available people are sorted to the top. People
-// marked inactive on the set's team are flagged the same way ("(inactive)").
+// they stay in the list (so you can see who they are) but are dimmed and
+// flagged with a small "unavailable" pill, and available people are sorted to
+// the top. People marked inactive on the set's team are flagged the same way.
+// The flags are PILLS rather than "(unavailable)" text on purpose: the names
+// they sit beside are long, and a parenthetical ate the room the name needed.
 //
 // Like common/Dropdown, the open list renders in a PORTAL on document.body,
 // positioned with fixed coordinates measured from the control. It has to: the
@@ -24,6 +26,7 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import Badge, { type BadgeTone } from "./common/Badge";
 
 export interface PlayerOption {
   id: string;
@@ -37,7 +40,7 @@ export interface PlayerOption {
   // shown as a muted count. Optional — callers that don't compute it omit it.
   count?: number;
   // True when picking this person here would make them an eligible musical
-  // director (an MD-capable role + they're an MD). Shows a "(MD)" hint in the
+  // director (an MD-capable role + they're an MD). Shows an "MD" pill in the
   // open list only — never on the collapsed control after selection.
   md?: boolean;
 }
@@ -56,15 +59,25 @@ interface MenuPosition {
 // edge so the list never sits flush against it.
 const MENU_GAP = 4;
 const VIEWPORT_MARGIN = 8;
+// The list is never narrower than this, whatever the control measures: names
+// here run long ("Tapestry Worship" + an "unavailable" pill), and matching a
+// narrow control's width truncated most of them. It still grows to a wider
+// control, and shrinks on a phone too narrow to hold it.
+const MENU_MIN_WIDTH = 288;
 // Below this much room, squeezing the list is worse than flipping it above the
 // control — a few visible names is not a usable picker.
 const MIN_MENU_HEIGHT = 160;
+
+// The control's default width. Exported because SetDetailModal draws read-only
+// boxes that MIRROR this control (same width, border and padding) so admin and
+// non-admin rosters line up — they have to move together.
+export const PLAYER_SELECT_WIDTH = "w-56 sm:w-64";
 
 interface PlayerSelectProps {
   // The person currently in this slot, or null for an empty slot. They're
   // excluded from `options` (they're already here), so the open list renders
   // them from this — which means the flags have to come along too, or the
-  // current pick is the one row in the list with no "(unavailable)" on it.
+  // current pick is the one row in the list with no "unavailable" pill on it.
   // Both default to "fine": omit them and the row reads as a plain name.
   selected: {
     id: string;
@@ -87,8 +100,8 @@ interface PlayerSelectProps {
   disabled?: boolean;
   // Empty slots get a dashed, muted box to read as "nobody yet".
   dashed?: boolean;
-  // Tailwind width class for the control. Defaults to a fixed w-48; grid layouts
-  // (the staged review modal) pass "w-full" to fill their column.
+  // Tailwind width class for the control. Defaults to PLAYER_SELECT_WIDTH; grid
+  // layouts (the staged review modal) pass "w-full" to fill their column.
   widthClass?: string;
   // This slot was hand-picked and is pinned against a re-run of the scheduler
   // (staged review modal). Purely cosmetic here — an indigo box, so a locked
@@ -103,7 +116,7 @@ export default function PlayerSelect({
   disabled,
   dashed,
   locked,
-  widthClass = "w-48",
+  widthClass = PLAYER_SELECT_WIDTH,
 }: PlayerSelectProps) {
   const [open, setOpen] = useState(false);
   // Type-to-search query, filtering the option list by name while open.
@@ -124,9 +137,21 @@ export default function PlayerSelect({
     // Hang below by default; flip up only when below is genuinely cramped AND
     // there's more room the other way.
     const flip = below < MIN_MENU_HEIGHT && above > below;
+    // At least MENU_MIN_WIDTH, at most what the viewport holds, and never
+    // narrower than the control it hangs off.
+    const width = Math.min(
+      Math.max(rect.width, MENU_MIN_WIDTH),
+      window.innerWidth - 2 * VIEWPORT_MARGIN
+    );
+    // Pinned to the control's left edge, nudged back on-screen when the extra
+    // width would push it off the right.
+    const left = Math.max(
+      VIEWPORT_MARGIN,
+      Math.min(rect.left, window.innerWidth - width - VIEWPORT_MARGIN)
+    );
     setPosition({
-      left: rect.left,
-      width: rect.width,
+      left,
+      width,
       ...(flip
         ? { bottom: window.innerHeight - rect.top + MENU_GAP }
         : { top: rect.bottom + MENU_GAP }),
@@ -232,16 +257,20 @@ export default function PlayerSelect({
         <ul role="listbox" className="min-h-0 flex-1 overflow-auto pb-1">
           {/* "None" and the current occupant only show on an unfiltered list. */}
           {!q && (
-            <OptionRow label="None" active={!selected} onClick={() => choose("")} />
+            <OptionRow name="None" active={!selected} onClick={() => choose("")} />
           )}
           {!q && selected && (
             <OptionRow
               // Flagged exactly like every other row, so the person already in
               // the slot reads the same way in the list as they do on the
-              // control's "unavailable" marker beside it.
-              label={`${selected.name}${
-                selected.available === false ? " (unavailable)" : ""
-              }${selected.inactive ? " (inactive)" : ""}`}
+              // control above it.
+              name={selected.name}
+              flags={
+                <FlagChips
+                  available={selected.available}
+                  inactive={selected.inactive}
+                />
+              }
               count={selected.count}
               active
               onClick={() => choose(selected.id)}
@@ -250,11 +279,16 @@ export default function PlayerSelect({
           {filtered.map((o) => (
             <OptionRow
               key={o.id}
-              // "(MD)" flags who can be the musical director here; combines
-              // with the "(unavailable)" marker when both apply.
-              label={`${o.name}${o.md ? " (MD)" : ""}${
-                o.available ? "" : " (unavailable)"
-              }${o.inactive ? " (inactive)" : ""}`}
+              name={o.name}
+              // "MD" flags who can be the musical director here; it sits
+              // alongside the unavailable/inactive pills when both apply.
+              flags={
+                <FlagChips
+                  md={o.md}
+                  available={o.available}
+                  inactive={o.inactive}
+                />
+              }
               count={o.count}
               // Unavailable/inactive people are dimmed but still selectable —
               // an admin can deliberately override and assign them anyway.
@@ -287,7 +321,7 @@ export default function PlayerSelect({
             dashed && !selected
               ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
               : locked
-                ? "border-indigo-400 bg-indigo-50 font-medium dark:border-indigo-500 dark:bg-indigo-900/40"
+                ? "border-indigo-400 bg-indigo-100 font-medium dark:border-indigo-500 dark:bg-indigo-900/40"
                 : "border-gray-300 bg-white dark:border-gray-600 dark:bg-gray-800"
           }`}
       >
@@ -297,22 +331,10 @@ export default function PlayerSelect({
             can't be read as belonging to the next thing along the row. */}
         <span className="flex min-w-0 items-center gap-1">
           <span className="truncate">{selected ? selected.name : "None"}</span>
-          {selected?.available === false && (
-            <span
-              className="shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400"
-              title="Unavailable at this set's time"
-            >
-              (unavailable)
-            </span>
-          )}
-          {selected?.inactive && (
-            <span
-              className="shrink-0 text-xs text-gray-500 dark:text-gray-400"
-              title="Paused on this team — not auto-scheduled"
-            >
-              (inactive)
-            </span>
-          )}
+          <FlagChips
+            available={selected?.available}
+            inactive={selected?.inactive}
+          />
           {selected?.tag && (
             <span className="shrink-0 text-xs font-medium text-indigo-600 dark:text-indigo-400">
               {selected.tag}
@@ -330,14 +352,18 @@ export default function PlayerSelect({
 }
 
 function OptionRow({
-  label,
+  name,
+  flags,
   active,
   disabled,
   muted,
   count,
   onClick,
 }: {
-  label: string;
+  // The name truncates on its own so the pills beside it always stay readable
+  // — a single pre-joined string would have cut them off with it.
+  name: string;
+  flags?: ReactNode;
   active?: boolean;
   disabled?: boolean;
   // Dimmed but still clickable (e.g. an unavailable person an admin may
@@ -365,7 +391,10 @@ function OptionRow({
                 : "text-gray-800 dark:text-gray-100"
           }`}
       >
-        <span className="truncate">{label}</span>
+        <span className="flex min-w-0 items-center gap-1">
+          <span className="truncate">{name}</span>
+          {flags}
+        </span>
         {count !== undefined && count > 0 && (
           <span
             className="shrink-0 text-xs text-gray-400 dark:text-gray-500"
@@ -378,6 +407,54 @@ function OptionRow({
         )}
       </button>
     </li>
+  );
+}
+
+// The pills that ride beside a name, wherever one is drawn: on the control, on
+// the selected row, and on every option. Small (Badge's "sm") so several fit
+// without crowding out the name they describe, and toned by meaning — amber for
+// a clash, gray for paused, indigo for the MD hint.
+function FlagChips({
+  md,
+  available,
+  inactive,
+}: {
+  md?: boolean;
+  // Undefined means "not known / not flagged" — only an explicit false is a
+  // clash, which is what lets `selected` omit the field entirely.
+  available?: boolean;
+  inactive?: boolean;
+}) {
+  const chips: { tone: BadgeTone; label: string; title: string }[] = [];
+  if (md) {
+    chips.push({
+      tone: "indigo",
+      label: "MD",
+      title: "Picking them here makes them the musical director",
+    });
+  }
+  if (available === false) {
+    chips.push({
+      tone: "amber",
+      label: "unavailable",
+      title: "Unavailable at this set's time",
+    });
+  }
+  if (inactive) {
+    chips.push({
+      tone: "gray",
+      label: "inactive",
+      title: "Paused on this team — not auto-scheduled",
+    });
+  }
+  return (
+    <>
+      {chips.map((c) => (
+        <Badge key={c.label} tone={c.tone} size="sm" title={c.title}>
+          {c.label}
+        </Badge>
+      ))}
+    </>
   );
 }
 

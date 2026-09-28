@@ -3,13 +3,6 @@
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
-// The selectable windows on the Calendar tab.
-export const STAT_WINDOWS = [
-  { label: "1 week", days: 7 },
-  { label: "1 month", days: 30 },
-  { label: "3 months", days: 90 },
-] as const;
-
 /**
  * Count how many of the given set start times fall within the next
  * `days` days from `now` (inclusive of now, exclusive of past sets).

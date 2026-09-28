@@ -123,6 +123,10 @@ function SetManagerView() {
   // Id of the row currently updating (shows inline dots), and a flag for the
   // bulk "confirm all" button — so a mutation never remounts the whole page.
   const [busyId, setBusyId] = useState<string | null>(null);
+  // WHICH action that row is running. The row keeps its buttons while one is in
+  // flight and the pressed button wears the dots, so the action area doesn't
+  // collapse into a lone spinner (and back) on every click.
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
   // Navbar org switcher: "all" or one org — filters both sections. Rows show
   // an org chip while several orgs are mixed together.
@@ -166,6 +170,7 @@ function SetManagerView() {
   // Accept or reject a targeted swap proposed to me.
   async function respondSwap(proposalId: string, action: "accept" | "reject") {
     setBusyId(proposalId);
+    setBusyAction(action);
     try {
       await fetch(`/api/swaps/proposals/${proposalId}/respond`, {
         method: "POST",
@@ -175,17 +180,20 @@ function SetManagerView() {
       await reload();
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   }
 
   // Withdraw a swap I proposed (restores both slots to their prior status).
   async function cancelSwap(proposalId: string) {
     setBusyId(proposalId);
+    setBusyAction("cancelSwap");
     try {
       await fetch(`/api/swaps/proposals/${proposalId}`, { method: "DELETE" });
       await reload();
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   }
 
@@ -313,6 +321,7 @@ function SetManagerView() {
   // `reason` is the optional cover note (requestSwap only).
   async function act(assignmentId: string, action: string, reason?: string) {
     setBusyId(assignmentId);
+    setBusyAction(action);
     try {
       await fetch(`/api/assignments/${assignmentId}`, {
         method: "PATCH",
@@ -322,6 +331,7 @@ function SetManagerView() {
       await reload();
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   }
 
@@ -337,11 +347,13 @@ function SetManagerView() {
 
   async function takeSwap(assignmentId: string) {
     setBusyId(assignmentId);
+    setBusyAction("take");
     try {
       await fetch(`/api/swaps/${assignmentId}/take`, { method: "POST" });
       await reload();
     } finally {
       setBusyId(null);
+      setBusyAction(null);
     }
   }
 
@@ -456,12 +468,7 @@ function SetManagerView() {
         />
         {visibleOpenSwaps.length === 0 &&
           visibleIncoming.length === 0 &&
-          inFlight.length === 0 && (
-            <p className="text-sm text-gray-500">
-              Nothing in flight — no open cover requests, swaps, or approvals
-              waiting.
-            </p>
-          )}
+          inFlight.length === 0 && <EmptySection />}
 
         {/* Targeted swaps someone proposed to me — accept takes their set and
             hands them mine; reject leaves both unchanged. */}
@@ -572,6 +579,7 @@ function SetManagerView() {
                 <AssignmentRow
                   a={a}
                   busy={busyId === a.id}
+                  busyAction={busyId === a.id ? busyAction : null}
                   showOrgChips={showOrgChips}
                   onDetails={() => setDetailSetId(a.set.id)}
                   onRequestCover={() => setCoverForId(a.id)}
@@ -603,9 +611,7 @@ function SetManagerView() {
           )}
         </SectionHeading>
         {pending.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            Nothing to confirm — you&rsquo;re all caught up.
-          </p>
+          <EmptySection />
         ) : (
           <ul className="space-y-3">
             {pending.map((a) => (
@@ -613,6 +619,7 @@ function SetManagerView() {
                 <AssignmentRow
                   a={a}
                   busy={busyId === a.id}
+                  busyAction={busyId === a.id ? busyAction : null}
                   showOrgChips={showOrgChips}
                   onDetails={() => setDetailSetId(a.set.id)}
                   onRequestCover={() => setCoverForId(a.id)}
@@ -640,7 +647,7 @@ function SetManagerView() {
           )}
         </SectionHeading>
         {confirmed.length === 0 ? (
-          <p className="text-sm text-gray-500">No confirmed sets in this window.</p>
+          <EmptySection />
         ) : (
           <ul className="space-y-3">
             {confirmed.map((a) => (
@@ -648,6 +655,7 @@ function SetManagerView() {
                 <AssignmentRow
                   a={a}
                   busy={busyId === a.id}
+                  busyAction={busyId === a.id ? busyAction : null}
                   showOrgChips={showOrgChips}
                   onDetails={() => setDetailSetId(a.set.id)}
                   onRequestCover={() => setCoverForId(a.id)}
@@ -685,15 +693,24 @@ function SetManagerView() {
         open={coverForId !== null}
         onClose={() => setCoverForId(null)}
         busy={busyId === coverForId}
+        // Closes only once the PATCH is through, so the dots stay in the
+        // dialog you pressed rather than on a row that reappears behind it.
         onConfirm={async (reason) => {
           const id = coverForId;
           if (!id) return;
-          setCoverForId(null);
           await act(id, "requestSwap", reason);
+          setCoverForId(null);
         }}
       />
     </div>
   );
+}
+
+// What an empty section says. One word, because the section heading beside it
+// already carries a 0 — a sentence explaining what isn't there was three lines
+// of reassurance the count had already given.
+function EmptySection() {
+  return <p className="text-sm text-gray-500">None.</p>;
 }
 
 // A section label plus whatever controls belong to that section. Deliberately
@@ -722,7 +739,7 @@ function SectionHeading({
           LONGEST title sits in the label cell of every heading, so the rule
           measures itself against that rather than a hardcoded width. Rename a
           section and the alignment still holds. */}
-      <h2 className="inline-flex items-center gap-4 border-b border-gray-300 pb-1.5 text-sm font-semibold uppercase tracking-wider text-gray-500 dark:border-gray-600 dark:text-gray-400">
+      <h2 className="inline-flex items-center gap-4 border-b border-gray-300 pb-1.5 text-sm font-semibold uppercase tracking-wider text-gray-700 dark:border-gray-600 dark:text-gray-400">
         {/* Sizer and real title stack in one grid cell — the cell is as wide as
             the wider of the two, which is always the sizer. */}
         <span className="grid">
@@ -736,7 +753,7 @@ function SectionHeading({
         </span>
         {/* min-w so a one- and a two-digit count are the same width, and the
             rules still end together. */}
-        <span className="inline-flex min-w-7 shrink-0 items-center justify-center rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+        <span className="inline-flex min-w-7 shrink-0 items-center justify-center rounded-full bg-gray-100 px-1.5 py-0.5 text-xs font-semibold tabular-nums text-gray-600 dark:bg-gray-700 dark:text-gray-300">
           {count ?? 0}
         </span>
       </h2>
@@ -750,6 +767,7 @@ function SectionHeading({
 function AssignmentRow({
   a,
   busy,
+  busyAction,
   showOrgChips,
   onDetails,
   onRequestCover,
@@ -759,6 +777,8 @@ function AssignmentRow({
 }: {
   a: ApiMyAssignment;
   busy: boolean;
+  // The action this row is running, or null. Drives WHICH button shows dots.
+  busyAction: string | null;
   showOrgChips: boolean;
   onDetails: () => void;
   onRequestCover: () => void;
@@ -804,9 +824,7 @@ function AssignmentRow({
         className="flex items-center gap-2"
         onClick={(e) => e.stopPropagation()}
       >
-        {busy ? (
-          <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
-        ) : a.status === "PENDING_APPROVAL" ? (
+        {a.status === "PENDING_APPROVAL" ? (
           // Taken/accepted, now frozen until an admin approves it.
           <span className="text-xs text-gray-500 dark:text-gray-400">
             Waiting for admin approval
@@ -819,6 +837,7 @@ function AssignmentRow({
               size="sm"
               variant="secondary"
               onClick={() => onCancelSwap(a.pendingSwap!.proposalId)}
+              loading={busyAction === "cancelSwap"}
             >
               Cancel swap
             </Button>
@@ -831,11 +850,25 @@ function AssignmentRow({
           <>
             {a.status !== "SWAP_REQUESTED" ? (
               <>
-                <Button size="sm" variant="secondary" onClick={onRequestCover}>
+                {/* No dots here: the reason prompt stays up through the
+                    PATCH and wears them itself. */}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={onRequestCover}
+                  disabled={busy}
+                >
                   Request cover
                 </Button>
-                {/* Targeted trade with a specific person's set. */}
-                <Button size="sm" variant="secondary" onClick={onSwap}>
+                {/* Targeted trade with a specific person's set. The request
+                    itself is made inside the swap modal, so this one only ever
+                    goes quiet while another action on the row runs. */}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={onSwap}
+                  disabled={busy}
+                >
                   Swap
                 </Button>
               </>
@@ -844,13 +877,19 @@ function AssignmentRow({
                 size="sm"
                 variant="secondary"
                 onClick={() => onAct(a.id, "cancelSwap")}
+                loading={busyAction === "cancelSwap"}
               >
                 Cancel cover request
               </Button>
             )}
             {/* Confirm sits last so the primary action is rightmost. */}
             {a.status === "PENDING" && (
-              <Button size="sm" onClick={() => onAct(a.id, "confirm")}>
+              <Button
+                size="sm"
+                onClick={() => onAct(a.id, "confirm")}
+                loading={busyAction === "confirm"}
+                disabled={busy}
+              >
                 Confirm
               </Button>
             )}

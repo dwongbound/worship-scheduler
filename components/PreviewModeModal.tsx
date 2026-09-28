@@ -44,9 +44,17 @@ export default function PreviewModeModal({
   const [picked, setPicked] = useState<string[]>([]);
   // Tints are a per-open choice, so a fresh dialog starts uncoloured.
   const [colors, setColors] = useState<SetTypeColors>({});
+  // Re-default when the set of types CHANGES, not when the array does. The
+  // caller derives this list from the calendar's sets on every render, so a
+  // fresh array arrives constantly — depending on its identity re-ticked
+  // everything on any re-render of the page behind the dialog, and an untick
+  // wouldn't survive the preview's own fetch landing a moment later.
+  const typeKey = setTypes.map((t) => t.id).join("|");
   useEffect(() => {
     if (open) setPicked(setTypes.map((t) => t.id));
-  }, [open, setTypes]);
+    // setTypes is deliberately not a dep — typeKey stands in for its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, typeKey]);
   useEffect(() => {
     if (open) setColors({});
   }, [open]);

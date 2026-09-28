@@ -16,6 +16,7 @@ import { DAY_LABELS } from "@/lib/constants";
 import { DEFAULT_TEAM_ROLES } from "@/lib/teamRoles";
 import { minutesToTimeLabel, timeStringToMinutes } from "@/lib/dates";
 import type { ApiAdminUser, ApiTeam, ApiWeeklyReminder } from "@/lib/types";
+import { fetchSlackStatus } from "@/lib/slackStatus";
 
 // Days ordered Monday→Sunday (DAY_LABELS is indexed 0=Sun) for the picker.
 const DAY_OPTIONS = [1, 2, 3, 4, 5, 6, 0];
@@ -69,10 +70,7 @@ export default function TeamMembersModal({
       setOrgSlackConnected(false);
       return;
     }
-    fetch(`/api/slack/status?orgId=${team.orgId}`)
-      .then((r) => r.json())
-      .then((d) => setOrgSlackConnected(!!d.enabled))
-      .catch(() => setOrgSlackConnected(false));
+    fetchSlackStatus(team.orgId).then((s) => setOrgSlackConnected(s.enabled));
   }, [team?.id, team?.slackChannelId, team?.orgId]);
 
   // ── This team's weekly Slack reminders (moved here from Org settings) ──

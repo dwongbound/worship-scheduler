@@ -1,11 +1,14 @@
 "use client";
-// Interactive phone tab-swipe. The current page follows the finger as you drag
+// Interactive tab-swipe, wherever the app-style bottom bar is shown (phones
+// and tablets — see lib/layout.ts). The current page follows the finger as you drag
 // left/right; the navbar highlight previews the tab you're heading toward. On
 // release it either commits (page finishes sliding out, the next one fades in)
 // or snaps back. The nav bars live outside this wrapper, so they never move —
-// only the content does.
+// only the content does (which also means this element must never widen the
+// page: see the clip on it at the bottom of the file).
 import { usePathname } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { isBottomNavWidth } from "@/lib/layout";
 import { consumeNavDirection } from "@/lib/navDirection";
 import { useSwipe } from "./SwipeProvider";
 
@@ -61,6 +64,9 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
     let mode: "none" | "deciding" | "drag" = "none";
     let dx = 0;
     let preview: number | null = null;
+    // Bumped whenever a drag starts, so a pending settle (below) knows it has
+    // been overtaken and leaves the new drag's transform alone.
+    let settle = 0;
 
     const clear = () => {
       mode = "none";
@@ -69,7 +75,9 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
     };
 
     const onStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1 || window.innerWidth >= 640) {
+      // Only where the app-style bottom bar is: swiping between tabs pairs
+      // with that bar, so the two share one width (lib/layout.ts).
+      if (e.touches.length !== 1 || !isBottomNavWidth()) {
         clear();
         return;
       }
@@ -96,6 +104,7 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
           return;
         }
         mode = "drag";
+        settle++;
         el.style.transition = "none";
       }
       // We own this horizontal gesture now — stop the browser from also
@@ -145,10 +154,22 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
         const href = hrefs[neighbor];
         window.setTimeout(() => navigateRef.current(href), OUT_MS);
       } else {
-        // Snap back.
+        // Snap back — and then drop the inline transform entirely, rather than
+        // leaving the `translateX(0)` it lands on. `translateX(0)` is not
+        // `none`: it leaves this element a containing block for every
+        // `position: fixed` descendant, so a modal opened after any
+        // non-committing swipe centered itself in THIS box (below the header,
+        // as tall as the content) instead of on the screen — and its backdrop
+        // covered only that box. Clearing it hands modals the viewport back.
         setPreviewIndex(null);
         el.style.transition = `transform ${OUT_MS}ms ease-out`;
         el.style.transform = "translateX(0)";
+        const mine = ++settle;
+        window.setTimeout(() => {
+          if (mine !== settle) return; // a new drag already owns the element
+          el.style.transition = "";
+          el.style.transform = "";
+        }, OUT_MS);
       }
       clear();
     };
@@ -167,5 +188,20 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
     };
   }, [tabsRef, activeIndexRef, navigateRef, setPreviewIndex]);
 
-  return <div ref={elRef}>{children}</div>;
+  // `overflow-x: clip` is load-bearing, not cosmetic. Dragging toward the
+  // PREVIOUS tab translates this box to the right, which in LTR is scrollable
+  // page overflow — and a horizontally-scrolled page slides the `fixed` nav
+  // bars out of view with it (iOS anchors fixed boxes to the document's left
+  // edge, so the header appears to slide and the bottom pill leaves the
+  // screen). Dragging the other way overflows to the LEFT, which is never
+  // scrollable, which is why only one direction looked broken.
+  // `body { overflow-x: clip }` (globals.css) aims at the same thing but can't
+  // finish the job: mid-drag this element has a transform, so it becomes the
+  // containing block for any `position: fixed` descendant, and such a
+  // descendant escapes an ancestor clip that sits OUTSIDE its containing
+  // block. Clipping here — on the transformed element itself — is inside it.
+  // Nothing visible changes: the clip box travels with the content it clips.
+  // Paired with the default `overflow-y: visible`, so no scroll container is
+  // created and `position: sticky` inside pages keeps working.
+  return <div ref={elRef} className="overflow-x-clip">{children}</div>;
 }

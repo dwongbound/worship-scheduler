@@ -7,8 +7,6 @@
 
 export type Theme = "light" | "dark" | "system";
 
-export const THEMES: Theme[] = ["light", "dark", "system"];
-
 const STORAGE_KEY = "theme";
 
 export function getStoredTheme(): Theme {

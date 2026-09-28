@@ -10,6 +10,7 @@ import { cookies } from "next/headers";
 import { claimPlaceholder, findUserByEmail } from "./accountClaim";
 import { DUPLICATE_NAME_COOKIE, nameConflictRedirect } from "./nameConflict";
 import { findNameConflicts } from "./nameConflictStore";
+import { linkSlackIdForUser } from "./slack";
 import { prisma } from "./prisma";
 
 // Google sign-in is optional: it's only enabled when its OAuth credentials
@@ -165,6 +166,18 @@ export const authOptions: NextAuthOptions = {
           select: { orgId: true, isAdmin: true },
         });
         token.memberships = rows;
+      }
+
+      // Signing in is our one reliable chance to learn this person's Slack
+      // member id without asking them for it: look their email up in every org
+      // whose bot is installed (users.lookupByEmail) and cache what comes back
+      // on the membership. Only on FIRST sign-in (`user` is set), only for
+      // memberships that don't have an id yet, and awaited so a serverless
+      // invocation can't be frozen mid-flight — orgs without Slack cost no
+      // network call at all. A miss (their Slack account doesn't exist yet) is
+      // simply retried on their next login.
+      if (user && token.id) {
+        await linkSlackIdForUser(token.id as string).catch(() => {});
       }
       return token;
     },

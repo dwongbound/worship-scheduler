@@ -5,7 +5,8 @@
 // fixed footer that never scrolls with (or gets overlapped by) the body. This
 // matters for the tall "full" workspace, where a sticky-inside-a-scrollbox
 // footer would leave a gap the body content peeks through.
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface ModalProps {
   open: boolean;
@@ -28,7 +29,19 @@ interface ModalProps {
   size?: "lg" | "wide" | "xl" | "full";
   // Optional action bar pinned to the bottom of the panel, outside the scroll
   // area (e.g. Apply / Discard). Buttons here stay put while the body scrolls.
-  footer?: ReactNode;
+  //
+  // Pass a FUNCTION instead of a node to have it told whether the body has been
+  // read to the end — `atEnd` is true once the scroll box is at its bottom, and
+  // true from the start when there's nothing to scroll. It's how a confirm
+  // action waits for a long summary to actually be seen (see the availability
+  // page's submit dialog) without punishing the short case.
+  footer?: ReactNode | ((state: { atEnd: boolean }) => ReactNode);
+  // Optional controls in the HEADER, to the left of the ✕ — for a switch that
+  // reframes the whole body rather than acting on part of it (the staged
+  // schedule's grouping toggle). They stay put while the body scrolls, which
+  // is the point: in a tall workspace a control parked at the top of the
+  // scroll area is gone the moment you start reading.
+  headerActions?: ReactNode;
 }
 
 // Panel classes per size. "full" trades the centered card for a tall, wide
@@ -40,6 +53,11 @@ const SIZE_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
   xl: "max-w-3xl max-h-[88vh]",
   full: "max-w-none h-[96vh]",
 };
+
+// useLayoutEffect warns when React renders this on the server; fall back to
+// useEffect there (the pre-paint measurement it buys us is client-only anyway).
+// The same shim SwipePager uses.
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 // ── Background scroll lock ────────────────────────────────────────────────
 // Shared by every Modal, because more than one is open at a time all the time
@@ -91,6 +109,7 @@ export default function Modal({
   children,
   size = "lg",
   footer,
+  headerActions,
 }: ModalProps) {
   // Close on Escape while open.
   useEffect(() => {
@@ -108,9 +127,46 @@ export default function Modal({
     return lockBodyScroll();
   }, [open]);
 
+  // Has the body been scrolled to its end? Only tracked for a footer that asked
+  // (the function form) — every other modal pays nothing for this.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const gated = typeof footer === "function";
+  const [atEnd, setAtEnd] = useState(true);
+
+  // Measured after every render rather than on scroll alone: the content can
+  // change height under us (a list filtering down, an error appearing) and
+  // that shouldn't leave the footer waiting for a scroll that's no longer
+  // possible. Before paint, so the footer never flashes the wrong state.
+  useIsoLayoutEffect(() => {
+    if (!open || !gated) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    // 1px of slack: fractional layout means scrollTop can land just shy of the
+    // bottom even when the box is visibly scrolled all the way down.
+    const measure = () =>
+      setAtEnd(el.scrollHeight - el.scrollTop - el.clientHeight <= 1);
+    measure();
+    el.addEventListener("scroll", measure, { passive: true });
+    // Catches the panel being resized (rotation, a phone keyboard opening)
+    // without a scroll or a re-render to go with it.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      ro.disconnect();
+    };
+  });
+
   if (!open) return null;
 
-  return (
+  // Rendered into <body>, the way Dropdown/Toast/PlayerSelect do it, so the
+  // dialog is centered on the SCREEN rather than inside whatever the page
+  // happens to be. `position: fixed` is only relative to the viewport while no
+  // ancestor has a transform (or filter, or will-change) — and this app has
+  // two that come and go under the content: the tab-swipe pager and
+  // pull-to-refresh. Left in the tree, a modal opened at the wrong moment
+  // centers itself in that box instead, with a backdrop that covers only it.
+  const overlay = (
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center ${PADDING_CLASSES[size]}`}
     >
@@ -127,7 +183,7 @@ export default function Modal({
         className={`relative flex w-full flex-col overflow-hidden rounded-xl
           bg-white shadow-xl dark:bg-gray-800 ${SIZE_CLASSES[size]}`}
       >
-        <div className="flex items-start justify-between gap-4 px-6 pb-3 pt-6">
+        <div className="flex items-start justify-between gap-4 px-6 pb-2 pt-6">
           {/* Title with the optional subtitle inline (wraps under it when the
               panel is narrow). */}
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-0.5">
@@ -144,27 +200,42 @@ export default function Modal({
               </p>
             )}
           </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
-          >
-            ✕
-          </button>
+          {/* shrink-0 on the pair: the title is what gives way on a narrow
+              panel, never the controls. */}
+          <div className="flex shrink-0 items-center gap-3">
+            {headerActions}
+            <button
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* min-h-0 lets this flex child actually shrink so it (not the panel)
-            scrolls. */}
-        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+            scrolls. The 4px of `pt` is borrowed from the header's `pb` (the gap
+            below the title is unchanged at 12px): this is a scroll container,
+            so it clips at its own edge, and with no top padding a first child's
+            focus ring — a textarea's, say — lost its top edge. */}
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-1">
           {children}
         </div>
 
         {footer && (
           <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
-            {footer}
+            {typeof footer === "function" ? footer({ atEnd }) : footer}
           </div>
         )}
       </div>
     </div>
   );
+
+  // No document during SSR; the portal is a client-only concern (an open modal
+  // renders nothing on the server, and a portal contributes no nodes here, so
+  // hydration sees the same empty slot either way).
+  return typeof document === "undefined"
+    ? null
+    : createPortal(overlay, document.body);
 }

@@ -2,7 +2,21 @@
 // Labeled select dropdown, same label-wrapping pattern as Input. The native
 // dropdown arrow is hidden (appearance-none) and replaced with a custom
 // chevron so its spacing from the edge is consistent across browsers.
+//
+// `className` lands on the <select>, which is `w-full` inside a positioned
+// wrapper that owns the chevron. So constrain the WIDTH on a wrapper of your
+// own (`<div className="max-w-xs"><Select …/></div>`) — narrowing the select
+// through className shrinks the box but leaves the chevron at the old right
+// edge, floating in space.
 import { ReactNode, SelectHTMLAttributes } from "react";
+
+// 16px on phones, 14px from `sm` up. Under 16px, iOS Safari zooms the whole
+// page in when you focus a field and never zooms back out — so the phone size
+// is a bug fix, not a type choice, and it belongs here rather than being
+// remembered field by field. Skipped when the caller sets its own size: a
+// compact control in a dense toolbar says `text-xs` and means it.
+const FIELD_TEXT = "text-base sm:text-sm";
+const hasOwnSize = (className: string) => /\btext-(xs|sm|base|lg|\[)/.test(className);
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label: string;
@@ -32,7 +46,8 @@ export default function Select({
       </span>
       <div className="relative">
         <select
-          className={`w-full appearance-none rounded-lg border border-gray-300 bg-white px-3 py-2 pr-10 text-sm
+          className={`w-full appearance-none rounded-lg border border-gray-300 bg-white px-3 py-2 pr-10
+            ${hasOwnSize(className) ? "" : FIELD_TEXT}
             focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
             dark:border-gray-600 dark:bg-gray-800 ${className}`}
           {...props}

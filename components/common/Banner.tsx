@@ -57,7 +57,7 @@ export default function Banner({
               href={href}
               onClick={onLinkClick}
               aria-label="Go there"
-              className="ml-1.5 whitespace-nowrap text-base font-bold hover:opacity-70"
+              className="ml-1.5 whitespace-nowrap text-sm font-bold hover:opacity-70"
             >
               →
             </Link>

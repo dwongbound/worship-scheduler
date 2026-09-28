@@ -17,12 +17,42 @@ Vitest (unit) · Playwright (e2e)
 docker compose --profile dev up
 # → http://localhost:3000
 
+# 3. First run only — load the demo data (see "Seeding" below):
+docker compose exec worship-scheduler-dev npm run db:seed
+
 # — OR — db in docker, app on your host (needs node 20):
 docker compose --profile dev up -d db-dev
 npm install
 npm run db:push && npm run db:seed
 npm run dev
 ```
+
+### Seeding / resetting the dev database
+
+`docker compose --profile dev up` **never seeds**. It syncs the schema and
+starts the server, and leaves whatever is in your database alone — so bringing
+the dev environment down and up keeps the orgs, sets and people you were
+working with.
+
+Seeding is one command, and you run it when you want it:
+
+```bash
+# Wipe the dev database and reload the demo data (orgs, users, teams, sets):
+docker compose exec worship-scheduler-dev npm run db:seed
+
+# (Running the app on your host instead of in docker? Just `npm run db:seed`.)
+```
+
+> ⚠️ `npm run db:seed` **deletes every row first** — that's how you get a clean
+> slate. Anything you created in dev is gone. There's no confirmation prompt,
+> so don't reach for it out of habit.
+>
+> It protects itself against the worst accident: `prisma/seed.ts` refuses to
+> run unless the target is plainly a local dev/test database. A remote host, a
+> database whose name contains `prod`, or `NODE_ENV=production` each stop it
+> before a single row is deleted. (`SEED_FORCE=1` overrides that — it exists
+> for deliberately reseeding a remote *dev* branch, and is never right for
+> production.)
 
 If `db-dev` exits with a PostgreSQL 18 message about existing data in
 `/var/lib/postgresql/data`, reset only the local dev database volume and
@@ -47,7 +77,7 @@ These are the profiles you run **on your own machine** — the hosted
 
 | Profile | DB service | DB port | App port | Notes                                 |
 | ------- | ---------- | ------- | -------- | ------------------------------------- |
-| `dev`   | `db-dev`   | 5432    | 3000     | hot reload, seeded demo data          |
+| `dev`   | `db-dev`   | 5432    | 3000     | hot reload; seed by hand (`db:seed`)  |
 | `test`  | `db-test`  | 5433    | 3100     | tmpfs db, runs unit + e2e             |
 | `prod`  | `db-prod`  | —       | 3000     | built image, exercises `env/prod.env` |
 

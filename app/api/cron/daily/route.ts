@@ -11,6 +11,10 @@
 //   4. Daily digests: DM each person their morning "here's your day" summary,
 //      one per org they belong to (sendDailyDigests) — skipped for anyone with
 //      nothing to do in that org.
+//   5. Data retention: delete history past each workspace's own cutoff
+//      (runDuePrunes). Weekly per org, not daily — see lib/retention
+//      PRUNE_INTERVAL_DAYS — so a bulk delete doesn't run every night for
+//      workspaces that generate a handful of rows a week.
 //
 // Vercel's free tier only runs crons once per day, so the per-reminder `minute`
 // is best-effort (stored for display; the daily run fires them all at once).
@@ -21,6 +25,7 @@
 // (Vercel sends this automatically); otherwise the route is open (dev/local).
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { runDuePrunes } from "@/lib/retentionStore";
 import {
   runDueGroupChats,
   archiveDueGroupChats,
@@ -84,6 +89,12 @@ export async function GET(req: NextRequest) {
   // group chats, and independently of everything above.
   const digests = await sendDailyDigests(now);
 
+  // Retention last: it's the only destructive job here, and running it after
+  // the messaging work means a slow Slack pass can't leave a sweep half done
+  // if the platform cuts the invocation short. Whatever misses its turn is
+  // simply due again tomorrow.
+  const pruned = await runDuePrunes(now);
+
   return NextResponse.json({
     due: due.length,
     sent,
@@ -91,5 +102,6 @@ export async function GET(req: NextRequest) {
     groupChats,
     archived,
     digests,
+    pruned,
   });
 }

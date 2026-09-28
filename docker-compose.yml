@@ -60,9 +60,12 @@ services:
     depends_on:
       db-dev:
         condition: service_healthy
-    # Install deps, generate the client, sync the schema, seed demo data
-    # (idempotent), run dev server.
-    command: sh -c "npm install && npx prisma generate && npx prisma db push && npx prisma db seed && npx next dev -H 0.0.0.0"
+    # Install deps, generate the client, sync the schema, run the dev server.
+    # Deliberately NO seed step: prisma/seed.ts wipes every table, so running it
+    # on boot threw away your dev data on every `up`. Seed by hand when you want
+    # demo data (or a clean slate) — see the README:
+    #   docker compose exec worship-scheduler-dev npm run db:seed
+    command: sh -c "npm install && npx prisma generate && npx prisma db push && npx next dev -H 0.0.0.0"
 
   # ---- test ----------------------------------------------------------------
   db-test:

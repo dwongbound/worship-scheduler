@@ -13,18 +13,24 @@ import SetFormFields, { SetFormState, emptySetForm } from "./SetFormFields";
 import { useOrgs } from "./OrgProvider";
 import { DAY_LABELS } from "@/lib/constants";
 import { minutesToTimeInput, timeStringToMinutes } from "@/lib/dates";
-import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import { orgHeaders } from "@/lib/api";
 import type { ApiSetTemplate, ApiTeam } from "@/lib/types";
 
 export default function TemplateModal({
   open,
   template,
+  teams,
   onClose,
   onCreated,
 }: {
   open: boolean;
   // The row being edited, or null/undefined to add new ones.
   template?: ApiSetTemplate | null;
+  // This admin org's teams, passed down rather than fetched: the Create page
+  // already holds exactly this list (same endpoint, same org) for its own
+  // sections, so asking for it again here was a second request for a list
+  // sitting one component up. null while the page is still loading them.
+  teams: ApiTeam[] | null;
   onClose: () => void;
   onCreated: () => void | Promise<void>;
 }) {
@@ -34,19 +40,13 @@ export default function TemplateModal({
   const [days, setDays] = useState<number[]>([]);
   const [form, setForm] = useState<SetFormState>(emptySetForm);
   const [busy, setBusy] = useState(false);
-  const [teams, setTeams] = useState<ApiTeam[]>([]);
-  // Which org the cached team list belongs to (refetched after an org switch).
-  const [teamsOrg, setTeamsOrg] = useState("");
-
   // Reset each time the modal opens — to the edited row's values, or to a
-  // blank form. Teams are fetched on the first open per admin org (they rarely
-  // change) and the picker defaults to the first one.
+  // blank form, with the team picker defaulting to the first team.
   // Deps are [open, template] on purpose: adding `teams` would re-run this
-  // after the fetch lands and wipe whatever the admin already typed.
+  // when the page's list lands and wipe whatever the admin already typed.
   useEffect(() => {
     if (!open || !adminOrgId) return;
     setDays(template ? [template.dayOfWeek] : []);
-    const cached = teamsOrg === adminOrgId;
     setForm(
       template
         ? {
@@ -59,17 +59,18 @@ export default function TemplateModal({
             capacities: template.slotCapacities,
             teamId: template.teamId ?? "",
           }
-        : { ...emptySetForm(), teamId: cached ? teams[0]?.id ?? "" : "" }
+        : { ...emptySetForm(), teamId: teams?.[0]?.id ?? "" }
     );
-    if (!cached) {
-      fetchJsonArray<ApiTeam>(`/api/teams?orgId=${adminOrgId}`).then((ts) => {
-        setTeams(ts);
-        setTeamsOrg(adminOrgId);
-        setForm((f) => (f.teamId ? f : { ...f, teamId: ts[0]?.id ?? "" }));
-      });
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, adminOrgId, template]);
+
+  // The page's list can land after the modal is already open (first paint of
+  // the Create tab). Fill the picker's default then — and only then, so it
+  // never overwrites a team the admin has chosen.
+  useEffect(() => {
+    if (!open) return;
+    setForm((f) => (f.teamId ? f : { ...f, teamId: teams?.[0]?.id ?? "" }));
+  }, [open, teams]);
 
   if (!open) return null;
 
@@ -146,7 +147,7 @@ export default function TemplateModal({
         <SetFormFields
           state={form}
           onChange={setForm}
-          teams={teams}
+          teams={teams ?? []}
           disabled={busy}
           labelRequired
           scheduleField={

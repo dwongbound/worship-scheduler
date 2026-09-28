@@ -5,7 +5,11 @@
 //   • `digestUpcomingDays` — how far ahead this org's daily digest looks;
 //   • `notificationPrefs` — which of the bot's personal DMs this org sends. The
 //     body carries only the switches that changed; they're merged over what's
-//     stored (see lib/notificationPrefs.ts).
+//     stored (see lib/notificationPrefs.ts);
+//   • `retentionMonths` — how long this workspace keeps its history. Saving a
+//     SHORTER window is destructive on the next weekly sweep, which is why the
+//     settings page makes an admin confirm it against real counts first
+//     (GET .../retention-preview).
 // Each is applied only when present, so the settings page can send one field
 // without disturbing the other.
 // Org-admin gated via requireOrgAdminFor, so a regular org admin can manage
@@ -18,6 +22,7 @@ import {
   DIGEST_UPCOMING_DAYS_MAX,
   DIGEST_UPCOMING_DAYS_MIN,
 } from "@/lib/constants";
+import { isRetentionMonths } from "@/lib/retention";
 import {
   mergeNotificationPrefs,
   parseNotificationPrefs,
@@ -32,6 +37,8 @@ const ORG_FIELDS = {
   joinKey: true,
   digestUpcomingDays: true,
   notificationPrefs: true,
+  retentionMonths: true,
+  lastPrunedAt: true,
 } as const;
 
 export async function GET(
@@ -68,6 +75,7 @@ export async function PATCH(
     joinKey?: string;
     digestUpcomingDays?: number;
     notificationPrefs?: NotificationPrefs;
+    retentionMonths?: number;
   } = {};
 
   // rotateKey:true mints a fresh random key; or set an explicit one. Absent
@@ -95,6 +103,18 @@ export async function PATCH(
       );
     }
     data.digestUpcomingDays = days;
+  }
+
+  // Retention window. Only the offered windows are accepted — a hand-rolled
+  // "1" here would quietly delete almost everything on the next sweep.
+  if (body.retentionMonths !== undefined) {
+    if (!isRetentionMonths(body.retentionMonths)) {
+      return NextResponse.json(
+        { error: "That isn't one of the retention windows." },
+        { status: 400 }
+      );
+    }
+    data.retentionMonths = body.retentionMonths;
   }
 
   // Notification switches. Only the ones that changed travel, so they're merged

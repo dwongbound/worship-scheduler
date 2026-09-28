@@ -178,7 +178,7 @@ export default function WeekStrip({
                   }}
                 />
               )}
-              <span className="relative text-[11px] font-medium uppercase opacity-70">
+              <span className="relative text-xs font-medium uppercase opacity-70">
                 {DAY_LABELS[date.getDay()].slice(0, 1)}
               </span>
               <span
@@ -195,7 +195,7 @@ export default function WeekStrip({
 
       {/* What the colours mean, and what a tap does — the strip has no room to
           spell either out on the cells themselves. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-gray-100 px-3 py-2 text-[11px] text-gray-500 dark:border-gray-700 dark:text-gray-400">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-gray-100 px-3 py-2 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
         <span className="flex items-center gap-1">
           <i className="h-2 w-2 rounded-full bg-rose-400" /> All day
         </span>

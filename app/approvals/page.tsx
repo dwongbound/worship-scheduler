@@ -9,6 +9,7 @@ import { useSession } from "next-auth/react";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
+import InfoTooltip from "@/components/common/InfoTooltip";
 import LoadingDots from "@/components/common/LoadingDots";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
@@ -67,17 +68,16 @@ export default function ApprovalsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
+      {/* The explanation lives in the (i), the way every other section's does:
+          it's read once, and after that it's three lines between you and the
+          list you came for. */}
+      <div className="flex items-center gap-1.5">
         <h1 className="text-2xl font-bold">Approvals</h1>
-        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-          Cover-takes and swaps waiting on your sign-off. Approve to finalize, or
-          reject to undo (a swap goes back to the original people; a cover
-          re-opens for someone else).
-        </p>
+        <InfoTooltip text="Cover-takes and swaps waiting on your sign-off. Approve to finalize, or reject to undo (a swap goes back to the original people; a cover re-opens for someone else)." />
       </div>
 
       {items.length === 0 ? (
-        <p className="text-gray-500">Nothing waiting for approval.</p>
+        <p className="text-gray-500">None.</p>
       ) : (
         <ul className="space-y-3">
           {items.map((item) => (

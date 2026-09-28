@@ -183,6 +183,8 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
   await blockOutTimes.getByRole("button", { name: "Specific times" }).click();
   await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
   await pickSingleDay(page);
+  // No time window is ticked by default — say all day explicitly.
+  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
   await blockOutTimes.getByRole("button", { name: "Block these times" }).click();
 
   // It lands in the My availability list as an all-day entry.
@@ -233,13 +235,11 @@ test("phone: adds and deletes a recurring weekly block via the single-panel adde
   // column instead of the sm two-column grid.
   const blockOutTimes = sectionByHeading(page, "Block out times");
   await blockOutTimes.getByRole("button", { name: "Every week" }).click();
-  // Days are a multi-select strip and times a checkbox list: Tuesday is on
-  // by default, so just
-  // swap the default "All day" window for Morning.
+  // Days are a multi-select strip and times a checkbox list: Tuesday is on by
+  // default, but no time window is — pick Morning.
   await expect(
     blockOutTimes.getByRole("button", { name: "Tuesday" })
   ).toHaveAttribute("aria-pressed", "true");
-  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
   await blockOutTimes.getByRole("checkbox", { name: "Morning (6am–12pm)" }).click();
   await blockOutTimes
     .getByRole("button", { name: "Add recurring block" })
@@ -297,6 +297,8 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
   await blockOutTimes.getByRole("button", { name: "Specific times" }).click();
   await blockOutTimes.getByLabel("Dates to block", { exact: true }).click();
   await pickSingleDay(page);
+  // No time window is ticked by default — say all day explicitly.
+  await blockOutTimes.getByRole("checkbox", { name: "All day" }).click();
   await blockOutTimes.getByRole("button", { name: "Block these times" }).click();
 
   // Re-opening the picker shows a red "full day" dot on today (the dayMarker).
