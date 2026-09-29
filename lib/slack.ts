@@ -53,27 +53,34 @@ import { SLACK_FORMAT } from "./integrations/slack";
 // Slack was the only option, and it means the same thing now.
 export { isOrgMessagingConnected as isOrgSlackConnected };
 
+/** What one attempted link did: cached an id, harmlessly did nothing, or broke. */
+type LinkOutcome = "linked" | "skipped" | "failed";
+
 /**
  * Resolve one membership's member id from the person's email and cache it on the
- * row. Returns true if it linked. The (orgId, slackUserId) unique guard can trip
- * when two app accounts share one integration account — a silent skip, never a
- * thrown error, so a sweep over many rows keeps going.
+ * row. The (orgId, slackUserId) unique guard can trip when two app accounts
+ * share one integration account — a "skipped", never a thrown error, so a sweep
+ * over many rows keeps going.
  */
 async function linkMembershipByEmail(
   membershipId: string,
   messaging: MessagingTransport,
   email: string
-): Promise<boolean> {
+): Promise<LinkOutcome> {
   // Not every provider can do this at all — Discord exposes no member email at
   // any permission level. Checking the capability keeps "this provider can't"
   // distinct from "this person isn't in the workspace".
-  if (!messaging.capabilities.emailLookup) return false;
-  const id = await messaging.lookupUserIdByEmail(email);
-  if (!id) return false;
+  if (!messaging.capabilities.emailLookup) return "skipped";
+  const lookup = await messaging.lookupUserIdByEmail(email);
+  // A failure is reported UP rather than swallowed: the sweep has to be able to
+  // tell "we asked about everyone and matched nobody" from "we never got an
+  // answer", because only the second one is worth interrupting an admin over.
+  if (lookup.kind === "failed") return "failed";
+  if (lookup.kind === "not-found") return "skipped";
   return prisma.orgMembership
-    .update({ where: { id: membershipId }, data: { slackUserId: id } })
-    .then(() => true)
-    .catch(() => false);
+    .update({ where: { id: membershipId }, data: { slackUserId: lookup.userId } })
+    .then<LinkOutcome>(() => "linked")
+    .catch<LinkOutcome>(() => "skipped");
 }
 
 /**
@@ -94,6 +101,13 @@ export type SlackSyncBatch = {
   matched: number;
   /** How many of the org's people hold a member id right now (the "x" of x/y). */
   synced: number;
+  /**
+   * Lookups that got no answer at all in this batch — a rejected request, a bad
+   * token, a rate limit we couldn't ride out. Non-zero means the sweep is
+   * BROKEN, not that nobody matched, and the caller must say so rather than
+   * reporting a clean run.
+   */
+  failed: number;
   /** No more people after this batch. */
   done: boolean;
 };
@@ -131,11 +145,21 @@ export async function syncOrgSlackIds(
   ]);
 
   let matched = 0;
+  let failed = 0;
   for (const row of rows) {
     // No email = nothing to look up. They still count as processed: the bar
     // walks the whole org, not just the part of it we can search.
     if (!row.user.email) continue;
-    if (await linkMembershipByEmail(row.id, messaging, row.user.email)) matched++;
+    const outcome = await linkMembershipByEmail(row.id, messaging, row.user.email);
+    if (outcome === "linked") matched++;
+    // Stop at the first failure instead of grinding through the rest. When the
+    // lookup is broken — a rejected request, a bad token — it is broken for
+    // everyone, and walking the whole org to say so just makes the admin wait
+    // longer for the same bad news.
+    if (outcome === "failed") {
+      failed++;
+      break;
+    }
   }
 
   // Counted after the writes, so the number the admin reads at the end includes
@@ -150,6 +174,7 @@ export async function syncOrgSlackIds(
     processed: Math.min(offset + rows.length, total),
     matched,
     synced,
+    failed,
     done: rows.length < limit,
   };
 }
