@@ -69,6 +69,16 @@ Playwright (e2e) · Docker.
   assets); the favicon is auto-served by Next.js from `app/icon.svg`.
 - Prefer extending `components/common/` over one-off styling. API routes
   check the session; admin routes re-check `isAdmin` against the db.
+- **Commit messages:** a succinct one-line subject, then a blank line, then a
+  short bulleted body — one bullet per change, each naming the key files or
+  areas touched. Keep it tight; no prose paragraphs. Example:
+  ```
+  Schedule drafts, Slack account sync, guided schedule tour
+
+  - Save/restore staged auto-generate plans as drafts (DraftsModal, lib/drafts.ts)
+  - Sync org member Slack IDs by email lookup (SlackSyncModal, slack/sync API)
+  - First-run guided tour + help modal for the schedule flow
+  ```
 
 ## Gotchas
 

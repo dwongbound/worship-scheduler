@@ -20,6 +20,7 @@ import { DISCORD_FORMAT } from "@/lib/integrations/discord/format";
 import {
   MessagingTransport,
   type Attempt,
+  type EmailLookup,
   type MessagingCapabilities,
   type IntegrationName,
   type DmTarget,
@@ -212,13 +213,37 @@ describe("SlackTransport.setGroupChatTopic", () => {
 describe("SlackTransport.lookupUserIdByEmail", () => {
   it("returns the member id the workspace knows for that email", async () => {
     const fetchMock = mockFetchSequence({ ok: true, user: { id: "U7" } });
-    expect(await slack().lookupUserIdByEmail("a@b.com")).toBe("U7");
+    expect(await slack().lookupUserIdByEmail("a@b.com")).toEqual({
+      kind: "found",
+      userId: "U7",
+    });
     expect(fetchMock.mock.calls[0][0]).toContain("users.lookupByEmail");
   });
 
-  it("returns null when the email isn't in the workspace", async () => {
+  it("reports a genuine absence as not-found, not as a failure", async () => {
     mockFetchSequence({ ok: false, error: "users_not_found" });
-    expect(await slack().lookupUserIdByEmail("a@b.com")).toBeNull();
+    expect(await slack().lookupUserIdByEmail("a@b.com")).toEqual({
+      kind: "not-found",
+    });
+  });
+
+  it("reports a REJECTED lookup as a failure, carrying Slack's reason", async () => {
+    // The distinction the sweep lives on. `invalid_arguments` is the request
+    // being wrong, not the person being absent — read as "not in the workspace"
+    // it turns a wholly broken sync into a clean run where nobody matched.
+    mockFetchSequence({ ok: false, error: "invalid_arguments" });
+    expect(await slack().lookupUserIdByEmail("a@b.com")).toEqual({
+      kind: "failed",
+      error: "invalid_arguments",
+    });
+  });
+
+  it("reports a bad token as a failure too", async () => {
+    mockFetchSequence({ ok: false, error: "invalid_auth" });
+    expect(await slack().lookupUserIdByEmail("a@b.com")).toEqual({
+      kind: "failed",
+      error: "invalid_auth",
+    });
   });
 
   it("declares the capability, which is what Discord will not be able to do", () => {
@@ -325,8 +350,9 @@ class FakeTransport extends MessagingTransport {
   async setGroupChatTopic() {
     return false; // threads have no topic
   }
-  async lookupUserIdByEmail() {
-    return null; // not possible on this provider
+  async lookupUserIdByEmail(): Promise<EmailLookup> {
+    // Not possible on this provider — which is a "not-found", not a failure.
+    return { kind: "not-found" };
   }
 }
 
@@ -418,5 +444,54 @@ describe("splitMessage", () => {
 
   it("hard-splits a single line too long to fit", () => {
     expect(splitMessage("abcdefg", 3)).toEqual(["abc", "def", "g"]);
+  });
+});
+
+describe("SlackTransport request encoding", () => {
+  // This is the case the mocks used to wave through. Every test here scripts a
+  // response and asserts on the RESULT, so a request Slack would reject looked
+  // exactly like one it would accept — which is how a lookup that never worked
+  // in production sat behind a green suite.
+  it("sends users.lookupByEmail form-encoded, not as JSON", async () => {
+    const fetchMock = mockFetchSequence({ ok: true, user: { id: "U123" } });
+
+    expect(await slack().lookupUserIdByEmail("kate@example.com")).toEqual({
+      kind: "found",
+      userId: "U123",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://slack.com/api/users.lookupByEmail");
+    // Slack parses form parameters only for this method. Handed JSON it sees no
+    // arguments at all and answers `invalid_arguments` — which reads like a bad
+    // email address rather than a bad request, so it hid for a long time.
+    expect(init.headers["Content-Type"]).toMatch(/application\/x-www-form-urlencoded/);
+    expect(init.body).toBe("email=kate%40example.com");
+    // The token still travels in the header, not the body.
+    expect(init.headers.Authorization).toBe("Bearer xoxb-test-token");
+  });
+
+  it("still sends everything else as JSON", async () => {
+    const fetchMock = mockFetchSequence({ ok: true, channel: { id: "C1" } });
+
+    await slack().setGroupChatTopic("C1", "Sunday Morning");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://slack.com/api/conversations.setTopic");
+    expect(init.headers["Content-Type"]).toMatch(/application\/json/);
+    expect(JSON.parse(init.body)).toEqual({
+      channel: "C1",
+      topic: "Sunday Morning",
+    });
+  });
+
+  it("form-encodes special characters rather than pasting them in raw", async () => {
+    // A + in an address is a real and common thing, and is exactly what naive
+    // string concatenation turns into a space.
+    const fetchMock = mockFetchSequence({ ok: true, user: { id: "U9" } });
+
+    await slack().lookupUserIdByEmail("kate+worship@example.com");
+
+    expect(fetchMock.mock.calls[0][1].body).toBe("email=kate%2Bworship%40example.com");
   });
 });

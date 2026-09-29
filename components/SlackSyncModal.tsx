@@ -17,6 +17,9 @@ type Batch = {
   processed: number;
   matched: number;
   synced: number;
+  // Lookups that got no answer at all. Non-zero means the sweep is broken, not
+  // that nobody matched — see the check in run().
+  failed: number;
   done: boolean;
 };
 
@@ -96,6 +99,23 @@ export default function SlackSyncModal({
       }
 
       if (cancelled.current) return;
+
+      // A 200 is not the same as a working sync. The lookups happen one per
+      // person INSIDE the request, and each can be rejected on its own — so a
+      // batch can come back perfectly well-formed having achieved nothing. The
+      // server counts those and stops at the first; reporting them as a clean
+      // run is how a wholly broken sweep used to look like a successful one
+      // where nobody happened to match.
+      if (batch.failed > 0) {
+        setError(
+          "Error trying to sync contacts — Slack rejected the lookups. " +
+            "Nobody was changed past this point. Check the workspace is still " +
+            "connected, then try again."
+        );
+        setPhase("error");
+        return;
+      }
+
       found += batch.matched;
       offset = batch.processed;
       setProcessed(batch.processed);

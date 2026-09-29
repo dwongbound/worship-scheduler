@@ -48,7 +48,11 @@ describe("linkSlackIdForUser", () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("users.lookupByEmail");
-    expect(JSON.parse(init.body)).toEqual({ email: "sam@example.com" });
+    // Form-encoded, not JSON: this method reads form parameters only, and a
+    // JSON body makes it answer `invalid_arguments`. Asserting JSON here is
+    // what let that ship — the request the test approved was one Slack would
+    // always have rejected.
+    expect(init.body).toBe("email=sam%40example.com");
     expect(membershipUpdate).toHaveBeenCalledWith({
       where: { id: "m1" },
       data: { slackUserId: "U9" },
