@@ -83,16 +83,42 @@ export async function pickSingleDay(page: Page) {
 }
 
 /**
- * Suppress the first-run guided tour — its full-screen overlay otherwise
- * intercepts clicks in every test. addInitScript runs before page scripts on
- * each navigation, so the "seen" flag is set for the whole session. Any test
- * that doesn't go through `login()` (e.g. a custom sign-up flow) must call
- * this itself before its first navigation.
+ * Suppress every first-run tour — the app-wide walkthrough AND the review
+ * workspace's own, either of which otherwise opens over the page and eats the
+ * clicks a test is trying to make. addInitScript runs before page scripts on
+ * each navigation, so the "seen" flags are set for the whole session. Any test
+ * that doesn't go through `login()` (e.g. a custom sign-up flow) must call this
+ * itself before its first navigation.
  */
 export async function suppressGuidedTour(page: Page) {
   await page.addInitScript(() => {
     try {
       localStorage.setItem("guided-tour-seen", "1");
+      localStorage.setItem("schedule-tour-seen:generate", "1");
+      localStorage.setItem("schedule-tour-seen:preview", "1");
+    } catch {
+      /* private mode — ignore */
+    }
+  });
+}
+
+/**
+ * Undo the review-workspace half of the above, for the one spec that is about
+ * the tour opening by itself. Init scripts run in the order they were added, so
+ * calling this AFTER `login()` clears what login's script just set — on every
+ * navigation, which is the only way to beat a script that re-runs on each one.
+ */
+export async function allowScheduleTours(page: Page) {
+  await page.addInitScript(() => {
+    try {
+      // ONCE, not on every navigation: the point of the spec that calls this is
+      // that the tour records itself as seen and stops coming back, and a
+      // script that re-cleared the flag on each page load would wipe exactly
+      // the thing under test.
+      if (sessionStorage.getItem("e2e-schedule-tours-allowed")) return;
+      sessionStorage.setItem("e2e-schedule-tours-allowed", "1");
+      localStorage.removeItem("schedule-tour-seen:generate");
+      localStorage.removeItem("schedule-tour-seen:preview");
     } catch {
       /* private mode — ignore */
     }

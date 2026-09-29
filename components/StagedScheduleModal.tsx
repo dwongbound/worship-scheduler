@@ -46,14 +46,18 @@
 //     own ⟳ is the fill affordance here, and there's no scheduler baseline
 //     behind a real calendar for a whole-plan re-roll to balance against.
 import {
+  useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from "react";
 import Modal from "./common/Modal";
+import ScheduleHelpModal from "./ScheduleHelpModal";
 import Button from "./common/Button";
+import Input from "./common/Input";
 import Badge from "./common/Badge";
 import LoadingDots from "./common/LoadingDots";
 import ScrollRow from "./common/ScrollRow";
@@ -85,14 +89,27 @@ import {
   isActiveForSet,
   loadRows,
   lockedCounts,
+  copySet,
   designateMDs,
   maxLoad,
+  pasteSet,
+  popUndo,
   previousMDForTeam,
+  pushUndo,
+  type PasteUndo,
+  type SetClipboard,
   totalConflicts,
   totalLocked,
   totalUnfillable,
   unfillableRoles,
 } from "@/lib/stagedPlan";
+import {
+  AUTOSAVE_INTERVAL_MS,
+  draftLabel,
+  MAX_DRAFTS,
+  type DraftSummary,
+} from "@/lib/drafts";
+import { hasSeenTour, markTourSeen, scheduleTourKey } from "@/lib/tourSeen";
 import {
   DEFAULT_PLAN_METRIC,
   type LoadMetric,
@@ -128,6 +145,30 @@ interface StagedScheduleModalProps {
   // admin tabs' org, which is the one the Create tab generates under.
   orgId?: string;
   // Commit: "Apply schedule" in the generate flow, "Save Changes" in a
+  // Save this plan as a draft. Generate flow only — the calendar's Preview Mode
+  // mirrors real sets, so there is nothing to park. `name` is null for the
+  // once-a-minute autosave and for a deliberate save left unnamed; `silent` marks
+  // the autosave, which must never surface an error or a spinner.
+  // Resolves to whether the plan actually reached the server — the autosave
+  // swallows its own failures, so this is the only way the "last saved" stamp
+  // can avoid reporting a save that never happened.
+  onSaveDraft?: (
+    plan: StagedPlan,
+    name: string | null,
+    silent: boolean
+  ) => Promise<boolean>;
+  // The draft this preview was opened FROM, if any: its name prefills the save
+  // dialog, and the autosave writes back into it rather than the recovery slot.
+  openedDraft?: { id: string; name: string | null } | null;
+  // A plan is being generated right now. The workspace opens straight away and
+  // wears a skeleton until it lands, rather than leaving the options dialog up
+  // and then swapping one modal for another.
+  loading?: boolean;
+  // The org's saved drafts, and a way to remove one. Used only when a save is
+  // refused for want of a slot: "delete one first" is the whole remedy, so it
+  // has to be doable right there rather than somewhere else.
+  drafts?: DraftSummary[];
+  onDeleteDraft?: (id: string) => Promise<void>;
   // preview (where the caller diffs the returned sets against what it opened
   // the preview with).
   onApply: (sets: StagedSet[]) => void;
@@ -156,6 +197,24 @@ function stagingKey(set: StagedSet): string {
   return set.stagingId ?? set.startsAt;
 }
 
+// "09/29/26 11:47 PM" — the viewer's own wall clock, since the only question a
+// last-saved stamp answers is "how long ago was that, for me?". The locale is
+// pinned to en-US so the order stays mm/dd/yy rather than following the
+// browser's, which would make the same string mean two different dates.
+function draftStamp(d: Date): string {
+  const date = d.toLocaleDateString("en-US", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "2-digit",
+  });
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${date} ${time}`;
+}
+
 export default function StagedScheduleModal({
   plan,
   users,
@@ -165,6 +224,11 @@ export default function StagedScheduleModal({
   mode = "generate",
   orgId: orgIdProp,
   onApply,
+  onSaveDraft,
+  openedDraft,
+  loading = false,
+  drafts = [],
+  onDeleteDraft,
   onClose,
 }: StagedScheduleModalProps) {
   const preview = mode === "preview";
@@ -173,8 +237,11 @@ export default function StagedScheduleModal({
   // org, the one the Create tab generated this plan under.
   const { adminOrgId } = useOrgs();
   const orgId = orgIdProp ?? adminOrgId;
-  // Editable copy of the proposal — reset whenever a fresh plan arrives.
-  const [sets, setSets] = useState<StagedSet[]>([]);
+  // Editable copy of the proposal — reset whenever a fresh plan arrives (see the
+  // render-phase adoption below). Seeded from the plan rather than from [], so a
+  // mount that already HAS one is correct on its very first render instead of
+  // painting an empty workspace and filling it in afterwards.
+  const [sets, setSets] = useState<StagedSet[]>(plan?.sets ?? []);
   // Who the pointer is resting on, so every OTHER slot holding that person
   // lights up too. A plan is a wall of names across many cards, and the question
   // you keep asking is "where else is this person playing?" — this answers it
@@ -183,6 +250,56 @@ export default function StagedScheduleModal({
   // behind `lg:` in PlayerSelect, since it needs a pointer and a screen wide
   // enough to show several sets at once.
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
+  // Copy/paste: which card is selected, and what's on the clipboard. Selection
+  // is by index into `sets` — the same handle every edit here already uses.
+  const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
+  const [clipboard, setClipboard] = useState<SetClipboard | null>(null);
+  // The "Copied!" / "Pasted!" / undo pill currently playing over a card.
+  // `seq` only exists to key the element: without it React reuses the node and
+  // a second copy onto the same card would never replay the animation.
+  const [flash, setFlash] = useState<{
+    idx: number;
+    kind: "copied" | "pasted" | "undone";
+    seq: number;
+  } | null>(null);
+  const showFlash = useCallback(
+    (idx: number, kind: "copied" | "pasted" | "undone") =>
+      setFlash((prev) => ({ idx, kind, seq: (prev?.seq ?? 0) + 1 })),
+    []
+  );
+  // Snapshots taken immediately before each paste, oldest first. The rules for
+  // pushing and popping this live in lib/stagedPlan.ts — see PasteUndo.
+  const [undoStack, setUndoStack] = useState<PasteUndo[]>([]);
+  // The guided tour. It is the ONLY explanation of this screen — the paragraph
+  // of instructions that used to sit at the top, and the shortcut hint under
+  // it, are gone — so it runs unasked the first time a browser gets here.
+  // Per mode: the generate flow and Preview Mode are different screens.
+  const [helpOpen, setHelpOpen] = useState(false);
+  const tourKey = scheduleTourKey(preview ? "preview" : "generate");
+  useEffect(() => {
+    if (!plan || hasSeenTour(tourKey)) return;
+    setHelpOpen(true);
+  }, [plan, tourKey]);
+  const closeHelp = useCallback(() => {
+    markTourSeen(tourKey);
+    setHelpOpen(false);
+  }, [tourKey]);
+  // The Save Draft dialog, and the name being typed into it. Prefilled from the
+  // draft this preview came from, so re-saving keeps its name unless you change
+  // it. Seeded on open rather than held in sync, or typing would fight the prop.
+  const [savingDraft, setSavingDraft] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  // Which draft the in-dialog trash is asking about. A second click confirms —
+  // deleting is irreversible, but stacking a third modal over the save prompt
+  // just to ask would be worse than asking in place.
+  const [confirmingDraftId, setConfirmingDraftId] = useState<string | null>(null);
+  const [deletingDraftId, setDeletingDraftId] = useState<string | null>(null);
+  // When the plan last actually reached the server, autosaves included. A
+  // historical fact rather than a freshness claim, so it is never cleared by a
+  // later edit — the next autosave, a minute out at most, moves it on.
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   // How the cards are grouped (see the header comment). Per-session, not
   // persisted — it's a reading preference for this one review.
   const [view, setView] = useState<"type" | "chrono">("type");
@@ -191,10 +308,22 @@ export default function StagedScheduleModal({
   // and the ✕/backdrop), which is why it wraps onClose rather than sitting on
   // the button.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
-  useEffect(() => {
+
+  // Adopt a new plan DURING RENDER, not in an effect.
+  //
+  // As an effect this ran one render too late, so the first paint after a plan
+  // arrived still measured the previous (empty) `sets` — which is what put a
+  // fully-drawn "0 sets · 0 assignments" workspace on screen between the
+  // skeleton and the real thing. Setting state during render is React's
+  // supported way to adjust state when a prop changes: it re-runs this
+  // component immediately, before anything is committed to the DOM, so the
+  // empty in-between state is never painted at all.
+  const [adoptedPlan, setAdoptedPlan] = useState(plan);
+  if (plan !== adoptedPlan) {
+    setAdoptedPlan(plan);
     setSets(plan?.sets ?? []);
     setConfirmDiscard(false);
-  }, [plan]);
+  }
 
   const nameOf = useMemo(() => {
     const byId = new Map(users.map((u) => [u.id, u.name]));
@@ -242,6 +371,40 @@ export default function StagedScheduleModal({
   ): string | null =>
     previousMDForTeam(earlier, teamId, plan?.baseline?.previousMDByTeam);
 
+  // Autosave the open preview once a minute, so a closed tab or a crash doesn't
+  // cost the work. It writes into the draft this preview came from when there is
+  // one, and otherwise into the caller's rolling recovery slot — which is why it
+  // doesn't consume one of the five keep-slots. Silent by design: an autosave
+  // that interrupts you to report a network blip is worse than one that misses.
+  //
+  // Both the plan and the save function are read through REFS rather than being
+  // named as dependencies. That matters: with `sets` in the deps the interval
+  // was torn down and restarted on every single edit, so a plan being worked on
+  // steadily — exactly the one worth protecting — kept resetting its own timer
+  // and never reached a save at all.
+  const saveDraftRef = useRef(onSaveDraft);
+  saveDraftRef.current = onSaveDraft;
+  const autosavePlanRef = useRef<StagedPlan | null>(null);
+  autosavePlanRef.current = plan ? { ...plan, sets } : null;
+
+  // Only whether autosaving is possible, so the timer isn't restarted by the
+  // caller handing down a new function identity.
+  const canAutosave = !preview && !!onSaveDraft;
+  useEffect(() => {
+    if (!plan || !canAutosave) return;
+    const timer = setInterval(() => {
+      const snapshot = autosavePlanRef.current;
+      if (!snapshot) return;
+      void saveDraftRef.current
+        ?.(snapshot, null, true)
+        .then((landed) => {
+          if (landed) setDraftSavedAt(draftStamp(new Date()));
+        })
+        .catch(() => {});
+    }, AUTOSAVE_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [plan, canAutosave]);
+
   // Every user's unavailability flattened into scheduler rules once, so both the
   // dropdowns and the conflict markers can tell who can't serve at a set's time.
   const rules = useMemo<UnavailabilityRule[]>(
@@ -268,6 +431,88 @@ export default function StagedScheduleModal({
   );
   const catalogFor = (set: StagedSet): TeamRoleDef[] =>
     (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
+
+
+  // Copy a selected set's shape + roster with ⌘/Ctrl+C, stamp it onto another
+  // with ⌘/Ctrl+V, and take back the last paste with ⌘/Ctrl+Z. Works in both
+  // modes: a generated plan and the calendar's Preview Mode are the same editor
+  // over the same cards.
+  //
+  // Bound on the document rather than the cards, because a card is a plain div
+  // — making each one focusable just to receive a key event would put every set
+  // into the tab order ahead of the controls inside it.
+  useEffect(() => {
+    if (!plan) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      if (key !== "c" && key !== "v" && key !== "z") return;
+      // Never hijack these from something the user is typing in — the MD
+      // picker, the draft-name field, a role's number box — where the browser's
+      // own copy/paste/undo is what's wanted.
+      const el = e.target as HTMLElement | null;
+      if (el?.closest("input, textarea, select, [contenteditable='true']")) return;
+
+      // Undo answers to the PLAN, not to the selection: by the time you want a
+      // paste back you may well have clicked the card away.
+      if (key === "z") {
+        if (undoStack.length === 0) return;
+        e.preventDefault();
+        const undone = popUndo(undoStack, sets);
+        setUndoStack(undone.stack);
+        if (!undone.ok) return;
+        setSets(undone.sets);
+        showFlash(undone.idx, "undone");
+        return;
+      }
+
+      if (selectedIdx === null) return;
+      const source = sets[selectedIdx];
+      if (!source) return;
+
+      if (key === "c") {
+        e.preventDefault();
+        // Resolved against the team catalog, so the clipboard carries the
+        // set's EFFECTIVE shape rather than its stored override — see copySet.
+        setClipboard(
+          copySet(
+            source,
+            resolveTeamCapacities(catalogFor(source), source.slotCapacities)
+          )
+        );
+        showFlash(selectedIdx, "copied");
+        return;
+      }
+
+      if (!clipboard) return;
+      e.preventDefault();
+      // Re-derive MDs afterwards: pasteSet clears the target's director (the
+      // roster it belonged to just went away), and this settles it from the new
+      // roster under the same no-two-in-a-row rule. Computed here rather than
+      // in a functional update because the undo entry has to hold the exact
+      // arrays on both sides of the change.
+      const next = designateMDs(
+        sets.map((s, i) => (i === selectedIdx ? pasteSet(s, clipboard) : s)),
+        { isMD: isMdOf, seed: plan.baseline?.previousMDByTeam }
+      );
+      setUndoStack((stack) =>
+        pushUndo(stack, { idx: selectedIdx, before: sets, after: next })
+      );
+      setSets(next);
+      showFlash(selectedIdx, "pasted");
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [plan, sets, selectedIdx, clipboard, catalogFor, isMdOf, undoStack, showFlash]);
+
+  // A fresh plan is a fresh editor — nothing carried over is still meaningful,
+  // least of all an undo history pointing at sets that are gone.
+  useEffect(() => {
+    setSelectedIdx(null);
+    setClipboard(null);
+    setUndoStack([]);
+    setFlash(null);
+  }, [plan]);
 
   // The candidate pool both fills run over (the whole plan, and one card).
   // Inactive memberships are dropped, so neither can propose someone paused on
@@ -353,7 +598,36 @@ export default function StagedScheduleModal({
     [sets, users, rules, catalogs]
   );
 
-  if (!plan) return null;
+  // Nothing to show yet. While a run is in flight that's the skeleton; the rest
+  // of the time this modal simply isn't open.
+  //
+  // Every frame-shaping prop here mirrors the real workspace below — size,
+  // headerActions, footer — so the panel that opens is the SAME panel, at the
+  // same size, and the plan fills in where the grey was. Without size="full"
+  // this fell back to the default centred card and read as a second, smaller
+  // modal flashing past on the way.
+  if (!plan) {
+    if (!loading) return null;
+    return (
+      <Modal
+        open
+        onClose={onClose}
+        title={preview ? "Schedule preview" : "Review generated schedule"}
+        size="full"
+        headerActions={<SkeletonBlock className="h-8 w-44 rounded-lg" />}
+        footer={
+          <div className="flex w-full items-center justify-end gap-2">
+            <SkeletonBlock className="mr-auto h-9 w-20 rounded-md" />
+            <SkeletonBlock className="h-9 w-24 rounded-md" />
+            <SkeletonBlock className="h-9 w-20 rounded-md" />
+            <SkeletonBlock className="h-9 w-32 rounded-md" />
+          </div>
+        }
+      >
+        <WorkspaceSkeleton />
+      </Modal>
+    );
+  }
 
   // Group the staged sets for the card layout — by set type, or by the day
   // they fall on. Either way sets are already in date order, so insertion
@@ -398,6 +672,27 @@ export default function StagedScheduleModal({
   // shown in the summary so it's clear nothing existing is recreated.
   const existingCount = sets.filter((s) => s.existing).length;
   const newCount = sets.length - existingCount;
+  // The one-line tally above the plan, assembled as plain sentences and joined
+  // with "·". Written out longhand on purpose: as inline JSX this was three
+  // nested conditionals that nobody could read at a glance.
+  // Only deliberate drafts occupy one of the org's slots, so only they are
+  // worth offering to delete when a save is refused for want of one.
+  const keptDrafts = drafts.filter((draft) => !draft.isRecovery);
+
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const summaryParts: string[] = [plural(sets.length, "set")];
+  if (preview) {
+    summaryParts.push(`${plural(totalAssignments, "assignment")} already on the calendar`);
+  } else {
+    summaryParts.push(plural(totalAssignments, "assignment"));
+    if (existingCount > 0) {
+      const exist = existingCount === 1 ? "exists" : "exist";
+      summaryParts.push(`${newCount} new, ${existingCount} already ${exist} and will be filled`);
+    }
+    if (plan?.skipped) {
+      summaryParts.push(`${plural(plan.skipped, "already-staffed set")} left untouched`);
+    }
+  }
 
   // ── Roster edits (all local until Apply) ──────────────────────────────
   const updateSet = (idx: number, next: (s: StagedSet) => StagedSet) =>
@@ -734,7 +1029,12 @@ export default function StagedScheduleModal({
     preview && !dirty ? onClose() : setConfirmDiscard(true);
 
   // Nothing to review — everything in the window was already staffed.
-  if (sets.length === 0) {
+  //
+  // Asked of the PLAN, not of the staged copy: `sets` is filled by an effect,
+  // so for one render after a plan arrives it is still empty, and reading it
+  // here flashed "Nothing to schedule in this window" in front of every
+  // successful generate before the real workspace appeared.
+  if (plan.sets.length === 0) {
     return (
       <Modal open onClose={onClose} title={title}>
         <p className="text-sm text-gray-600 dark:text-gray-400">
@@ -794,73 +1094,91 @@ export default function StagedScheduleModal({
         </div>
       }
       footer={
-        // Preview mode has nothing to commit, so its footer is the one way
-        // out; the generate flow keeps Discard beside Apply.
-        preview ? (
-          // Same two-button shape as the generate flow: back out, or commit.
-          // Save is dead until something has actually changed, so a preview
-          // opened just to read can't write anything.
-          <>
-            <Button variant="secondary" onClick={requestClose} disabled={busy}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => onApply(sets)}
-              disabled={busy || !dirty}
-              title={dirty ? undefined : "Nothing has been changed yet"}
-            >
-              {busy ? <LoadingDots size="sm" /> : "Save Changes"}
-            </Button>
-          </>
-        ) : (
-          <>
-            <Button
-              variant="secondary"
-              onClick={requestClose}
-              disabled={busy}
-            >
-              Discard
-            </Button>
-            <Button onClick={() => onApply(applySets())} disabled={busy}>
-              {busy ? <LoadingDots size="sm" /> : "Apply schedule"}
-            </Button>
-          </>
-        )
+        <div className="w-full">
+          <div className="flex items-center justify-end gap-2">
+            {/* Preview mode has nothing to park, so its footer is the plain
+                back-out/commit pair; the generate flow adds Save Draft and pushes
+                Discard away to the far left. Help sits immediately before the
+                commit button in both. */}
+            {preview ? (
+              // Same two-button shape as the generate flow: back out, or commit.
+              // Save is dead until something has actually changed, so a preview
+              // opened just to read can't write anything.
+              <>
+                <Button variant="secondary" onClick={requestClose} disabled={busy}>
+                  Cancel
+                </Button>
+                <HelpButton onClick={() => setHelpOpen(true)} />
+                <Button
+                  onClick={() => onApply(sets)}
+                  disabled={busy || !dirty}
+                  title={dirty ? undefined : "Nothing has been changed yet"}
+                >
+                  {busy ? <LoadingDots size="sm" /> : "Save Changes"}
+                </Button>
+              </>
+            ) : (
+              <>
+                {/* Throwing the plan away is the one destructive act here, so it's
+                    red — and `mr-auto` banishes it to the far left of the footer's
+                    justify-end row, well clear of the two buttons that keep the
+                    work. */}
+                <Button
+                  variant="danger"
+                  className="mr-auto"
+                  onClick={requestClose}
+                  disabled={busy}
+                >
+                  Discard
+                </Button>
+                {/* Parking the plan is a different act from committing it, so it
+                    sits apart from Apply rather than beside Discard as a variant
+                    of backing out. */}
+                {onSaveDraft && (
+                  <>
+                    {/* Sits on the buttons' own line, immediately left of the one
+                        it reports on. The autosave is otherwise entirely invisible,
+                        so this is the only evidence that the work is being kept —
+                        which is why it reports the last save rather than
+                        disappearing on the next edit. */}
+                    {draftSavedAt && (
+                      <span className="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                        Draft last saved at {draftSavedAt}
+                      </span>
+                    )}
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setDraftName(openedDraft?.name ?? "");
+                        setDraftError(null);
+                        setConfirmingDraftId(null);
+                        setSavingDraft(true);
+                      }}
+                      disabled={busy}
+                    >
+                      Save Draft
+                    </Button>
+                  </>
+                )}
+                <HelpButton onClick={() => setHelpOpen(true)} />
+                <Button onClick={() => onApply(applySets())} disabled={busy}>
+                  {busy ? <LoadingDots size="sm" /> : "Apply schedule"}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
       }
     >
-      {preview ? (
-        <p className="text-sm text-gray-600 dark:text-gray-400">
-          Showing <strong>{sets.length}</strong> upcoming set
-          {sets.length === 1 ? "" : "s"} already on the calendar, with{" "}
-          <strong>{totalAssignments}</strong> assignment
-          {totalAssignments === 1 ? "" : "s"}. Move people around, or use a
-          card&rsquo;s ⟳ to fill just its empty slots. Nothing reaches the
-          calendar (and nobody is messaged) until you{" "}
-          <strong>Save Changes</strong>.
-        </p>
-      ) : (
-        <p className="text-sm text-gray-600 dark:text-gray-400">
-          Staged <strong>{sets.length}</strong> set
-          {sets.length === 1 ? "" : "s"} with{" "}
-          <strong>{totalAssignments}</strong> assignment
-          {totalAssignments === 1 ? "" : "s"}
-          {existingCount > 0 &&
-            ` (${newCount} new, ${existingCount} already exist${
-              existingCount === 1 ? "s" : ""
-            } and will be filled — not recreated)`}
-          . Adjust anyone below, then apply — nothing is saved (or announced)
-          until you do. Anyone you pick by hand is{" "}
-          <span className="whitespace-nowrap">🔒 locked</span> and stays put if you
-          re-run auto schedule; set their slot back to “None” (or click the 🔒) to
-          release them.
-          {plan.skipped > 0 &&
-            ` ${plan.skipped} already-staffed set${
-              plan.skipped === 1 ? "" : "s"
-            } left untouched.`}
-        </p>
-      )}
+      {/* What is on the table, and nothing else. Every instruction that used to
+          sit here now lives in the Help tour, which is the one place to change
+          it — a wall of prose above the plan was read once and then skipped
+          past forever. */}
+      <p className="text-sm text-gray-600 dark:text-gray-400">
+        {summaryParts.join(" · ")}
+      </p>
 
-      {/* Unfillable banner: a role has an open slot with no available person to
+      {/* Unfillable chip: a role has an open slot with no available person to
           fill it (nobody plays it, or all are busy). Look for the red roles. */}
       {unfillable > 0 && (
         <p className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-300">
@@ -870,7 +1188,7 @@ export default function StagedScheduleModal({
         </p>
       )}
 
-      {/* Conflict banner: a manual edit put someone on a set they're not free
+      {/* Conflict chip: a manual edit put someone on a set they're not free
           for. Non-blocking — surfaced so it's a deliberate choice. */}
       {conflicts > 0 && (
         <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
@@ -1011,9 +1329,17 @@ export default function StagedScheduleModal({
                 edge to edge: with a dozen sideways-scrolling rows stacked up,
                 a bare bold line wasn't enough to tell where one group of sets
                 ended and the next began. Sticky, so the label of the group
-                you're scrolled into stays overhead. */}
+                you're scrolled into stays overhead.
+
+                `-top-1` rather than `top-0` for the same reason as the `-mx-6`:
+                it cancels the modal body's padding. A sticky offset is measured
+                from the scroll container's CONTENT box, so `top-0` parks the
+                band 4px (Modal's `pt-1`) below the clip edge — and cards
+                scrolling past showed through that strip. -4px lands its top
+                edge exactly on the clip edge: nothing above it, nothing cut
+                off. */}
             <p
-              className="sticky top-0 z-10 -mx-6 mb-2 border-y border-gray-200 bg-gray-100/95
+              className="sticky -top-1 z-10 -mx-6 mb-2 border-y border-gray-200 bg-gray-100/95
                 px-6 py-2 text-sm font-semibold backdrop-blur
                 dark:border-gray-700 dark:bg-gray-900/95"
             >
@@ -1072,11 +1398,62 @@ export default function StagedScheduleModal({
               <div
                 key={stagingKey(set)}
                 data-testid="staged-set-card"
+                data-selected={selectedIdx === idx || undefined}
                 style={tint as CSSProperties | undefined}
-                className={`flex w-72 shrink-0 flex-col rounded-lg border border-gray-200 p-3 dark:border-gray-700 ${
-                  tint ? "bg-[var(--tint)] dark:bg-[var(--tint-dark)]" : ""
-                }`}
+                // Clicking the card's own space selects it for copy/paste;
+                // clicking again lets it go. Clicks that land on a control
+                // inside it are that control's business, so they're ignored
+                // here rather than being swallowed into a selection.
+                onClick={(e) => {
+                  const el = e.target as HTMLElement | null;
+                  if (
+                    el?.closest("button, a, input, select, textarea, [role='option']")
+                  ) {
+                    return;
+                  }
+                  setSelectedIdx((current) => (current === idx ? null : idx));
+                }}
+                // Selection is the border taking the brand colour, and nothing
+                // else. `indigo-*` is remapped to the favicon teal in
+                // tailwind.config.ts, so this is the same blue as every primary
+                // button — Tailwind's literal `blue-*` is a different hue and
+                // reads as a stray colour on this page. Every card carries the
+                // same 2px border whether or not it's picked, so selecting one
+                // recolours it in place instead of nudging the row by a pixel,
+                // and a ring on top of a border only ever read as a second,
+                // blurrier edge.
+                className={`relative flex w-72 shrink-0 cursor-pointer flex-col rounded-lg border-2 p-3 ${
+                  selectedIdx === idx
+                    ? "border-indigo-500 dark:border-indigo-400"
+                    : "border-gray-200 dark:border-gray-700"
+                } ${tint ? "bg-[var(--tint)] dark:bg-[var(--tint-dark)]" : ""}`}
               >
+                {/* What just happened, said on the card it happened to — the
+                    keyboard gives no other feedback, and a paste onto a card
+                    that already looked similar is otherwise silent. It clears
+                    itself when the animation ends, so there's no timer to
+                    cancel on unmount, and it never eats a click on its way out. */}
+                {flash?.idx === idx && (
+                  <div
+                    key={flash.seq}
+                    role="status"
+                    onAnimationEnd={() => setFlash(null)}
+                    className="pointer-events-none absolute inset-x-0 top-2 z-10 flex animate-flash-fade justify-center"
+                  >
+                    <span className="flex items-center gap-1 rounded-full bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white shadow-md">
+                      {flash.kind === "copied" && "Copied!"}
+                      {flash.kind === "pasted" && "Pasted!"}
+                      {flash.kind === "undone" && (
+                        <>
+                          <UndoIcon />
+                          {/* The icon carries it visually; this is what a
+                              screen reader gets instead. */}
+                          <span className="sr-only">Paste undone</span>
+                        </>
+                      )}
+                    </span>
+                  </div>
+                )}
                 <div className="mb-2 flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold">
@@ -1330,6 +1707,151 @@ export default function StagedScheduleModal({
         of the review modal, so the two overlays stack cleanly. Escape hits
         both listeners: this one wins (registered last), so Escape backs out
         of the confirmation rather than out of the review. */}
+    {/* The guided tour. Opened by Help, and once on its own the first time this
+        browser reaches this workspace. */}
+    <ScheduleHelpModal open={helpOpen} preview={preview} onClose={closeHelp} />
+
+    {/* Save Draft: the confirm doubles as the name prompt, since naming is the
+        only decision being made. Prefilled when this preview came from a draft,
+        so re-saving keeps its name unless you change it. */}
+    <Modal
+      open={savingDraft}
+      onClose={() => setSavingDraft(false)}
+      title={openedDraft ? "Save draft" : "Save this preview as a draft?"}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => setSavingDraft(false)}
+            disabled={draftBusy}
+          >
+            Cancel
+          </Button>
+          <Button
+            onClick={async () => {
+              if (!plan || !onSaveDraft) return;
+              setDraftBusy(true);
+              setDraftError(null);
+              try {
+                await onSaveDraft({ ...plan, sets }, draftName.trim() || null, false);
+                setSavingDraft(false);
+                // The plan is on the server now, so there is nothing left to
+                // lose by leaving — close the whole workspace rather than
+                // dropping the user back into a preview they just parked.
+                // Straight to onClose, not requestClose: the discard warning
+                // exists for UNSAVED work, and asking "throw this away?" about
+                // something just saved would be nonsense.
+                onClose();
+              } catch (err) {
+                // The limit lands here: five kept drafts and this is a sixth.
+                setDraftError(
+                  err instanceof Error ? err.message : "Could not save the draft."
+                );
+              } finally {
+                setDraftBusy(false);
+              }
+            }}
+            disabled={draftBusy}
+          >
+            {draftBusy ? <LoadingDots size="sm" /> : "Confirm"}
+          </Button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <Input
+          label="Name (optional)"
+          value={draftName}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+            setDraftName(e.target.value)
+          }
+          placeholder="e.g. Advent, plan B"
+          maxLength={80}
+        />
+        {/* What a draft actually buys you, and the one limit worth knowing
+            BEFORE you spend a slot rather than after the save is refused. */}
+        <div className="space-y-1.5 text-sm text-gray-500 dark:text-gray-400">
+          <p>
+            {openedDraft
+              ? "This replaces the draft you opened, keeping the plan exactly as it stands now."
+              : "This keeps the plan exactly as it stands. Reopen it any time from the Drafts button on the Create tab and carry on where you left off."}
+          </p>
+          <p>
+            Your org can keep <strong>{MAX_DRAFTS}</strong> saved drafts at a
+            time
+            {openedDraft
+              ? " — replacing this one doesn’t use another."
+              : ". Once they’re full, delete one from the Drafts list to make room."}
+          </p>
+          <p>Closing the preview after saving won’t lose anything.</p>
+        </div>
+        {draftError && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-red-600 dark:text-red-400">
+              {draftError}
+            </p>
+            {/* The remedy, in place. Being told to "delete one first" and then
+                having to close this, open the Drafts list, delete, come back
+                and retype the name is the long way round for a one-click fix.
+                Recovery rows are left out: they never occupied a slot, so
+                deleting one frees nothing. */}
+            {onDeleteDraft && keptDrafts.length > 0 && (
+              <ul className="divide-y divide-gray-200 rounded-lg border border-gray-200 dark:divide-gray-700 dark:border-gray-700">
+                {keptDrafts.map((draft) => (
+                  <li key={draft.id} className="flex items-center gap-2 px-3 py-2">
+                    <span className="min-w-0 flex-1 truncate text-sm text-gray-700 dark:text-gray-200">
+                      {draftLabel(draft)}
+                    </span>
+                    {confirmingDraftId === draft.id ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingDraftId(null)}
+                          disabled={deletingDraftId !== null}
+                          className="shrink-0 rounded px-2 py-1 text-xs text-gray-500 hover:bg-gray-100 disabled:opacity-40 dark:text-gray-400 dark:hover:bg-gray-700"
+                        >
+                          Keep
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setDeletingDraftId(draft.id);
+                            try {
+                              await onDeleteDraft(draft.id);
+                              setConfirmingDraftId(null);
+                              // A slot just opened, so the refusal is stale.
+                              setDraftError(null);
+                            } finally {
+                              setDeletingDraftId(null);
+                            }
+                          }}
+                          disabled={deletingDraftId !== null}
+                          className="shrink-0 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-40"
+                        >
+                          {deletingDraftId === draft.id ? "Deleting…" : "Delete"}
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Delete ${draftLabel(draft)}`}
+                        title="Delete draft"
+                        onClick={() => setConfirmingDraftId(draft.id)}
+                        disabled={deletingDraftId !== null}
+                        className="shrink-0 rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-40 dark:text-red-400 dark:hover:bg-red-950/40"
+                      >
+                        <DraftTrashIcon />
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+
     <Modal
       open={confirmDiscard}
       onClose={() => setConfirmDiscard(false)}
@@ -1348,8 +1870,11 @@ export default function StagedScheduleModal({
       <p className="text-sm text-gray-600 dark:text-gray-400">
         {preview ? (
           <>
-            You have {describePreviewSaves(pendingSaves)} that haven&rsquo;t
-            been saved. Leaving now throws them away and the calendar stays
+            {/* The explicit {" "} is load-bearing: JSX drops the newline
+                between an expression and the text after it, which ran the
+                count straight into the next word. */}
+            You have {describePreviewSaves(pendingSaves)}{" "}
+            that haven&rsquo;t been saved. Leaving now throws them away and the calendar stays
             exactly as it is.
           </>
         ) : (
@@ -1363,6 +1888,152 @@ export default function StagedScheduleModal({
       </p>
     </Modal>
     </>
+  );
+}
+
+// One grey placeholder. The pulse lives on the containers so every block in a
+// group breathes together rather than each on its own beat.
+function SkeletonBlock({ className }: { className?: string }) {
+  return (
+    <div
+      className={`animate-pulse bg-gray-200 dark:bg-gray-700 ${className ?? ""}`}
+    />
+  );
+}
+
+// The workspace body, before the plan lands: the same blocks in the same order
+// as the real one — tally line, team-load panel, the two plan-wide buttons, a
+// section heading, then a row of set cards running off the right edge. The
+// point is that nothing MOVES when the plan arrives; the grey is simply
+// replaced in place.
+function WorkspaceSkeleton() {
+  return (
+    <div
+      className="animate-pulse space-y-4"
+      data-testid="workspace-skeleton"
+      aria-hidden
+    >
+      {/* "24 sets · 199 assignments" */}
+      <div className="h-4 w-56 rounded bg-gray-200 dark:bg-gray-700" />
+
+      {/* Team load, four columns of five rows like the real panel. */}
+      <div className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="h-3 w-20 rounded bg-gray-200 dark:bg-gray-700" />
+          <div className="h-8 w-36 rounded-md bg-gray-200 dark:bg-gray-700" />
+        </div>
+        <div className="grid gap-x-8 gap-y-3.5 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 16 }, (_, i) => (
+            <div key={i} className="space-y-1.5">
+              <div className="h-3 w-24 rounded bg-gray-200 dark:bg-gray-700" />
+              <div className="h-1.5 rounded-full bg-gray-200 dark:bg-gray-700" />
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 h-3 w-40 rounded bg-gray-200 dark:bg-gray-700" />
+      </div>
+
+      {/* "Re-run auto schedule" + "Clear all people" */}
+      <div className="flex gap-2">
+        <div className="h-9 w-40 rounded-md bg-gray-200 dark:bg-gray-700" />
+        <div className="h-9 w-32 rounded-md bg-gray-200 dark:bg-gray-700" />
+      </div>
+
+      {/* A set-type section heading, full-bleed the way the real one is. */}
+      <div className="-mx-6 bg-gray-100 px-6 py-3 dark:bg-gray-700/40">
+        <div className="h-4 w-48 rounded bg-gray-200 dark:bg-gray-700" />
+      </div>
+
+      {/* The card row, clipped at the edge like the real scroller. */}
+      <div className="flex gap-3 overflow-hidden">
+        {Array.from({ length: 6 }, (_, card) => (
+          <div
+            key={card}
+            className="w-72 shrink-0 space-y-3 rounded-lg border-2 border-gray-200 p-3 dark:border-gray-700"
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="space-y-1.5">
+                <div className="h-3.5 w-32 rounded bg-gray-200 dark:bg-gray-700" />
+                <div className="h-2.5 w-40 rounded bg-gray-200 dark:bg-gray-700" />
+              </div>
+              <div className="h-5 w-14 shrink-0 rounded-full bg-gray-200 dark:bg-gray-700" />
+            </div>
+            {Array.from({ length: 6 }, (_, row) => (
+              <div key={row} className="space-y-1.5">
+                <div className="h-2 w-20 rounded bg-gray-200 dark:bg-gray-700" />
+                <div className="h-9 rounded-md bg-gray-200 dark:bg-gray-700" />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Trash glyph for the in-dialog draft list. A copy of DraftsModal's rather than
+// a shared import: twelve lines of path data are cheaper to repeat than an
+// icons module is to introduce for two callers.
+function DraftTrashIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.8}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-4 w-4"
+      aria-hidden
+    >
+      <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+// The Help button: blue, but a tint rather than a fill, so it reads as its own
+// thing beside the solid commit button it sits next to.
+function HelpButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button variant="info" onClick={onClick}>
+      <span className="flex items-center gap-1.5">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="h-4 w-4"
+          aria-hidden
+        >
+          <circle cx="12" cy="12" r="9" />
+          <path d="M9.6 9.5a2.5 2.5 0 0 1 4.9.6c0 1.7-2.5 2.4-2.5 2.4M12 17h.01" />
+        </svg>
+        Help
+      </span>
+    </Button>
+  );
+}
+
+// An arrow curving back on itself — the universal "undo", and the whole message
+// of the flash that carries it.
+function UndoIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3.5 w-3.5"
+      aria-hidden
+    >
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
+    </svg>
   );
 }
 

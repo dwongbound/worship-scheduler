@@ -4,7 +4,7 @@
 import type { StagedSet } from "./types";
 import { defaultMDId, isValidMD, type MDAssignment } from "./md";
 import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
-import type { Instrument } from "./constants";
+import type { Instrument, SlotCapacityMap } from "./constants";
 import {
   DEFAULT_TEAM_ROLES,
   slottedRoles,
@@ -301,4 +301,121 @@ export function designateMDs(
     });
   }
   return settled;
+}
+
+/**
+ * One set's shape and roster, lifted off it so another set can take the same
+ * form. The preview's copy/paste clipboard.
+ *
+ * `capacities` is the copied set's EFFECTIVE shape — already resolved against
+ * its team's catalog — not its stored override. That's what makes paste mean
+ * "look like THAT set": a role the source fills gets its slot count even when
+ * the source inherited it from the team default, and a role the source doesn't
+ * have lands as an explicit zero rather than falling back to the target team's
+ * default and quietly reappearing.
+ */
+export type SetClipboard = {
+  capacities: SlotCapacityMap;
+  assignments: { userId: string; role: Instrument }[];
+};
+
+/** Lift a set's shape + people onto the clipboard. `capacities` comes resolved. */
+export function copySet(set: StagedSet, capacities: SlotCapacityMap): SetClipboard {
+  return {
+    capacities: { ...capacities },
+    assignments: set.assignments.map((a) => ({ userId: a.userId, role: a.role })),
+  };
+}
+
+/**
+ * Stamp a copied shape + roster onto another set.
+ *
+ * The target keeps its own IDENTITY — when it starts, what it's called, its
+ * team, whether it wants an MD — and takes the source's FORM: every role the
+ * source had (including ones the target's team doesn't list, which is what
+ * "paste the whole shape" has to mean) and none that it didn't.
+ *
+ * Every pasted seat is locked. Pasting is a deliberate statement about who
+ * plays, so a later "Auto schedule" must treat it as a constraint rather than
+ * a suggestion to overwrite.
+ *
+ * `assignmentId` is carried across for a seat the target ALREADY had with the
+ * same person in the same role: it's the same seat, so Preview Mode saves it as
+ * an update and it keeps its history instead of being deleted and re-inserted.
+ *
+ * `mdUserId` is cleared — the roster just changed wholesale, so the old
+ * director may not even be on the set. Callers re-derive it with designateMDs.
+ */
+export function pasteSet(target: StagedSet, clip: SetClipboard): StagedSet {
+  // Existing seats by person+role, so an unchanged one keeps its identity.
+  const existing = new Map(
+    target.assignments
+      .filter((a) => a.assignmentId)
+      .map((a) => [`${a.userId}|${a.role}`, a.assignmentId!])
+  );
+  return {
+    ...target,
+    slotCapacities: { ...clip.capacities },
+    assignments: clip.assignments.map((a) => {
+      const assignmentId = existing.get(`${a.userId}|${a.role}`);
+      return {
+        userId: a.userId,
+        role: a.role,
+        locked: true,
+        ...(assignmentId ? { assignmentId } : {}),
+      };
+    }),
+    mdUserId: null,
+  };
+}
+
+/**
+ * One paste, and the two plan states it sat between.
+ *
+ * `before`/`after` are whole set LISTS rather than the single card pasted onto,
+ * because `designateMDs` re-settles directors across the plan: rewinding just
+ * that card would leave another set's MD changed by an edit that no longer
+ * exists. `idx` is only carried so the UI can say which card came back.
+ */
+export type PasteUndo = {
+  idx: number;
+  before: StagedSet[];
+  after: StagedSet[];
+};
+
+/**
+ * How many pastes can be taken back. A snapshot is a whole set list, so this is
+ * a memory cap as much as a usability one — and an undo trail longer than a
+ * working session's worth of pastes is not something anyone walks back.
+ */
+export const UNDO_DEPTH = 20;
+
+/** Record a paste. The oldest entries fall off past `UNDO_DEPTH`. */
+export function pushUndo(stack: PasteUndo[], entry: PasteUndo): PasteUndo[] {
+  return [...stack, entry].slice(-UNDO_DEPTH);
+}
+
+/** What an undo attempt did: either the plan it restored, or the stack alone. */
+export type UndoResult =
+  | { ok: true; stack: PasteUndo[]; sets: StagedSet[]; idx: number }
+  | { ok: false; stack: PasteUndo[] };
+
+/**
+ * Take back the most recent paste.
+ *
+ * Refuses — and throws the whole history away — when the top entry's `after` is
+ * no longer the list in hand. Every edit path builds a NEW array, so reference
+ * inequality is an exact signal that something else changed the plan since the
+ * paste, and rewinding would silently discard that later work. Dropping the
+ * history is the honest answer: the trail is broken, so nothing behind it can
+ * be trusted either.
+ *
+ * Chained undos still work, because restoring an entry's `before` restores the
+ * very array the previous paste produced as its `after`.
+ */
+export function popUndo(stack: PasteUndo[], current: StagedSet[]): UndoResult {
+  const last = stack[stack.length - 1];
+  if (!last) return { ok: false, stack };
+  if (last.after !== current) return { ok: false, stack: [] };
+  return { ok: true, stack: stack.slice(0, -1), sets: last.before, idx: last.idx };
 }

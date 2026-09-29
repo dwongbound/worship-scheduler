@@ -1,5 +1,5 @@
 "use client";
-// The "Auto schedule" options step. Everything the generate run needs is asked
+// The "Generate New Schedule" options step. Everything the generate run needs is asked
 // here, in one dialog, rather than sitting permanently on the Create page:
 // which window to schedule, and which recurring sets to expand into it.
 //
@@ -146,7 +146,7 @@ export default function GenerateModal({
       open
       size="wide"
       onClose={onClose}
-      title="Auto schedule"
+      title="Generate New Schedule"
       // The caveat that used to sit beside the title as muted text. It's
       // reassurance, not instruction — nobody needs it on screen every time —
       // so it lives behind the (i) and the header stays a header.

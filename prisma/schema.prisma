@@ -150,6 +150,7 @@ model Org {
   templates            SetTemplate[]
   availabilityRequests AvailabilityRequest[]
   reminders            WeeklyReminder[]
+  scheduleDrafts       ScheduleDraft[]
 
   createdAt DateTime @default(now())
 
@@ -367,6 +368,8 @@ model User {
   // Targeted swaps this person initiated / was offered (see SwapProposal).
   swapsRequested  SwapProposal[]    @relation("SwapRequestedBy")
   swapsReceived   SwapProposal[]    @relation("SwapRecipient")
+  // Saved generate previews (see ScheduleDraft) this person first saved.
+  scheduleDrafts  ScheduleDraft[]
   // Sets where this person is the designated musical director.
   mdSets          Set[]             @relation("SetMD")
 
@@ -765,4 +768,52 @@ model AvailabilityResponse {
 
   @@unique([userId, requestId])
   @@map("availability_responses")
+}
+
+// A saved "Review generated schedule" preview — the whole staged plan, parked so
+// an admin can come back to it. Drafts live only in the Create tab's generate
+// flow; the calendar's Preview Mode has nothing to save (it mirrors real sets).
+//
+// The plan is stored whole, as Json, exactly as the review modal holds it. It is
+// deliberately NOT normalised into Sets/Assignments: a draft is a proposal that
+// may never be applied, and modelling it as real rows would put unapplied
+// schedules in every query that reads the calendar.
+//
+// Two kinds of row, told apart by `isRecovery`:
+//   • a DELIBERATE draft — the admin pressed Save Draft. Capped at 5 per org;
+//     may carry a name.
+//   • a RECOVERY draft — the once-a-minute autosave behind a fresh preview, one per
+//     person per org, overwritten in place and never counted against the cap, so
+//     the safety net still works when the 5 deliberate slots are full.
+model ScheduleDraft {
+  id    String @id @default(cuid())
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  // What the admin called it. Null is legal for a deliberate draft too — naming
+  // is optional — so this never stands in for `isRecovery`.
+  name String?
+
+  // The rolling autosave slot rather than something deliberately kept.
+  isRecovery Boolean @default(false)
+
+  // The StagedPlan payload (lib/types.ts): sets, skipped, baseline.
+  plan Json
+
+  // Who FIRST saved it — what the drafts list attributes the row to. A later
+  // editor is recorded only by updatedAt moving.
+  createdBy   User   @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  createdById String
+
+  createdAt DateTime @default(now())
+  // Bumped by an explicit re-save AND by the autosave, so "last edited" is
+  // honest about when the stored plan last changed.
+  updatedAt DateTime @updatedAt
+
+  // The list is always "this org's drafts, newest activity first".
+  @@index([orgId, updatedAt])
+  // One recovery slot per person per org is an application rule (a partial
+  // unique index can't express it here) — see POST /api/admin/drafts.
+  @@index([orgId, createdById, isRecovery])
+  @@map("schedule_drafts")
 }

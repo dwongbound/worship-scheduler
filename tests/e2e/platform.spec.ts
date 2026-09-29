@@ -87,7 +87,7 @@ test("super-admin manages the platform and administers every org", async ({
   // membership, and the switcher lists an org they never joined.
   await page.goto("/create");
   await expect(
-    page.getByRole("button", { name: "Auto schedule…" })
+    page.getByRole("button", { name: "Generate New Schedule" })
   ).toBeVisible();
   await page.getByTestId("org-switcher").click();
   await expect(page.getByText(orgName(1), { exact: true })).toBeVisible();

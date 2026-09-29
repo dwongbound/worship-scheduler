@@ -3,7 +3,14 @@
 import { ButtonHTMLAttributes } from "react";
 import LoadingDots from "./LoadingDots";
 
-type Variant = "primary" | "secondary" | "danger" | "ghost" | "admin";
+type Variant =
+  | "primary"
+  | "secondary"
+  | "danger"
+  | "dangerOutline"
+  | "ghost"
+  | "admin"
+  | "info";
 type Size = "sm" | "md";
 
 const VARIANT_CLASSES: Record<Variant, string> = {
@@ -13,6 +20,13 @@ const VARIANT_CLASSES: Record<Variant, string> = {
     "bg-white text-gray-900 border border-gray-300 hover:bg-gray-50 " +
     "dark:bg-gray-800 dark:text-gray-100 dark:border-gray-600 dark:hover:bg-gray-700",
   danger: "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-400",
+  // Destructive action that is NOT the point of the screen (Disconnect, sitting
+  // beside the connect buttons). Same outlined shape as "secondary"/"admin" so a
+  // toolbar still reads as one row — only the colour says "this undoes things".
+  dangerOutline:
+    "bg-white text-red-600 border border-red-500 hover:bg-red-50 " +
+    "dark:bg-gray-800 dark:text-red-400 dark:border-red-500/70 " +
+    "dark:hover:bg-red-500/10",
   ghost:
     "bg-transparent text-gray-700 hover:bg-gray-100 " +
     "dark:text-gray-300 dark:hover:bg-gray-800",
@@ -24,6 +38,14 @@ const VARIANT_CLASSES: Record<Variant, string> = {
     "bg-white text-amber-600 border border-amber-500 hover:bg-amber-50 " +
     "dark:bg-gray-800 dark:text-amber-400 dark:border-amber-500/70 " +
     "dark:hover:bg-amber-500/10",
+  // Explain-this action (the review workspace's Help). Wears the brand colour
+  // — `indigo-*` is remapped to the favicon teal — but as a tint rather than a
+  // fill, so it reads as "blue, and not the thing you came here to press" when
+  // it sits beside a solid primary.
+  info:
+    "bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 " +
+    "dark:bg-indigo-500/10 dark:text-indigo-300 dark:border-indigo-500/40 " +
+    "dark:hover:bg-indigo-500/20",
 };
 
 const SIZE_CLASSES: Record<Size, string> = {

@@ -2,7 +2,7 @@
 // Create tab (admins only): define weekly set templates, run the
 // auto-scheduler, and see who has finished entering availability.
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -22,6 +22,8 @@ import GenerateModal, {
   type TemplateColors,
 } from "@/components/GenerateModal";
 import StagedScheduleModal from "@/components/StagedScheduleModal";
+import DraftsModal from "@/components/DraftsModal";
+import type { DraftSummary } from "@/lib/drafts";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
@@ -94,6 +96,18 @@ export default function CreatePage() {
   const [generateResult, setGenerateResult] = useState("");
   // The proposed schedule awaiting the admin's review (null = not staging).
   const [stagedPlan, setStagedPlan] = useState<StagedPlan | null>(null);
+  // Saved previews for this org. Loaded alongside the page so the Drafts button
+  // knows whether to exist at all — it's hidden when there are none, since an
+  // empty list is a dead end rather than a feature.
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [draftBusyId, setDraftBusyId] = useState<string | null>(null);
+  // Which draft the open preview came from, so Save Draft prefills its name and
+  // the autosave writes back into it instead of the recovery slot.
+  const [openedDraft, setOpenedDraft] = useState<{
+    id: string;
+    name: string | null;
+  } | null>(null);
   // Per-recurring-set tints chosen in the options dialog, handed to the review
   // modal so each set type's cards read as a block. Preview-only: they aren't
   // posted anywhere and are forgotten when the review closes.
@@ -106,9 +120,14 @@ export default function CreatePage() {
   );
   // Which page of the Recurring table is shown (4 rows per page).
   const [templatePage, setTemplatePage] = useState(0);
-  // The "Auto schedule" options dialog. Its scope + template picks live inside
-  // it (see GenerateModal) — the page only needs to know it's open.
+  // The "Generate New Schedule" options dialog. Its scope + template picks live
+  // inside it (see GenerateModal) — the page only needs to know it's open.
   const [generateOpen, setGenerateOpen] = useState(false);
+  // A generate run is in flight: the review workspace is open on its skeleton.
+  const [generating, setGenerating] = useState(false);
+  // Identifies the current run, so a result that arrives after the user closed
+  // the workspace (or started another run) is discarded instead of applied.
+  const generateRun = useRef(0);
 
   // "Request availabilities" form state. `reqTeamIds` = the teams to ask;
   // it defaults to every team in the org once the team list loads.
@@ -131,6 +150,124 @@ export default function CreatePage() {
     setOrgSlackConnected(false);
     fetchSlackStatus(adminOrgId).then((s) => setOrgSlackConnected(s.enabled));
   }, [adminOrgId]);
+
+  // Drafts, reloaded after every save/delete so the button and the list agree
+  // with the server rather than with an optimistic guess.
+  const reloadDrafts = useCallback(async () => {
+    if (!adminOrgId) return;
+    const res = await fetch("/api/admin/drafts", {
+      headers: orgHeaders(adminOrgId),
+    }).catch(() => null);
+    setDrafts(res?.ok ? await res.json() : []);
+  }, [adminOrgId]);
+  useEffect(() => {
+    void reloadDrafts();
+  }, [reloadDrafts]);
+
+  // Fold one saved row into the local list, newest activity first — the order
+  // the server returns. Replaces any existing row with the same id, which is
+  // what an autosave overwriting the recovery slot does every minute.
+  const mergeDraft = useCallback((saved: DraftSummary) => {
+    setDrafts((current) => [saved, ...current.filter((d) => d.id !== saved.id)]);
+  }, []);
+
+  /**
+   * Save the open preview. `silent` marks the once-a-minute autosave, which must
+   * stay invisible: it swallows its own failures and never disturbs the list.
+   *
+   * Resolves to whether the plan actually reached the server, which is what the
+   * review modal's "last saved" stamp is allowed to report.
+   *
+   * Where it lands depends on what's open. A preview opened FROM a draft is
+   * PATCHed back into that draft. A fresh one autosaves into the org's recovery
+   * slot (POST isRecovery), or POSTs a new kept draft when saved deliberately.
+   */
+  const saveDraft = useCallback(
+    async (plan: StagedPlan, name: string | null, silent: boolean) => {
+      if (!adminOrgId) return false;
+      const headers = {
+        "Content-Type": "application/json",
+        ...orgHeaders(adminOrgId),
+      };
+      // An autosave sends only the plan, so it can never blank a chosen name;
+      // a deliberate save sends the name key and promotes a recovery row.
+      const body = silent ? { plan } : { plan, name };
+      const res = openedDraft
+        ? await fetch(`/api/admin/drafts/${openedDraft.id}`, {
+            method: "PATCH",
+            headers,
+            body: JSON.stringify(body),
+          })
+        : await fetch("/api/admin/drafts", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ ...body, isRecovery: silent }),
+          });
+      if (!res.ok) {
+        // The autosave stays quiet, including at the limit — but it reports the
+        // miss back, so the "last saved" stamp never claims a save that didn't
+        // happen.
+        if (silent) return false;
+        const data = await res.json().catch(() => null);
+        throw new Error(data?.error ?? "Could not save the draft.");
+      }
+      // A deliberate save of a fresh preview becomes the draft we're now in, so
+      // a second Save Draft replaces it rather than spending another slot.
+      const saved = await res.json().catch(() => null);
+      if (!silent && saved?.id) setOpenedDraft({ id: saved.id, name: saved.name });
+      // Merge the row the write handed back rather than re-reading the list.
+      // The autosave calls this once a minute for as long as a preview is open,
+      // and refetching there spent a request a minute refreshing a list nobody
+      // was looking at. The Drafts button only needs to know the row exists.
+      if (saved?.id) mergeDraft(saved);
+      return true;
+    },
+    [adminOrgId, openedDraft, mergeDraft]
+  );
+
+  // Open a saved draft back into the review modal.
+  const openDraft = useCallback(
+    async (id: string) => {
+      if (!adminOrgId) return;
+      setDraftBusyId(id);
+      try {
+        const res = await fetch(`/api/admin/drafts/${id}`, {
+          headers: orgHeaders(adminOrgId),
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        setOpenedDraft({ id: data.id, name: data.name });
+        setStagedPlan(data.plan as StagedPlan);
+        setDraftsOpen(false);
+      } finally {
+        setDraftBusyId(null);
+      }
+    },
+    [adminOrgId]
+  );
+
+  const deleteDraft = useCallback(
+    async (id: string) => {
+      if (!adminOrgId) return;
+      await fetch(`/api/admin/drafts/${id}`, {
+        method: "DELETE",
+        headers: orgHeaders(adminOrgId),
+      });
+      // The draft we're editing just went away — stop writing back into it.
+      setOpenedDraft((current) => (current?.id === id ? null : current));
+      // Drop it locally; there is nothing to learn from re-reading the list.
+      setDrafts((current) => current.filter((draft) => draft.id !== id));
+    },
+    [adminOrgId]
+  );
+
+  // Open the Drafts list, refreshing it first. This is the one moment accuracy
+  // actually matters — another admin may have saved or deleted one since the
+  // page loaded — so it's where the read belongs, rather than after every write.
+  const openDraftsList = useCallback(() => {
+    setDraftsOpen(true);
+    void reloadDrafts();
+  }, [reloadDrafts]);
 
   const reload = useCallback(async () => {
     if (!adminOrgId) return;
@@ -292,9 +429,15 @@ export default function CreatePage() {
   // success the options dialog closes and the review modal takes over; on
   // failure it stays open showing why, with the picks intact.
   async function generate(opts: GenerateOptions, colors: TemplateColors) {
+    const run = ++generateRun.current;
     setBusyAction("generate");
     setGenerateResult("");
     setPlanColors(colors);
+    // Hand over to the review workspace NOW, which wears a skeleton until the
+    // plan lands. Waiting here left the options dialog up and then swapped one
+    // modal for another, which read as a flash rather than as progress.
+    setGenerateOpen(false);
+    setGenerating(true);
     try {
       const res = await fetch("/api/admin/generate", {
         method: "POST",
@@ -302,15 +445,29 @@ export default function CreatePage() {
         body: JSON.stringify(opts),
       });
       const data = await res.json();
+      // Closed while we were waiting: don't yank a modal back open over
+      // whatever they moved on to.
+      if (generateRun.current !== run) return;
       if (res.ok) {
-        setGenerateOpen(false);
         setStagedPlan(data as StagedPlan);
       } else {
+        // The skeleton closes with nothing behind it, so the reason has to land
+        // on the page — it shows next to the button that started the run.
         setGenerateResult(`Error: ${data.error ?? "unknown"}`);
       }
     } finally {
-      setBusyAction(null);
+      if (generateRun.current === run) {
+        setGenerating(false);
+        setBusyAction(null);
+      }
     }
+  }
+
+  // Abandon an in-flight run: bumping the counter makes its result a no-op.
+  function cancelGenerate() {
+    generateRun.current++;
+    setGenerating(false);
+    setBusyAction(null);
   }
 
   // Step 2 — commit the reviewed plan. This is what actually creates the sets
@@ -464,24 +621,40 @@ export default function CreatePage() {
                   belongs here, on the thing being expanded. */}
               <InfoTooltip text="Expands these recurring sets into concrete sets, then auto-assigns people based on the roles they play and their availability. You'll get a preview to review and tweak before anything is saved — nobody is notified until you apply. To change who's assigned on a single set, open it on the Calendar." />
             </div>
-            {/* The window and the template picks are asked in the dialog, not
-                parked on the page: they're answered once per run, and half of
-                them only apply to one of the three scopes. */}
-            <Button
-              size="sm"
-              onClick={() => {
-                setGenerateResult("");
-                setGenerateOpen(true);
-              }}
-              disabled={templates.length === 0}
-              title={
-                templates.length === 0
-                  ? "Add a recurring set first."
-                  : undefined
-              }
-            >
-              Auto schedule…
-            </Button>
+            {/* Both buttons ride together at the right end. Loose in the
+                justify-between row, the third child lands dead centre — which
+                reads as a heading, not as a control belonging with Drafts. */}
+            <div className="flex items-center gap-2">
+              {/* The window and the template picks are asked in the dialog, not
+                  parked on the page: they're answered once per run, and half of
+                  them only apply to one of the three scopes. */}
+              <Button
+                size="sm"
+                onClick={() => {
+                  setGenerateResult("");
+                  setGenerateOpen(true);
+                }}
+                disabled={templates.length === 0}
+                title={
+                  templates.length === 0
+                    ? "Add a recurring set first."
+                    : undefined
+                }
+              >
+                Generate New Schedule
+              </Button>
+              {/* Only when there's something to open: an empty Drafts list is a
+                  dead end, and the button's absence is itself the answer. */}
+              {drafts.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={openDraftsList}
+                >
+                  Drafts
+                </Button>
+              )}
+            </div>
           </div>
           {/* A failed run reports here, next to the button that started it. */}
           {generateResult && !generateOpen && (
@@ -1026,7 +1199,27 @@ export default function CreatePage() {
         teams={teams}
         busy={busyAction === "apply"}
         onApply={applyPlan}
-        onClose={() => setStagedPlan(null)}
+        onSaveDraft={saveDraft}
+        openedDraft={openedDraft}
+        loading={generating}
+        drafts={drafts}
+        onDeleteDraft={deleteDraft}
+        onClose={() => {
+          if (generating) cancelGenerate();
+          setStagedPlan(null);
+          // The next preview is its own thing — don't keep writing into the
+          // draft this one came from.
+          setOpenedDraft(null);
+        }}
+      />
+
+      <DraftsModal
+        open={draftsOpen}
+        drafts={drafts}
+        busyId={draftBusyId}
+        onOpenDraft={openDraft}
+        onDelete={deleteDraft}
+        onClose={() => setDraftsOpen(false)}
       />
     </div>
   );

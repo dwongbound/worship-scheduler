@@ -621,15 +621,13 @@ function CalendarView() {
               Preview Mode
             </Button>
           )}
-          {/* Opens the export dialog (range picker + .ics/Excel). The chevron
-              bounces on hover to signal it opens a menu, not a direct download. */}
-          <Button
-            variant="secondary"
-            className="group"
-            onClick={() => setExportOpen(true)}
-          >
+          {/* Opens the export dialog (range picker + .ics/Excel). An export
+              glyph, not a chevron: nothing drops down from this button — it
+              opens a dialog — and a down-arrow promised a menu that was never
+              there. */}
+          <Button variant="secondary" onClick={() => setExportOpen(true)}>
             Export
-            <ExportChevron />
+            <ExportIcon />
           </Button>
           {/* Rightmost: expands the "My sets" sidebar. */}
           <Button
@@ -767,23 +765,22 @@ function CalendarView() {
   );
 }
 
-// Down-chevron on the Export button; bounces on button hover to hint that it
-// opens a chooser rather than downloading straight away.
-function ExportChevron() {
+// An arrow leaving a tray — the standard "export" glyph, and honest about what
+// the button does in a way a dropdown chevron wasn't.
+function ExportIcon() {
   return (
     <svg
       viewBox="0 0 20 20"
       fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
       aria-hidden="true"
-      className="h-4 w-4 transition-transform group-hover:animate-bounce"
+      className="h-4 w-4"
     >
-      <path
-        d="M6 8l4 4 4-4"
-        stroke="currentColor"
-        strokeWidth="1.75"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
+      <path d="M10 13V3M7 6l3-3 3 3" />
+      <path d="M4 12v4a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-4" />
     </svg>
   );
 }
