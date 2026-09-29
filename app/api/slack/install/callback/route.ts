@@ -1,11 +1,14 @@
 // GET /api/slack/install/callback — Slack returns here after an admin approves
 // the bot install. Exchange the code for the workspace's bot token, encrypt it
-// onto the Org, then best-effort auto-link members by email.
+// onto the Org. Linking people to their Slack accounts is NOT done here: it's
+// the "Sync team members" button in Org settings (POST /api/slack/sync), because
+// a serial email lookup per person outlives this request's time budget in any
+// org big enough to matter — and failing halfway through a redirect handler is
+// invisible to the admin who pressed the button.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { verifyState } from "@/lib/slackOauth";
 import { encryptSecret } from "@/lib/crypto";
-import { autoPopulateSlackIds } from "@/lib/slack";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
@@ -47,9 +50,6 @@ export async function GET(req: NextRequest) {
       slackBotUserId: data.bot_user_id ?? null,
     },
   });
-
-  // Resolve member ids by email so most people never have to click Connect.
-  await autoPopulateSlackIds(parsed.orgId).catch(() => {});
 
   return back("installed");
 }

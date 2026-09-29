@@ -7,9 +7,14 @@ import {
   countAssignments,
   loadRows,
   lockedCounts,
+  copySet,
   designateMDs,
   maxLoad,
+  pasteSet,
+  popUndo,
   previousMDForTeam,
+  pushUndo,
+  UNDO_DEPTH,
   totalLocked,
   totalConflicts,
   totalUnfillable,
@@ -385,5 +390,161 @@ describe("designateMDs", () => {
   it("leaves mdUserId null when nobody on the roster can lead", () => {
     const out = designateMDs([led("2026-01-04")], { isMD: () => false });
     expect(out[0].mdUserId).toBeNull();
+  });
+});
+
+describe("copySet / pasteSet", () => {
+  const source: StagedSet = {
+    ...stagedSet("2026-01-04", [
+      { userId: "alice", role: "KEYS" as Instrument },
+      { userId: "bob", role: "DRUMS" as Instrument },
+    ]),
+    teamId: "t1",
+    label: "Source",
+  };
+  const capacities = { KEYS: 1, DRUMS: 1, BASS: 0 };
+
+  it("carries the resolved shape and the people, not the stored override", () => {
+    const clip = copySet(source, capacities);
+    expect(clip.capacities).toEqual(capacities);
+    expect(clip.assignments).toEqual([
+      { userId: "alice", role: "KEYS" },
+      { userId: "bob", role: "DRUMS" },
+    ]);
+  });
+
+  it("doesn't alias the source — editing the copy can't reach back", () => {
+    const clip = copySet(source, capacities);
+    clip.capacities.KEYS = 99;
+    expect(capacities.KEYS).toBe(1);
+  });
+
+  it("gives the target the source's shape, including roles it didn't have", () => {
+    const target: StagedSet = {
+      ...stagedSet("2026-01-11", [{ userId: "carol", role: "VOCALS" as Instrument }]),
+      teamId: "t2",
+      label: "Target",
+      slotCapacities: { VOCALS: 2 },
+    };
+    const pasted = pasteSet(target, copySet(source, capacities));
+
+    // Its own identity survives...
+    expect(pasted.startsAt).toBe("2026-01-11");
+    expect(pasted.label).toBe("Target");
+    expect(pasted.teamId).toBe("t2");
+    // ...and it takes the source's form: the source's roles, and none of the
+    // ones only the target had.
+    expect(pasted.slotCapacities).toEqual(capacities);
+    expect(pasted.assignments.map((a) => a.userId)).toEqual(["alice", "bob"]);
+    expect(pasted.assignments.some((a) => a.role === "VOCALS")).toBe(false);
+  });
+
+  it("locks every pasted seat", () => {
+    // Pasting is a deliberate statement about who plays, so a later auto
+    // schedule has to treat it as a constraint rather than overwrite it.
+    const pasted = pasteSet(stagedSet("2026-01-11", []), copySet(source, capacities));
+    expect(pasted.assignments.every((a) => a.locked)).toBe(true);
+  });
+
+  it("keeps the assignmentId of a seat the target already had", () => {
+    // Same person, same role = the same seat, so Preview Mode saves it as an
+    // update and it keeps its history instead of being deleted and re-added.
+    const target: StagedSet = {
+      ...stagedSet("2026-01-11", [
+        { userId: "alice", role: "KEYS" as Instrument, assignmentId: "a1" },
+        { userId: "zoe", role: "DRUMS" as Instrument, assignmentId: "a2" },
+      ]),
+      teamId: "t1",
+    };
+    const pasted = pasteSet(target, copySet(source, capacities));
+    expect(pasted.assignments.find((a) => a.userId === "alice")?.assignmentId).toBe("a1");
+    // bob is new to this set, so he's a new seat rather than inheriting zoe's.
+    expect(pasted.assignments.find((a) => a.userId === "bob")?.assignmentId).toBeUndefined();
+  });
+
+  it("clears the target's MD, since the roster it belonged to is gone", () => {
+    const target: StagedSet = {
+      ...stagedSet("2026-01-11", []),
+      requiresMD: true,
+      mdUserId: "someone-not-pasted",
+    };
+    expect(pasteSet(target, copySet(source, capacities)).mdUserId).toBeNull();
+  });
+});
+
+describe("pushUndo / popUndo", () => {
+  // The helpers only ever compare set lists by REFERENCE, so the contents of
+  // these are irrelevant — what matters is which array object is which.
+  const planA: StagedSet[] = [stagedSet("2026-01-04", [])];
+  const planB: StagedSet[] = [stagedSet("2026-01-11", [])];
+  const planC: StagedSet[] = [stagedSet("2026-01-18", [])];
+
+  it("records a paste without touching the stack it was given", () => {
+    const stack = pushUndo([], { idx: 0, before: planA, after: planB });
+    expect(stack).toHaveLength(1);
+    expect(pushUndo(stack, { idx: 1, before: planB, after: planC })).toHaveLength(2);
+    // The original is untouched — these feed a useState setter.
+    expect(stack).toHaveLength(1);
+  });
+
+  it("drops the oldest entries past the depth cap", () => {
+    let stack: ReturnType<typeof pushUndo> = [];
+    for (let i = 0; i < UNDO_DEPTH + 5; i++) {
+      stack = pushUndo(stack, { idx: i, before: planA, after: planB });
+    }
+    expect(stack).toHaveLength(UNDO_DEPTH);
+    // The survivors are the most recent ones, so the newest paste is always
+    // the one you can take back.
+    expect(stack[stack.length - 1].idx).toBe(UNDO_DEPTH + 4);
+    expect(stack[0].idx).toBe(5);
+  });
+
+  it("restores the plan as it stood before the last paste", () => {
+    const stack = pushUndo([], { idx: 2, before: planA, after: planB });
+    const undone = popUndo(stack, planB);
+    expect(undone.ok).toBe(true);
+    if (undone.ok) {
+      expect(undone.sets).toBe(planA);
+      expect(undone.idx).toBe(2);
+      expect(undone.stack).toEqual([]);
+    }
+  });
+
+  it("chains, because one paste's `before` is the previous one's `after`", () => {
+    // planA --paste--> planB --paste--> planC, then two undos walk it back.
+    let stack = pushUndo([], { idx: 0, before: planA, after: planB });
+    stack = pushUndo(stack, { idx: 1, before: planB, after: planC });
+
+    const first = popUndo(stack, planC);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.sets).toBe(planB);
+
+    const second = popUndo(first.stack, first.sets);
+    expect(second.ok).toBe(true);
+    if (second.ok) expect(second.sets).toBe(planA);
+  });
+
+  it("does nothing, and keeps the stack, when there's nothing to undo", () => {
+    const empty = popUndo([], planA);
+    expect(empty.ok).toBe(false);
+    expect(empty.stack).toEqual([]);
+  });
+
+  it("refuses and throws the history away once the plan has moved on", () => {
+    // Someone edited a dropdown after the paste, so `sets` is a new array.
+    // Rewinding here would silently discard that edit; the whole trail behind
+    // it is untrustworthy too, so it goes.
+    const stack = pushUndo([], { idx: 0, before: planA, after: planB });
+    const stale = popUndo(stack, planC);
+    expect(stale.ok).toBe(false);
+    expect(stale.stack).toEqual([]);
+  });
+
+  it("is not fooled by a plan that merely LOOKS the same", () => {
+    // A structurally identical copy is still a different edit — reference
+    // equality is the point, not deep equality.
+    const stack = pushUndo([], { idx: 0, before: planA, after: planB });
+    expect(popUndo(stack, [...planB]).ok).toBe(false);
   });
 });

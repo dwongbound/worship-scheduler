@@ -77,29 +77,89 @@ async function linkMembershipByEmail(
 }
 
 /**
- * Best-effort: for every member of an org that has no member id yet, try to
- * resolve it by email and cache it on their OrgMembership. Called after a bot
- * install — it only covers people who are ALREADY members, so
- * `linkSlackIdForUser` handles everyone who arrives afterwards. Never throws.
+ * One batch of the org-wide "Sync team members" sweep (Org settings → Slack).
+ *
+ * Deliberately NOT a single call that walks the whole org: the lookups are
+ * serial and paced, so a big org outlives a serverless function's time budget —
+ * which is exactly how the old install-time sweep managed to half-finish in
+ * silence. The client drives it instead, one window at a time, which also gives
+ * it something honest to draw a progress bar from.
  */
-export async function autoPopulateSlackIds(orgId: string): Promise<void> {
+export type SlackSyncBatch = {
+  /** People in the org — the denominator of both the bar and "x/y synced". */
+  total: number;
+  /** How many we have been through once this batch is in (the bar's numerator). */
+  processed: number;
+  /** How many we resolved to a member id in THIS batch. The caller sums them. */
+  matched: number;
+  /** How many of the org's people hold a member id right now (the "x" of x/y). */
+  synced: number;
+  /** No more people after this batch. */
+  done: boolean;
+};
+
+/**
+ * Look up `limit` of an org's people (starting at `offset`) by email and cache
+ * what comes back on their OrgMembership. Returns null when the org can't do
+ * this at all — no integration connected, or one with no email lookup.
+ *
+ * Re-checks people who ALREADY have an id on purpose: after connecting a
+ * different workspace every stored id is from the old one, and a fresh lookup is
+ * what replaces it. A lookup that misses leaves the stored id alone rather than
+ * clearing it — a miss is usually a transient failure or an email that simply
+ * isn't in the workspace, and neither is a reason to throw away an id somebody
+ * may have set by hand.
+ */
+export async function syncOrgSlackIds(
+  orgId: string,
+  offset: number,
+  limit: number
+): Promise<SlackSyncBatch | null> {
   const messaging = await transportForOrg(orgId);
-  if (!messaging?.capabilities.emailLookup) return;
-  const rows = await prisma.orgMembership.findMany({
-    where: { orgId, slackUserId: null, user: { email: { not: null } } },
-    select: { id: true, user: { select: { email: true } } },
-  });
+  if (!messaging?.capabilities.emailLookup) return null;
+
+  // Ordered by id so the client's successive windows tile the org exactly once.
+  const [total, rows] = await Promise.all([
+    prisma.orgMembership.count({ where: { orgId } }),
+    prisma.orgMembership.findMany({
+      where: { orgId },
+      orderBy: { id: "asc" },
+      skip: offset,
+      take: limit,
+      select: { id: true, user: { select: { email: true } } },
+    }),
+  ]);
+
+  let matched = 0;
   for (const row of rows) {
-    await linkMembershipByEmail(row.id, messaging, row.user.email!);
+    // No email = nothing to look up. They still count as processed: the bar
+    // walks the whole org, not just the part of it we can search.
+    if (!row.user.email) continue;
+    if (await linkMembershipByEmail(row.id, messaging, row.user.email)) matched++;
   }
+
+  // Counted after the writes, so the number the admin reads at the end includes
+  // this batch. It's the whole org's tally, not a running sum of `matched` —
+  // people already linked before the sweep count too.
+  const synced = await prisma.orgMembership.count({
+    where: { orgId, slackUserId: { not: null } },
+  });
+
+  return {
+    total,
+    processed: Math.min(offset + rows.length, total),
+    matched,
+    synced,
+    done: rows.length < limit,
+  };
 }
 
 /**
- * The other half of autoPopulateSlackIds: link ONE person in every org they
- * belong to that doesn't have their member id yet. Called on every sign-in
- * (lib/auth.ts) and right after redeeming an org key, which between them cover
- * everybody the install-time sweep can't see — accounts created later, people who
- * joined an org later, and anyone whose integration account didn't exist yet. That
+ * The other half of syncOrgSlackIds: link ONE person in every org they belong to
+ * that doesn't have their member id yet. Called on every sign-in (lib/auth.ts)
+ * and right after redeeming an org key, which between them cover everybody an
+ * admin's last sweep couldn't see — accounts created since, people who joined an
+ * org since, and anyone whose integration account didn't exist yet. That keeps
  * the manual field in /profile a fallback rather than a chore.
  *
  * Orgs with no bot installed are filtered out in the query, so the usual "nothing

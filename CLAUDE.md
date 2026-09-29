@@ -153,7 +153,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   additions — in one PATCH, applied as one transaction with one grouped Slack
   notice; it replaced the per-seat `admin/assignments` routes, which fired a
   round trip and a Slack message per person), `admin/templates(+/[id])`,
-  `admin/generate(+/apply)`, `admin/availability-request`.
+  `admin/generate(+/apply)`, `admin/availability-request`,
+  `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
+  their plan payloads, `[id]` GET is what carries one back).
   (`admin/users/[id]` PATCH also renames a member — `name` is global to the
   person, and the Team tab's cog → "Edit details" is its only caller.)
   (No `sets/[id]/autofill` — "Auto schedule" in the set detail modal runs
@@ -194,6 +196,34 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   month/3/6/12 months. Only "this plan" is counted client-side; every window is
   ONE on-demand query to `GET /api/admin/team-load?metric=…`, cached per window
   in the modal — the plan itself never carries a year of assignments. ✅tested
+  Also the preview's COPY/PASTE clipboard: `copySet` lifts a set's EFFECTIVE
+  shape (already resolved against its team catalog) + roster, `pasteSet` stamps
+  both onto another set — which keeps its own identity (time, label, team) and
+  takes the source's form, every pasted seat LOCKED so a later auto-fill treats
+  it as a constraint. ✅tested
+- `drafts.ts` — saved generate previews: `MAX_DRAFTS` (5 per org),
+  `AUTOSAVE_INTERVAL_MS`, `canSaveDraft` (its `replacingId` is what makes
+  re-saving an existing draft free, and promoting the recovery row NOT free),
+  `draftLabel`, `normalizeDraftName`. Two kinds of `ScheduleDraft` row, told
+  apart by `isRecovery`: DELIBERATE ones (the Save Draft button, capped, may be
+  named) and the ONE rolling RECOVERY slot per person per org (the once-a-minute
+  autosave), which never counts against the cap — a full set of keep-slots is
+  exactly when you most need the safety net. Both the POST and the promoting
+  PATCH re-check the cap against the db. ✅tested
+- `scheduleTour.ts` — the words of the review workspace's guided tour, as data:
+  `tourSteps({preview})` → one step per quirk (views · team load · hover ·
+  locking · the card's ↻/✕ · copy-paste-undo · the warnings · committing), with
+  the last step forked per mode (Preview Mode has no draft to park and commits
+  with Save Changes). It is the ONLY explanation of that screen — the paragraph
+  of instructions that used to head the modal and the shortcut hint under it
+  were deleted in its favour, so a missing step = an undiscoverable feature.
+  ✅tested
+- `tourSeen.ts` — "has this browser been shown that walkthrough?", in
+  localStorage: `APP_TOUR_KEY` (the navbar's "?" tour) + `scheduleTourKey(mode)`
+  (the review workspace's, keyed per mode so seeing one doesn't silence the
+  other) + `hasSeenTour`/`markTourSeen`. Every access is wrapped — private mode
+  THROWS rather than returning null — and an unreadable store reports "seen", so
+  a browser that can never record the flag isn't nagged every visit. ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
   (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.
@@ -297,13 +327,36 @@ and sending a note act immediately; the Notes box is a composer with a send
 arrow, empty on every open, its log below holding what's been written; there's
 no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFields`,
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
-`GenerateModal` (auto-schedule options — window, which recurring sets, and an
+`GenerateModal` (the "Generate New Schedule" options — window, which recurring sets, and an
 optional per-set-type color) → `StagedScheduleModal` (the preview; a set type's
 color tints its cards at 10%, matched via `StagedSet.templateId`; every slot row
 leads with a ✕ that drops THAT slot from THAT set — capacity − 1 plus its
 occupant, written into `StagedSet.slotCapacities`, which both apply and the
 preview save persist, the same edit `SetDetailModal.deleteSlot` makes — and a
-role emptied of slots comes back via the card's "+ role" chips),
+role emptied of slots comes back via the card's "+ role" chips; the unfillable
+(red) and conflict (amber) banners ride ON the footer's action bar, bled to the
+modal's edges — the body scrolls for a long plan, so at the top they were gone
+by the time you were looking at the roles they named; clicking a
+card's own space SELECTS it — ⌘/Ctrl+C then copies its shape + people and
+⌘/Ctrl+V stamps them onto another selected card, ⌘/Ctrl+Z takes the last paste
+back (an undo entry snapshots the WHOLE set list, since `designateMDs` re-settles
+directors across the plan, and a snapshot whose `after` no longer matches `sets`
+means something else edited since — the history is dropped rather than rewinding
+over that work); all three are bound on the document so cards needn't enter the
+tab order, and each flashes a pill on the card it happened to
+(`animate-flash-fade`); in the generate flow only, Save Draft parks the
+plan via `lib/drafts.ts` and a once-a-minute autosave writes the same plan into the
+org's recovery slot),
+`DraftsModal` (the saved-preview list — open or delete, the delete confirm
+stacked over it so you stay in the list, which is where making room happens),
+`ScheduleHelpModal` (the review workspace's guided tour: a STEPPED modal, not
+spotlights — that screen scrolls two ways and regroups itself, so anything
+anchored to a live element would point at empty space half the time; each step
+draws its own little picture instead. Opened by the footer's blue Help button
+(`Button variant="info"`, between Save Draft and Apply), and once on its own the
+first time a browser reaches each mode. It swallows Escape in the CAPTURE phase
+— every `Modal` closes on a document keydown, so otherwise dismissing the help
+would also back out of the plan it explains),
 `Navbar` (top tab strip at `lg` and up; below that an app-style floating
 bottom bar — phones AND tablets, gated on `lib/layout.ts`
 `BOTTOM_NAV_MAX_WIDTH`, which `SwipePager` and `PullToRefresh` share so the

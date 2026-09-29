@@ -1,4 +1,4 @@
-// POST /api/admin/generate — the "Auto schedule" button (admin only).
+// POST /api/admin/generate — the "Generate New Schedule" button (admin only).
 // Body: either { weeks?: number } (default 12 ≈ 3 months) OR
 //       { startDate: "YYYY-MM-DD", endDate: "YYYY-MM-DD" } for an explicit
 //       window. The date range wins when both dates are supplied.

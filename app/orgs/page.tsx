@@ -17,6 +17,7 @@ import { useMe } from "@/components/MeProvider";
 import OrgNotifications from "@/components/OrgNotifications";
 import OrgRetention from "@/components/OrgRetention";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
+import SlackSyncModal from "@/components/SlackSyncModal";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
 import Select from "@/components/common/Select";
 import {
@@ -66,6 +67,9 @@ export default function OrgSettingsPage() {
   const [spotifyNotice, setSpotifyNotice] =
     useState<{ tone: "indigo" | "amber"; text: string } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  // "Sync team members" — the org-wide email→Slack-ID sweep, which owns its own
+  // confirmation and progress (see SlackSyncModal).
+  const [syncOpen, setSyncOpen] = useState(false);
   const [orgKey, setOrgKey] = useState("");
   const [addError, setAddError] = useState("");
   const [addBusy, setAddBusy] = useState(false);
@@ -119,6 +123,9 @@ export default function OrgSettingsPage() {
     setDigestDays(null);
     setDigestError("");
     setDigestSaved(false);
+    // A sync belongs to the org it was started from; don't leave its dialog
+    // standing open over a different org's settings.
+    setSyncOpen(false);
     if (!selectedId) return;
     const org = orgs?.find((o) => o.id === selectedId);
     if (!org?.isAdmin) return;
@@ -302,7 +309,11 @@ export default function OrgSettingsPage() {
                   </p>
 
                   {selected.isAdmin ? (
-                    <div className="flex flex-wrap gap-2 pt-1">
+                    /* Connect and Sync sit together on the left as the two
+                       things you came here to do; Disconnect drifts to the far
+                       right, outlined in red, so the destructive one is never
+                       the button next to the one you meant to press. */
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
                       <Button
                         onClick={() => {
                           window.location.href = `/api/slack/install?orgId=${selected.id}`;
@@ -313,22 +324,31 @@ export default function OrgSettingsPage() {
                           : "Connect to Slack"}
                       </Button>
                       {slack?.orgSlackConnected && (
-                        <Button
-                          variant="secondary"
-                          onClick={async () => {
-                            await fetch(
-                              `/api/slack/install?orgId=${selected.id}`,
-                              { method: "DELETE" }
-                            );
-                            // Every page caches this answer per org — drop it
-                            // so the next reader asks again (connecting is a
-                            // full navigation, so it needs no equivalent).
-                            invalidateSlackStatus(selected.id);
-                            await refreshMe();
-                          }}
-                        >
-                          Disconnect
-                        </Button>
+                        <>
+                          <Button
+                            variant="secondary"
+                            onClick={() => setSyncOpen(true)}
+                          >
+                            Sync Team Members
+                          </Button>
+                          <Button
+                            variant="dangerOutline"
+                            className="ml-auto"
+                            onClick={async () => {
+                              await fetch(
+                                `/api/slack/install?orgId=${selected.id}`,
+                                { method: "DELETE" }
+                              );
+                              // Every page caches this answer per org — drop it
+                              // so the next reader asks again (connecting is a
+                              // full navigation, so it needs no equivalent).
+                              invalidateSlackStatus(selected.id);
+                              await refreshMe();
+                            }}
+                          >
+                            Disconnect
+                          </Button>
+                        </>
                       )}
                     </div>
                   ) : (
@@ -538,6 +558,18 @@ export default function OrgSettingsPage() {
             )}
           </section>
         </div>
+      )}
+
+      {/* Keyed on the org so switching orgs mid-dialog can't carry a result
+          from one over to the other. */}
+      {selected && selected.isAdmin && (
+        <SlackSyncModal
+          key={selected.id}
+          open={syncOpen}
+          orgId={selected.id}
+          workspaceName={slack?.slackTeamName ?? null}
+          onClose={() => setSyncOpen(false)}
+        />
       )}
 
       {addOpen && (
