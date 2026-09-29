@@ -10,6 +10,7 @@ import type { MessageFormat } from "../../messageFormat";
 import {
   MessagingTransport,
   type Attempt,
+  type EmailLookup,
   type MessagingCapabilities,
   type IntegrationName,
   type DmTarget,
@@ -17,6 +18,20 @@ import {
 import { SLACK_FORMAT } from "./format";
 
 const SLACK_API = "https://slack.com/api";
+
+/**
+ * Slack methods that must be sent as `application/x-www-form-urlencoded`.
+ *
+ * Most of the Web API happily reads a JSON body, so everything else here goes
+ * out as JSON. These do not: they parse form parameters only, and a JSON body
+ * leaves them seeing no arguments at all — answered as `invalid_arguments`,
+ * which looks like a rejected email rather than a rejected request. That cost
+ * us a silently broken auto-link, so add to this set rather than "fixing" a
+ * caller the next time a lookup mysteriously refuses perfectly good input.
+ *
+ * https://docs.slack.dev/reference/methods/users.lookupByEmail
+ */
+const FORM_ENCODED_OPS = new Set(["users.lookupByEmail"]);
 
 // Minimum gap between two Slack calls. Deliberately modest: it exists to stop a
 // `Promise.all` fan-out from arriving as one burst, which is what actually
@@ -55,13 +70,38 @@ export class SlackTransport extends MessagingTransport {
   }
 
   protected buildRequest(op: string, body: Record<string, unknown>) {
+    const url = `${SLACK_API}/${op}`;
+    const auth = `Bearer ${this.credential}`;
+
+    // A handful of Slack methods never learned to read a JSON body. Handed one
+    // they don't reject it loudly — they just see NO arguments at all and
+    // answer `invalid_arguments`, which reads like a bad email rather than a
+    // bad request. Sent form-encoded, the very same call works.
+    if (FORM_ENCODED_OPS.has(op)) {
+      const form = new URLSearchParams();
+      for (const [key, value] of Object.entries(body)) {
+        if (value !== undefined && value !== null) form.set(key, String(value));
+      }
+      return {
+        url,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded; charset=utf-8",
+            Authorization: auth,
+          },
+          body: form.toString(),
+        } satisfies RequestInit,
+      };
+    }
+
     return {
-      url: `${SLACK_API}/${op}`,
+      url,
       init: {
         method: "POST",
         headers: {
           "Content-Type": "application/json; charset=utf-8",
-          Authorization: `Bearer ${this.credential}`,
+          Authorization: auth,
         },
         body: JSON.stringify(body),
       } satisfies RequestInit,
@@ -158,8 +198,22 @@ export class SlackTransport extends MessagingTransport {
    * auto-populate OrgMembership.slackUserId at install time so most people never
    * click "Connect". Returns null on any miss.
    */
-  async lookupUserIdByEmail(email: string): Promise<string | null> {
-    const data = await this.request("users.lookupByEmail", { email });
-    return (data?.user?.id as string | undefined) ?? null;
+  async lookupUserIdByEmail(email: string): Promise<EmailLookup> {
+    const outcome = await this.requestResult("users.lookupByEmail", { email });
+    if (outcome.kind === "ok") {
+      const id = outcome.data?.user?.id as string | undefined;
+      return id ? { kind: "found", userId: id } : { kind: "not-found" };
+    }
+    // The one failure that ISN'T a problem: Slack answering that it has nobody
+    // with this address. Everything else — a rejected request, a bad token, a
+    // rate limit we couldn't ride out — is a failure the caller must hear about
+    // rather than record as "looked, found nobody".
+    if (outcome.kind === "failed" && outcome.error === "users_not_found") {
+      return { kind: "not-found" };
+    }
+    return {
+      kind: "failed",
+      error: outcome.kind === "failed" ? outcome.error : "rate limited",
+    };
   }
 }

@@ -70,6 +70,17 @@ export const DM_FIELDS = {
 } as const;
 
 /** What one HTTP attempt turned out to be. */
+/**
+ * What an email lookup came back with. All three cases matter to the caller: a
+ * person found, a person genuinely not in the workspace, and a lookup that
+ * never got an answer at all. Collapsing the last two into `null` is precisely
+ * what let a wholly broken sweep report a clean run in which nobody matched.
+ */
+export type EmailLookup =
+  | { kind: "found"; userId: string }
+  | { kind: "not-found" }
+  | { kind: "failed"; error: string };
+
 export type Attempt =
   | { kind: "ok"; data: Record<string, any> }
   | { kind: "failed"; error: string }
@@ -170,7 +181,7 @@ export abstract class MessagingTransport {
    * `capabilities.emailLookup` is true; elsewhere it returns null always, and
    * callers should check the capability instead of inferring "not in workspace".
    */
-  abstract lookupUserIdByEmail(email: string): Promise<string | null>;
+  abstract lookupUserIdByEmail(email: string): Promise<EmailLookup>;
 
   // ── Shared behaviour ──────────────────────────────────────────────────────
 
@@ -185,11 +196,30 @@ export abstract class MessagingTransport {
     op: string,
     body: Record<string, unknown>
   ): Promise<Record<string, any> | null> {
+    const outcome = await this.requestResult(op, body);
+    return outcome.kind === "ok" ? outcome.data : null;
+  }
+
+  /**
+   * The same call, with the REASON it failed still attached.
+   *
+   * `request` above flattens every kind of failure to `null`, which is right
+   * for send-and-forget operations but wrong for a lookup: "this person isn't
+   * in the workspace" and "the request was rejected" are both null, so a
+   * completely broken sweep reports itself as a clean run where nobody matched.
+   * Callers that need to tell those apart use this instead.
+   */
+  protected async requestResult(
+    op: string,
+    body: Record<string, unknown>
+  ): Promise<Attempt> {
     if (integrationDryRun()) {
       console.log(`[${this.logTag}] DRY RUN ${op}:`, JSON.stringify(body));
-      return this.dryRunResponse(op);
+      return { kind: "ok", data: this.dryRunResponse(op) };
     }
-    if (!this.credential) return null;
+    if (!this.credential) {
+      return { kind: "failed", error: "no credential for this org" };
+    }
 
     const attempt = async (): Promise<Attempt> => {
       const { url, init } = this.buildRequest(op, body);
@@ -212,16 +242,16 @@ export abstract class MessagingTransport {
         // Still limited after one retry — give up and let the caller's own retry
         // path (the next cron run, usually) handle it.
         console.error(`[${this.logTag}] ${op} still rate limited after retry`);
-        return null;
+        return outcome;
       }
       if (outcome.kind === "failed") {
         console.error(`[${this.logTag}] ${op} failed:`, outcome.error);
-        return null;
+        return outcome;
       }
-      return outcome.data;
+      return outcome;
     } catch (err) {
       console.error(`[${this.logTag}] ${op} threw:`, err);
-      return null;
+      return { kind: "failed", error: err instanceof Error ? err.message : "threw" };
     }
   }
 

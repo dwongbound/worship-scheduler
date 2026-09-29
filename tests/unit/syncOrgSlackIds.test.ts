@@ -65,9 +65,8 @@ describe("syncOrgSlackIds", () => {
     const batch = await syncOrgSlackIds("org1", 0, 10);
 
     expect(fetchMock.mock.calls[0][0]).toContain("users.lookupByEmail");
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
-      email: "sam@example.com",
-    });
+    // Form-encoded, not JSON — see the note in tests/unit/messagingTransport.
+    expect(fetchMock.mock.calls[0][1].body).toBe("email=sam%40example.com");
     expect(membershipUpdate).toHaveBeenCalledWith({
       where: { id: "m1" },
       data: { slackUserId: "U9" },
@@ -77,6 +76,7 @@ describe("syncOrgSlackIds", () => {
       processed: 2,
       matched: 2,
       synced: 2,
+      failed: 0,
       done: true,
     });
   });
@@ -153,5 +153,47 @@ describe("syncOrgSlackIds", () => {
 
     expect(await syncOrgSlackIds("org1", 0, 10)).toBeNull();
     expect(membershipFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("syncOrgSlackIds failure reporting", () => {
+  // The whole point of counting failures: a batch that achieved nothing must
+  // not come back looking like a batch where nobody happened to match. The
+  // production symptom was every lookup answered `invalid_arguments` while the
+  // modal drew a full green progress bar.
+  it("reports a rejected lookup as failed, and stops rather than grinding on", async () => {
+    counts(2, 0);
+    membershipFindMany.mockResolvedValue([
+      member("m1", "sam@example.com"),
+      member("m2", "kate@example.com"),
+    ]);
+    // Slack rejecting the REQUEST — not answering "we don't have this person".
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ok: false, error: "invalid_arguments" }),
+    });
+
+    const batch = await syncOrgSlackIds("org1", 0, 10);
+
+    expect(batch?.failed).toBe(1);
+    expect(batch?.matched).toBe(0);
+    // Nothing was written, and it stopped at the first: the lookup is broken
+    // for everyone, so walking the rest of the org only makes the admin wait
+    // longer for the same bad news.
+    expect(membershipUpdate).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a plain absence out of the failure count", async () => {
+    counts(1, 0);
+    membershipFindMany.mockResolvedValue([member("m1", "ghost@example.com")]);
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ok: false, error: "users_not_found" }),
+    });
+
+    const batch = await syncOrgSlackIds("org1", 0, 10);
+
+    // Nobody matched, but nothing is wrong — the sweep should say so quietly.
+    expect(batch?.failed).toBe(0);
+    expect(batch?.matched).toBe(0);
   });
 });
