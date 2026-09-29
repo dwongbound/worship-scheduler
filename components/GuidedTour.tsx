@@ -9,8 +9,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Button from "./common/Button";
+import { APP_TOUR_KEY, hasSeenTour, markTourSeen } from "@/lib/tourSeen";
 
-const SEEN_KEY = "guided-tour-seen";
 const TIP_WIDTH = 320;
 
 type Step = {
@@ -26,45 +26,62 @@ type Step = {
 };
 
 // Steps everyone sees. Kept in-file so the whole feature is one unit.
+//
+// Ordered as the WORKFLOW runs, not as the tabs sit in the navbar: an admin
+// asks for availability, you fill it in, you get scheduled, you confirm, and
+// you hand a set off when you can't make it. Someone following the tour in
+// order should end it knowing how a set gets from "proposed" to "yours".
 const COMMON_STEPS: Step[] = [
   {
     title: "Welcome to Worship Scheduler",
-    body: "Plan worship teams, request set swaps, and track availability all in one place. Here's a quick tour of where things live.",
+    body: "Plan worship teams, track who's free, and hand sets off when you can't make one. Here's how a set gets from an admin's plan onto your calendar.",
   },
   {
-    title: "Calendar",
-    body: "The Calendar tab shows every upcoming set. Click a set to see who's playing which role and to confirm your spot.",
-    target: "/calendar",
-    href: "/calendar",
-  },
-  {
-    title: "My Sets",
-    body: "My Sets is every set you're on, split by what it's waiting on: covers and swaps in flight, sets pending your confirmation, and confirmed ones you can export to your calendar.",
-    target: "/set-manager",
-    href: "/set-manager",
-  },
-  {
-    title: "Availabilities",
-    body: "When an admin sends an availability request, fill it in here so the scheduler knows when you can (and can't) play.",
+    title: "It starts with a request",
+    body: "An admin asks the team for availability. You'll see a red dot on the Availabilities tab until you've answered — that dot is the app's only nag, so it's worth clearing.",
     target: "/schedule",
     href: "/schedule",
   },
   {
-    title: "Respond to a request",
-    body: "When an admin asks for availability, block the dates you can't serve within their window here, then hit Submit Response so the team knows you're done. If you're already free, just submit.",
+    title: "Block the dates you can't serve",
+    body: "Inside the request, mark the days or times you're away. A weekly commitment can repeat — forever, for a number of weeks, or until a date. If you're free the whole window, block nothing.",
     target: "avail-editors",
     href: "/schedule",
   },
   {
-    title: "Drag to block dates",
-    body: "The fastest way to add an outage: click a day, or click and drag across a run of days on the calendar, to block them all at once.",
+    title: "Drag across a run of days",
+    body: "The fast way to block a holiday: click a day, or click and drag across a stretch of them, straight on the calendar.",
     target: "avail-calendar",
     href: "/schedule",
     desktopOnly: true,
   },
   {
+    title: "Then say you're done",
+    body: "Submit response is what tells the admin you've finished — without it they can’t tell “free all month” from “hasn’t looked yet”. You can reopen and change your answer any time after.",
+    target: "avail-editors",
+    href: "/schedule",
+  },
+  {
+    title: "Calendar",
+    body: "Once the admin builds the schedule, every upcoming set shows up here. Open one to see who's playing which role, read the set's notes and songs, and confirm your own spot.",
+    target: "/calendar",
+    href: "/calendar",
+  },
+  {
+    title: "My Sets",
+    body: "Everything you're on, grouped by what it's waiting on: sets needing your confirmation, covers and swaps in flight, and confirmed ones you can export to your own calendar. Confirm all clears the pending pile in one go.",
+    target: "/set-manager",
+    href: "/set-manager",
+  },
+  {
+    title: "When you can't make one",
+    body: "From My Sets, hand a set off: ask for a cover and anyone on that team who plays the role can take it, or propose a straight swap with a specific person's set. Either way an admin approves the handover before it's final — so you're not off the hook until they do.",
+    target: "/set-manager",
+    href: "/set-manager",
+  },
+  {
     title: "Switching orgs",
-    body: "If you serve in more than one ministry — say your college group and TapWorship — each is its own org with its own Slack workspace. Use this switcher to move between them; your calendar, sets, and requests all follow the org you pick.",
+    body: "If you serve in more than one ministry — say your college group and TapWorship — each is its own org. Use this switcher to move between them; your calendar, sets, and requests all follow the org you pick.",
     target: "orgs",
   },
 ];
@@ -72,25 +89,38 @@ const COMMON_STEPS: Step[] = [
 // Extra steps shown only to admins, covering the admin-only tabs.
 const ADMIN_STEPS: Step[] = [
   {
-    // The admin tabs are collapsed under a single "Admin" dropdown, so both
+    // The admin tabs are collapsed under a single "Admin" dropdown, so the
     // admin steps spotlight that trigger (their copy names the tab inside it).
-    title: "Create sets & schedules",
-    body: "Under the Admin menu, the Create tab is where you add sets, roll out weekly templates, auto-generate a roster, and send availability requests.",
+    title: "Ask the team for availability",
+    body: "Under the Admin menu, the Create tab is where the cycle starts: define your weekly recurring sets, then send an availability request for the window you're scheduling. The same tab shows you who has answered and who hasn't.",
+    target: "/admin",
+    href: "/create",
+  },
+  {
+    title: "Build the schedule",
+    body: "Generate New Schedule expands your recurring sets and fills them from who plays what and who's free — then hands you a preview to fix up before anything is saved. Nobody is created or messaged until you apply it. That preview has a Help button of its own with a tour of everything it can do.",
     target: "/admin",
     href: "/create",
   },
   {
     title: "Manage your team",
-    body: "Under the Admin menu, the Team tab lets you add members, grant or revoke admin, set the instruments people play, and organize ministry teams.",
+    body: "Under the Admin menu, the Team tab is where people live: add members, grant or revoke admin, set which roles each person plays, and organise ministry teams. Nobody can be scheduled until they have a role.",
     target: "/admin",
     href: "/users",
+  },
+  {
+    title: "Editing what's already out",
+    body: "Preview Mode on the Calendar opens the same review workspace over the sets you've already published, so you can shuffle people across weeks at once instead of set by set.",
+    target: "/calendar",
+    href: "/calendar",
+    desktopOnly: true,
   },
 ];
 
 // Closing step everyone sees last — highlights the user menu.
 const PROFILE_STEP: Step = {
   title: "Your profile",
-  body: "Open the menu under your name to check the teams you're on and the roles you play — your org admin sets both, so ask them if something's missing. You can't be scheduled until you have a role. Reopen this tour anytime from the \"?\" icon.",
+  body: "Open the menu under your name to check the teams you're on and the roles you play — your org admin sets both, so ask them if something's missing. Reopen this tour anytime from the “?” icon.",
   target: "profile",
 };
 
@@ -135,14 +165,9 @@ export default function GuidedTour({ isAdmin }: { isAdmin: boolean }) {
 
   // Auto-open the first time this browser sees the app.
   useEffect(() => {
-    try {
-      if (!localStorage.getItem(SEEN_KEY)) {
-        setStep(0);
-        setOpen(true);
-      }
-    } catch {
-      // localStorage unavailable (private mode) — just skip the auto-open.
-    }
+    if (hasSeenTour(APP_TOUR_KEY)) return;
+    setStep(0);
+    setOpen(true);
   }, []);
 
   // Navigate to the page the current step is describing.
@@ -203,11 +228,7 @@ export default function GuidedTour({ isAdmin }: { isAdmin: boolean }) {
 
   // Mark seen and close, whether the user finished or skipped.
   const finish = () => {
-    try {
-      localStorage.setItem(SEEN_KEY, "1");
-    } catch {
-      // ignore — worst case the tour auto-opens again next visit.
-    }
+    markTourSeen(APP_TOUR_KEY);
     setOpen(false);
   };
 

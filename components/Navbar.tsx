@@ -358,8 +358,7 @@ export default function Navbar() {
   const adminGroupActive = adminTabs.some((t) => isActive(t.href));
   const adminHasDot = adminTabs.some((t) => "dot" in t && t.dot);
 
-  // "Org settings" is only useful to someone who administers an org — same rule
-  // the org switcher's copy of the item uses (OrgSwitcher `canManageOrgs`).
+  // "Org settings" is only useful to someone who administers an org.
   const canManageOrgs = !!orgs?.some((o) => o.isAdmin);
 
   // Feed the swipe handler the current tab order, active tab, and a navigate
@@ -546,8 +545,8 @@ export default function Navbar() {
               {canManageOrgs && (
                 // Mirrors "Platform admin" below: an admin-only row, so it gets
                 // the amber accent + shield the rest of the app marks admin
-                // surfaces with. Hidden on phones like the org switcher's copy,
-                // because /orgs is a desktop-oriented full-page view.
+                // surfaces with. Hidden on phones, because /orgs is a
+                // desktop-oriented full-page view.
                 <Link
                   href="/orgs"
                   className="hidden items-center gap-1.5 px-4 py-2 text-sm font-medium text-amber-600

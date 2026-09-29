@@ -27,7 +27,7 @@ test("admin can generate for an availability request's date range", async ({
   // Pick a request (the seed ships "Fall 2026") as the generate scope. The
   // option value is "req:<id>"; select the first such option regardless of its
   // (date-dependent) label.
-  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
   const reqValue = await scope
@@ -76,7 +76,7 @@ test("re-running the auto schedule inside the preview doesn't crash it", async (
   await login(page, "admin");
   await page.goto("/create");
 
-  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
   const reqValue = await scope
@@ -138,10 +138,10 @@ test("admin can add a weekly template and generate a schedule", async ({ page })
   await expect(page.getByText(/Sundays · 9:00 AM/)).toBeVisible();
 
   // Run the scheduler for 4 weeks — this stages a preview, it doesn't save yet.
-  // The scope + template picks live in the "Auto schedule" dialog now.
+  // The scope + template picks live in the "Generate New Schedule" dialog now.
   // (Target the number input by role: "Weeks ahead" also appears as an option
   // in the "Schedule for" select, so getByLabel alone is ambiguous.)
-  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const weeks = options.getByRole("spinbutton", { name: "Weeks ahead" });
   // "Weeks ahead" is a stepper: − / + either side of a still-typeable field.
@@ -192,7 +192,7 @@ test("review dropdowns flag people who are unavailable at a set's time", async (
   // listed) option in a Thursday set's roster dropdowns. Use a large window so
   // there are always fresh (unstaffed) Thursdays to review, even if an earlier
   // test already staffed the nearest few weeks.
-  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   await options.getByRole("spinbutton", { name: "Weeks ahead" }).fill("16");
   await options.getByRole("button", { name: "Generate preview" }).click();
@@ -337,7 +337,7 @@ test("re-running the preview settles MDs on a plan that requires them", async ({
   };
   await expect(await findTemplateRow(/MD Rotation Check/)).toBeVisible();
 
-  await page.getByRole("button", { name: "Auto schedule…" }).click();
+  await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const weeks = options.getByRole("spinbutton", { name: "Weeks ahead" });
   await weeks.fill("4");
@@ -396,4 +396,86 @@ test("re-running the preview settles MDs on a plan that requires them", async ({
   const row = await findTemplateRow(/MD Rotation Check/);
   await row.getByRole("button", { name: "Delete" }).click();
   await deleted;
+});
+
+test("the workspace opens straight onto a skeleton, never the empty state", async ({
+  page,
+}) => {
+  await login(page, "admin");
+
+  // Hold the generate response so the in-flight state is a fixed thing to look
+  // at rather than a frame that may or may not be caught.
+  await page.route("**/api/admin/generate", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await route.continue();
+  });
+
+  await page.goto("/create");
+  await page.getByRole("button", { name: "Generate New Schedule" }).click();
+  const options = page.getByRole("dialog");
+  const scope = options.getByLabel("Schedule for");
+  const reqValue = await scope
+    .locator('option[value^="req:"]')
+    .first()
+    .getAttribute("value");
+  await scope.selectOption(reqValue!);
+  await options.getByRole("button", { name: "Generate preview" }).click();
+
+  // The full workspace is up immediately, wearing a skeleton — the options
+  // dialog does not sit there spinning and then hand over.
+  const review = page
+    .getByRole("dialog")
+    .filter({ hasText: "Review generated schedule" });
+  await expect(review).toBeVisible();
+  await expect(review.getByTestId("workspace-skeleton")).toBeVisible();
+  await expect(options.getByRole("button", { name: "Generate preview" })).toHaveCount(0);
+
+  // And it is the SAME panel, not a smaller one standing in: measured while
+  // loading and again once the plan is in, it must not resize underneath you.
+  // The skeleton used to fall back to the default centred card, which read as a
+  // second modal flashing past on the way to the real one.
+  const loadingBox = await review.boundingBox();
+  expect(loadingBox).not.toBeNull();
+
+  // Watch for the in-between states rather than polling for them. Both bugs
+  // here were ONE render long — far too short for an expect() poll to land on,
+  // so a plain toHaveCount(0) passes whether or not they happen. A
+  // MutationObserver runs on every DOM commit, which is exactly the resolution
+  // needed to prove a frame was never painted.
+  await page.evaluate(() => {
+    const seen: string[] = [];
+    (window as Window & { __flashes?: string[] }).__flashes = seen;
+    const watched = [
+      "Nothing to schedule in this window", // the old empty-state branch
+      "0 sets · 0 assignments", // a fully-drawn but empty workspace
+      "Nobody assigned yet.", // the same, in the Team load panel
+    ];
+    new MutationObserver(() => {
+      const text = document.body.innerText;
+      for (const phrase of watched) {
+        if (text.includes(phrase) && !seen.includes(phrase)) seen.push(phrase);
+      }
+    }).observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  });
+
+  // Then the real thing fills in where the grey was.
+  await expect(review.getByTestId("staged-set-card").first()).toBeVisible();
+  await expect(review.getByTestId("workspace-skeleton")).toHaveCount(0);
+  await expect(review.getByText("Nothing to schedule in this window")).toHaveCount(0);
+
+  // Nothing empty was ever on screen: the skeleton was replaced by the finished
+  // plan in one step.
+  const flashes = await page.evaluate(
+    () => (window as Window & { __flashes?: string[] }).__flashes ?? []
+  );
+  expect(flashes).toEqual([]);
+
+  const loadedBox = await review.boundingBox();
+  expect(loadedBox).not.toBeNull();
+  expect(Math.abs(loadedBox!.width - loadingBox!.width)).toBeLessThan(2);
+  expect(Math.abs(loadedBox!.height - loadingBox!.height)).toBeLessThan(2);
 });

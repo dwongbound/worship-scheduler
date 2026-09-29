@@ -32,7 +32,7 @@ export type IntegrationName = "SLACK" | "DISCORD";
 export type MessagingCapabilities = {
   /**
    * Can resolve a member id from an email address, which is what makes linking
-   * automatic (see autoPopulateSlackIds / linkSlackIdForUser in lib/slack.ts).
+   * automatic (see syncOrgSlackIds / linkSlackIdForUser in lib/slack.ts).
    * FALSE for Discord — its API exposes no member email at any permission
    * level, so every member must link their own account. Callers must check this
    * rather than calling lookupUserIdByEmail and treating null as "not found".

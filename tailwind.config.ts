@@ -78,6 +78,16 @@ const config: Config = {
           "0%": { opacity: "0", transform: "translateY(0.5rem)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        // A status pill that announces itself over a card and then leaves —
+        // the "Copied!"/"Pasted!" flashes on the staged-schedule cards. It
+        // pops in quickly, HOLDS long enough to be read, then fades out, so
+        // the whole life of it is one animation with no timers to clean up.
+        "flash-fade": {
+          "0%": { opacity: "0", transform: "translateY(-0.25rem) scale(0.96)" },
+          "12%": { opacity: "1", transform: "translateY(0) scale(1)" },
+          "70%": { opacity: "1", transform: "translateY(0) scale(1)" },
+          "100%": { opacity: "0", transform: "translateY(-0.25rem) scale(0.98)" },
+        },
       },
       animation: {
         jump: "jump 1.2s ease-in-out infinite",
@@ -86,6 +96,7 @@ const config: Config = {
         radiate: "radiate 2s ease-out infinite",
         "check-draw": "check-draw 0.4s ease-out forwards",
         "toast-in": "toast-in 0.2s ease-out",
+        "flash-fade": "flash-fade 1.2s ease-out forwards",
       },
     },
   },
