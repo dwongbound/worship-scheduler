@@ -370,12 +370,15 @@ would also back out of the plan it explains),
 `Navbar` (top tab strip at `lg` and up; below that an app-style floating
 bottom bar — phones AND tablets, gated on `lib/layout.ts`
 `BOTTOM_NAV_MAX_WIDTH`, which `SwipePager` and `PullToRefresh` share so the
-gestures can't drift from the bar), `SwipePager` (the tab swipe: the PAGE NEVER
-MOVES — a clearly sideways drag (`lib/swipeNav.ts`) fades in an edge pill
-naming the tab you're pulling toward, solid indigo once armed, and release
-commits; nothing to put back if the gesture was a misread, and no transform on
-the content means it can't become the containing block for a `fixed` modal.
-Touches starting in a dialog or a sideways-scrolling box aren't ours),
+gestures can't drift from the bar), `SwipePager` (the tab swipe: NOTHING
+MOVES — not the page, not the cue. A clearly sideways drag (`lib/swipeNav.ts`)
+fades up a round arrow disc on the side you're heading for, parked clear of the
+edge; it's two stacked discs, the armed indigo one fading in over the pale one
+by the same `progress`, so COLOUR AND OPACITY ARE THE WHOLE ANIMATION and
+"fully dark = release and you land there" is the one thing to read. Nothing to
+put back if the gesture was a misread, and no transform on the content means it
+can't become the containing block for a `fixed` modal. Touches starting in a
+dialog or a sideways-scrolling box aren't ours),
 `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
 `app/layout.tsx` around `SwipePager`; a page registers its own refetch with
 `usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that

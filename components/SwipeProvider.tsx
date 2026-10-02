@@ -4,23 +4,13 @@
 // touch gesture and reads it. `previewIndex` flows the other way: SwipePager
 // sets it mid-drag so the navbar can highlight the tab you're swiping toward
 // before the navigation actually commits.
-//
-// Tabs carry their LABEL as well as their href because the swipe cue names the
-// tab you're pulling toward ("→ My Sets"); an arrow alone doesn't say where
-// you'd land.
 import { createContext, useContext, useRef, useState, type ReactNode } from "react";
 
 type Navigate = (href: string) => void;
 
-export interface SwipeTab {
-  href: string;
-  /** Short name, as the bottom bar spells it — it has to fit in a pill. */
-  label: string;
-}
-
 interface SwipeCtx {
   // Written by the navbar, read by the pager's gesture handler.
-  tabsRef: React.MutableRefObject<SwipeTab[]>;
+  tabsRef: React.MutableRefObject<string[]>;
   activeIndexRef: React.MutableRefObject<number>;
   navigateRef: React.MutableRefObject<Navigate>;
   // Set by the pager mid-drag, read by the navbar for a live highlight.
@@ -32,7 +22,7 @@ interface SwipeCtx {
 const Ctx = createContext<SwipeCtx | null>(null);
 
 export function SwipeProvider({ children }: { children: ReactNode }) {
-  const tabsRef = useRef<SwipeTab[]>([]);
+  const tabsRef = useRef<string[]>([]);
   const activeIndexRef = useRef(0);
   const navigateRef = useRef<Navigate>(() => {});
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);

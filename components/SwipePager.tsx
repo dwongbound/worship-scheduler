@@ -2,13 +2,16 @@
 // Tab-swipe gesture, wherever the app-style bottom bar is shown (phones and
 // tablets — see lib/layout.ts).
 //
-// The page NEVER moves. Drag clearly sideways and a small arrow cue fades in
-// at the edge you're heading toward, naming the tab; pull it all the way (or
-// flick) and release to go there, let go short and it fades away. That's the
-// whole design, and it's deliberate: the previous version translated the
-// content with your finger, so a vertical scroll that drifted a few degrees
-// off-axis shoved the page sideways and you had to drag it back. Here a
-// misread gesture costs an arrow nobody asked for, and nothing else.
+// NOTHING MOVES — not the page, not the cue. Drag clearly sideways and a small
+// arrow disc fades up on the side you're heading for, deepening from pale to
+// solid indigo as you go; release once it's fully dark and you land on that
+// tab, let go short and it fades away. Opacity is the whole animation, so
+// there's exactly one thing to read: dark = you'll land.
+//
+// That's deliberate. The previous version translated the content with your
+// finger, so a vertical scroll that drifted a few degrees off-axis shoved the
+// page sideways and you had to drag it back. Here a misread gesture costs a
+// faint arrow nobody asked for, and nothing else.
 //
 // Not moving the page has a second payoff: no transform on this element means
 // it never becomes the containing block for a `position: fixed` descendant, a
@@ -29,27 +32,48 @@ const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : use
 
 const IN_MS = 250; // the new page fading in after a committed swipe
 const CUE_FADE_MS = 160; // the cue fading out when you let go
+const CUE_INSET = 16; // px the cue floats in from the screen edge
 
-// The cue's two looks. Armed = let go now and you'll land on that tab, so it
-// goes solid indigo — the same "this is active" colour the nav bars use.
-const PILL_BASE =
-  "flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold shadow-lg ring-1";
-const PILL_IDLE =
-  "bg-white text-gray-500 ring-gray-200 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700";
-const PILL_ARMED =
+// The cue is two identical discs stacked: a plain one, and the armed indigo
+// one over it. Fading the top disc in by the same `progress` ripens the COLOUR
+// along with the opacity — one continuous "getting warmer", rather than a
+// grey disc that snaps to indigo at the threshold. Two layers of Tailwind
+// beats interpolating hex in JS, which would have to re-derive both themes.
+const DISC_BASE =
+  "flex h-12 w-12 items-center justify-center rounded-full shadow-lg ring-1";
+const DISC_IDLE =
+  "bg-white text-gray-400 ring-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:ring-gray-700";
+const DISC_ARMED =
   "bg-indigo-600 text-white ring-indigo-600 dark:bg-indigo-500 dark:ring-indigo-500";
+
+// A plain chevron pointing at the tab you're heading for (the whole disc is
+// mirrored for the left-hand one).
+function Arrow() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-5 w-5"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
 
 export default function SwipePager({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { tabsRef, activeIndexRef, navigateRef, setPreviewIndex } = useSwipe();
   const elRef = useRef<HTMLDivElement>(null);
-  // The edge cue. Driven imperatively (style + textContent) rather than by
-  // state: it updates on every touchmove, and re-rendering the whole page
-  // subtree at 60fps to move one arrow would be absurd.
+  // The cue. Driven imperatively (inline styles) rather than by state: it
+  // updates on every touchmove, and re-rendering the whole page subtree at
+  // 60fps to fade one disc would be absurd.
   const cueRef = useRef<HTMLDivElement>(null);
-  const pillRef = useRef<HTMLDivElement>(null);
-  const arrowRef = useRef<SVGSVGElement>(null);
-  const labelRef = useRef<HTMLSpanElement>(null);
+  const stackRef = useRef<HTMLDivElement>(null);
+  const armedRef = useRef<HTMLDivElement>(null);
   // Portals need a DOM to render into, which the server hasn't got.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -88,33 +112,29 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
     // gesture knows it has been overtaken and leaves the new one alone.
     let cueSeq = 0;
 
-    // Paint the cue for the current drag. `progress` is literally its opacity:
-    // invisible at rest, solid at a full pull.
-    const showCue = (toIndex: number, progress: number, toLeft: boolean) => {
+    // Paint the cue for the current drag. `progress` is literally its opacity
+    // — and the armed disc's, so it darkens into indigo as it appears.
+    const showCue = (progress: number, toLeft: boolean) => {
       const cue = cueRef.current;
-      const pill = pillRef.current;
-      if (!cue || !pill) return;
+      if (!cue) return;
       cueSeq++;
-      const tab = tabsRef.current[toIndex];
-      if (labelRef.current) labelRef.current.textContent = tab?.label ?? "";
-      const armed = progress >= 1;
-      // Heading left, the arrow leads ("← Calendar"); heading right it
-      // trails ("My Sets →"). Either way it points off the edge it sits on.
-      pill.className = `${PILL_BASE} ${armed ? PILL_ARMED : PILL_IDLE} ${
-        toLeft ? "flex-row-reverse rounded-r-2xl" : "rounded-l-2xl"
-      }`;
-      if (arrowRef.current) {
-        arrowRef.current.style.transform = toLeft ? "rotate(180deg)" : "";
+      // Mirrored rather than rotated for the left-hand tab: a disc is round,
+      // so only the arrow inside it can tell, and flipping keeps the drop
+      // shadow pointing down where light comes from.
+      if (stackRef.current) {
+        stackRef.current.style.transform = toLeft ? "scaleX(-1)" : "";
       }
-      // Anchored to the destination's edge, and sliding out of it as the pull
-      // fills — so "more swipe" reads as "more arrow", twice over.
-      cue.style.left = toLeft ? "0px" : "auto";
-      cue.style.right = toLeft ? "auto" : "0px";
+      if (armedRef.current) armedRef.current.style.opacity = String(progress);
+      // It sits on the destination's side but floats clear of the edge, and
+      // it never moves: fading from nothing to solid indigo is the ENTIRE
+      // animation, so "fully dark = let go now" is the one thing to read. A
+      // disc that also slid in gave the same fact twice and made the edge of
+      // the screen look draggable, which is what this gesture no longer is.
+      cue.style.left = toLeft ? `${CUE_INSET}px` : "auto";
+      cue.style.right = toLeft ? "auto" : `${CUE_INSET}px`;
       cue.style.display = "block";
       cue.style.transition = "none";
       cue.style.opacity = String(progress);
-      const hidden = (1 - progress) * 100;
-      cue.style.transform = `translate(${toLeft ? -hidden : hidden}%, -50%)`;
     };
 
     // Fade it out and park it. Hidden with `display: none` once gone so a
@@ -201,7 +221,7 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
         return;
       }
       const progress = swipeProgress(dx, w);
-      showCue(target, progress, dx > 0);
+      showCue(progress, dx > 0);
       // Only once it's armed does the bottom bar preview the destination —
       // the highlight and the solid pill say the same thing at the same time.
       const next = progress >= 1 ? target : null;
@@ -221,13 +241,13 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
         shouldCommit(swipeProgress(dx, window.innerWidth || 1), Date.now() - startT);
       if (commit) {
         const toIndex = target as number;
-        const href = tabsRef.current[toIndex]?.href;
+        const href = tabsRef.current[toIndex];
         // Keep the destination highlighted through the navigation, and leave
         // the cue up (solid) while the new page fades in — it's the only
         // feedback between the release and the route change.
         setPreviewIndex(toIndex);
         preview = toIndex;
-        showCue(toIndex, 1, dx > 0);
+        showCue(1, dx > 0);
         const mine = cueSeq;
         window.setTimeout(() => {
           if (cueSeq === mine) hideCue();
@@ -267,25 +287,23 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
         ref={cueRef}
         aria-hidden
         data-testid="swipe-cue"
-        className="pointer-events-none fixed top-1/2 z-40"
+        className="pointer-events-none fixed top-1/2 z-40 -translate-y-1/2"
         style={{ display: "none", opacity: 0 }}
       >
-        <div ref={pillRef} className={`${PILL_BASE} ${PILL_IDLE} rounded-l-2xl`}>
-          <span ref={labelRef} />
-          <svg
-            ref={arrowRef}
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2.5}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="h-4 w-4 shrink-0"
+        {/* Both discs are the same box, the armed one laid exactly over the
+            plain one — so fading it in blends the two colours instead of
+            swapping them. */}
+        <div ref={stackRef} className="relative">
+          <div className={`${DISC_BASE} ${DISC_IDLE}`}>
+            <Arrow />
+          </div>
+          <div
+            ref={armedRef}
+            className={`absolute inset-0 ${DISC_BASE} ${DISC_ARMED}`}
+            style={{ opacity: 0 }}
           >
-            {/* A plain chevron, pointing at the tab you're heading for
-                (flipped for the left-hand one). */}
-            <path d="M9 6l6 6-6 6" />
-          </svg>
+            <Arrow />
+          </div>
         </div>
       </div>,
       document.body

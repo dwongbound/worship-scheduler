@@ -363,12 +363,7 @@ export default function Navbar() {
 
   // Feed the swipe handler the current tab order, active tab, and a navigate
   // fn (same optimistic highlight + loader a tab tap gets, then a real push).
-  // Label included: the swipe cue names its destination, and it uses the SHORT
-  // name for the same reason the bottom bar does — "Availabilities" won't fit.
-  tabHrefsRef.current = tabs.map((t) => ({
-    href: t.href,
-    label: ("mobileLabel" in t && t.mobileLabel) || t.label,
-  }));
+  tabHrefsRef.current = tabs.map((t) => t.href);
   activeIndexRef.current = Math.max(
     0,
     tabs.findIndex((t) => isActive(t.href))
@@ -376,7 +371,7 @@ export default function Navbar() {
   navigateRef.current = (href) => {
     // Tell SwipePager this was a tab move (and which way), so the incoming
     // page fades in — an unrelated route change shouldn't animate.
-    const to = tabHrefsRef.current.findIndex((t) => t.href === href);
+    const to = tabHrefsRef.current.indexOf(href);
     setNavDirection(Math.sign(to - activeIndexRef.current));
     handleTabClick(href);
     router.push(href);
