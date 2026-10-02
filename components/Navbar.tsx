@@ -369,8 +369,8 @@ export default function Navbar() {
     tabs.findIndex((t) => isActive(t.href))
   );
   navigateRef.current = (href) => {
-    // Tell SwipePager which way the content should slide: swiping to a
-    // right-hand tab slides the new page in from the right, and vice versa.
+    // Tell SwipePager this was a tab move (and which way), so the incoming
+    // page fades in — an unrelated route change shouldn't animate.
     const to = tabHrefsRef.current.indexOf(href);
     setNavDirection(Math.sign(to - activeIndexRef.current));
     handleTabClick(href);

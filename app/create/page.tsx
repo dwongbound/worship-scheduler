@@ -33,7 +33,7 @@ import {
 } from "@/lib/teamRoles";
 import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
-import { requestTargetsTeams } from "@/lib/availabilityTargets";
+import { requestAudienceFor } from "@/lib/availabilityTargets";
 import { fetchSlackStatus } from "@/lib/slackStatus";
 import { useOrgs } from "@/components/OrgProvider";
 import type {
@@ -521,16 +521,26 @@ export default function CreatePage() {
 
   const selectedRequestId = statusRequestId || requests[0]?.id || "";
   const selectedRequest = requests.find((r) => r.id === selectedRequestId) ?? null;
-  // Only the people the selected request actually asked: members of its
-  // targeted teams (no teams = it went to the whole org). Roles don't matter —
-  // being on the team is what puts someone on the hook.
-  const askedUsers = users.filter((u) =>
-    requestTargetsTeams(
-      selectedRequest?.teams?.map((t) => t.id) ?? [],
-      u.teams.map((t) => t.id)
-    )
-  );
+  // Where each person stands with the selected request: on the hook, paused
+  // out of it, or on none of its teams at all (lib/availabilityTargets). Roles
+  // don't matter — an ACTIVE membership of a targeted team is what puts someone
+  // on the hook, and no teams on the request = it went to the whole org.
+  const requestTeamIds = selectedRequest?.teams?.map((t) => t.id) ?? [];
+  const audienceOf = (u: ApiAdminUser) =>
+    requestAudienceFor(requestTeamIds, u.teams);
+  // Paused people stay on the list — being skipped on purpose has to be
+  // visible, or an admin chasing a short list wonders who is missing from it.
+  const askedUsers = users.filter((u) => audienceOf(u) !== "not-asked");
+  // How many of them are only here to be accounted for, not chased.
+  const pausedCount = askedUsers.filter(
+    (u) => audienceOf(u) === "inactive"
+  ).length;
   const sortedUsers = [...askedUsers].sort((a, b) => {
+    // Paused people sink below everyone: they owe nothing, so they must not
+    // pad the "hasn't replied yet" block this list exists to show.
+    const aPaused = audienceOf(a) === "inactive";
+    const bPaused = audienceOf(b) === "inactive";
+    if (aPaused !== bPaused) return aPaused ? 1 : -1;
     const aDone = Boolean(
       a.availabilityResponses.find(
         (r) => r.requestId === selectedRequestId && r.completedAt
@@ -950,6 +960,12 @@ export default function CreatePage() {
                 {selectedRequestTeams.length > 0
                   ? selectedRequestTeams.map((t) => t.name).join(", ")
                   : "everyone in the organization"}
+                {/* Said here as well as on the rows: the count is what tells an
+                    admin the short list of chasees is short on purpose. */}
+                {pausedCount > 0 &&
+                  ` · ${pausedCount} inactive ${
+                    pausedCount === 1 ? "person" : "people"
+                  } skipped (listed at the bottom)`}
               </p>
             </div>
           )}
@@ -983,6 +999,10 @@ export default function CreatePage() {
                         (r) => r.requestId === selectedRequestId
                       )?.note
                     );
+                    // Paused on every team this request asked: shown for the
+                    // record, never chased. Their own row says so, because the
+                    // bottom of a scrolled list isn't self-explanatory.
+                    const paused = audienceOf(u) === "inactive";
                     return (
                       <tr
                         key={u.id}
@@ -997,20 +1017,31 @@ export default function CreatePage() {
                         role="button"
                         className={`cursor-pointer border-b border-gray-100 last:border-0 transition-colors hover:bg-indigo-50 dark:border-gray-700/50 dark:hover:bg-indigo-900/20 ${selectedUserId === u.id ? "bg-indigo-100 dark:bg-indigo-900/20" : ""}`}
                       >
-                        <td className="py-2 pr-4 font-medium">
+                        <td
+                          className={`py-2 pr-4 font-medium ${
+                            paused ? "text-gray-400 dark:text-gray-500" : ""
+                          }`}
+                        >
                           <span className="inline-flex items-center gap-1.5">
                             {u.name}
+                            {paused && <Badge size="sm">inactive</Badge>}
                             {hasNote && (
                               <AttentionDot label={`${u.name} left a note`} />
                             )}
                           </span>
                         </td>
                         <td className="py-2">
+                          {/* A answer already given still counts, even if they
+                              were paused afterwards — it's real data about the
+                              window. Only the "we're still waiting" amber turns
+                              into "we're not waiting". */}
                           {done ? (
                             <Badge tone="green">
                               {done.edited ? "Edited " : "Done "}
                               {new Date(done.completedAt!).toLocaleDateString()}
                             </Badge>
+                          ) : paused ? (
+                            <Badge>Not asked — inactive</Badge>
                           ) : (
                             <Badge tone="amber">Not yet</Badge>
                           )}

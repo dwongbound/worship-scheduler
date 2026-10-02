@@ -134,25 +134,84 @@ function StepArt({ art, preview }: { art: TourArt; preview: boolean }) {
         </>
       )}
 
+      {/* Three stacks of cards, one per view. The difference being drawn is
+          how many group BANDS there are — two rows under their own headings,
+          versus one unbroken row — so each stack carries little grey bars
+          standing in for the bands. */}
       {art === "views" && (
         <>
           <div className="flex flex-col items-center gap-1">
-            <div className="flex gap-1">
-              <MiniCard rows={2} w="w-8" />
-              <MiniCard rows={2} w="w-8" />
-              <MiniCard rows={2} w="w-8" />
+            <div className="space-y-1">
+              <GroupBand w="w-[72px]" />
+              <div className="flex gap-1">
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+              </div>
+              <GroupBand w="w-[72px]" />
+              <div className="flex gap-1">
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+              </div>
             </div>
             <span className="text-[10px] text-gray-500">By set type</span>
           </div>
           <div className="flex flex-col items-center gap-1">
-            <div className="flex gap-1">
-              <MiniCard rows={2} w="w-8" />
-              <MiniCard rows={2} w="w-8" />
-              <MiniCard rows={2} w="w-8" />
+            <div className="space-y-1">
+              <GroupBand w="w-[72px]" />
+              <div className="flex gap-1">
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+              </div>
+              <GroupBand w="w-[72px]" />
+              <div className="flex gap-1">
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+              </div>
             </div>
-            <span className="text-[10px] text-gray-500">Chronological</span>
+            <span className="text-[10px] text-gray-500">Week</span>
+          </div>
+          <div className="flex flex-col items-center gap-1">
+            <div className="space-y-1">
+              <GroupBand w="w-[72px]" />
+              {/* One row, running off the right edge — the whole point of the
+                  linear view is that it keeps going. */}
+              <div className="flex w-[72px] gap-1 overflow-hidden">
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+                <MiniCard rows={1} w="w-5" />
+              </div>
+            </div>
+            <span className="text-[10px] text-gray-500">Linear</span>
           </div>
         </>
+      )}
+
+      {/* Two names picked out of the load list, and the cards that survive
+          them — two, because picking more than one is the part that has to be
+          obvious. */}
+      {art === "filter" && (
+        <div className="flex items-center gap-3">
+          <div className="w-32 space-y-1">
+            <div className="rounded border border-indigo-500 bg-indigo-500/10 px-1 py-0.5 dark:border-indigo-400">
+              <Bar pct={100} tone="amber" n="20" />
+            </div>
+            <Bar pct={55} tone="teal" n="11" />
+            <div className="rounded border border-indigo-500 bg-indigo-500/10 px-1 py-0.5 dark:border-indigo-400">
+              <Bar pct={40} tone="teal" n="8" />
+            </div>
+          </div>
+          <span className="text-lg text-gray-400">→</span>
+          <div className="flex gap-1">
+            <MiniCard rows={2} w="w-8" highlight={0} />
+            <MiniCard rows={2} w="w-8" highlight={1} />
+            <MiniCard rows={2} w="w-8" highlight={0} />
+          </div>
+        </div>
       )}
 
       {art === "load" && (
@@ -245,6 +304,13 @@ function StepArt({ art, preview }: { art: TourArt; preview: boolean }) {
       )}
     </div>
   );
+}
+
+// The grey strip standing in for one of the sticky group headings the cards
+// are filed under — the only thing that actually differs between the three
+// views, so the views drawing needs a shape for it.
+function GroupBand({ w }: { w: string }) {
+  return <div className={`h-1.5 rounded-sm bg-gray-300 dark:bg-gray-600 ${w}`} />;
 }
 
 // A set card, shrunk to its silhouette. `highlight` tints one row the way

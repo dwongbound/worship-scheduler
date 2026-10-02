@@ -63,7 +63,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
   still hand-pickable — the pick lists and swap picker label them
   "(inactive)" the way they label "(unavailable)". Per team, so someone can be
-  active on one team and paused on another in the same org.
+  active on one team and paused on another in the same org. Inactive ALSO
+  excuses them from availability requests: paused on every team a request
+  targets = no Slack DM, no red dot, no row to fill in (`lib/availabilityTargets.ts`
+  `targetsUser`/`membersTargetedBy`). The Create tab's status panel still lists
+  them, last and marked "inactive", so a short chase list reads as deliberate.
 - **User** — username/passwordHash/name, `isMD` (musical director; global
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
@@ -266,6 +270,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
   behind "is this the app-style layout?", shared by the bottom bar's `lg:`
   classes, SwipePager and PullToRefresh.
+- `swipeNav.ts` — the tab-swipe gesture's math: `gestureAxis` (a move is a
+  swipe only if it's `AXIS_RATIO`× more horizontal than vertical — a scroll
+  that drifts sideways stays a scroll, and once vertical wins the touch is the
+  page's for good), `armDistance`/`swipeProgress` (0→1 over a capped fraction
+  of the width — it IS the cue's opacity), `shouldCommit` (a full pull, or a
+  flick past half), `swipeTarget`. ✅tested
 - `notificationPrefs.ts` — the per-org switches for the bot's PERSONAL DMs:
   `NOTIFICATION_TYPES` (the catalog the Org settings → Notifications list draws),
   `notificationEnabled` (unrecorded = ON, so nothing goes quiet by accident),
@@ -360,7 +370,16 @@ would also back out of the plan it explains),
 `Navbar` (top tab strip at `lg` and up; below that an app-style floating
 bottom bar — phones AND tablets, gated on `lib/layout.ts`
 `BOTTOM_NAV_MAX_WIDTH`, which `SwipePager` and `PullToRefresh` share so the
-gestures can't drift from the bar), `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
+gestures can't drift from the bar), `SwipePager` (the tab swipe: NOTHING
+MOVES — not the page, not the cue. A clearly sideways drag (`lib/swipeNav.ts`)
+fades up a round arrow disc on the side you're heading for, parked clear of the
+edge; it's two stacked discs, the armed indigo one fading in over the pale one
+by the same `progress`, so COLOUR AND OPACITY ARE THE WHOLE ANIMATION and
+"fully dark = release and you land there" is the one thing to read. Nothing to
+put back if the gesture was a misread, and no transform on the content means it
+can't become the containing block for a `fixed` modal. Touches starting in a
+dialog or a sideways-scrolling box aren't ours),
+`Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
 `app/layout.tsx` around `SwipePager`; a page registers its own refetch with
 `usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that
 doesn't falls back to `location.reload()`. A surface with its own drag gesture
