@@ -45,9 +45,18 @@ test("admin previews the real calendar in the review workspace", async ({
   await expect(card.getByText("Bob Baker")).toBeVisible();
   await expect(card.getByText("Carol Chen")).toBeVisible();
 
-  // Both groupings work, same as the generate flow.
-  await review.getByRole("button", { name: "Chronological" }).click();
+  // All three groupings work, same as the generate flow: week headings appear
+  // in the weekly view and are gone again in the linear one, which files every
+  // set under a single band.
+  await review
+    .getByRole("button", { name: "Chronological (week)", exact: true })
+    .click();
   await expect(review.getByText(/^Week of /).first()).toBeVisible();
+  await review
+    .getByRole("button", { name: "Chronological (linear)", exact: true })
+    .click();
+  await expect(review.getByText(/^Week of /)).toHaveCount(0);
+  await expect(review.getByText("In date order")).toBeVisible();
 
   // Nothing was edited, so Cancel just closes — no confirmation to answer.
   await review.getByRole("button", { name: "Cancel" }).click();

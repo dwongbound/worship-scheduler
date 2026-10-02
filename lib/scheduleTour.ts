@@ -16,6 +16,7 @@ export type TourArt =
   | "overview"
   | "views"
   | "load"
+  | "filter"
   | "hover"
   | "lock"
   | "card"
@@ -53,10 +54,11 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
     {
       id: "views",
       art: "views",
-      title: "Two ways to read the plan",
+      title: "Three ways to read the plan",
       body: [
         "By set type groups every Thursday Rehearsal together, then every Sunday Morning — the view for comparing the same service week over week.",
-        "Chronological lays the plan out in date order instead, which is how a stretch where one person is on everything becomes obvious.",
+        "Chronological (week) lays the plan out in date order with a heading per week, so everything happening in one week sits side by side and the next week follows below.",
+        "Chronological (linear) is the same date order with the week breaks taken out: one long row holding every set, for sweeping across a whole season in one go.",
       ],
     },
     {
@@ -66,6 +68,16 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       body: [
         "In Team load, each bar is one person and the number is how many slots they hold. Bars are scaled against the busiest person on the list, and the heaviest few turn amber.",
         "The picker above the list changes what is being counted: this plan on its own, everything already booked ahead, or the past month, three, six or twelve. Only this plan is worked out here — the other windows are fetched when you choose them, so the plan never has to carry a year of history around.",
+      ],
+    },
+    {
+      id: "filter",
+      art: "filter",
+      title: "See only certain people's sets",
+      body: [
+        "Click a name in Team load and the cards below narrow to the sets that person is on. The row you picked turns blue, and a banner over the cards says whose plan you are looking at and how many sets are hidden.",
+        "Click more names to add them. You get every set at least one of them is on — two people read as one combined calendar, not only the sets they share.",
+        "Grouping still works the way you left it, so you can read a season by set type or in date order. Click a name again to drop that person, or Clear filter to bring the whole plan back.",
       ],
     },
     {
