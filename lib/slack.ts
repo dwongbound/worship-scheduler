@@ -19,6 +19,7 @@
 // This module is server-only (it imports prisma). The client talks to it via the
 // API routes, never by importing it directly.
 import { prisma } from "./prisma";
+import { membersTargetedBy } from "./availabilityTargets";
 import { orderedRoles, roleLabel, type TeamRoleDef } from "./teamRoles";
 import { getTeamCatalog } from "./teamRoleStore";
 import type { Prisma } from "./generated/prisma/client";
@@ -546,10 +547,11 @@ export async function notifyAvailabilityRequest(request: {
     where: {
       orgId: request.orgId,
       slackUserId: { not: null },
-      // Only members of a targeted team — team membership alone, no roles needed.
-      ...(teamIds.length
-        ? { user: { teamMembers: { some: { teamId: { in: teamIds } } } } }
-        : {}),
+      // Exactly who the app puts on the hook for this request — an ACTIVE
+      // membership on a targeted team, no roles needed (lib/availabilityTargets).
+      // Shared with targetsUser so the DM can't nag someone the Availabilities
+      // tab never asks.
+      ...membersTargetedBy(request.orgId, teamIds),
     },
     select: DM_FIELDS,
   });
