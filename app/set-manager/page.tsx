@@ -26,6 +26,7 @@ import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import LoadingDots from "@/components/common/LoadingDots";
 import ExportIcsButton from "@/components/ExportIcsButton";
+import DeclineSwapModal from "@/components/DeclineSwapModal";
 import RequestCoverModal from "@/components/RequestCoverModal";
 import SetDetailModal from "@/components/SetDetailModal";
 import SwapModal from "@/components/SwapModal";
@@ -128,6 +129,12 @@ function SetManagerView() {
   // collapse into a lone spinner (and back) on every click.
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  // The swap whose decline modal is open (null = none), plus who proposed it
+  // so the note box can name its reader.
+  const [declining, setDeclining] = useState<{
+    id: string;
+    proposer: string;
+  } | null>(null);
   // Navbar org switcher: "all" or one org — filters both sections. Rows show
   // an org chip while several orgs are mixed together.
   const { orgs, viewOrgId, isAdminOf } = useOrgs();
@@ -167,21 +174,36 @@ function SetManagerView() {
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
   }, [orgs, viewOrgId, horizonEnd]);
 
-  // Accept or reject a targeted swap proposed to me.
-  async function respondSwap(proposalId: string, action: "accept" | "reject") {
+  // Accept or reject a targeted swap proposed to me. `note` is the optional
+  // reason typed into the decline modal; it only ever rides along with a
+  // reject, and ends up leading the proposer's "swap declined" DM.
+  async function respondSwap(
+    proposalId: string,
+    action: "accept" | "reject",
+    note?: string
+  ) {
     setBusyId(proposalId);
     setBusyAction(action);
     try {
       await fetch(`/api/swaps/proposals/${proposalId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, note }),
       });
       await reload();
     } finally {
       setBusyId(null);
       setBusyAction(null);
     }
+  }
+
+  // Reject goes through a modal so the note can be offered; accept doesn't,
+  // because there's nothing to explain about saying yes.
+  async function confirmDecline(note: string) {
+    const proposal = declining;
+    if (!proposal) return;
+    await respondSwap(proposal.id, "reject", note);
+    setDeclining(null);
   }
 
   // Withdraw a swap I proposed (restores both slots to their prior status).
@@ -509,7 +531,12 @@ function SetManagerView() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => respondSwap(s.id, "reject")}
+                          onClick={() =>
+                            setDeclining({
+                              id: s.id,
+                              proposer: s.requestedBy.name,
+                            })
+                          }
                         >
                           Reject
                         </Button>
@@ -701,6 +728,16 @@ function SetManagerView() {
           await act(id, "requestSwap", reason);
           setCoverForId(null);
         }}
+      />
+
+      {/* Decline-a-swap prompt: the note is optional, and leads the DM the
+          proposer gets. Closes only once the POST is through, same as above. */}
+      <DeclineSwapModal
+        open={declining !== null}
+        onClose={() => setDeclining(null)}
+        busy={busyId === declining?.id}
+        proposer={declining?.proposer}
+        onConfirm={confirmDecline}
       />
     </div>
   );

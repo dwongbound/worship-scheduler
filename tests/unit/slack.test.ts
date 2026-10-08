@@ -48,7 +48,7 @@ describe("weeklySummaryText", () => {
     // join("\n\n") → title, blank line, then the set block.
     const lines = text.split("\n");
     expect(lines[0]).toContain("*Sunday Team*");
-    expect(lines[2]).toContain("*Sunday Worship*");
+    expect(lines[2]).toContain("`Sunday Worship`");
     // ROLE_ORDER is WL, DRUMS, BASS, KEYS, … → WL, then Drums, then Keys.
     expect(lines[3]).toBe("• Alice — Worship Leader");
     expect(lines[4]).toBe("• Ryan — Drums");
@@ -100,7 +100,7 @@ describe("weeklySummaryText", () => {
         assignments: [],
       },
     ]);
-    expect(text).toContain("*Worship set*");
+    expect(text).toContain("`Worship set`");
     expect(text).toContain("• _No one assigned yet_");
   });
 });

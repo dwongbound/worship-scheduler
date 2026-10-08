@@ -9,6 +9,10 @@ import type { MessageFormat } from "../../messageFormat";
 
 export const DISCORD_FORMAT: MessageFormat = {
   bold: (text) => `**${text}**`,
+  // Discord reads `*x*` as italic too, but `_x_` is the spelling both providers
+  // share — worth preferring where they agree.
+  italic: (text) => `_${text}_`,
+  code: (text) => `\`${text}\``,
   link: (url, text) => `${text} (${url})`,
   // Discord rejects anything longer outright, so MessagingTransport chunks against it.
   maxChars: 2000,

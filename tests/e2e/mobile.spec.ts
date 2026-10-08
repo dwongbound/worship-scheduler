@@ -431,6 +431,16 @@ test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async 
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "Reject" }).tap();
 
+  // Reject now opens the decline modal (with an optional note) rather than
+  // declining on the spot — so the phone path has to get through the dialog
+  // too. Skipping the note is the common case and the one to keep covered
+  // here; the note itself is swap-decline.spec.ts's job.
+  const modal = page.getByRole("dialog");
+  await expect(
+    modal.getByRole("heading", { name: "Decline this swap" })
+  ).toBeVisible();
+  await modal.getByRole("button", { name: "Decline", exact: true }).tap();
+
   await expect(card).toHaveCount(0, { timeout: 15_000 });
   await expect(page).toHaveURL(/\/set-manager/);
 });

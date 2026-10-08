@@ -180,6 +180,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   ✅tested
 - `constants.ts` ✅ · `dates.ts` ✅ (`upcomingOccurrences`, `format*`, minute⇄time)
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
+  `shortDateTimeCompact` ("8/20/26 10PM") is THE date every chat message names
+  a set by — short enough that a swap can name two sets in one sentence.
 - `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops
   inactive memberships, so the auto-fill can't propose them) +
   `inactiveMemberIds()` (who the swap picker flags). ✅tested
@@ -291,8 +293,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   and the ops it supports. `capabilities` records what a provider genuinely
   CAN'T do: `emailLookup` is false on Discord, which is why auto-linking is
   Slack-only. ✅tested
-- `messageFormat.ts` — the `MessageFormat` shape (`bold`/`link`/`maxChars`) +
-  `splitMessage`. Pure; concrete formats live with their integrations. ✅tested
+- `messageFormat.ts` — the `MessageFormat` shape
+  (`bold`/`italic`/`code`/`link`/`maxChars`) + `splitMessage`. Pure; concrete
+  formats live with their integrations. EVERY bit of markup in a message goes
+  through this — the spellings differ per provider (bold is `*x*` on Slack,
+  `**x**` on Discord), so a hand-typed one is a bug that only shows on the
+  provider you weren't looking at. ✅tested
 - `orgIntegration.ts` — which integration an org talks through, and the ONE
   place a provider is chosen: `transportForOrg`/`transportForCredential`/
   `orgMessagingContext`, plus `isOrgMessagingConnected` (can we send — dry-run
@@ -412,6 +418,18 @@ for controls pinned in the header left of the ✕, and accepts `footer` as a
 FUNCTION `({ atEnd }) => …` for an action that must wait until a long body has
 been scrolled to the end — the availability submit's Confirm.) `SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
+
+## Slack / chat message house style (`lib/slack.ts`)
+
+Every DM reads the same way, so a column of them is scannable:
+**emoji + bold label**, the set's name as `code`, one date format, and labelled
+links instead of bare URLs. The pieces are all in `lib/slack.ts`: `EMOJI` (one
+table — these get re-picked by hand more than the copy does), `lead()`,
+`setName()`, `setWhen()`, `linkOr()`. Bold and code always sit OUTSIDE a link —
+no provider renders markup inside a link label, which is also why the digest's
+labels and the batched-roster DM's set names can't be part of their links.
+A full inventory of who gets what, when, with the literal copy, is the
+TapWorship Slack Notices artifact.
 
 ## Gotchas
 
