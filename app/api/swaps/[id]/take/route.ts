@@ -119,6 +119,7 @@ export async function POST(
   await notifySwapTaken(updated.id, previousOwnerId, takerName);
   await notifyAdminsPendingApproval(assignment.set.orgId, {
     kind: "cover",
+    role: assignment.role,
     set: { label: assignment.set.label, startsAt: assignment.set.startsAt },
     taker: takerName,
     previousOwner: previousOwnerName,
