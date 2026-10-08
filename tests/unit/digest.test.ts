@@ -12,9 +12,9 @@ import {
 const BASE = "https://tapworship.com";
 
 const items: DigestItem[] = [
-  { text: "Fill out the availability request “Fall 2026” for Grace", path: "/schedule" },
-  { text: "You have 1 set today, at 2:00 PM Sunday Morning", path: "/calendar" },
-  { text: "3 swap requests waiting on your approval", path: "/approvals" },
+  { label: "Sets Today", text: "Sunday Morning at 2:00 PM", path: "/calendar" },
+  { label: "Availability Request", text: "Fill out Fall 2026 for Grace", path: "/schedule" },
+  { label: "Swap Requests", text: "3 pending approval", path: "/approvals" },
 ];
 
 describe("renderDigestText", () => {
@@ -31,15 +31,23 @@ describe("renderDigestText", () => {
   it("renders one linked bullet per item, in order", () => {
     const lines = renderDigestText("Carol", items, BASE).split("\n").slice(1);
     expect(lines).toEqual([
-      `• <${BASE}/schedule|Fill out the availability request “Fall 2026” for Grace>`,
-      `• <${BASE}/calendar|You have 1 set today, at 2:00 PM Sunday Morning>`,
-      `• <${BASE}/approvals|3 swap requests waiting on your approval>`,
+      `• *Sets Today:* <${BASE}/calendar|Sunday Morning at 2:00 PM>`,
+      `• *Availability Request:* <${BASE}/schedule|Fill out Fall 2026 for Grace>`,
+      `• *Swap Requests:* <${BASE}/approvals|3 pending approval>`,
     ]);
+  });
+
+  // The label is bold and OUTSIDE the link on purpose: no provider renders
+  // markup inside a link label, so folding it in would emit literal asterisks.
+  it("keeps the bold label outside the hyperlink", () => {
+    const line = renderDigestText("Carol", items, BASE).split("\n")[1];
+    expect(line.indexOf("*Sets Today:*")).toBeLessThan(line.indexOf("<"));
+    expect(line).not.toContain("|*");
   });
 
   it("degrades to plain bullets when the app url is unknown", () => {
     const text = renderDigestText("Carol", items, "");
-    expect(text).toContain("• Fill out the availability request");
+    expect(text).toContain("• *Availability Request:* Fill out Fall 2026");
     // No half-built links: an empty base must not emit "<|...>".
     expect(text).not.toContain("<");
   });
@@ -104,11 +112,7 @@ describe("windowPhrase", () => {
   it("reads as a sentence in the lines that use it", () => {
     // How buildOrgDigest assembles them — guards against a phrase that only
     // works standalone (e.g. one starting with a capital).
-    expect(`Confirm your spot on 2 sets ${windowPhrase(14)}`).toBe(
-      "Confirm your spot on 2 sets in the next two weeks"
-    );
-    expect(`3 sets ${windowPhrase(7)} have people who haven’t confirmed`).toBe(
-      "3 sets in the next week have people who haven’t confirmed"
-    );
+    expect(`2 sets ${windowPhrase(14)}`).toBe("2 sets in the next two weeks");
+    expect(`3 sets ${windowPhrase(7)}`).toBe("3 sets in the next week");
   });
 });

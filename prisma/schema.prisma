@@ -586,6 +586,11 @@ model SwapProposal {
   // Optional note the proposer leaves — shown to the recipient with the trade.
   reason String?
 
+  // Optional note the RECIPIENT leaves when declining ("I'm away that week").
+  // Null for every accepted trade and for a decline with nothing to add; the
+  // "swap declined" DM just omits the sentence then.
+  declineNote String?
+
   status SwapProposalStatus @default(PENDING)
 
   // Captured at propose-time so a reject restores each side exactly.

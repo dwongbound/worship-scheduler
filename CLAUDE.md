@@ -63,7 +63,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   callers build `rolesByTeam` via `lib/roster.ts schedulableRolesByTeam`), but
   still hand-pickable — the pick lists and swap picker label them
   "(inactive)" the way they label "(unavailable)". Per team, so someone can be
-  active on one team and paused on another in the same org.
+  active on one team and paused on another in the same org. Inactive ALSO
+  excuses them from availability requests: paused on every team a request
+  targets = no Slack DM, no red dot, no row to fill in (`lib/availabilityTargets.ts`
+  `targetsUser`/`membersTargetedBy`). The Create tab's status panel still lists
+  them, last and marked "inactive", so a short chase list reads as deliberate.
 - **User** — username/passwordHash/name, `isMD` (musical director; global
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
@@ -176,6 +180,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   ✅tested
 - `constants.ts` ✅ · `dates.ts` ✅ (`upcomingOccurrences`, `format*`, minute⇄time)
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
+  `shortDateTimeCompact` ("8/20/26 10PM") is THE date every chat message names
+  a set by — short enough that a swap can name two sets in one sentence.
 - `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops
   inactive memberships, so the auto-fill can't propose them) +
   `inactiveMemberIds()` (who the swap picker flags). ✅tested
@@ -266,6 +272,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
   behind "is this the app-style layout?", shared by the bottom bar's `lg:`
   classes, SwipePager and PullToRefresh.
+- `swipeNav.ts` — the tab-swipe gesture's math: `gestureAxis` (a move is a
+  swipe only if it's `AXIS_RATIO`× more horizontal than vertical — a scroll
+  that drifts sideways stays a scroll, and once vertical wins the touch is the
+  page's for good), `armDistance`/`swipeProgress` (0→1 over a capped fraction
+  of the width — it IS the cue's opacity), `shouldCommit` (a full pull, or a
+  flick past half), `swipeTarget`. ✅tested
 - `notificationPrefs.ts` — the per-org switches for the bot's PERSONAL DMs:
   `NOTIFICATION_TYPES` (the catalog the Org settings → Notifications list draws),
   `notificationEnabled` (unrecorded = ON, so nothing goes quiet by accident),
@@ -281,8 +293,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   and the ops it supports. `capabilities` records what a provider genuinely
   CAN'T do: `emailLookup` is false on Discord, which is why auto-linking is
   Slack-only. ✅tested
-- `messageFormat.ts` — the `MessageFormat` shape (`bold`/`link`/`maxChars`) +
-  `splitMessage`. Pure; concrete formats live with their integrations. ✅tested
+- `messageFormat.ts` — the `MessageFormat` shape
+  (`bold`/`italic`/`code`/`link`/`maxChars`) + `splitMessage`. Pure; concrete
+  formats live with their integrations. EVERY bit of markup in a message goes
+  through this — the spellings differ per provider (bold is `*x*` on Slack,
+  `**x**` on Discord), so a hand-typed one is a bug that only shows on the
+  provider you weren't looking at. ✅tested
 - `orgIntegration.ts` — which integration an org talks through, and the ONE
   place a provider is chosen: `transportForOrg`/`transportForCredential`/
   `orgMessagingContext`, plus `isOrgMessagingConnected` (can we send — dry-run
@@ -360,7 +376,16 @@ would also back out of the plan it explains),
 `Navbar` (top tab strip at `lg` and up; below that an app-style floating
 bottom bar — phones AND tablets, gated on `lib/layout.ts`
 `BOTTOM_NAV_MAX_WIDTH`, which `SwipePager` and `PullToRefresh` share so the
-gestures can't drift from the bar), `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
+gestures can't drift from the bar), `SwipePager` (the tab swipe: NOTHING
+MOVES — not the page, not the cue. A clearly sideways drag (`lib/swipeNav.ts`)
+fades up a round arrow disc on the side you're heading for, parked clear of the
+edge; it's two stacked discs, the armed indigo one fading in over the pale one
+by the same `progress`, so COLOUR AND OPACITY ARE THE WHOLE ANIMATION and
+"fully dark = release and you land there" is the one thing to read. Nothing to
+put back if the gesture was a misread, and no transform on the content means it
+can't become the containing block for a `fixed` modal. Touches starting in a
+dialog or a sideways-scrolling box aren't ours),
+`Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
 `app/layout.tsx` around `SwipePager`; a page registers its own refetch with
 `usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that
 doesn't falls back to `location.reload()`. A surface with its own drag gesture
@@ -393,6 +418,18 @@ for controls pinned in the header left of the ✕, and accepts `footer` as a
 FUNCTION `({ atEnd }) => …` for an action that must wait until a long body has
 been scrolled to the end — the availability submit's Confirm.) `SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
+
+## Slack / chat message house style (`lib/slack.ts`)
+
+Every DM reads the same way, so a column of them is scannable:
+**emoji + bold label**, the set's name as `code`, one date format, and labelled
+links instead of bare URLs. The pieces are all in `lib/slack.ts`: `EMOJI` (one
+table — these get re-picked by hand more than the copy does), `lead()`,
+`setName()`, `setWhen()`, `linkOr()`. Bold and code always sit OUTSIDE a link —
+no provider renders markup inside a link label, which is also why the digest's
+labels and the batched-roster DM's set names can't be part of their links.
+A full inventory of who gets what, when, with the literal copy, is the
+TapWorship Slack Notices artifact.
 
 ## Gotchas
 

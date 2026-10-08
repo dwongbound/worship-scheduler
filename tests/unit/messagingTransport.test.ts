@@ -17,6 +17,7 @@ import { SlackTransport } from "@/lib/integrations/slack";
 import { prisma } from "@/lib/prisma";
 import { splitMessage } from "@/lib/messageFormat";
 import { DISCORD_FORMAT } from "@/lib/integrations/discord/format";
+import { SLACK_FORMAT } from "@/lib/integrations/slack/format";
 import {
   MessagingTransport,
   type Attempt,
@@ -493,5 +494,41 @@ describe("SlackTransport request encoding", () => {
     await slack().lookupUserIdByEmail("kate+worship@example.com");
 
     expect(fetchMock.mock.calls[0][1].body).toBe("email=kate%2Bworship%40example.com");
+  });
+});
+
+// ── Provider markup ───────────────────────────────────────────────────────
+// Every message's formatting goes through MessageFormat precisely because the
+// spellings differ per provider; a hard-coded `*x*` is a bug that only shows
+// up on the provider you weren't looking at. These pin all four verbs for both
+// providers so adding a third can't quietly skip one.
+describe("provider message formats", () => {
+  it("spells Slack mrkdwn", () => {
+    expect(SLACK_FORMAT.bold("Keys")).toBe("*Keys*");
+    expect(SLACK_FORMAT.italic("No one assigned yet")).toBe(
+      "_No one assigned yet_"
+    );
+    expect(SLACK_FORMAT.code("Large Group")).toBe("`Large Group`");
+    expect(SLACK_FORMAT.link("https://x.test/a", "here")).toBe(
+      "<https://x.test/a|here>"
+    );
+  });
+
+  it("spells Discord markdown, where a labelled link can't be a hyperlink", () => {
+    expect(DISCORD_FORMAT.bold("Keys")).toBe("**Keys**");
+    expect(DISCORD_FORMAT.italic("No one assigned yet")).toBe(
+      "_No one assigned yet_"
+    );
+    expect(DISCORD_FORMAT.code("Large Group")).toBe("`Large Group`");
+    // The information survives even though the hyperlink can't.
+    expect(DISCORD_FORMAT.link("https://x.test/a", "here")).toBe(
+      "here (https://x.test/a)"
+    );
+  });
+
+  it("agrees on code and italic, differs on bold — which is the whole point", () => {
+    expect(DISCORD_FORMAT.code("x")).toBe(SLACK_FORMAT.code("x"));
+    expect(DISCORD_FORMAT.italic("x")).toBe(SLACK_FORMAT.italic("x"));
+    expect(DISCORD_FORMAT.bold("x")).not.toBe(SLACK_FORMAT.bold("x"));
   });
 });

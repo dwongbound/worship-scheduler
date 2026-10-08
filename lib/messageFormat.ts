@@ -1,9 +1,12 @@
 // How one provider writes text, and how long a message it will accept.
 //
-// Our messages only ever use formatting in two places — bold, and a link whose
-// label differs from its URL — so those are the only two things a format has to
-// answer. Keeping them behind this type is what lets the message builders in
-// lib/slack.ts stay provider-neutral instead of hard-coding Slack mrkdwn.
+// Four pieces of markup is all our messages use — bold for the nouns that
+// identify a thing, code for a set's name, italic for a placeholder line, and a
+// link whose label differs from its URL. Keeping them behind this type is what
+// lets the message builders in lib/slack.ts stay provider-neutral instead of
+// hard-coding Slack mrkdwn: the spellings genuinely differ (bold is `*x*` on
+// Slack and `**x**` on Discord), and a hard-coded one is a bug that only shows
+// up on the provider you weren't looking at.
 //
 // The concrete formats live with their providers, in lib/integrations/<name>/
 // format.ts. Only the shape and the splitter are shared, so they live here.
@@ -14,6 +17,13 @@
 export type MessageFormat = {
   /** Bold `text` in this provider's markup. */
   bold(text: string): string;
+  /** Italic `text`. Used for placeholder copy ("No one assigned yet"). */
+  italic(text: string): string;
+  /**
+   * `text` as inline code. Every set name goes through this, so a set called
+   * "Large Group" reads as one object rather than two stray words.
+   */
+  code(text: string): string;
   /**
    * A link labelled `text`. Slack has real inline links; Discord has none
    * outside embeds, so its version degrades to "label (url)" — the information

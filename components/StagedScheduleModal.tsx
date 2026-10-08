@@ -13,11 +13,22 @@
 // season a different way is the main thing you came to do):
 //   • By set type — one horizontally-scrolling row per recurring set, so you
 //     read one set type's rotation across the weeks.
-//   • Chronological — one row per WEEK, weeks running down the page, so you
-//     read the calendar as it actually happens: everything in that week side
-//     by side (Tuesday morning, Tuesday evening, Thursday…), then the next
-//     week below. The date axis pivots from "across the weeks" to "down the
-//     weeks".
+//   • Chronological (week) — one row per WEEK, weeks running down the page, so
+//     you read the calendar as it actually happens: everything in that week
+//     side by side (Tuesday morning, Tuesday evening, Thursday…), then the
+//     next week below. The date axis pivots from "across the weeks" to "down
+//     the weeks".
+//   • Chronological (linear) — the same date order with the week breaks taken
+//     out: ONE row holding every set in the plan, scrolled end to end. The
+//     view for sweeping across a season without a heading every seven days.
+//
+// FILTERING BY PERSON: clicking names in the Team load panel narrows the
+// cards below to the sets those people are on (click a name again to drop it,
+// or the banner's Clear to drop them all). Several names are a UNION — every
+// set at least one of them is on — so two people picked together read as one
+// combined calendar rather than only the sets they share. Grouping is
+// untouched, which is how "what does December look like for Steven and John?"
+// gets answered without reading every card.
 // Every roster dropdown is availability-aware — people who can't serve at a
 // set's time are flagged and sorted last (same PlayerSelect the calendar's
 // SetDetailModal uses).
@@ -189,6 +200,23 @@ function weekLabel(startsAt: string): string {
 }
 
 /**
+ * The heading over the one group the linear view makes. It still gets a band
+ * — the band is what carries the set count and the "filtered to X" pill — but
+ * there is only ever one of them, so nothing is being divided up.
+ */
+const LINEAR_GROUP = "In date order";
+
+/**
+ * The picked names as one phrase: "Ada", "Ada or Bo", "Ada, Bo or Cy". "or"
+ * rather than "and" because the filter is a union — a shown set has at least
+ * one of these people on it, not all of them.
+ */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+}
+
+/**
  * The editor's identity for a staged set. Normally its start time (one
  * occurrence per time in a generated plan); Preview Mode stages real calendar
  * sets, where two can share an instant, so those carry an explicit id.
@@ -302,7 +330,36 @@ export default function StagedScheduleModal({
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   // How the cards are grouped (see the header comment). Per-session, not
   // persisted — it's a reading preference for this one review.
-  const [view, setView] = useState<"type" | "chrono">("type");
+  const [view, setView] = useState<"type" | "chrono" | "linear">("type");
+  // Narrow the cards to these people's sets; empty = the whole plan. Set by
+  // clicking rows in the Team load panel — that list is already "who is
+  // carrying how much", so it's the natural place to ask "carrying what?".
+  //
+  // Several names are a UNION, not an intersection: picking two people shows
+  // every set either of them is on. The question being asked here is "what do
+  // these two have coming up", and sets they happen to share are the rare
+  // case — an intersection would usually come back empty.
+  const [filterUserIds, setFilterUserIds] = useState<string[]>([]);
+  const toggleFilterUser = useCallback(
+    (userId: string) =>
+      setFilterUserIds((current) =>
+        current.includes(userId)
+          ? current.filter((id) => id !== userId)
+          : [...current, userId]
+      ),
+    []
+  );
+  // A card the filter has hidden must not stay selected, or ⌘/Ctrl+V would
+  // paste onto something that isn't on screen. Written as an effect because
+  // the selection can go out of view two ways: changing who is picked, and
+  // editing the last filtered person off the card that was selected.
+  useEffect(() => {
+    if (filterUserIds.length === 0 || selectedIdx === null) return;
+    const set = sets[selectedIdx];
+    if (!set?.assignments.some((a) => filterUserIds.includes(a.userId))) {
+      setSelectedIdx(null);
+    }
+  }, [filterUserIds, selectedIdx, sets]);
   // Guard on the way out: the plan only exists in this component, so closing
   // is the one action here that destroys work. Asked for both exits (Discard
   // and the ✕/backdrop), which is why it wraps onClose rather than sitting on
@@ -323,6 +380,8 @@ export default function StagedScheduleModal({
     setAdoptedPlan(plan);
     setSets(plan?.sets ?? []);
     setConfirmDiscard(false);
+    // A filter naming people from the last plan would hide most of this one.
+    setFilterUserIds([]);
   }
 
   const nameOf = useMemo(() => {
@@ -629,22 +688,35 @@ export default function StagedScheduleModal({
     );
   }
 
-  // Group the staged sets for the card layout — by set type, or by the day
-  // they fall on. Either way sets are already in date order, so insertion
-  // order gives chronological groups for free. Entries keep their index into
-  // `sets` so the edit callbacks still address the master list.
+  // Who the cards are narrowed to, if anyone, in the order they were picked.
+  const filterNames = filterUserIds.map(nameOf);
+  const filtering = filterUserIds.length > 0;
+  const isOnSet = (set: StagedSet) =>
+    !filtering || set.assignments.some((a) => filterUserIds.includes(a.userId));
+
+  // Group the staged sets for the card layout — by set type, by the week they
+  // fall in, or not at all (linear: every set in one row). Either way sets are
+  // already in date order, so insertion order gives chronological groups for
+  // free. Entries keep their index into `sets` so the edit callbacks still
+  // address the master list — which is also why the person filter drops sets
+  // HERE rather than earlier: every index downstream still means what it did.
   const groupedSets: [string, { set: StagedSet; idx: number }[]][] = [];
   {
     const groups = new Map<string, { set: StagedSet; idx: number }[]>();
     sets.forEach((set, idx) => {
-      const key =
-        view === "chrono" ? weekLabel(set.startsAt) : set.label ?? "Worship Set";
+      if (!isOnSet(set)) return;
+      let key: string;
+      if (view === "chrono") key = weekLabel(set.startsAt);
+      else if (view === "linear") key = LINEAR_GROUP;
+      else key = set.label ?? "Worship Set";
       const group = groups.get(key) ?? [];
       group.push({ set, idx });
       groups.set(key, group);
     });
     groupedSets.push(...groups.entries());
   }
+  // How many sets the filter is hiding — the banner's "3 of 71" half.
+  const shownCount = groupedSets.reduce((n, [, g]) => n + g.length, 0);
 
   // What the Team load bars are measuring, spelled out under the panel. Built
   // here as a plain if-chain: three states nested as ternaries inside the JSX
@@ -1069,7 +1141,8 @@ export default function StagedScheduleModal({
           {(
             [
               ["type", "By set type"],
-              ["chrono", "Chronological"],
+              ["chrono", "Chronological (week)"],
+              ["linear", "Chronological (linear)"],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -1081,7 +1154,7 @@ export default function StagedScheduleModal({
                 // Preview mode is the read-the-season view, where switching how
                 // the calendar is laid out is the main thing you do here — so
                 // its toggle is a size up.
-                preview ? "px-3.5 py-1.5 text-sm" : "px-2.5 py-1 text-xs"
+                preview ? "px-3 py-1.5 text-sm" : "px-2.5 py-1 text-xs"
               } ${
                 view === value
                   ? "bg-indigo-600 text-white"
@@ -1205,8 +1278,18 @@ export default function StagedScheduleModal({
           weighing the plan against. */}
       <div className="mt-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-            Team load
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="font-semibold uppercase tracking-wide">
+              Team load
+            </span>
+            {/* The rows don't look clickable on their own, and a filter nobody
+                finds may as well not exist. Dropped once it's been used — by
+                then the banner below is saying the same thing. */}
+            {!filtering && rows.length > 0 && (
+              <span className="ml-2 text-gray-400 dark:text-gray-500">
+                click names to see only their sets
+              </span>
+            )}
           </p>
           <div className="w-52">
             <Select
@@ -1250,6 +1333,11 @@ export default function StagedScheduleModal({
                   count={r.count}
                   peak={peak}
                   isMD={isMdOf(r.userId)}
+                  selected={filterUserIds.includes(r.userId)}
+                  // Clicking a name adds that person's sets to what's shown;
+                  // clicking them again takes them back out. Pick nobody and
+                  // the whole plan is back.
+                  onClick={() => toggleFilterUser(r.userId)}
                 />
               ))}
             </ul>
@@ -1317,11 +1405,40 @@ export default function StagedScheduleModal({
         </div>
       )}
 
+      {/* The person filter, said in words right where it takes effect. A
+          partial view of a plan that anyone could mistake for the whole plan
+          is the one thing worth shouting about here, so this is a full-width
+          bar rather than a chip — and its Clear is the same toggle the load
+          row is, so there are two ways out of it. (The group bands below
+          repeat the name, because this bar scrolls away and they don't.) */}
+      {filtering && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm dark:border-indigo-500/50 dark:bg-indigo-500/10">
+          <span className="font-semibold text-indigo-800 dark:text-indigo-200">
+            {filterNames.length === 1
+              ? `Showing only ${filterNames[0]}’s sets`
+              : `Showing only sets with ${joinNames(filterNames)}`}
+          </span>
+          <span className="text-xs text-indigo-700/80 dark:text-indigo-300/80">
+            {shownCount} of {sets.length} set{sets.length === 1 ? "" : "s"} —
+            everything else in the plan is hidden
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilterUserIds([])}
+            className="ml-auto rounded-md border border-indigo-300 bg-white px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/50 dark:bg-transparent dark:text-indigo-200 dark:hover:bg-indigo-500/20"
+          >
+            Clear filter
+          </button>
+        </div>
+      )}
+
       {/* ── The cards. By set type: one sideways-scrolling row per label,
-          reading a rotation across the weeks. Chronological: one section per
-          day, days stacked down the page, each day's sets wrapping in a grid
-          — so a Tuesday with a morning, noon and evening set reads together
-          and the next day follows below. ─────────────────────────────────── */}
+          reading a rotation across the weeks. Chronological (week): one
+          section per week, weeks stacked down the page, each week's sets
+          reading side by side — so a Tuesday with a morning, noon and evening
+          set reads together and the next week follows below. Chronological
+          (linear): no sections at all, just one row of every set in date
+          order. ─────────────────────────────────────────────────────────── */}
       <div className="mt-4 space-y-6">
         {groupedSets.map(([groupLabel, entries]) => (
           <section key={groupLabel}>
@@ -1347,6 +1464,18 @@ export default function StagedScheduleModal({
               <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
                 {entries.length} set{entries.length === 1 ? "" : "s"}
               </span>
+              {/* The band is the only thing pinned to the top of a long scroll,
+                  so it's the only place that can keep saying "you are not
+                  looking at the whole plan" all the way down it. */}
+              {filtering && (
+                <span className="ml-2 rounded-full bg-indigo-600 px-2 py-0.5 text-[11px] font-medium text-white">
+                  {/* Two names still fit in a band; past that it's a count,
+                      since the banner above carries the full list. */}
+                  {filterNames.length <= 2
+                    ? `${filterNames.join(" · ")} only`
+                    : `${filterNames.length} people only`}
+                </span>
+              )}
             </p>
             {/* A row scrolls sideways through the weeks, and the fact that it
                 DOES is easy to miss — macOS fades its scrollbar out the moment
@@ -1699,6 +1828,16 @@ export default function StagedScheduleModal({
             </ScrollRow>
           </section>
         ))}
+        {/* Only reachable by taking the picked people off their last sets
+            while the filter is still on them — but the alternative is a blank
+            space below a banner that says sets are being shown. */}
+        {groupedSets.length === 0 && filtering && (
+          <p className="rounded-lg border border-dashed border-gray-300 px-3 py-6 text-center text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+            {filterNames.length === 1
+              ? `${filterNames[0]} isn’t on any set in this plan.`
+              : `Nobody you’ve picked is on a set in this plan.`}
+          </p>
+        )}
       </div>
     </Modal>
 
@@ -2040,16 +2179,25 @@ function UndoIcon() {
 // One row of the Team load panel: name, a bar scaled to the busiest person, and
 // ONE number — how many slots that person holds in whatever window the picker
 // is showing. The busiest people get an amber bar so over-use is easy to spot.
+//
+// The whole row is a button: pressing it adds that person's sets to what the
+// cards below are narrowed to. `selected` is this person being one of the
+// picked — drawn as a tinted, outlined row so the names the plan is being read
+// through are obvious even with the banner scrolled off.
 function LoadBar({
   name,
   count,
   peak,
   isMD,
+  selected,
+  onClick,
 }: {
   name: string;
   count: number;
   peak: number;
   isMD: boolean;
+  selected: boolean;
+  onClick: () => void;
 }) {
   const pct = peak > 0 ? Math.round((count / peak) * 100) : 0;
   // Flag the heaviest tier (≥80% of the peak, and more than one set) so a long
@@ -2057,33 +2205,52 @@ function LoadBar({
   const heavy = peak > 1 && count >= peak * 0.8;
   return (
     <li className="text-sm">
-      <div className="mb-0.5 flex items-baseline justify-between gap-2">
-        <span className="truncate text-gray-800 dark:text-gray-100">
-          {name}
-          {isMD && (
-            <span className="ml-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
-              MD
-            </span>
-          )}
-        </span>
-        <span
-          className={`shrink-0 text-xs font-semibold tabular-nums ${
-            heavy
-              ? "text-amber-600 dark:text-amber-400"
-              : "text-gray-500 dark:text-gray-400"
-          }`}
-        >
-          {count}
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-        <div
-          className={`h-full rounded-full ${
-            heavy ? "bg-amber-500" : "bg-indigo-500"
-          }`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={selected}
+        title={
+          selected
+            ? `${name}'s sets are being shown — click to take them back out`
+            : `Also show the sets ${name} is on`
+        }
+        // The row keeps its old geometry when unselected: a 1px transparent
+        // border and the same padding as the tint, so picking a name recolours
+        // the row in place instead of nudging the four-column grid around it.
+        className={`w-full rounded-md border px-1.5 py-1 text-left transition-colors ${
+          selected
+            ? "border-indigo-500 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-500/15"
+            : "border-transparent hover:bg-gray-100 dark:hover:bg-gray-700/50"
+        }`}
+      >
+        <div className="mb-0.5 flex items-baseline justify-between gap-2">
+          <span className="truncate text-gray-800 dark:text-gray-100">
+            {name}
+            {isMD && (
+              <span className="ml-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+                MD
+              </span>
+            )}
+          </span>
+          <span
+            className={`shrink-0 text-xs font-semibold tabular-nums ${
+              heavy
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-gray-500 dark:text-gray-400"
+            }`}
+          >
+            {count}
+          </span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-600">
+          <div
+            className={`h-full rounded-full ${
+              heavy ? "bg-amber-500" : "bg-indigo-500"
+            }`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </button>
     </li>
   );
 }

@@ -24,8 +24,17 @@ import { setLinkPath } from "./setLink";
 import type { MessageFormat } from "./messageFormat";
 import { SLACK_FORMAT } from "./integrations/slack";
 
-/** One bullet: a sentence plus the app path it links to. */
+/**
+ * One bullet: a bold label naming the kind of thing, the sentence itself, and
+ * the app path it links to.
+ *
+ * The label is separate from the text because it stays OUTSIDE the hyperlink —
+ * no provider renders markup inside a link label, so a bolded label baked into
+ * `text` would come out as literal asterisks.
+ */
 export type DigestItem = {
+  /** "Sets Today", "Swap Requests" — bolded, outside the link. */
+  label: string;
   text: string;
   /** App-relative path, e.g. "/calendar". */
   path: string;
@@ -128,9 +137,26 @@ export async function buildOrgDigest(
       : Promise.resolve(0),
   ]);
 
-  // Assembled in a fixed order — most time-critical first — so the DM reads the
-  // same way every morning.
+  // Assembled in a fixed order so the DM reads the same way every morning:
+  // what's happening TODAY first (it's the only thing with a deadline of
+  // hours), then what they owe, then the admin queues.
   const items: DigestItem[] = [];
+
+  // One person can hold several roles on a set — collapse to distinct sets so
+  // a guitarist who also leads doesn't read as two sets.
+  const setsToday = [...new Map(today.map((a) => [a.set.id, a.set])).values()];
+  if (setsToday.length > 0) {
+    const when = setsToday
+      .map((s) => `${s.label ?? "Worship Set"} at ${formatTime(s.startsAt)}`)
+      .join(", ");
+    items.push({
+      label: "Sets Today",
+      text: setsToday.length === 1 ? when : `${setsToday.length} sets — ${when}`,
+      // One set today = link straight to its roster; several and the bullet is
+      // about the day, so it stays the calendar.
+      path: setsToday.length === 1 ? setLinkPath(setsToday[0].id) : "/calendar",
+    });
+  }
 
   if (request) {
     // Only the request itself could be fetched in parallel; whether they owe it
@@ -143,33 +169,17 @@ export async function buildOrgDigest(
       const label =
         request.name ?? shortRangeLabel(request.startDate, request.endDate);
       items.push({
-        text: `Fill out the availability request “${label}” for ${orgName}`,
+        label: "Availability Request",
+        text: `Fill out ${label} for ${orgName}`,
         path: "/schedule",
       });
     }
   }
 
-  // One person can hold several roles on a set — collapse to distinct sets so
-  // a guitarist who also leads doesn't read as two sets.
-  const setsToday = [...new Map(today.map((a) => [a.set.id, a.set])).values()];
-  if (setsToday.length > 0) {
-    const when = setsToday
-      .map((s) => `${formatTime(s.startsAt)}${s.label ? ` ${s.label}` : ""}`)
-      .join(", ");
-    items.push({
-      text:
-        setsToday.length === 1
-          ? `You have 1 set today, at ${when}`
-          : `You have ${setsToday.length} sets today: ${when}`,
-      // One set today = link straight to its roster; several and the bullet is
-      // about the day, so it stays the calendar.
-      path: setsToday.length === 1 ? setLinkPath(setsToday[0].id) : "/calendar",
-    });
-  }
-
   if (toConfirm > 0) {
     items.push({
-      text: `Confirm your spot on ${plural(toConfirm, "set")} ${windowPhrase(upcomingDays)}`,
+      label: "Confirm Your Spot",
+      text: `${plural(toConfirm, "set")} ${windowPhrase(upcomingDays)}`,
       path: "/calendar",
     });
   }
@@ -179,22 +189,23 @@ export async function buildOrgDigest(
   const [swaps, covers] = approvals;
   if (swaps > 0) {
     items.push({
-      text: `${plural(swaps, "swap request")} waiting on your approval`,
+      label: "Swap Requests",
+      text: `${swaps} pending approval`,
       path: "/approvals",
     });
   }
   if (covers > 0) {
     items.push({
-      text: `${plural(covers, "cover request")} waiting on your approval`,
+      label: "Cover Requests",
+      text: `${covers} pending approval`,
       path: "/approvals",
     });
   }
 
   if (unsettled > 0) {
     items.push({
-      text: `${plural(unsettled, "set")} ${windowPhrase(upcomingDays)} ${
-        unsettled === 1 ? "has" : "have"
-      } people who haven’t confirmed`,
+      label: "Missing Confirmations",
+      text: `${plural(unsettled, "set")} requiring confirmation`,
       path: "/calendar",
     });
   }
@@ -219,9 +230,15 @@ export function renderDigestText(
   fmt: MessageFormat = SLACK_FORMAT
 ): string {
   const firstName = name.trim().split(/\s+/)[0] || name;
-  const bullets = items.map((item) =>
-    baseUrl ? `• ${fmt.link(`${baseUrl}${item.path}`, item.text)}` : `• ${item.text}`
-  );
+  // The label is bold and sits OUTSIDE the link; the sentence is the link's
+  // label. No provider renders markup inside a link label, so this is the only
+  // arrangement that keeps both the bolding and a clickable bullet.
+  const bullets = items.map((item) => {
+    const body = baseUrl
+      ? fmt.link(`${baseUrl}${item.path}`, item.text)
+      : item.text;
+    return `\u{2022} ${fmt.bold(`${item.label}:`)} ${body}`;
+  });
   return [`☀️ Good morning ${firstName} — here's your day:`, ...bullets].join(
     "\n"
   );
