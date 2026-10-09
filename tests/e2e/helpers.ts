@@ -219,6 +219,31 @@ export function attemptTag(testInfo: TestInfo): string {
  * times out mid-test) otherwise leaves residue that makes every retry fail on
  * the leftover rather than on whatever actually went wrong.
  */
+/**
+ * `page.goto` plus a wait for the app to actually be ready to drive.
+ *
+ * `goto` resolves on the document's `load` event, which on this app is well
+ * before there's anything to click: the shared overlay (LoadingProvider) is
+ * still covering the viewport, and the page's own content doesn't render until
+ * its first fetch lands. Measured on /schedule at phone width, the form these
+ * tests click into does not exist until ~860ms after load — at which point the
+ * body's height nearly doubles — and the overlay stays mounted until ~2.3s
+ * while it fades.
+ *
+ * A bare `goto` therefore hands the test a page that is still assembling, and
+ * the first click races the reflow. Waiting for the overlay to LEAVE the DOM
+ * is the one signal that works on every page, since each one drives it through
+ * usePageLoading().
+ */
+export async function gotoReady(page: Page, path: string) {
+  await page.goto(path);
+  // The navbar renders on mount with no data of its own, so this proves React
+  // is up — and therefore that the page has already reported itself as
+  // loading — before the overlay's absence is allowed to mean anything.
+  await expect(page.locator("nav").first()).toBeVisible();
+  await expect(page.getByTestId("page-loading")).toHaveCount(0);
+}
+
 export async function clearBusyBlocks(page: Page) {
   const { entries } = (await (
     await page.request.get("/api/availability")

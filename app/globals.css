@@ -39,6 +39,20 @@
   }
   body {
     overflow-x: clip;
+    /* Kill DOUBLE-TAP-to-zoom, and only that. `manipulation` is `auto` minus
+       the double-tap gesture, so scrolling and PINCH-zoom are untouched — a
+       stray double-tap on a dense table row used to zoom the page and leave
+       you pinching your way back out, while pinching in to read a figure is a
+       thing people legitimately want.
+       Pinch is also not ours to take: iOS has ignored `user-scalable=no` and
+       `maximum-scale` since iOS 10 on purpose, so the viewport meta can't
+       disable it and the only thing that would is a JS gesture blocker —
+       a third global non-passive touchmove listener arguing with SwipePager
+       and PullToRefresh over the same events.
+       Safe beside those two: `manipulation` still permits pan, and a
+       descendant with a STRICTER value still wins (CalendarMonth's grid sets
+       its own `pan-x`). It also drops the legacy 300ms tap delay. */
+    touch-action: manipulation;
   }
   /* Don't move this clip up to `html`, tempting as it looks: the viewport takes
      its overflow from the ROOT element and only falls back to `body` while the
