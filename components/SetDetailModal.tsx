@@ -548,6 +548,11 @@ export default function SetDetailModal({
   const isSetMember =
     !!currentUserId && set.assignments.some((a) => a.user.id === currentUserId);
   const canEditSongs = isAdmin || isSetMember;
+  // Starting the set's group chat is for the people it's about: an org admin,
+  // or someone actually playing on it. It was open to any org member, which
+  // meant anyone browsing the calendar could create a private channel, invite
+  // a roster they're not part of, and post into it.
+  const canMessageTeam = isAdmin || isSetMember;
   // Anyone with any editable surface gets the Cancel/Save footer; a pure
   // viewer gets a plain Close, since there's nothing here for them to stage.
   const canEditAnything = canEditNotes || canEditTeam || canEditSongs;
@@ -973,6 +978,17 @@ export default function SetDetailModal({
   const changes = describeSetChanges(before, after, labelFor, nameFor);
   const dirty = changes.length > 0;
 
+  // Why the Slack button is off, or null when it's live. Worked out here
+  // rather than as a ternary chain in the JSX, and ordered the way you'd fix
+  // them: who you are, then the org's setup, then your own unsaved edits.
+  const slackDisabledReason = !canMessageTeam
+    ? "Only an admin or someone playing on this set can message the team."
+    : !slackConfigured
+      ? "Connect Slack for this organization to message the team."
+      : dirty
+        ? "Save your changes first — the message goes to the roster as saved."
+        : null;
+
   // Save every staged change. Ordering is load-bearing:
   //   1. guest teams, because a seat borrowed from a team added in this
   //      session needs that team's REAL row id, which only exists after this;
@@ -1355,47 +1371,52 @@ export default function SetDetailModal({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {/* Shown to everyone (any team member can start the group chat), but
-              disabled until this org connects Slack — the affordance stays
-              discoverable and the tooltip explains what's missing. */}
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={messageTeamOnSlack}
-            disabled={busy || !slackConfigured || dirty}
-            title={
-              !slackConfigured
-                ? "Connect Slack for this organization to message the team."
-                : dirty
-                  ? "Save your changes first — the message goes to the roster as saved."
-                  : undefined
-            }
+          {/* Still SHOWN to everyone rather than hidden from onlookers: the
+              set's group chat is a thing that exists, and a missing button
+              reads as "broken" where a disabled one with a reason reads as
+              "not yours".
+              The reason sits on this WRAPPER, not on the button: a disabled
+              control doesn't reliably surface its own `title` (Safari skips
+              tooltips on disabled elements entirely), which is exactly the
+              case the reason exists for. The span is never disabled, so the
+              hover always lands. */}
+          <span
+            className="inline-flex"
+            data-testid="slack-team-action"
+            title={slackDisabledReason ?? undefined}
           >
-            <span className="flex items-center gap-1.5">
-              {slackDone ? (
-                <>
-                  <svg
-                    aria-hidden
-                    viewBox="0 0 20 20"
-                    className="h-4 w-4 text-green-600 dark:text-green-400"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M4 10.5l4 4 8-9" />
-                  </svg>
-                  Sent
-                </>
-              ) : (
-                <>
-                  <SlackIcon />
-                  Slack Team
-                </>
-              )}
-            </span>
-          </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={messageTeamOnSlack}
+              disabled={busy || slackDisabledReason !== null}
+            >
+              <span className="flex items-center gap-1.5">
+                {slackDone ? (
+                  <>
+                    <svg
+                      aria-hidden
+                      viewBox="0 0 20 20"
+                      className="h-4 w-4 text-green-600 dark:text-green-400"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M4 10.5l4 4 8-9" />
+                    </svg>
+                    Sent
+                  </>
+                ) : (
+                  <>
+                    <SlackIcon />
+                    Slack Team
+                  </>
+                )}
+              </span>
+            </Button>
+          </span>
 
           {/* Overflow menu: the less-common set actions. Admin-only toggles
               (Require MD / Choir / Private) plus the .ics export, which stays

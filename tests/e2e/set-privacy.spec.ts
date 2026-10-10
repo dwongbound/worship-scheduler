@@ -106,3 +106,34 @@ test("admin creates a private set from the calendar, then toggles it public", as
     ).toBeTruthy();
   }).toPass();
 });
+
+// Starting a set's Slack group chat creates a private channel around that
+// set's roster, so it belongs to the people the set is about: an org admin, or
+// someone actually playing on it. Everyone else sees the button — a missing
+// one reads as broken — but disabled, with the reason on hover.
+//
+// Asserted as "the reason is / isn't the permission one" rather than
+// "enabled vs disabled": the button is also disabled while the org hasn't
+// connected Slack, which is every org in the test env, so enabledness alone
+// can't tell the two cases apart.
+test("only an admin or someone on the set can message its team on Slack", async ({
+  page,
+}) => {
+  const PERMISSION_REASON = /Only an admin or someone playing on this set/;
+
+  // bob plays drums on Sunday Morning — whatever is blocking him, it isn't him.
+  await login(page, "bob");
+  let modal = await openSetByLabel(page, "Sunday Morning");
+  let action = modal.getByTestId("slack-team-action");
+  await expect(action).toBeVisible();
+  await expect(action).not.toHaveAttribute("title", PERMISSION_REASON);
+
+  // ivy is in the same org but plays Wednesday Night, not this set.
+  await login(page, "ivy");
+  modal = await openSetByLabel(page, "Sunday Morning");
+  action = modal.getByTestId("slack-team-action");
+  await expect(action).toHaveAttribute("title", PERMISSION_REASON);
+  await expect(
+    action.getByRole("button", { name: "Slack Team" })
+  ).toBeDisabled();
+});
