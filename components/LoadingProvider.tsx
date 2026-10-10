@@ -19,6 +19,10 @@ import LoadingScreen from "./common/LoadingScreen";
 
 type Controls = { begin: () => void; report: (loading: boolean) => void };
 
+/** The overlay's fade-out, and how long it stays mounted for it. Keep in step
+ *  with the `duration-300` class below. */
+const FADE_MS = 300;
+
 const LoadingContext = createContext<Controls>({
   begin: () => {},
   report: () => {},
@@ -61,7 +65,20 @@ export default function LoadingProvider({
   }, []);
 
   useEffect(() => {
-    if (visible) setRendered(true);
+    if (visible) {
+      setRendered(true);
+      return;
+    }
+    // Unmount on a TIMER, not on transitionend.
+    //
+    // `transitionend` only fires if a transition actually runs, and there are
+    // ordinary cases where none does: the overlay mounted and hidden inside
+    // one frame (a page whose data was already cached), or a viewer with
+    // transitions off. The event then never arrives, `rendered` stays true,
+    // and this `fixed inset-0` box sits over the page forever — invisible and
+    // inert, so nobody notices, but permanently there. A timer always fires.
+    const timer = window.setTimeout(() => setRendered(false), FADE_MS);
+    return () => window.clearTimeout(timer);
   }, [visible]);
 
   return (
@@ -69,10 +86,13 @@ export default function LoadingProvider({
       {children}
       {rendered && (
         <div
+          // e2e reads this to know the app has finished assembling: `goto`
+          // resolves on `load`, which here is before the first fetch has even
+          // been sent (see gotoReady in tests/e2e/helpers.ts). Which also means
+          // it must really leave the DOM — hence the timer above.
+          data-testid="page-loading"
           aria-hidden={!visible}
-          onTransitionEnd={() => {
-            if (!visible) setRendered(false);
-          }}
+          // `duration-300` must stay in step with FADE_MS.
           className={`fixed inset-0 z-20 transition-opacity duration-300 ${
             visible ? "opacity-100" : "opacity-0 pointer-events-none"
           }`}
