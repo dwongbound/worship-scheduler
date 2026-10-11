@@ -9,8 +9,13 @@ const APP_NAME = "Worship Scheduler";
 const SUBTEXT = "\"Let's give a clap offering!\" — Joe Lee";
 
 // Equalizer bar heights + per-bar timing, tuned so it reads like music
-// rather than a mechanical loop. Colors are drawn from the app favicon
-// (app/icon.svg): orange, crimson, teal, yellow, green.
+// rather than a mechanical loop.
+//
+// The colours are left over from an older favicon (a woven grid of orange,
+// crimson, teal, yellow and green) that the "tw" mark replaced. They're kept
+// deliberately for now — the splash is the one place with any colour in it,
+// and a monochrome equalizer reads as broken rather than restrained. Worth
+// revisiting as a palette, not as a find-and-replace.
 const BARS = [
   { h: "h-6", delay: "0s", dur: "0.9s", color: "#E0913C" },
   { h: "h-10", delay: "0.15s", dur: "1.1s", color: "#C13454" },

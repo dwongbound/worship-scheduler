@@ -1,6 +1,6 @@
 // E2E: admin-only Create tab — templates, generation, availability status.
 import { expect, test } from "@playwright/test";
-import { login, pickSingleDay } from "./helpers";
+import { login, pickSingleDay, seedOwnSetTime } from "./helpers";
 
 test("non-admins don't see the Create tab and can't use the page", async ({ page }) => {
   await login(page, "bob");
@@ -402,6 +402,15 @@ test("the workspace opens straight onto a skeleton, never the empty state", asyn
   page,
 }) => {
   await login(page, "admin");
+  // This test is ABOUT the non-empty path, so it can't be left to inherit a
+  // window that earlier tests in this file have already applied sets into —
+  // generate skips occurrences that already exist, and the plan comes back
+  // empty. Its own weekly slot can't be used up by anything before it.
+  await seedOwnSetTime(page, {
+    label: "Skeleton Probe",
+    dayOfWeek: 6, // Saturday 14:00 — no other spec schedules here
+    startMinute: 14 * 60,
+  });
 
   // Hold the generate response so the in-flight state is a fixed thing to look
   // at rather than a frame that may or may not be caught.

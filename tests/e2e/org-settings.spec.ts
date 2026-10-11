@@ -97,8 +97,16 @@ test("an org admin includes a member in all group chats and it persists", async 
   await expect(bobChip()).toBeVisible();
 
   // Restore shared seed state — the chip's ✕ takes him back out.
-  await Promise.all([savePatch(), bobChip().click()]);
-  await expect(bobChip()).toHaveCount(0);
+  //
+  // Click and assertion retried as ONE unit (the same idiom pickSingleDay
+  // uses): this click lands moments after the reload above, where it can be
+  // swallowed by the re-render and fire no request at all. Pressing again is
+  // safe — taking out someone already out is a no-op — and a removal that
+  // genuinely doesn't work still fails, just after a few tries instead of one.
+  await expect(async () => {
+    await bobChip().click();
+    await expect(bobChip()).toHaveCount(0, { timeout: 2000 });
+  }).toPass({ timeout: 15_000 });
 });
 
 test("changing data retention asks first, and says what it would delete", async ({

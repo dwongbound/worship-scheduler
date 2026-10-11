@@ -252,8 +252,10 @@ directly. Changing it takes effect on the next deploy.
 - **Theme** — three modes (light / dark / system) cycled by the Navbar
   button; logic in `lib/theme.ts`, applied flash-free by the inline script
   in `app/layout.tsx`. `system` follows the OS preference live.
-- **Branding** — `components/Logo.tsx` (the "tw" monogram in the Navbar)
-  and `app/icon.svg` (favicon) are hand-drawn SVGs, no image assets.
+- **Branding** — the "tw" mark. `assets/tw-logo-master.png` is the 3000px
+  master (never served); `public/tw-logo.png` is what `components/Logo.tsx`
+  draws in the Navbar, and `app/icon.png` / `app/apple-icon.png` are the
+  favicon and home-screen icon.
 - **Auth** — `lib/auth.ts` (NextAuth credentials + bcrypt). Pages are
   gated by `proxy.ts`; API routes return JSON 401s.
 

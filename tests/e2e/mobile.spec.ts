@@ -10,6 +10,7 @@
 import { expect, test } from "@playwright/test";
 import {
   clearBusyBlocks,
+  gotoReady,
   login,
   pickSingleDay,
   requestAvailability,
@@ -177,11 +178,14 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
   // left a block behind, and this test's own "it's gone again" assertion would
   // then fail on the leftover rather than on anything it did.
   await clearBusyBlocks(page);
-  await page.goto("/schedule");
+  await gotoReady(page, "/schedule");
 
   // The month calendar is desktop-only (hidden below lg); the phone gets the
   // week strip instead, and the form below it still works either way. Neither
   // needs an availability request, unlike the request cards above them.
+  // NB this assertion is worth nothing as a WAIT — a locator that doesn't
+  // exist yet is "hidden", so before gotoReady it passed on a blank page and
+  // let the clicks below start mid-render. gotoReady is the sync point.
   await expect(page.locator("[data-tour='avail-calendar']")).toBeHidden();
 
   const blockOutTimes = sectionByHeading(page, "Block out times");
@@ -203,7 +207,12 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
 
 test("phone week strip blocks a day with one tap", async ({ page }) => {
   await login(page, "carol");
-  await page.goto("/schedule");
+  // Carol's blocks are this file's shared mutable state — five tests add and
+  // remove them. Clearing here (rather than trusting the previous test to have
+  // tidied up) is what stops one failure from cascading into the rest: the
+  // "it's gone again" assertion at the end counts ALL her blocks.
+  await clearBusyBlocks(page);
+  await gotoReady(page, "/schedule");
 
   // The strip replaces the desktop calendar below lg: today is always in the
   // week it opens on, and tapping a free day blocks it all day.
@@ -232,7 +241,8 @@ test("phone: adds and deletes a recurring weekly block via the single-panel adde
   page,
 }) => {
   await login(page, "carol");
-  await page.goto("/schedule");
+  await clearBusyBlocks(page); // own state — see the note two tests above
+  await gotoReady(page, "/schedule");
 
   // The single "Block out times" panel does both block kinds behind a toggle;
   // it defaults to specific, so switch to the weekly mode. This is the same
@@ -267,7 +277,11 @@ test("phone: submits an availability response and re-opens it for changes", asyn
 }) => {
   await requestAvailability(page);
   await login(page, "carol");
-  await page.goto("/schedule");
+  // Not optional here: the modal below is asserted to say carol is "available
+  // the whole time", which is only true with no blocks on her. This test used
+  // to inherit that state from whichever test ran before it.
+  await clearBusyBlocks(page);
+  await gotoReady(page, "/schedule");
 
   // The submit-confirmation modal is viewport-independent; make sure the whole
   // "Submit response" → confirm → "Make changes" loop works on a phone too.
@@ -295,7 +309,7 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
   await requestAvailability(page);
   await login(page, "carol");
   await clearBusyBlocks(page); // see the note in the test above
-  await page.goto("/schedule");
+  await gotoReady(page, "/schedule");
 
   // No calendar on a phone, so the general "Block out times" form is the only
   // way to block a day inside the active request's window.
