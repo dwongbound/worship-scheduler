@@ -180,6 +180,70 @@ export async function openSetByLabel(page: Page, label: string) {
  * the Availabilities page shows its input forms. Leaves the session logged in
  * as admin — callers log in as the user they want afterward.
  */
+/**
+ * Give this test its own weekly set time, so a generate always has something
+ * NEW to propose.
+ *
+ * Generate expands the org's templates over a window and skips any occurrence
+ * that already has a set. Tests that apply a schedule therefore use the window
+ * up: every later generate over the same range comes back EMPTY, which looks
+ * exactly like a broken generate and is why these specs failed in sequence but
+ * passed alone. A template at a day+time nothing else touches can't be
+ * consumed by whatever ran first.
+ *
+ * `dayOfWeek` is 0=Sun; `startMinute` is minutes from midnight. Pick a pair no
+ * other spec uses — collisions here recreate the very problem this avoids.
+ */
+export async function seedOwnSetTime(
+  page: Page,
+  { label, dayOfWeek, startMinute }: {
+    label: string;
+    dayOfWeek: number;
+    startMinute: number;
+  }
+) {
+  const orgs = (await (await page.request.get("/api/orgs")).json()) as {
+    id: string;
+    isAdmin: boolean;
+  }[];
+  const adminOrg = orgs.find((o) => o.isAdmin);
+  expect(adminOrg, "admin has no admin org").toBeTruthy();
+  const headers = { "x-org-id": adminOrg!.id };
+
+  // A template must name a team — its members are who the generated sets can
+  // be staffed from, so an unstaffed one would produce empty cards.
+  const teams = (await (
+    await page.request.get("/api/teams", { headers })
+  ).json()) as { id: string; name: string }[];
+  const team = teams.find((t) => t.name === "Sunday Team") ?? teams[0];
+  expect(team, "no team to hang a template on").toBeTruthy();
+
+  // Idempotent: several tests in a file may ask for the same slot, and six
+  // identical templates would quietly multiply every later preview.
+  const existing = (await (
+    await page.request.get("/api/admin/templates", { headers })
+  ).json()) as { label: string; dayOfWeek: number; startMinute: number }[];
+  const already = existing.some(
+    (t) =>
+      t.label === label &&
+      t.dayOfWeek === dayOfWeek &&
+      t.startMinute === startMinute
+  );
+  if (already) return;
+
+  const res = await page.request.post("/api/admin/templates", {
+    headers,
+    data: {
+      label,
+      dayOfWeek,
+      startMinute,
+      durationMinutes: 90,
+      teamId: team!.id,
+    },
+  });
+  expect(res.ok(), `template POST failed: ${res.status()}`).toBeTruthy();
+}
+
 export async function requestAvailability(page: Page) {
   await login(page, "admin");
   // Admin routes are org-scoped: name the org via the x-org-id header. The
@@ -219,6 +283,31 @@ export function attemptTag(testInfo: TestInfo): string {
  * times out mid-test) otherwise leaves residue that makes every retry fail on
  * the leftover rather than on whatever actually went wrong.
  */
+/**
+ * `page.goto` plus a wait for the app to actually be ready to drive.
+ *
+ * `goto` resolves on the document's `load` event, which on this app is well
+ * before there's anything to click: the shared overlay (LoadingProvider) is
+ * still covering the viewport, and the page's own content doesn't render until
+ * its first fetch lands. Measured on /schedule at phone width, the form these
+ * tests click into does not exist until ~860ms after load — at which point the
+ * body's height nearly doubles — and the overlay stays mounted until ~2.3s
+ * while it fades.
+ *
+ * A bare `goto` therefore hands the test a page that is still assembling, and
+ * the first click races the reflow. Waiting for the overlay to LEAVE the DOM
+ * is the one signal that works on every page, since each one drives it through
+ * usePageLoading().
+ */
+export async function gotoReady(page: Page, path: string) {
+  await page.goto(path);
+  // The navbar renders on mount with no data of its own, so this proves React
+  // is up — and therefore that the page has already reported itself as
+  // loading — before the overlay's absence is allowed to mean anything.
+  await expect(page.locator("nav").first()).toBeVisible();
+  await expect(page.getByTestId("page-loading")).toHaveCount(0);
+}
+
 export async function clearBusyBlocks(page: Page) {
   const { entries } = (await (
     await page.request.get("/api/availability")

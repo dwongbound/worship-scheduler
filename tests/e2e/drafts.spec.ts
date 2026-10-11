@@ -4,10 +4,20 @@
 // there's nothing to park. The Drafts button is hidden until one exists, which
 // is the first thing this checks.
 import { expect, test } from "@playwright/test";
-import { login } from "./helpers";
+import { login, seedOwnSetTime } from "./helpers";
 
 // Open the Create tab and stage a preview from the seeded availability request.
+//
+// Seeds its own weekly set time first: generate skips occurrences that already
+// have a set, so after any spec that APPLIES a schedule the same window comes
+// back empty — and an empty plan has no footer to press Save Draft on. These
+// tests passed alone and failed after create.spec for exactly that reason.
 async function openPreview(page: import("@playwright/test").Page) {
+  await seedOwnSetTime(page, {
+    label: "Draft Probe",
+    dayOfWeek: 5, // Friday 15:00 — nothing else schedules here
+    startMinute: 15 * 60,
+  });
   await page.goto("/create");
   await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
