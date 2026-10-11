@@ -9,16 +9,16 @@ export const proxy = withAuth({
 });
 
 export const config = {
-  // icon.png is excluded so the favicon still loads on the logged-out /login
-  // screen (otherwise the request for it would itself redirect to /login).
-  // It must stay in step with the FILENAME in app/ — this read `icon.svg`
-  // when the mark was a drawing, and a rename here is silent: the favicon
-  // just quietly 302s to /login for anyone signed out.
-  // manifest.webmanifest and apple-icon are excluded because phones fetch
-  // them without auth cookies when installing the app to the home screen.
-  // tw-logo.png is the Navbar mark, served from public/ — the login page
-  // doesn't draw it today, but it costs nothing to keep reachable.
+  // `icon` and `apple-icon` are the GENERATED icon routes (app/icon.tsx,
+  // app/apple-icon.tsx) — excluded so the favicon still loads on the
+  // logged-out /login screen, which would otherwise redirect the request for
+  // it back to /login. Extension-less on purpose: that's the route Next
+  // serves a generated icon at, and the names here have to track whatever
+  // app/ actually produces. A mismatch is silent — nothing references these
+  // paths in code, the favicon just quietly stops loading when signed out.
+  // manifest.webmanifest is excluded because phones fetch it without auth
+  // cookies when installing the app to the home screen.
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|icon.png|tw-logo.png|manifest.webmanifest|apple-icon|login).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|icon|manifest.webmanifest|apple-icon|login).*)",
   ],
 };
