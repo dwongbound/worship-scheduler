@@ -180,6 +180,70 @@ export async function openSetByLabel(page: Page, label: string) {
  * the Availabilities page shows its input forms. Leaves the session logged in
  * as admin — callers log in as the user they want afterward.
  */
+/**
+ * Give this test its own weekly set time, so a generate always has something
+ * NEW to propose.
+ *
+ * Generate expands the org's templates over a window and skips any occurrence
+ * that already has a set. Tests that apply a schedule therefore use the window
+ * up: every later generate over the same range comes back EMPTY, which looks
+ * exactly like a broken generate and is why these specs failed in sequence but
+ * passed alone. A template at a day+time nothing else touches can't be
+ * consumed by whatever ran first.
+ *
+ * `dayOfWeek` is 0=Sun; `startMinute` is minutes from midnight. Pick a pair no
+ * other spec uses — collisions here recreate the very problem this avoids.
+ */
+export async function seedOwnSetTime(
+  page: Page,
+  { label, dayOfWeek, startMinute }: {
+    label: string;
+    dayOfWeek: number;
+    startMinute: number;
+  }
+) {
+  const orgs = (await (await page.request.get("/api/orgs")).json()) as {
+    id: string;
+    isAdmin: boolean;
+  }[];
+  const adminOrg = orgs.find((o) => o.isAdmin);
+  expect(adminOrg, "admin has no admin org").toBeTruthy();
+  const headers = { "x-org-id": adminOrg!.id };
+
+  // A template must name a team — its members are who the generated sets can
+  // be staffed from, so an unstaffed one would produce empty cards.
+  const teams = (await (
+    await page.request.get("/api/teams", { headers })
+  ).json()) as { id: string; name: string }[];
+  const team = teams.find((t) => t.name === "Sunday Team") ?? teams[0];
+  expect(team, "no team to hang a template on").toBeTruthy();
+
+  // Idempotent: several tests in a file may ask for the same slot, and six
+  // identical templates would quietly multiply every later preview.
+  const existing = (await (
+    await page.request.get("/api/admin/templates", { headers })
+  ).json()) as { label: string; dayOfWeek: number; startMinute: number }[];
+  const already = existing.some(
+    (t) =>
+      t.label === label &&
+      t.dayOfWeek === dayOfWeek &&
+      t.startMinute === startMinute
+  );
+  if (already) return;
+
+  const res = await page.request.post("/api/admin/templates", {
+    headers,
+    data: {
+      label,
+      dayOfWeek,
+      startMinute,
+      durationMinutes: 90,
+      teamId: team!.id,
+    },
+  });
+  expect(res.ok(), `template POST failed: ${res.status()}`).toBeTruthy();
+}
+
 export async function requestAvailability(page: Page) {
   await login(page, "admin");
   // Admin routes are org-scoped: name the org via the x-org-id header. The
