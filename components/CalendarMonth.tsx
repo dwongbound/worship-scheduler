@@ -1,21 +1,22 @@
 "use client";
 // Custom-styled calendar grid. A fixed window of week rows — seven columns,
-// days running straight through a month boundary — that moves a WHOLE WEEK at
-// a time on a wheel or a vertical drag, the same model as the date picker in
-// common/DateSelect (the geometry is shared, in lib/calendarScroll).
+// days running straight through a month boundary — moved only by the BUTTONS
+// in the header: ‹ › jump a whole month and Today comes home.
 //
-// There is no scroll container behind it: the window is an index into an
-// endless run of weeks, so a step is exact and no row ever lands half on
-// screen. ‹ › still jump a whole month, and the heading names whichever month
-// owns most of the visible rows — so it changes when the view genuinely does,
-// not when a single day crosses over.
+// Deliberately NOT moved by a wheel or a drag. It used to step a week per
+// gesture, which meant the grid swallowed every scroll that passed over it —
+// and since the pointer sits over the grid nearly all the time, a day cell's
+// own list of sets became almost impossible to scroll. The window is an index
+// into an endless run of weeks, so it still steps exactly and no row ever
+// lands half on screen; the heading names whichever month owns most of the
+// visible rows, so it changes when the view genuinely does, not when a single
+// day crosses over.
 //
 // Every set renders as a clickable "slot" chip on its day; clicking one calls
 // onSelectSet (the page opens SetDetailModal).
-// A day with more sets than fit is CLIPPED, never scrolled: a cell that
-// swallowed the wheel made the grid itself nearly unsteppable, since the
-// pointer is usually over a busy day. What doesn't fit is counted in a "+N"
-// badge, and the whole list is on the set-manager tab.
+// A day with more sets than fit scrolls inside its own cell (scrollbar hidden),
+// with top/bottom fade + chevron cues marking that there's more out of view —
+// the one thing in here that a wheel or a finger does move.
 // Fully Tailwind-styled; light + dark aware.
 import {
   type ReactNode,
@@ -33,13 +34,9 @@ import StatusBadge from "./StatusBadge";
 import StatusDot from "./StatusDot";
 import LoadingDots from "./common/LoadingDots";
 import { type AssignmentStatus } from "@/lib/constants";
-import { BOTTOM_NAV_MAX_WIDTH } from "@/lib/layout";
 import {
   CALENDAR_VISIBLE_WEEKS,
-  SWIPE_STEP_PX,
-  addWeeks,
   buildWeeks,
-  canStep,
   earliestLiveDay,
   majorityMonth,
   startOfMonth,
@@ -50,10 +47,6 @@ import { formatTime } from "@/lib/dates";
 import type { ApiSet, ApiSwapRequest } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-// px of travel before a drag's axis is called. Below this a touch is still
-// ambiguous, and claiming it would steal the tab swipe.
-const AXIS_SLOP = 10;
 
 // Local-time YYYY-MM-DD, published on every cell as `data-date`. Same spelling
 // the availability calendar uses, so a test (or a future deep link) can name a
@@ -186,9 +179,9 @@ export default function CalendarMonth({
 
   // Tell the parent which month is on screen so it can widen its fetch window.
   // An effect keyed on the month itself, rather than a call inside each nav
-  // handler: with the window moving a week at a time there is no longer one
-  // place a "month change" happens, and the majority month can cross over
-  // mid-drag. The parent's handler is idempotent, so a repeat costs nothing.
+  // handler: ‹ ›, Today and a `focusMonth` link all move the window, and the
+  // heading's majority month is what they have in common. The parent's handler
+  // is idempotent, so a repeat costs nothing.
   const monthStamp = `${headerMonth.getFullYear()}-${headerMonth.getMonth()}`;
   useEffect(() => {
     const [y, m] = monthStamp.split("-").map(Number);
@@ -196,18 +189,8 @@ export default function CalendarMonth({
   }, [monthStamp, onViewMonthChange]);
 
   // ── Moving through time ──────────────────────────────────────────────────
-  // One week per gesture, never faster than the shared cooldown (a trackpad
-  // fires wheel events in the dozens per second, and momentum keeps them
-  // coming after your fingers lift).
-  const lastStep = useRef(0);
-  const step = useCallback((delta: number) => {
-    const now = Date.now();
-    if (!canStep(now, lastStep.current)) return;
-    lastStep.current = now;
-    setFirstWeek((w) => addWeeks(w, delta));
-  }, []);
-
-  // ‹ › jump a whole month, relative to the one the heading names.
+  // By button only. ‹ › jump a whole month, relative to the one the heading
+  // names; Today comes back to this week.
   const goToMonth = (delta: number) =>
     setFirstWeek(
       monthTopRow(
@@ -215,104 +198,6 @@ export default function CalendarMonth({
       )
     );
   const goToday = () => setFirstWeek(monthTopRow(today));
-
-  // Stepping by wheel or drag is for POINTER widths only. On a tablet the grid
-  // keeps its hands off entirely: no listeners, no touch-action of its own,
-  // nothing inside it that scrolls. Dragging there does what dragging a page
-  // does, and the weeks are moved with ‹ › or Today.
-  const [pointerWidth, setPointerWidth] = useState(true);
-  useEffect(() => {
-    const query = window.matchMedia(`(min-width: ${BOTTOM_NAV_MAX_WIDTH}px)`);
-    const sync = () => setPointerWidth(query.matches);
-    sync();
-    query.addEventListener("change", sync);
-    return () => query.removeEventListener("change", sync);
-  }, []);
-
-  // The listeners are attached BY HAND, in a callback ref, because React's own
-  // wheel and touchmove listeners are passive: preventDefault inside them does
-  // nothing, so the page scrolled behind the calendar while the weeks stepped.
-  const detachGestures = useRef<(() => void) | null>(null);
-  const gridRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      detachGestures.current?.();
-      detachGestures.current = null;
-      if (!node || !pointerWidth) return;
-
-      // Every vertical wheel over the grid steps a week — nothing inside a
-      // cell scrolls any more, so there is nobody to stand aside for.
-      const onWheel = (e: WheelEvent) => {
-        if (e.deltaY === 0) return;
-        e.preventDefault();
-        step(e.deltaY > 0 ? 1 : -1);
-      };
-
-      // Touch: a vertical drag steps a week per SWIPE_STEP_PX travelled, rate
-      // limited like the wheel so a flick can't run away with the year.
-      //
-      // The axis is decided once, on the first decisive movement, and only a
-      // VERTICAL drag is ours: a horizontal one is the tab swipe
-      // (SwipePager), and claiming every touch here would eat it. Once the
-      // drag is ours, every move is preventDefault'd — that's what stops the
-      // page scrolling underneath on a tablet — and once it isn't, we never
-      // touch it again for the rest of the gesture.
-      let startX = 0;
-      let startY = 0;
-      let decided = false;
-      let ours = false;
-
-      const onTouchStart = (e: TouchEvent) => {
-        const touch = e.touches[0];
-        decided = e.touches.length !== 1; // a pinch is never ours
-        ours = false;
-        if (!touch) return;
-        startX = touch.clientX;
-        startY = touch.clientY;
-      };
-
-      const onTouchMove = (e: TouchEvent) => {
-        const touch = e.touches[0];
-        if (!touch) return;
-        const dx = touch.clientX - startX;
-        const dy = touch.clientY - startY;
-
-        if (!decided) {
-          if (Math.abs(dx) < AXIS_SLOP && Math.abs(dy) < AXIS_SLOP) return;
-          decided = true;
-          // Vertical only — a horizontal drag is the tab swipe (SwipePager),
-          // and claiming every touch here would eat it.
-          ours = Math.abs(dy) > Math.abs(dx);
-        }
-        if (!ours) return;
-
-        // Ours: the page stays exactly where it is.
-        if (e.cancelable) e.preventDefault();
-        if (Math.abs(dy) < SWIPE_STEP_PX) return;
-        // Dragging up (negative dy) pulls later weeks in, as scrolling does.
-        step(dy < 0 ? 1 : -1);
-        startY = touch.clientY; // rebase, so each step costs another SWIPE_STEP_PX
-      };
-
-      const onTouchEnd = () => {
-        decided = false;
-        ours = false;
-      };
-
-      node.addEventListener("wheel", onWheel, { passive: false });
-      node.addEventListener("touchstart", onTouchStart, { passive: true });
-      node.addEventListener("touchmove", onTouchMove, { passive: false });
-      node.addEventListener("touchend", onTouchEnd, { passive: true });
-      node.addEventListener("touchcancel", onTouchEnd, { passive: true });
-      detachGestures.current = () => {
-        node.removeEventListener("wheel", onWheel);
-        node.removeEventListener("touchstart", onTouchStart);
-        node.removeEventListener("touchmove", onTouchMove);
-        node.removeEventListener("touchend", onTouchEnd);
-        node.removeEventListener("touchcancel", onTouchEnd);
-      };
-    },
-    [step, pointerWidth]
-  );
 
   return (
     // A flex column so the header + weekday labels stay put while the day grid
@@ -362,13 +247,14 @@ export default function CalendarMonth({
 
       {/* Day grid — fills the remaining height, its rows sharing it evenly so
           the whole month always fits the page rather than forcing a scroll.
-          `minmax(0, 1fr)` lets the rows shrink to fit a short viewport; each
-          cell is overflow-hidden and counts extra sets as "+N more". Nothing
-          in here scrolls, so a wheel anywhere over the grid steps a week. */}
+          `minmax(0, 1fr)` lets the rows shrink to fit a short viewport; a cell
+          with more sets than fit scrolls inside itself. The grid takes no
+          gestures of its own — the weeks move by button. */}
       <div
-        ref={gridRef}
-        // data-no-pull: a downward drag here steps the calendar back a week,
-        // so pull-to-refresh must keep its hands off (components/PullToRefresh).
+        // data-no-pull: a downward drag inside a day cell scrolls that cell's
+        // own chips, and PullToRefresh only looks at the window's scroll
+        // position — without this it would refresh the page instead
+        // (components/PullToRefresh).
         data-no-pull
         className="grid min-h-0 flex-1 grid-cols-7 overflow-hidden"
         style={{
@@ -431,14 +317,14 @@ export default function CalendarMonth({
                 </span>
               </div>
 
-              {/* All of the day's chips, clipped to the cell with a "+N" badge
-                  counting whatever didn't fit. The badge sits on the cell's own
-                  bg, which differs when muted. */}
+              {/* All of the day's chips, scrollable within the cell (scrollbar
+                  hidden) with fade + chevron cues when there's more out of view.
+                  The fade blends to the cell's own bg, which differs when muted. */}
               <DayChips
-                badgeBg={
+                fadeFrom={
                   muted
-                    ? "bg-gray-50 dark:bg-gray-900/50"
-                    : "bg-white dark:bg-gray-800"
+                    ? "from-gray-50 dark:from-gray-900/50"
+                    : "from-white dark:from-gray-800"
                 }
               >
                 {daySets.map((set) => (
@@ -462,41 +348,43 @@ export default function CalendarMonth({
   );
 }
 
-// A day cell's chip list. Fills the cell's remaining height and simply CLIPS
-// what doesn't fit — it used to scroll inside itself, but on a desktop the
-// pointer sits over a day cell most of the time, so the cell ate the wheel and
-// the grid barely stepped. Instead a small "+N" badge counts the chips that are
-// cut off; `badgeBg` carries the cell's own background so it reads as a label
-// rather than a chip. The full list of a day's sets lives on the set-manager tab.
+// A day cell's scrollable chip list. Fills the cell's remaining height and
+// scrolls internally with the scrollbar hidden; a top and/or bottom fade plus a
+// small chevron appear only when content is clipped in that direction, so it's
+// clear there are more sets above/below. `fadeFrom` carries the gradient's
+// start color (matching the cell bg) so the fade blends seamlessly.
+//
+// This is the ONLY scroller in the calendar — the grid itself no longer steps
+// weeks on a wheel or a drag, so a gesture that starts here is unambiguously
+// meant for it, at every width.
 function DayChips({
   children,
-  badgeBg,
+  fadeFrom,
 }: {
   children: ReactNode;
-  badgeBg: string;
+  fadeFrom: string;
 }) {
-  const listRef = useRef<HTMLDivElement>(null);
-  // How many chips are cut off at the bottom (0 = they all fit).
-  const [hidden, setHidden] = useState(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether content is hidden above / below the current scroll position.
+  const [more, setMore] = useState({ up: false, down: false });
 
   const recompute = useCallback(() => {
-    const el = listRef.current;
+    const el = scrollRef.current;
     if (!el) return;
-    // A chip counts as hidden once its top is at or below the cell's bottom
-    // edge, or it is more than half cut off — a chip showing most of itself
-    // still reads as present.
-    const cut = Array.from(el.children).filter((child) => {
-      const chip = child as HTMLElement;
-      return chip.offsetTop + chip.offsetHeight / 2 > el.clientHeight;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    setMore({
+      up: scrollTop > 1,
+      // -1 guards against sub-pixel rounding that would otherwise leave the
+      // "more below" cue on when fully scrolled.
+      down: scrollTop + clientHeight < scrollHeight - 1,
     });
-    setHidden(cut.length);
   }, []);
 
   // Recompute after layout and whenever the cell (or its content) resizes — the
   // grid rows flex with the viewport, so a cell's height isn't fixed.
   useLayoutEffect(() => {
     recompute();
-    const el = listRef.current;
+    const el = scrollRef.current;
     if (!el) return;
     const ro = new ResizeObserver(recompute);
     ro.observe(el);
@@ -506,21 +394,50 @@ function DayChips({
 
   return (
     <div className="relative min-h-0 flex-1">
-      <div ref={listRef} className="h-full space-y-1 overflow-hidden">
+      <div
+        ref={scrollRef}
+        // Marks this as the cell's own scroller — the one thing in the calendar
+        // that a wheel or a finger moves. e2e names the cell's list by it.
+        data-chips
+        onScroll={recompute}
+        // `[scrollbar-width:none]` (Firefox) + the webkit rule hide the bar.
+        className="h-full space-y-1 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         {children}
       </div>
 
-      {hidden > 0 && (
-        <div
-          aria-hidden
-          className={`pointer-events-none absolute inset-x-0 bottom-0 flex justify-end ${badgeBg}`}
-        >
-          <span className="rounded px-1 text-[10px] font-medium leading-4 text-gray-500 dark:text-gray-400">
-            +{hidden} more
-          </span>
-        </div>
-      )}
+      {/* Top fade — shown when scrolled down past the first chip. */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-x-0 top-0 h-4 bg-gradient-to-b ${fadeFrom} to-transparent transition-opacity duration-150 ${
+          more.up ? "opacity-100" : "opacity-0"
+        }`}
+      />
+      {/* Bottom fade + a centered chevron nudging that there's more below. */}
+      <div
+        aria-hidden
+        className={`pointer-events-none absolute inset-x-0 bottom-0 flex h-5 items-end justify-center bg-gradient-to-t ${fadeFrom} to-transparent transition-opacity duration-150 ${
+          more.down ? "opacity-100" : "opacity-0"
+        }`}
+      >
+        <ChevronDown className="h-3 w-3 text-gray-400 dark:text-gray-500" />
+      </div>
     </div>
+  );
+}
+
+// Small down-chevron cue at the bottom of a scrollable day cell.
+function ChevronDown({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden="true">
+      <path
+        d="M5 7.5l5 5 5-5"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
