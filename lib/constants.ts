@@ -310,19 +310,22 @@ export function parseGroupChatLeadDays(raw: unknown): number | null {
 // ── Daily digest ───────────────────────────────────────────────────────────
 
 // When the daily "here's what needs you" Slack DM goes out, as minutes from
-// midnight in the server's TZ. The target is 8:00 AM, deliberately NOT
+// midnight in the server's TZ. The target is 6:30 AM, deliberately NOT
 // user-configurable — the only per-person setting is User.dailyDigest (on/off).
-export const DIGEST_SEND_MINUTE = 8 * 60;
+export const DIGEST_SEND_MINUTE = 6 * 60 + 30;
 
 // The cron can't hit DIGEST_SEND_MINUTE exactly: Vercel schedules crons in UTC,
 // so a fixed slot drifts an hour against the server's local time twice a year
 // (and free-tier crons aren't minute-accurate). So the sender accepts any run
-// inside this morning window rather than requiring >= 8:00 exactly — a hard
-// cutoff silently skipped every winter, when the UTC slot landed at 7 AM local.
+// inside this morning window rather than requiring >= 6:30 exactly — a hard
+// cutoff silently skipped every winter, when the UTC slot landed an hour early.
+// The 5 AM floor is that hour of slack: the 13:30 UTC slot is 6:30 AM PDT and
+// 5:30 AM PST, and a 6 AM floor would have dropped the whole standard-time half
+// of the year on the floor.
 // Once-a-day is enforced by OrgMembership.digestSentAt, not by these bounds;
 // the window's only job is to keep a stray run (say, a manual curl at midnight)
 // from DMing everyone "here's your day" at the wrong hour.
-export const DIGEST_WINDOW_START_MINUTE = 6 * 60;
+export const DIGEST_WINDOW_START_MINUTE = 5 * 60;
 export const DIGEST_WINDOW_END_MINUTE = 12 * 60;
 
 // How far ahead the digest looks — the default for a new org. The live value is

@@ -469,7 +469,7 @@ export interface ApiMe {
   email: string | null;
   // Whether a usable password hash exists (OAuth-only accounts have none).
   hasPassword: boolean;
-  // Opt-in (default on) to the daily 8 AM Slack digest — see lib/digest.ts.
+  // Opt-in (default on) to the daily 6:30 AM Slack digest — see lib/digest.ts.
   dailyDigest: boolean;
   memberships: ApiMeMembership[];
   // Teams this person serves on, each with the roles they've picked there and

@@ -86,6 +86,13 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `status: PENDING|CONFIRMED|SWAP_REQUESTED`. `@@unique([setId, userId, role])`.
   Nullable `guestTeamId` = this seat was borrowed from a **SetGuestTeam**
   (null, i.e. every legacy row, = an ordinary seat on the set's own team).
+- **CoverDecline** — one person's "not me" on an OPEN cover request
+  (`@@unique([assignmentId, userId])`, optional `note`). A cover is broadcast,
+  so declining resolves nothing for anyone else: the slot stays
+  `SWAP_REQUESTED`, `GET /api/swaps` just skips it for the decliner and the
+  owner gets a DM with the note. Scoped to the current ask — `PATCH
+  /api/assignments/[id]` deletes the rows on every status change, so asking
+  again reaches the people who passed.
 - **SetGuestTeam** — another team lending people to a set it doesn't own (the
   choir team joining a Sunday set). The set keeps ONE owning team; a guest row
   only widens who may sit where. `roles: Json` = which of **that team's** roles
@@ -146,7 +153,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
   list row has — what a `?set=` deep link resolves through), `assignments`,
   `assignments/[id]`, `assignments/confirm-all`.
-- Swaps: `swaps`, `swaps/[id]/take`.
+- Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
+  open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Availability: `availability`, `availability/[id]`, `availability/complete`,
   `availability-request`.
@@ -430,9 +438,19 @@ no provider renders markup inside a link label, which is also why the digest's
 labels and the batched-roster DM's set names can't be part of their links.
 A full inventory of who gets what, when, with the literal copy, is the
 TapWorship Slack Notices artifact.
+The ONE daily cron (`vercel.json` → `/api/cron/daily`) fires at **13:30 UTC**
+= 6:30 AM PDT / 5:30 AM PST. `DIGEST_SEND_MINUTE` is the 6:30 target and
+`DIGEST_WINDOW_{START,END}_MINUTE` (5 AM–12 PM) is the slack a fixed UTC slot
+needs across DST — move one and `tests/unit/digest.test.ts` pins the other.
 
 ## Gotchas
 
+- **Never ship a focusable field under 16px on touch.** iOS zooms the page in
+  on focus and never zooms back out. `common/Input`/`Select` carry
+  `text-base sm:text-sm`, but that misses tablets and every hand-rolled
+  `<input>`/`<textarea>`; the backstop is the `@media (pointer: coarse)` rule
+  at the bottom of `app/globals.css`, deliberately UNLAYERED so it beats
+  Tailwind's utilities layer.
 - Recurring times interpreted in server `TZ` (default `America/Los_Angeles`);
   keep app + db containers on the same TZ.
 - Playwright `tests/e2e/global-setup.ts` force-resets + reseeds the test db each run.
