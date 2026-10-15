@@ -187,16 +187,17 @@ export default function SwapModal({
                 </div>
               </div>
 
-              {/* Both-direction flags — availability, double-booking, and
-                  whether they've stepped back from this team. Each only
-                  appears when there's something to warn about, so an empty
-                  row means a clean trade.
+              {/* Both-direction flags — availability each way, either side
+                  already being ON the other's set, and whether they've
+                  stepped back from this team. Each only appears when there's
+                  something to warn about, so an empty row means a clean trade.
 
-                  Two tones on purpose: RED is a deliberate "no" (a dated
-                  block they typed in answer to an availability request), AMBER
-                  is everything softer — a standing weekly pattern, or a second
-                  seat that's awkward rather than impossible. Nothing here is a
-                  blocker; the trade is still one tap away. */}
+                  Two tones, split by how the clash arises. AMBER is an
+                  AVAILABILITY block — they've said they can't, however they
+                  said it. RED is the harder one: they're already playing the
+                  very set you'd hand them, so accepting means two roles that
+                  morning. Nothing here blocks the trade (two roles on one set
+                  is legitimate); the tone is just how loudly it's said. */}
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
                 {c.theyInactive && (
                   <span className="text-gray-500 dark:text-gray-400">
@@ -208,40 +209,26 @@ export default function SwapModal({
                     ⚠ You&apos;re unavailable that day
                   </span>
                 )}
-                {c.theyMarkedUnavailable ? (
-                  <span
-                    className="text-red-600 dark:text-red-400"
-                    title="They blocked this exact date — usually answering an availability request."
-                  >
-                    ⚠ They marked your date unavailable
+                {!c.theyAvailable && (
+                  <span className="text-amber-600 dark:text-amber-400">
+                    ⚠ They&apos;re unavailable your date
                   </span>
-                ) : (
-                  !c.theyAvailable && (
-                    <span
-                      className="text-amber-600 dark:text-amber-400"
-                      title="A standing weekly block of theirs covers your set's time. They haven't said anything about this date in particular."
-                    >
-                      ⚠ They&apos;re not usually free then
-                    </span>
-                  )
                 )}
-                {/* Already sitting on the other's set in ANOTHER role — the
-                    trade would make that a double shift. */}
                 {c.theyAlsoOnYourSet.length > 0 && (
                   <span
-                    className="text-amber-600 dark:text-amber-400"
+                    className="text-red-600 dark:text-red-400"
                     title="They'd end up playing two roles on your set."
                   >
-                    ⚠ They&apos;re already on your set (
+                    ⚠ They&apos;re unavailable — already playing your set (
                     {c.theyAlsoOnYourSet.map((r) => roleLabel(r)).join(", ")})
                   </span>
                 )}
                 {c.youAlsoOnTheirSet.length > 0 && (
                   <span
-                    className="text-amber-600 dark:text-amber-400"
+                    className="text-red-600 dark:text-red-400"
                     title="You'd end up playing two roles on their set."
                   >
-                    ⚠ You&apos;re already on their set (
+                    ⚠ You&apos;re already playing their set (
                     {c.youAlsoOnTheirSet.map((r) => roleLabel(r)).join(", ")})
                   </span>
                 )}
