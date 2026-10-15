@@ -661,13 +661,18 @@ export async function notifySwapResolved(
         `${setWhen(p.fromAssignment.set)} for ${roleLabel(p.fromAssignment.role)}.`,
     ].join("\n");
   } else {
-    // Their reason leads, because it's the only part they don't already know.
-    // Punctuated for them when they didn't punctuate it themselves.
+    // Deliberately the same sentence as the COVER decline (notifyCoverDeclined):
+    // who said no, to what, and their note as a QUOTE on the end. The two are
+    // the same news — "this person isn't taking your slot" — so a column of
+    // them should read alike, and a bare, unattributed note read as the app's
+    // own words rather than something a person typed.
     const note = p.declineNote?.trim();
-    const reason = note ? `${note}${/[.!?]$/.test(note) ? "" : "."} ` : "";
+    const reason = note ? `: "${note}"` : "";
     text =
-      `${lead(EMOJI.swapDeclined, "Swap declined", fmt)} ${reason}You're still on ` +
-      `${setName(p.fromAssignment.set, fmt)} at ${setWhen(p.fromAssignment.set)}.`;
+      `${lead(EMOJI.swapDeclined, "Swap Declined", fmt)} ${who} can't take your ` +
+      `${roleLabel(p.fromAssignment.role)} slot on ` +
+      `${setName(p.fromAssignment.set, fmt)} at ` +
+      `${setWhen(p.fromAssignment.set)}${reason}. You're still on it.`;
   }
   // Its own line under a two-line accepted notice, inline after the one-line
   // decline — a trailing "See it here." hanging off the second bullet read as
