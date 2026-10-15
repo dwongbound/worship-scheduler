@@ -201,6 +201,13 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   text, the control's default width is its exported `PLAYER_SELECT_WIDTH`
   (SetDetailModal's read-only boxes mirror it), and the portaled list is at
   least `MENU_MIN_WIDTH` wide however narrow the control is.)
+- `sets.ts` — five pure set rules, numbered in its header. §5
+  `seatIndex`/`rolesHeldOn` is the newest: who already holds which roles on
+  which set, which is how `GET /api/swaps/candidates` can warn that a trade
+  would leave someone playing TWO roles on one set (`theyAlsoOnYourSet` /
+  `youAlsoOnTheirSet`). Never a blocker — several roles on one set is
+  legitimate; only the SAME role on both sides is impossible, and that set is
+  dropped from the candidate list outright. ✅tested
 - `guestTeams.ts` — guest-team vocabulary: `GuestRoleSpec`, `isUnbounded`,
   `openSeats` (an `allAvailable` seat reports 0, so it never reads as a hole),
   `validateGuestRoles(raw, allowedKeys)`. ✅tested
