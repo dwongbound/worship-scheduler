@@ -8,16 +8,18 @@
 // picture before proposing:
 //   youAvailable  — am I free for THEIR set's date (I'd take it)?
 //   theyAvailable — are they free for MY set's date (they'd take it)?
-//   theyMarkedUnavailable — did they *explicitly* block my set's date in an
-//                            availability response ("previously marked
-//                            unavailable"), as opposed to a recurring block?
+//                   One flag whatever the shape of the block: a standing
+//                   weekly rule and a date they typed into an availability
+//                   response both mean "they've said they can't".
 //   theyInactive  — are they marked inactive on this team (still swappable,
 //                   but flagged so you know they've stepped back)?
 //   theyAlsoOnYourSet / youAlsoOnTheirSet — roles either side ALREADY holds on
 //                   the other's set. A person can legitimately play two roles
 //                   on one set, so this never blocks the trade; it's flagged
 //                   because accepting would quietly hand someone a double
-//                   shift they never asked for (see lib/sets.ts §5).
+//                   shift they never asked for (see lib/sets.ts §5). This is
+//                   the picker's RED warning — an availability block is an
+//                   intention, but a seat they already hold is a fact.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -167,9 +169,6 @@ export async function GET(req: NextRequest) {
   ]);
   const inactiveUserIds = inactiveMemberIds(memberships);
   const rules: UnavailabilityRule[] = blocks.map((b) => ({ ...b }));
-  // Only the explicit (non-recurring) blocks count as "previously marked
-  // unavailable" for a specific date.
-  const explicitRules = rules.filter((r) => r.type !== "RECURRING");
 
   const mySet: SchedulerSet = {
     id: mine.set.id,
@@ -201,7 +200,6 @@ export async function GET(req: NextRequest) {
       youAvailable: isUserAvailable(user.id, theirSet, rules),
       // They'd take my set:
       theyAvailable: isUserAvailable(c.user.id, mySet, rules),
-      theyMarkedUnavailable: !isUserAvailable(c.user.id, mySet, explicitRules),
       theyInactive: inactiveUserIds.has(c.user.id),
       // Roles they'd be adding MY set's slot on top of. `mine.role` can't be
       // among them (I hold it), but passing it keeps the call honest.

@@ -207,7 +207,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   would leave someone playing TWO roles on one set (`theyAlsoOnYourSet` /
   `youAlsoOnTheirSet`). Never a blocker — several roles on one set is
   legitimate; only the SAME role on both sides is impossible, and that set is
-  dropped from the candidate list outright. ✅tested
+  dropped from the candidate list outright. It IS the picker's one RED
+  warning though: an availability block is an intention (amber, and one flag
+  however the block was entered), a seat someone already holds is a fact.
+  ✅tested
 - `guestTeams.ts` — guest-team vocabulary: `GuestRoleSpec`, `isUnbounded`,
   `openSeats` (an `allAvailable` seat reports 0, so it never reads as a hole),
   `validateGuestRoles(raw, allowedKeys)`. ✅tested
