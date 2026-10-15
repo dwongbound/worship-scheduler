@@ -6,10 +6,9 @@
 //   • the dense month grid IS shown (phones get the "My sets" list instead),
 //   • but the floating bottom tab bar is shown too, because that's a `lg:`
 //     switch and this is below it — the desktop top strip is still hidden,
-//   • and the calendar's own gestures are OFF: dragging or wheeling inside the
-//     grid does nothing, so a drag scrolls the page like a page. The weeks are
-//     moved with ‹ › or Today. (components/CalendarMonth.tsx gates all of it
-//     on lib/layout's BOTTOM_NAV_MAX_WIDTH.)
+//   • and the calendar takes no gestures of its own — true at every width now,
+//     but this is the width where it matters most: a drag scrolls the page
+//     like a page, and the weeks are moved with ‹ › or Today.
 //
 // This file backs the "tablet-ipad" and "tablet-android" playwright projects
 // (see playwright.config.ts), the same way mobile.spec.ts backs the two phone
@@ -34,7 +33,7 @@ test("tablet shows the month grid AND the bottom tab bar", async ({ page }) => {
   await expect(page).toHaveURL(/\/set-manager/);
 });
 
-test("tablet calendar doesn't move under a wheel or a drag", async ({
+test("the tablet calendar doesn't move under a wheel or a drag", async ({
   page,
   browserName,
 }) => {
@@ -59,9 +58,9 @@ test("tablet calendar doesn't move under a wheel or a drag", async ({
   const before = await firstCellDate();
   expect(before).toBeTruthy();
 
-  // Desktop steps a week per wheel notch. Here there is no listener at all, so
-  // the grid must not move — this is the assertion that would fail if the
-  // width gate were dropped.
+  // No wheel listener anywhere on the grid, at any width — the weeks move by
+  // button. The desktop spec asserts the same thing; this pins it at the width
+  // where a stray listener would also fight the page's own scrolling.
   await grid.hover();
   await page.mouse.wheel(0, 300);
   await page.waitForTimeout(400); // well past the step cooldown
