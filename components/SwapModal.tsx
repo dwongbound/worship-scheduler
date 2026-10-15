@@ -2,7 +2,10 @@
 // Targeted-swap picker: a one-step, infinite-scrolling list of the sets I could
 // trade one of my assignments into (same role + team, held by someone else).
 // Each row shows the set, who holds it now + their status, and both-direction
-// availability, then a "Request swap" that proposes the trade.
+// warnings — availability each way, plus whether either side is ALREADY on the
+// other's set in another role — then a "Request swap" that proposes the trade.
+// None of the warnings blocks the trade; they exist so you don't propose one
+// blind.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { roleLabel } from "@/lib/teamRoles";
 import Modal from "./common/Modal";
@@ -133,7 +136,7 @@ export default function SwapModal({
         placeholder="Reason (optional) — e.g. away this weekend"
         rows={2}
         aria-label="Reason for the swap (optional)"
-        className="mb-3 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-800"
+        className="mb-3 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-base focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-800 sm:text-sm"
       />
 
       {error && (
@@ -184,9 +187,16 @@ export default function SwapModal({
                 </div>
               </div>
 
-              {/* Both-direction availability flags, plus whether they've
-                  stepped back from this team (only surfaced when there's
-                  something to warn about). */}
+              {/* Both-direction flags — availability, double-booking, and
+                  whether they've stepped back from this team. Each only
+                  appears when there's something to warn about, so an empty
+                  row means a clean trade.
+
+                  Two tones on purpose: RED is a deliberate "no" (a dated
+                  block they typed in answer to an availability request), AMBER
+                  is everything softer — a standing weekly pattern, or a second
+                  seat that's awkward rather than impossible. Nothing here is a
+                  blocker; the trade is still one tap away. */}
               <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
                 {c.theyInactive && (
                   <span className="text-gray-500 dark:text-gray-400">
@@ -199,15 +209,41 @@ export default function SwapModal({
                   </span>
                 )}
                 {c.theyMarkedUnavailable ? (
-                  <span className="text-red-600 dark:text-red-400">
-                    ⚠ They previously marked your date unavailable
+                  <span
+                    className="text-red-600 dark:text-red-400"
+                    title="They blocked this exact date — usually answering an availability request."
+                  >
+                    ⚠ They marked your date unavailable
                   </span>
                 ) : (
                   !c.theyAvailable && (
-                    <span className="text-amber-600 dark:text-amber-400">
-                      ⚠ They&apos;re unavailable your date
+                    <span
+                      className="text-amber-600 dark:text-amber-400"
+                      title="A standing weekly block of theirs covers your set's time. They haven't said anything about this date in particular."
+                    >
+                      ⚠ They&apos;re not usually free then
                     </span>
                   )
+                )}
+                {/* Already sitting on the other's set in ANOTHER role — the
+                    trade would make that a double shift. */}
+                {c.theyAlsoOnYourSet.length > 0 && (
+                  <span
+                    className="text-amber-600 dark:text-amber-400"
+                    title="They'd end up playing two roles on your set."
+                  >
+                    ⚠ They&apos;re already on your set (
+                    {c.theyAlsoOnYourSet.map((r) => roleLabel(r)).join(", ")})
+                  </span>
+                )}
+                {c.youAlsoOnTheirSet.length > 0 && (
+                  <span
+                    className="text-amber-600 dark:text-amber-400"
+                    title="You'd end up playing two roles on their set."
+                  >
+                    ⚠ You&apos;re already on their set (
+                    {c.youAlsoOnTheirSet.map((r) => roleLabel(r)).join(", ")})
+                  </span>
                 )}
               </div>
             </div>

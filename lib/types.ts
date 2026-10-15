@@ -165,6 +165,12 @@ export interface ApiSwapCandidate {
   theyAvailable: boolean; // they're free for my set's date
   theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
   theyInactive: boolean; // they're marked inactive on this set's team
+  // Roles each side ALREADY holds on the other's set — empty when neither is
+  // doubling up. Never a blocker (two roles on one set is legitimate), but the
+  // picker has to say so: accepting would hand someone a second seat that
+  // morning without their asking. See lib/sets.ts §5.
+  theyAlsoOnYourSet: Instrument[];
+  youAlsoOnTheirSet: Instrument[];
 }
 
 // A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).
