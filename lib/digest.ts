@@ -1,5 +1,5 @@
 // The daily digest: one Slack DM per person per org, each morning around
-// DIGEST_SEND_MINUTE (8 AM), listing only the things that need them — availability to
+// DIGEST_SEND_MINUTE (6:30 AM), listing only the things that need them — availability to
 // fill in, sets today, spots to confirm, plus the admin approval queues. Each
 // bullet links straight to the tab that resolves it.
 //

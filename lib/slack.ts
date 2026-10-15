@@ -239,6 +239,7 @@ export type SetLike = { label: string | null; startsAt: Date };
 const EMOJI = {
   coverRequested: "\u{1F648}", // 🙈 see-no-evil — someone needs covering for
   coverTaken: "\u{2705}", //      ✅ settled (pending an admin's nod)
+  coverDeclined: "\u{1F645}", //  🙅 someone passed — the request is still open
   swapProposed: "\u{1F501}", //   🔁 a two-way trade
   swapAccepted: "\u{2705}", //    ✅
   swapDeclined: "\u{1F6AB}", //   🚫
@@ -492,6 +493,54 @@ export async function notifySwapTaken(
     `${lead(EMOJI.coverTaken, "Cover Taken", fmt)} ${takerName} covering ` +
     `${roleLabel(assignment.role)} slot on ${setName(assignment.set, fmt)} ` +
     `at ${setWhen(assignment.set)}. Pending admin approval.`;
+  await dm.messaging.postDm(owner, text);
+}
+
+/**
+ * Someone passed on an open cover request. DM the owner — the slot is still
+ * theirs, so this is news about who ISN'T coming, not a change to the roster.
+ *
+ * `declinerName` and `note` are passed in rather than read back off the
+ * CoverDecline row: the caller already has both, and the note is the only part
+ * of the message the owner can't work out for themselves.
+ */
+export async function notifyCoverDeclined(
+  assignmentId: string,
+  declinerName: string,
+  note: string | null
+): Promise<void> {
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    include: {
+      user: { select: { id: true } },
+      set: { select: { label: true, startsAt: true, orgId: true } },
+    },
+  });
+  if (!assignment) return;
+  const dm = await orgMessagingContext(assignment.set.orgId, "COVER_DECLINED");
+  if (!dm) return;
+
+  const owner = await prisma.orgMembership.findUnique({
+    where: {
+      userId_orgId: { userId: assignment.userId, orgId: assignment.set.orgId },
+    },
+    select: DM_FIELDS,
+  });
+  if (!owner?.slackUserId) return;
+
+  const fmt = dm.messaging.fmt;
+  // The note hangs off the end as a quote, exactly the way the cover REQUEST
+  // notice carries the owner's own note — so the pair reads as two halves of
+  // one conversation. No note just ends the sentence.
+  const reason = note ? `: "${note}"` : "";
+  // Their row is on the My Sets tab, where the slot is still theirs to re-ask
+  // about or hand back.
+  const url = appUrl(setLinkPath(assignment.setId, "set-manager"));
+  const text =
+    `${lead(EMOJI.coverDeclined, "Cover Declined", fmt)} ${declinerName} can't take ` +
+    `your ${roleLabel(assignment.role)} slot on ${setName(assignment.set, fmt)} ` +
+    `at ${setWhen(assignment.set)}${reason}. Still open to everyone else — ` +
+    `see it ${linkOr(url, "here", fmt)}.`;
   await dm.messaging.postDm(owner, text);
 }
 
@@ -1245,7 +1294,7 @@ export async function sendTeamWeeklySummary(
  *
  * The lastSent guard is per membership and compares against the START of today,
  * so this is safe to call repeatedly — the cron fires once a day, and running it
- * more often just delivers closer to 8 AM rather than duplicating.
+ * more often just delivers closer to 6:30 AM rather than duplicating.
  * Best-effort and non-throwing, like every other sender here.
  */
 export async function sendDailyDigests(
@@ -1254,7 +1303,7 @@ export async function sendDailyDigests(
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const minutesNow = now.getHours() * 60 + now.getMinutes();
   // Outside the morning window this isn't a digest run — bail without sending.
-  // The window is deliberately wider than the 8 AM target: the UTC cron slot
+  // The window is deliberately wider than the 6:30 AM target: the UTC cron slot
   // shifts an hour against local time across DST, so an exact-time check would
   // (and did) skip the whole winter. See the constants for the full reasoning.
   if (
