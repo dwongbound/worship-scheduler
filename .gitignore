@@ -63,3 +63,11 @@ test-results/
 
 # form-response exports — real people's emails, same rule as env/
 prisma/data/
+
+# iOS — the Xcode project is GENERATED from ios/project.yml (xcodegen), so the
+# spec is what's committed and the .xcodeproj is not: it's machine-written
+# state that conflicts on every branch and whose diffs nobody can read.
+ios/*.xcodeproj
+ios/**/.build/
+ios/**/xcuserdata/
+ios/DerivedData/

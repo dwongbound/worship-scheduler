@@ -84,3 +84,24 @@ html.dark .scrollbar-visible {
 html.dark .scrollbar-visible::-webkit-scrollbar-thumb {
   background-color: #4b5563; /* gray-600 */
 }
+
+/* iOS zooms the whole page in when you focus a field whose text is under 16px,
+   and it never zooms back out — you're left pinching your way back. The fix is
+   simply never to ship a focusable field below 16px on a touch screen.
+   common/Input and common/Select do that themselves (`text-base sm:text-sm`),
+   but that only covers the controls built on the primitives, and only below
+   the `sm` breakpoint — a tablet is wider than that and zooms just the same.
+   So this is the floor for everything: scoped by POINTER, not width, so phones
+   and tablets are both covered and a desktop keeps its compact fields.
+
+   Deliberately NOT inside `@layer base`: Tailwind's utilities layer beats the
+   base layer whatever the specificity, so a `text-sm` on the element would win
+   and the rule would do nothing. Unlayered CSS beats both. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select,
+  [contenteditable]:not([contenteditable="false"]) {
+    font-size: 16px;
+  }
+}

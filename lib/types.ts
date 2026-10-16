@@ -162,9 +162,14 @@ export interface ApiSwapCandidate {
     team: { id: string; name: string } | null;
   };
   youAvailable: boolean; // I'm free for their set's date
-  theyAvailable: boolean; // they're free for my set's date
-  theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
+  theyAvailable: boolean; // they're free for my set's date (any kind of block)
   theyInactive: boolean; // they're marked inactive on this set's team
+  // Roles each side ALREADY holds on the other's set — empty when neither is
+  // doubling up. Never a blocker (two roles on one set is legitimate), but the
+  // picker says so in RED: an availability block is an intention, a seat they
+  // already hold is a fact. See lib/sets.ts §5.
+  theyAlsoOnYourSet: Instrument[];
+  youAlsoOnTheirSet: Instrument[];
 }
 
 // A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).
@@ -469,7 +474,7 @@ export interface ApiMe {
   email: string | null;
   // Whether a usable password hash exists (OAuth-only accounts have none).
   hasPassword: boolean;
-  // Opt-in (default on) to the daily 8 AM Slack digest — see lib/digest.ts.
+  // Opt-in (default on) to the daily 6:30 AM Slack digest — see lib/digest.ts.
   dailyDigest: boolean;
   memberships: ApiMeMembership[];
   // Teams this person serves on, each with the roles they've picked there and

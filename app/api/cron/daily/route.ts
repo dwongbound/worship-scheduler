@@ -18,9 +18,11 @@
 //
 // Vercel's free tier only runs crons once per day, so the per-reminder `minute`
 // is best-effort (stored for display; the daily run fires them all at once).
-// The slot is 16:00 UTC because Vercel schedules in UTC while this app runs in
-// APP_TZ: 16:00 UTC is 8 AM PST / 9 AM PDT, inside the digest's morning window
-// year-round. Moving it means re-checking DIGEST_WINDOW_* in lib/constants.ts.
+// The slot is 13:30 UTC because Vercel schedules in UTC while this app runs in
+// APP_TZ, and a fixed UTC slot therefore drifts an hour across DST: 13:30 UTC
+// is 6:30 AM PDT (the target) and 5:30 AM PST. Both sit inside the digest's
+// morning window, which starts at 5 AM for exactly that reason. Moving this
+// slot means re-checking DIGEST_WINDOW_* in lib/constants.ts.
 // Auth: if CRON_SECRET is set, require `Authorization: Bearer <CRON_SECRET>`
 // (Vercel sends this automatically); otherwise the route is open (dev/local).
 import { NextRequest, NextResponse } from "next/server";

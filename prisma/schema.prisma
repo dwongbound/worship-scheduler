@@ -368,6 +368,8 @@ model User {
   // Targeted swaps this person initiated / was offered (see SwapProposal).
   swapsRequested  SwapProposal[]    @relation("SwapRequestedBy")
   swapsReceived   SwapProposal[]    @relation("SwapRecipient")
+  // Open cover requests this person has said "not me" to (see CoverDecline).
+  coverDeclines   CoverDecline[]
   // Saved generate previews (see ScheduleDraft) this person first saved.
   scheduleDrafts  ScheduleDraft[]
   // Sets where this person is the designated musical director.
@@ -554,10 +556,41 @@ model Assignment {
   swapFrom SwapProposal[] @relation("SwapFrom")
   swapTo   SwapProposal[] @relation("SwapTo")
 
+  // Who has already said "not me" to this cover request (see CoverDecline).
+  coverDeclines CoverDecline[]
+
   // A person can hold several roles on one set (e.g. worship leader + acoustic
   // guitar) but never the same role twice.
   @@unique([setId, userId, role])
   @@map("assignments")
+}
+
+// Someone answered an OPEN cover request with "not me".
+//
+// A cover request is broadcast — every eligible player sees the same card — so
+// unlike a targeted swap there is no single recipient whose reject resolves it.
+// A decline is therefore personal: it takes the card off THAT person's Covers /
+// Swaps list and DMs the owner, while the request stays open to everyone else.
+//
+// Scoped to the current ask, not to the slot forever: requesting or cancelling
+// cover on the assignment deletes these rows (see PATCH /api/assignments/:id),
+// so asking a second time reaches the people who passed the first time.
+model CoverDecline {
+  id           String     @id @default(cuid())
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  assignmentId String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+
+  // Optional "why" typed into the decline modal, relayed to the owner's DM.
+  // Null = declined without a word, which the DM simply omits.
+  note String?
+
+  createdAt DateTime @default(now())
+
+  // One answer per person per request; declining twice just updates the note.
+  @@unique([assignmentId, userId])
+  @@map("cover_declines")
 }
 
 // A targeted swap ("trade") between two assignments in the SAME role: the

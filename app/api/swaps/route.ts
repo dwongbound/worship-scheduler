@@ -1,7 +1,8 @@
 // GET /api/swaps — open swap requests the current user could take:
 // upcoming, someone else's, for an instrument the user plays, within the
-// user's orgs (?orgId= narrows to one — the My Sets org filter), and on
-// the set's own team (a team-less set is open to the whole org).
+// user's orgs (?orgId= narrows to one — the My Sets org filter), on
+// the set's own team (a team-less set is open to the whole org), and not
+// already declined by this user (POST /api/swaps/:id/decline).
 // Also powers the navbar red dot (it just checks the count, all orgs).
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
@@ -35,6 +36,10 @@ export async function GET(req: NextRequest) {
       status: "SWAP_REQUESTED",
       userId: { not: user.id },
       set: { startsAt: { gte: new Date() }, orgId: { in: scope } },
+      // Requests I've already said "not me" to. A decline is personal — the
+      // slot stays open to everyone else — so it's filtered here rather than
+      // by anything on the assignment itself.
+      coverDeclines: { none: { userId: user.id } },
     },
     include: {
       set: { include: { org: { select: { id: true, name: true } } } },

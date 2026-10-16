@@ -59,6 +59,14 @@ export async function PATCH(
     data: { status, swapReason },
   });
 
+  // Any "not me" answers belonged to the PREVIOUS ask (see CoverDecline).
+  // Clearing them on every one of these actions means cancelling and asking
+  // again — or just asking again with a better reason — reaches the people who
+  // passed last time, instead of silently never reaching them.
+  await prisma.coverDecline.deleteMany({
+    where: { assignmentId: assignment.id },
+  });
+
   await prisma.setHistoryEvent.create({
     data: {
       setId: assignment.setId,
