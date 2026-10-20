@@ -219,12 +219,15 @@ export default function Modal({
             {headerActions}
             {/* A drawn X rather than the "✕" glyph: the glyph rendered as a
                 hairline in Figtree, and its tiny box was hard to hit on a
-                phone. 44px square target on phones (40px from sm up), 2.5px stroke. The negative margin
-                keeps the bigger box from pushing the header taller. */}
+                phone. 44px square target on phones (40px from sm up), 2.5px stroke. The
+                negative TOP margin lets the bigger box reach up into the
+                header's padding instead of pushing the header taller — top
+                only, because a box that also hangs out the bottom makes this
+                row overflow (and look scrollable to anything measuring it). */}
             <button
               onClick={onClose}
               aria-label="Close"
-              className="-my-2 -mr-2 flex h-11 w-11 items-center sm:h-10 sm:w-10 justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+              className="-mr-2 -mt-2.5 flex h-11 w-11 items-center justify-center sm:-mt-2 sm:h-10 sm:w-10 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
             >
               <svg
                 width="20"
