@@ -133,7 +133,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
           title: "Saving your changes",
           body: [
             "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone.",
-            "Cancel backs out. If you have made changes it asks first, and lists what it is about to throw away.",
+            "Close backs out. If you have made changes it asks first, and lists what it is about to throw away.",
           ],
         }
       : {

@@ -229,7 +229,7 @@ export default function Modal({
                 row overflow (and look scrollable to anything measuring it). */}
             <button
               onClick={onClose}
-              aria-label="Close"
+              aria-label="Close dialog"
               className="-mr-2 -mt-2.5 flex h-11 w-11 items-center justify-center sm:-mt-2 sm:h-10 sm:w-10 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
             >
               <svg

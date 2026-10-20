@@ -1237,7 +1237,7 @@ export default function StagedScheduleModal({
               // opened just to read can't write anything.
               <>
                 <Button variant="secondary" onClick={requestClose} disabled={busy}>
-                  Cancel
+                  Close
                 </Button>
                 <HelpButton onClick={() => setHelpOpen(true)} />
                 <Button
@@ -1251,7 +1251,7 @@ export default function StagedScheduleModal({
             ) : (
               <>
                 {/* Throwing the plan away is the one destructive act here, so it's
-                    red and a size smaller than the rest — and `mr-auto` banishes it to the far left of the footer's
+                    red — and `mr-auto` banishes it to the far left of the footer's
                     justify-end row, well clear of the two buttons that keep the
                     work. */}
                 <Button
@@ -1922,7 +1922,7 @@ export default function StagedScheduleModal({
             onClick={() => setSavingDraft(false)}
             disabled={draftBusy}
           >
-            Cancel
+            Close
           </Button>
           <Button
             onClick={async () => {
@@ -2023,7 +2023,7 @@ export default function StagedScheduleModal({
                             }
                           }}
                           disabled={deletingDraftId !== null}
-                          className="shrink-0 rounded bg-red-600 px-1.5 py-0.5 text-[11px] font-medium text-white hover:bg-red-700 disabled:opacity-40"
+                          className="shrink-0 rounded bg-red-600 px-2 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-40"
                         >
                           {deletingDraftId === draft.id ? "Deleting…" : "Delete"}
                         </button>

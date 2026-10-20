@@ -474,7 +474,7 @@ export default function ProfilePage() {
               variant="secondary"
               onClick={() => setPwOpen(false)}
             >
-              Cancel
+              Close
             </Button>
             <Button type="submit" disabled={pwSaving}>
               {pwSaving ? <LoadingDots size="sm" /> : "Update password"}

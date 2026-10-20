@@ -161,7 +161,7 @@ export default function GenerateModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            Close
           </Button>
           <Button onClick={submit} disabled={busy || !!blocked} title={blocked ?? undefined}>
             {busy ? <LoadingDots size="sm" /> : "Generate preview"}

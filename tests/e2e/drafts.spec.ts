@@ -97,7 +97,7 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
   await expect(reSave.getByText(/This replaces the draft you opened/)).toBeVisible();
   // Replacing one you already have is free — the cap only bites on new ones.
   await expect(reSave.getByText(/doesn’t use another/)).toBeVisible();
-  await reSave.getByRole("button", { name: "Cancel" }).click();
+  await reSave.getByRole("button", { name: "Close", exact: true }).click();
 
   // Back out of the preview again, then delete the draft from the list.
   await page.getByRole("button", { name: "Discard" }).click();

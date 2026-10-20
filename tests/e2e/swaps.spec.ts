@@ -48,7 +48,7 @@ test("bob requests a swap on his Sunday set", async ({ page }) => {
 
   await modal.getByRole("button", { name: "Request cover" }).click();
   await expect(modal).toBeVisible();
-  await expect(modal.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  await expect(modal.getByRole("button", { name: "Close", exact: true })).toBeDisabled();
 
   release();
   await expect(modal).not.toBeVisible();

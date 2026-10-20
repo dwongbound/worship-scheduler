@@ -161,13 +161,11 @@ body {
   .modal-footer > div:has(> button) {
     flex: 1 1 auto;
   }
-  /* A destructive button (Button marks it `data-destructive`) is always the
-     smallest thing in the row: it keeps its label's width and a shorter
-     height, so the buttons that keep your work are the big easy targets and
-     Delete is the one you have to mean. */
+  /* A destructive button (Button marks it `data-destructive`) keeps the full
+     44px height but only its label's width: the buttons that keep your work
+     share the rest of the row, so Delete is never the widest target there. */
   .modal-footer > button[data-destructive],
   .modal-footer > div > button[data-destructive] {
     flex: 0 0 auto;
-    min-height: 36px;
   }
 }

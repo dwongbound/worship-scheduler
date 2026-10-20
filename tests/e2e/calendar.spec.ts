@@ -383,7 +383,7 @@ test("removing a filled slot asks for confirmation first", async ({ page }) => {
     .filter({ hasText: "Remove Drums slot?" })
     .last();
   await expect(confirm.getByText(/Bob Baker is assigned/)).toBeVisible();
-  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await confirm.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByText("Remove Drums slot?")).toHaveCount(0);
   await expect(
     // Exact match: the slot's ✕ button ("Remove … (Bob Baker)") would also
@@ -423,7 +423,7 @@ test("leaving the set modal with staged edits asks first and lists them", async 
   await expect(modal.getByText("1 unsaved change")).toBeVisible();
 
   // Cancel now warns, naming the change rather than just saying "unsaved".
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   const warning = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -436,7 +436,7 @@ test("leaving the set modal with staged edits asks first and lists them", async 
   await expect(modal.getByText("1 unsaved change")).toBeVisible();
 
   // Discarding closes the modal and never touches the server.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   await page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })

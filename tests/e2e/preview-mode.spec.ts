@@ -59,7 +59,7 @@ test("admin previews the real calendar in the review workspace", async ({
   await expect(review.getByText("In date order")).toBeVisible();
 
   // Nothing was edited, so Cancel just closes — no confirmation to answer.
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await expect(review).not.toBeVisible();
   await expect(page.getByLabel("Show sets for")).toBeVisible();
 });
@@ -106,7 +106,7 @@ test("a card's refresh fills only that set's empty slots", async ({ page }) => {
 
   // The fill is an edit, so Save wakes up and leaving now asks first.
   await expect(review.getByRole("button", { name: "Save Changes" })).toBeEnabled();
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   const confirm = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" });
@@ -115,7 +115,7 @@ test("a card's refresh fills only that set's empty slots", async ({ page }) => {
   await confirm.getByRole("button", { name: "Keep editing" }).click();
   await expect(review.getByRole("button", { name: "Save Changes" })).toBeEnabled();
   // Now really discard — nothing was written, so the calendar is untouched.
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })

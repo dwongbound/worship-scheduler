@@ -281,7 +281,7 @@ function StepArt({ art, preview }: { art: TourArt; preview: boolean }) {
           {preview ? (
             <>
               <span className="rounded-md border border-gray-300 bg-white px-2 py-1 text-[10px] text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200">
-                Cancel
+                Close
               </span>
               <span className="rounded-md bg-indigo-600 px-2 py-1 text-[10px] text-white">
                 Save Changes

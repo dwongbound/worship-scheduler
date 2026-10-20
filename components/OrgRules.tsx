@@ -870,7 +870,7 @@ function RuleBuilder({
       footer={
         <div className="flex w-full items-center justify-end gap-2">
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            Close
           </Button>
           <Button
             loading={busy}
