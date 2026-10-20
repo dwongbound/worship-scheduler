@@ -460,7 +460,7 @@ export default function TeamMembersModal({
                 onClick={() => onConfirmDelete(false)}
                 disabled={busy}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"

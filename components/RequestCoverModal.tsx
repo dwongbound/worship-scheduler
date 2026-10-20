@@ -45,7 +45,7 @@ export default function RequestCoverModal({
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            Close
           </Button>
           <Button onClick={() => onConfirm(reason)} loading={busy}>
             Request cover

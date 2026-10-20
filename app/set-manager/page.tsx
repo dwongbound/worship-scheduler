@@ -910,9 +910,11 @@ function AssignmentRow({
         </p>
       </div>
       {/* The actions keep their own jobs: a click here must not also open the
-          details modal behind them. */}
+          details modal behind them. On a phone they span the card in equal
+          widths at a 44px touch height, so none is a small target tucked in
+          a corner; from `sm` up they sit at their own size. */}
       <div
-        className="flex items-center gap-2"
+        className="flex w-full items-center gap-2 sm:w-auto [&>button]:min-h-11 [&>button]:flex-1 [&>button]:text-sm sm:[&>button]:min-h-0 sm:[&>button]:flex-none sm:[&>button]:text-xs"
         onClick={(e) => e.stopPropagation()}
       >
         {a.status === "PENDING_APPROVAL" ? (
