@@ -11,7 +11,7 @@ type Variant =
   | "ghost"
   | "admin"
   | "info";
-type Size = "sm" | "md";
+type Size = "xs" | "sm" | "md";
 
 const VARIANT_CLASSES: Record<Variant, string> = {
   primary:
@@ -49,9 +49,16 @@ const VARIANT_CLASSES: Record<Variant, string> = {
 };
 
 const SIZE_CLASSES: Record<Size, string> = {
+  xs: "px-2 py-1 text-xs",
   sm: "px-2.5 py-1.5 text-xs",
   md: "px-4 py-2 text-sm",
 };
+
+// A destructive button is always drawn one size below what it's asked for, so
+// it's never as big as the buttons beside it: the actions that keep your work
+// are the large, easy targets and the one that throws work away is the one
+// you have to mean. Callers pass the same `size` as the row's other buttons.
+const DESTRUCTIVE_SIZE: Record<Size, Size> = { md: "sm", sm: "xs", xs: "xs" };
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: Variant;
@@ -72,18 +79,23 @@ export default function Button({
   children,
   ...props
 }: ButtonProps) {
+  const destructive = variant === "danger" || variant === "dangerOutline";
+  const drawnSize = destructive ? DESTRUCTIVE_SIZE[size] : size;
   return (
     <button
       // A button whose action is already running can't be pressed again.
       disabled={disabled || loading}
       aria-busy={loading || undefined}
+      // globals.css keys on this: on a phone a modal footer's buttons grow to
+      // share the row, but a destructive one never grows past its label.
+      data-destructive={destructive || undefined}
       // `relative` only while loading, so it can't fight a caller's own
       // positioning class the rest of the time.
       className={`${loading ? "relative" : ""} inline-flex items-center justify-center gap-1.5 rounded-lg font-medium
         transition-[color,background-color,border-color,opacity,scale] duration-100 ease-out
         enabled:active:scale-[0.97] enabled:active:opacity-100
         disabled:cursor-not-allowed disabled:opacity-70
-        ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`}
+        ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[drawnSize]} ${className}`}
       {...props}
     >
       {loading ? (

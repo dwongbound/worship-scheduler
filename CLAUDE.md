@@ -446,7 +446,10 @@ the majority rule and the rate limit live in `lib/calendarScroll.ts` ✅tested;
 `range` mode highlights start→hovered-day live; `Badge` takes `size="sm"` for a
 pill that rides inside another control; `Button` takes `loading` — dots ON the
 button, label hidden but still holding its width, so a pressed button can't
-resize mid-click (it implies `disabled`); `Checkbox` takes `rowTarget` to make
+resize mid-click (it implies `disabled`); a destructive `Button` (`danger`/`dangerOutline`) always
+draws one size below the `size` it's given, and on phones a modal footer
+keeps it at label width while the other buttons fill the row, so it's never
+the biggest target; `Checkbox` takes `rowTarget` to make
 the whole row a real `<label>` (off by default: most rows carry chips and text
 you may want to click without flipping a tick); `Input`/`Select` set their own
 `text-base sm:text-sm` — 16px on phones is what stops iOS zooming into a

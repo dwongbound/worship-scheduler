@@ -1325,7 +1325,9 @@ export default function SetDetailModal({
               Delete set
             </Button>
           )}
-          <div className="ml-auto flex items-center gap-2">
+          {/* On a phone this group takes the rest of the row and its buttons
+              split it at full touch height, leaving Delete the small one. */}
+          <div className="ml-auto flex flex-1 items-center justify-end gap-2 sm:flex-none [&>button]:min-h-11 [&>button]:flex-1 sm:[&>button]:min-h-0 sm:[&>button]:flex-none">
             {canEditAnything ? (
               <>
                 {/* Unsaved-changes count, so "Save" isn't the only clue that
