@@ -219,7 +219,9 @@ export default function Modal({
             {headerActions}
             {/* A drawn X rather than the "✕" glyph: the glyph rendered as a
                 hairline in Figtree, and its tiny box was hard to hit on a
-                phone. 44px square target on phones (40px from sm up), 2.5px stroke. The
+                phone. 44px square target on phones (40px from sm up); the glyph
+                itself stays 18px at a 2.25 stroke, about the weight of the title,
+                so the bigger target doesn't read as a bigger button. The
                 negative TOP margin lets the bigger box reach up into the
                 header's padding instead of pushing the header taller — top
                 only, because a box that also hangs out the bottom makes this
@@ -230,12 +232,12 @@ export default function Modal({
               className="-mr-2 -mt-2.5 flex h-11 w-11 items-center justify-center sm:-mt-2 sm:h-10 sm:w-10 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
             >
               <svg
-                width="20"
-                height="20"
+                width="18"
+                height="18"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth={2.5}
+                strokeWidth={2.25}
                 strokeLinecap="round"
                 aria-hidden="true"
               >
