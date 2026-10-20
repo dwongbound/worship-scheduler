@@ -86,8 +86,11 @@ import {
   availableGuestMembers,
   buildSchedule,
   isUserAvailable,
+  type ExistingAssignment,
+  type FixedSet,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
+import type { SchedulingRule } from "@/lib/schedulingRules";
 import { isActiveForSet } from "@/lib/stagedPlan";
 import {
   DEFAULT_SET_METRIC,
@@ -316,6 +319,44 @@ export default function SetDetailModal({
       cancelled = true;
     };
   }, [guestDraft, orgTeams, set?.org?.id]);
+
+  // The org's scheduling rules plus what "Auto schedule" needs to obey them for
+  // THIS set (the sets around it, a month of bookings either side). Admins
+  // only, fetched once per opened set; until it lands — or if it can't be read
+  // — the fill is plain rotation, exactly as before rules existed.
+  const [ruleData, setRuleData] = useState<{
+    rules: SchedulingRule[];
+    fixedSets: FixedSet[];
+    periodBookings: ExistingAssignment[];
+  } | null>(null);
+  const ruleOrgId = set?.org?.id ?? "";
+  useEffect(() => {
+    setRuleData(null);
+    if (!isAdmin || !openSetId || !ruleOrgId) return;
+    let cancelled = false;
+    fetch(`/api/orgs/${ruleOrgId}/rules?forSet=${encodeURIComponent(openSetId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setRuleData({
+          rules: d.rules ?? [],
+          fixedSets: (d.fixedSets ?? []).map((f: FixedSet & { startsAt: string }) => ({
+            ...f,
+            startsAt: new Date(f.startsAt),
+          })),
+          periodBookings: (d.periodBookings ?? []).map(
+            (b: { userId: string; startsAt: string }) => ({
+              userId: b.userId,
+              startsAt: new Date(b.startsAt),
+            })
+          ),
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, openSetId, ruleOrgId]);
 
   // Is the Slack bot configured for this org? Drives whether the "Slack Team"
   // button is enabled (it's shown to everyone regardless).
@@ -723,6 +764,11 @@ export default function SetDetailModal({
           roles: catalog,
           capacities,
           requiresMD: set.requiresMD,
+          // This set's own row from the rule context names its recurring set
+          // (recognised server-side, the way the generator would).
+          setId: set.id,
+          templateId:
+            ruleData?.fixedSets.find((f) => f.setId === set.id)?.templateId ?? null,
           preAssigned: ownAssignments.map((a) => ({
             userId: a.user.id,
             role: a.role,
@@ -736,7 +782,14 @@ export default function SetDetailModal({
       // the dropdowns sort by, so the fill and the manual picks agree on who's
       // fresh. Empty until that window lands, which only costs the fill its
       // balancing tiebreak.
-      new Map(serveCounts ?? [])
+      new Map(serveCounts ?? []),
+      [],
+      new Map(),
+      {
+        schedulingRules: ruleData?.rules ?? [],
+        fixedSets: ruleData?.fixedSets ?? [],
+        periodBookings: ruleData?.periodBookings ?? [],
+      }
     );
     if (proposals.length === 0) return;
 

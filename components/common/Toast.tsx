@@ -68,7 +68,7 @@ export default function Toast({ toast, onDismiss }: ToastProps) {
       // Above modals (z-50) and their dropdowns (z-[60]/z-[61]). Pinned to the
       // bottom on phones and bottom-right on wider screens; pointer-events are
       // off on the wrapper so the toast never blocks clicks around it.
-      className="pointer-events-none fixed inset-x-0 bottom-4 z-[70] flex justify-center px-4 sm:justify-end sm:px-6"
+      className="pointer-events-none fixed inset-x-0 bottom-[max(1rem,env(safe-area-inset-bottom))] z-[70] flex justify-center px-4 sm:justify-end sm:px-6"
     >
       <div
         // role=status (not alert) so screen readers announce it politely

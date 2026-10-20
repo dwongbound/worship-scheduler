@@ -80,7 +80,9 @@ export default function Button({
       // `relative` only while loading, so it can't fight a caller's own
       // positioning class the rest of the time.
       className={`${loading ? "relative" : ""} inline-flex items-center justify-center gap-1.5 rounded-lg font-medium
-        transition-colors disabled:cursor-not-allowed disabled:opacity-70
+        transition-[color,background-color,border-color,opacity,scale] duration-100 ease-out
+        enabled:active:scale-[0.97] enabled:active:opacity-100
+        disabled:cursor-not-allowed disabled:opacity-70
         ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`}
       {...props}
     >
