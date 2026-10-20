@@ -13,6 +13,19 @@
     cursor: pointer;
   }
 
+  /* A control's label isn't content: long-pressing a button or a nav tab
+     shouldn't select its text or pop iOS's Copy/Share callout. Ordinary text
+     (names, notes, links inside prose) stays selectable. (The gray tap-flash
+     is already off — Tailwind's preflight sets -webkit-tap-highlight-color.) */
+  button,
+  [role="button"],
+  [role="tab"],
+  nav a {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
   /* Tell the browser which scheme to paint native controls in (date pickers,
      the calendar/spinner icons, scrollbars) so they match light/dark. The
      `.dark` class is toggled on <html> by the theme script. */
@@ -83,6 +96,23 @@ html.dark .scrollbar-visible {
 }
 html.dark .scrollbar-visible::-webkit-scrollbar-thumb {
   background-color: #4b5563; /* gray-600 */
+}
+
+/* Press feedback for touch. With the tap highlight off (Tailwind preflight) and hover
+   styles gated to mouse devices by Tailwind, a tap otherwise shows NOTHING
+   until the next screen arrives — which reads as lag. Every tappable thing
+   dims the instant a finger lands and comes back on release, the way iOS
+   controls do. In @layer base so a component's own `active:` style (Button's
+   press-in, for one) wins over this generic one. Pointer-scoped: a mouse has
+   hover feedback already and doesn't need the dim. */
+@layer base {
+  @media (pointer: coarse) {
+    button:not(:disabled):active,
+    [role="button"]:not([aria-disabled="true"]):active,
+    a[href]:active {
+      opacity: 0.6;
+    }
+  }
 }
 
 /* iOS zooms the whole page in when you focus a field whose text is under 16px,

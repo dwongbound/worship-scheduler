@@ -200,6 +200,9 @@ export default function OrgSwitcher() {
           >
             <Input
               label="Organization key"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={orgKey}
               onChange={(e) => setOrgKey(e.target.value)}
               autoComplete="off"

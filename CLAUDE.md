@@ -461,6 +461,13 @@ needs across DST — move one and `tests/unit/digest.test.ts` pins the other.
   `<input>`/`<textarea>`; the backstop is the `@media (pointer: coarse)` rule
   at the bottom of `app/globals.css`, deliberately UNLAYERED so it beats
   Tailwind's utilities layer.
+- **Touch feel lives in `app/globals.css`, not per component.** Buttons, tabs
+  and nav links can't be long-press-selected (`user-select`/`touch-callout`),
+  and on a coarse pointer anything tappable dims while pressed; `Button` has
+  its own `active:` press-in, which wins. Tailwind's preflight already kills the
+  tap-highlight flash. The status-bar colour is `lib/theme.ts THEME_COLORS`
+  (= the nav's colours), retargeted by `applyTheme` when the in-app theme is
+  forced. Inner popup lists and the Modal body use `overscroll-contain`.
 - Recurring times interpreted in server `TZ` (default `America/Los_Angeles`);
   keep app + db containers on the same TZ.
 - Playwright `tests/e2e/global-setup.ts` force-resets + reseeds the test db each run.

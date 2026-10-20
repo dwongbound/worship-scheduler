@@ -170,9 +170,10 @@ export default function Modal({
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center ${PADDING_CLASSES[size]}`}
     >
-      {/* backdrop */}
+      {/* backdrop. touch-none: a swipe on the dimmed area would otherwise
+          scroll the page underneath on iOS, which ignores the body lock. */}
       <div
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 touch-none bg-black/50"
         onClick={onClose}
         aria-hidden
       />
@@ -219,7 +220,10 @@ export default function Modal({
             below the title is unchanged at 12px): this is a scroll container,
             so it clips at its own edge, and with no top padding a first child's
             focus ring — a textarea's, say — lost its top edge. */}
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-1">
+        {/* overscroll-contain: reaching the end of the body stops there instead
+            of handing the swipe to the page behind (the body-overflow lock
+            below isn't enough on iOS Safari, which scrolls it anyway). */}
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-1">
           {children}
         </div>
 
