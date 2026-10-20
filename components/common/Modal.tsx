@@ -204,12 +204,27 @@ export default function Modal({
               panel, never the controls. */}
           <div className="flex shrink-0 items-center gap-3">
             {headerActions}
+            {/* A drawn X rather than the "✕" glyph: the glyph rendered as a
+                hairline in Figtree, and its tiny box was hard to hit on a
+                phone. 40px square target, 2.5px stroke. The negative margin
+                keeps the bigger box from pushing the header taller. */}
             <button
               onClick={onClose}
               aria-label="Close"
-              className="rounded p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+              className="-my-2 -mr-2 flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
             >
-              ✕
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.5}
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
             </button>
           </div>
         </div>
