@@ -101,6 +101,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
   replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
   ordinary counted role.
+- **SchedulingRule** — one of an org's rules for Auto schedule (ORG-wide,
+  never per team): `tier` REQUIRED|PREFERENCE, `enabled`, `position` (list
+  order = the preference ranking), `params: Json` (the kind + its ids; see
+  `lib/schedulingRules.ts`). Rules naming something since deleted are dropped
+  on load. Edited in Org settings → Scheduling rules (`components/OrgRules.tsx`).
 - **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute, plus an
   optional startDate/endDate bounding the span it repeats over — the /schedule
   form's Repeats: Forever · N weeks · Until a date · Time Range),
@@ -156,6 +161,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
+- Rules: `orgs/[id]/rules` (org admin) — GET the list + dropdown options (or,
+  with `?forSet=`, what one set's Auto schedule needs); PUT replaces the whole
+  ordered list, refusing a contradiction with `{ error, index }`.
 - Availability: `availability`, `availability/[id]`, `availability/complete`,
   `availability-request`.
 - Export: `export`, `export/[id]` (ICS).
@@ -190,6 +198,19 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
   `shortDateTimeCompact` ("8/20/26 10PM") is THE date every chat message names
   a set by — short enough that a swap can name two sets in one sentence.
+- `schedulingRules.ts` — the Rules vocabulary: five kinds (ONLY_IF_NEEDED,
+  PREFER, SAME_PLAYER weekly-by-set-type or two specific sets, TOGETHER
+  always/never, LIMIT per Mon–Sun week or month), `parseRuleParams` /
+  `validateRules` (ids checked against the org), `findContradiction` (between
+  REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
+  `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and
+  `templateIdOf` (sets don't store their template, so it's recognised by
+  label + team + weekday + time). `buildSchedule`'s 7th arg `ScheduleOptions`
+  feeds them in: REQUIRED never bends (a slot is left open instead — a held
+  SAME_PLAYER seat is the `HOLD` case), PREFERENCES rank lexicographically
+  above rotation. All three callers pass them; the prisma side is
+  `schedulingRuleStore.ts` (`ruleContext` = nearby sets + a month of bookings
+  either side). ✅tested
 - `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops
   inactive memberships, so the auto-fill can't propose them) +
   `inactiveMemberIds()` (who the swap picker flags). ✅tested

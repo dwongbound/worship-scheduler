@@ -92,8 +92,11 @@ import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   buildSchedule,
   teamKey,
+  type FixedSet,
+  type ScheduleOptions,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
+import type { SchedulingRule } from "@/lib/schedulingRules";
 import {
   conflictedUserIds,
   countAssignments,
@@ -605,6 +608,55 @@ export default function StagedScheduleModal({
   // boolean so a failure on one window doesn't mislabel the next one you pick.
   const [loadErrorKey, setLoadErrorKey] = useState<string | null>(null);
 
+  // The org's scheduling rules (Org settings → Scheduling rules), so a re-run
+  // here obeys them the way the server's fill did. Empty until they land, or if
+  // they can't be read — the re-run then falls back to plain rotation.
+  const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  useEffect(() => {
+    if (!orgId) return;
+    let cancelled = false;
+    fetch(`/api/orgs/${orgId}/rules`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => !cancelled && d && setSchedulingRules(d.rules ?? []))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
+
+  // A staged set's database id, when it has one: an existing set the plan
+  // fills (generate), or the real set itself (Preview Mode).
+  const setIdOf = (s: StagedSet) => s.setId ?? s.stagingId ?? null;
+
+  // Everything the rules read from outside the sets being filled: the real
+  // sets around the plan, plus — when re-running ONE set — the plan's other
+  // sets as they now stand.
+  const ruleOptions = (exceptIdx?: number): ScheduleOptions => {
+    const fixedSets: FixedSet[] = (plan?.baseline?.fixedSets ?? []).map((f) => ({
+      ...f,
+      startsAt: new Date(f.startsAt),
+    }));
+    if (exceptIdx !== undefined) {
+      sets.forEach((s, i) => {
+        if (i === exceptIdx) return;
+        fixedSets.unshift({
+          setId: setIdOf(s),
+          templateId: s.templateId ?? null,
+          startsAt: new Date(s.startsAt),
+          assignments: s.assignments.map((a) => ({ userId: a.userId, role: a.role })),
+        });
+      });
+    }
+    return {
+      schedulingRules,
+      fixedSets,
+      periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
+        userId: b.userId,
+        startsAt: new Date(b.startsAt),
+      })),
+    };
+  };
+
   // Fetch the selected window's tally, unless it's the plan (counted locally)
   // or we already have it. A wide window is a big read, which is exactly why
   // it's on demand instead of riding along with every generated plan.
@@ -909,6 +961,8 @@ export default function StagedScheduleModal({
         capacities: s.slotCapacities,
         requiresMD: s.requiresMD,
         teamId: s.teamId,
+        templateId: s.templateId ?? null,
+        setId: setIdOf(s),
         preAssigned: (keptBySet.get(stagingKey(s)) ?? []).map((a) => ({
           userId: a.userId,
           role: a.role,
@@ -922,7 +976,8 @@ export default function StagedScheduleModal({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
       })),
-      new Map(Object.entries(plan?.baseline?.teamCounts ?? {}))
+      new Map(Object.entries(plan?.baseline?.teamCounts ?? {})),
+      ruleOptions()
     );
 
     const bySet = new Map<string, StagedSet["assignments"]>();
@@ -1006,6 +1061,8 @@ export default function StagedScheduleModal({
           capacities: set.slotCapacities,
           requiresMD: set.requiresMD,
           teamId: set.teamId,
+          templateId: set.templateId ?? null,
+          setId: setIdOf(set),
           preAssigned: set.assignments.map((a) => ({
             userId: a.userId,
             role: a.role,
@@ -1017,7 +1074,8 @@ export default function StagedScheduleModal({
       rules,
       counts,
       booked,
-      teamCounts
+      teamCounts,
+      ruleOptions(idx)
     );
 
     updateSet(idx, (s) => {
