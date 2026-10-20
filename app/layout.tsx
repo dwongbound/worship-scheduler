@@ -9,6 +9,7 @@ import PullToRefresh from "@/components/PullToRefresh";
 import SwipePager from "@/components/SwipePager";
 import { SwipeProvider } from "@/components/SwipeProvider";
 import ScrollToTopButton from "@/components/ScrollToTopButton";
+import { THEME_COLORS } from "@/lib/theme";
 
 // Figtree is the app's UI typeface — a humanist geometric sans with a tall
 // x-height, picked so dense schedule views stay legible at 14px. Loaded as a
@@ -42,12 +43,12 @@ export const viewport: Viewport = {
   // leaving buttons in the screen's curved corners. Desktop has no safe area,
   // so nothing changes there.
   viewportFit: "cover",
-  // Colors the status bar / browser UI around the page. Media-query based,
-  // so it follows the OS setting (close enough to lib/theme.ts's "system"
-  // default; a manual in-app override won't be reflected here).
+  // Colors the status bar / browser UI around the page — the nav's colour,
+  // one per OS scheme. A forced in-app mode retargets both tags
+  // (lib/theme.ts syncThemeColor, mirrored in THEME_SCRIPT below).
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F9FAFB" }, // gray-50
-    { media: "(prefers-color-scheme: dark)", color: "#111827" }, // gray-900
+    { media: "(prefers-color-scheme: light)", color: THEME_COLORS.light },
+    { media: "(prefers-color-scheme: dark)", color: THEME_COLORS.dark },
   ],
 };
 
@@ -61,6 +62,14 @@ try {
   var dark = stored === 'dark' ||
     (stored !== 'light' && stored !== 'dark' && system);
   document.documentElement.classList.toggle('dark', dark);
+  var forced = stored === 'light' || stored === 'dark'
+    ? (stored === 'dark' ? '${THEME_COLORS.dark}' : '${THEME_COLORS.light}')
+    : null;
+  if (forced) {
+    document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+      m.setAttribute('content', forced);
+    });
+  }
 } catch (e) {}
 `;
 

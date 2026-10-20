@@ -592,6 +592,9 @@ export default function OrgSettingsPage() {
           >
             <Input
               label="Organization key"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={orgKey}
               onChange={(e) => setOrgKey(e.target.value)}
               autoComplete="off"
