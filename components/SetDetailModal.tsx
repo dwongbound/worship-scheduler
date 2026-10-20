@@ -13,7 +13,7 @@
 // looks exactly as it will once saved. Save then diffs the copy against the
 // original (lib/setDraft.ts) and issues only the calls that changed, then CLOSES
 // the modal — a save is the end of the job (a failed one keeps the modal and
-// the staged edits up, with the error in a toast). Cancel, ✕, Escape and the
+// the staged edits up, with the error in a toast). Close, ✕, Escape and the
 // backdrop all route through a confirmation that LISTS the unsaved changes
 // first. Two things stay immediate, because neither can be
 // staged honestly: deleting the set, messaging the team on Slack (that one
@@ -176,7 +176,7 @@ export default function SetDetailModal({
   // other irreversible step here, rather than an inline row you can hit twice.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Stacked "you have unsaved changes" warning, raised by any attempt to leave
-  // with staged edits (Cancel, ✕, Escape, the backdrop).
+  // with staged edits (Close, ✕, Escape, the backdrop).
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // Filled slot whose "✕" was clicked — a confirm modal asks before removing
   // the person along with their slot. (Empty slots are removed right away.)
@@ -594,7 +594,7 @@ export default function SetDetailModal({
   // meant anyone browsing the calendar could create a private channel, invite
   // a roster they're not part of, and post into it.
   const canMessageTeam = isAdmin || isSetMember;
-  // Anyone with any editable surface gets the Cancel/Save footer; a pure
+  // Anyone with any editable surface gets the Close/Save footer; a pure
   // viewer gets a plain Close, since there's nothing here for them to stage.
   const canEditAnything = canEditNotes || canEditTeam || canEditSongs;
 
@@ -1175,7 +1175,7 @@ export default function SetDetailModal({
   };
 
   // Leaving with staged edits asks first, listing exactly what would be lost.
-  // Every exit funnels through here: Cancel, the ✕, Escape and the backdrop.
+  // Every exit funnels through here: Close, the ✕, Escape and the backdrop.
   const attemptClose = () => {
     if (dirty) setConfirmingDiscard(true);
     else onClose();
@@ -1312,7 +1312,7 @@ export default function SetDetailModal({
       }
       footer={
         /* Sticky action row. Delete sits far left — away from Save, since it's
-           the one button here that can't be taken back — and Cancel/Save at the
+           the one button here that can't be taken back — and Close/Save at the
            right, Save last. Someone who can't edit anything just gets Close. */
         <div className="flex w-full items-center gap-2">
           {isAdmin && (
@@ -1344,7 +1344,7 @@ export default function SetDetailModal({
                   onClick={attemptClose}
                   disabled={busy}
                 >
-                  Cancel
+                  Close
                 </Button>
                 <Button
                   size="sm"
@@ -2174,7 +2174,7 @@ export default function SetDetailModal({
                 onClick={() => setRolesDraft(null)}
                 disabled={busy}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={saveRoles} loading={busy}>
                 Save
@@ -2309,7 +2309,7 @@ export default function SetDetailModal({
               onClick={() => setSlotToDelete(null)}
               disabled={busy}
             >
-              Cancel
+              Close
             </Button>
             <Button
               size="sm"

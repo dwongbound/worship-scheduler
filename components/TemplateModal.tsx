@@ -179,7 +179,7 @@ export default function TemplateModal({
             onClick={onClose}
             disabled={busy}
           >
-            Cancel
+            Close
           </Button>
           {/* Blocked until the teams list loads — every template needs a team. */}
           <Button type="submit" disabled={busy || !form.teamId}>

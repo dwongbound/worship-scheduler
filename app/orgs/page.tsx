@@ -608,7 +608,7 @@ export default function OrgSettingsPage() {
                 type="button"
                 onClick={() => setAddOpen(false)}
               >
-                Cancel
+                Close
               </Button>
               <Button type="submit" disabled={addBusy || !orgKey.trim()}>
                 {addBusy ? "Joining…" : "Join"}

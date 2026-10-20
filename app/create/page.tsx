@@ -1146,7 +1146,7 @@ export default function CreatePage() {
               onClick={() => setRemindOpen(false)}
               disabled={remindBusy}
             >
-              Cancel
+              Close
             </Button>
             <Button onClick={sendReminder} disabled={remindBusy}>
               {remindBusy ? <LoadingDots size="sm" /> : "Send reminder"}
@@ -1183,7 +1183,7 @@ export default function CreatePage() {
               onClick={() => setDeleteOpen(false)}
               disabled={deleteBusy}
             >
-              Cancel
+              Close
             </Button>
             <Button
               variant="danger"

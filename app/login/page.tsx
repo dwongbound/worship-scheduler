@@ -414,7 +414,7 @@ function LoginForm() {
                 variant="secondary"
                 onClick={() => setConflicts(null)}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={continueAnyway} disabled={submitting}>
                 {submitting ? "Continuing…" : "This is someone else — continue"}

@@ -107,7 +107,7 @@ export default function PreviewModeModal({
       footer={
         <>
           <Button variant="secondary" onClick={onClose}>
-            Cancel
+            Close
           </Button>
           <Button
             onClick={() => onPreview(picked, colors)}

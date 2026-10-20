@@ -115,7 +115,7 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
 test("phone: the set modal's staged edits and sticky footer work on a phone", async ({
   page,
 }) => {
-  // The detail modal stages every edit behind a sticky Delete · Cancel · Save
+  // The detail modal stages every edit behind a sticky Delete · Close · Save
   // row. On a phone that row is the only way to commit or back out — there's no
   // room for it to scroll away — so it's worth proving it's reachable and that
   // the discard guard still names what would be lost.
@@ -143,7 +143,7 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
   await expect(save).toBeEnabled();
 
   // Backing out warns, and names the change.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   const warning = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -515,7 +515,7 @@ test("phone: sending a note posts it immediately and shows it in the log", async
 
   // It really reached the server — reopening the set (a fresh fetch) still
   // shows it, and the composer comes back empty rather than pre-filled.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   await expect(modal).not.toBeVisible();
   await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
   await expect(

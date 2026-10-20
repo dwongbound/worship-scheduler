@@ -375,7 +375,7 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 ## Components
 
 Feature: `CalendarMonth`, `CreateSetModal`, `SetDetailModal` (edits are STAGED:
-everything writes to a local copy, a sticky footer has Delete · Cancel · Save,
+everything writes to a local copy, a sticky footer has Delete · Close · Save,
 Save COMMITS AND CLOSES (a failed save keeps the modal + edits up), and any
 exit with changes hits a confirm that lists them — Delete-set, Slack messaging
 and sending a note act immediately; the Notes box is a composer with a send
@@ -446,10 +446,11 @@ the majority rule and the rate limit live in `lib/calendarScroll.ts` ✅tested;
 `range` mode highlights start→hovered-day live; `Badge` takes `size="sm"` for a
 pill that rides inside another control; `Button` takes `loading` — dots ON the
 button, label hidden but still holding its width, so a pressed button can't
-resize mid-click (it implies `disabled`); a destructive `Button` (`danger`/`dangerOutline`) always
-draws one size below the `size` it's given, and on phones a modal footer
-keeps it at label width while the other buttons fill the row, so it's never
-the biggest target; `Checkbox` takes `rowTarget` to make
+resize mid-click (it implies `disabled`); on phones a modal footer keeps a destructive `Button`
+(`danger`/`dangerOutline`, tagged `data-destructive`) at full height but only
+its label's width while the other buttons fill the row, so it's never the
+widest target; dismiss buttons say **Close**, never "Cancel" (that word is
+kept for undoing a request, e.g. "Cancel swap"); `Checkbox` takes `rowTarget` to make
 the whole row a real `<label>` (off by default: most rows carry chips and text
 you may want to click without flipping a tick); `Input`/`Select` set their own
 `text-base sm:text-sm` — 16px on phones is what stops iOS zooming into a
