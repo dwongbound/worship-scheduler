@@ -151,6 +151,7 @@ model Org {
   availabilityRequests AvailabilityRequest[]
   reminders            WeeklyReminder[]
   scheduleDrafts       ScheduleDraft[]
+  schedulingRules      SchedulingRule[]
 
   createdAt DateTime @default(now())
 
@@ -854,4 +855,32 @@ model ScheduleDraft {
   // unique index can't express it here) — see POST /api/admin/drafts.
   @@index([orgId, createdById, isRecovery])
   @@map("schedule_drafts")
+}
+
+// One of an org's scheduling rules — its own instructions to the auto-fill,
+// applied to every set on every team (see lib/schedulingRules.ts for the
+// vocabulary and lib/scheduler.ts for the fill that obeys them).
+//
+// `tier` is "REQUIRED" (never broken; contradictions refused on save) or
+// "PREFERENCE" (followed when possible). `position` is the list order, and
+// for preferences it IS the ranking — a higher one wins a disagreement.
+// `params` is the rule itself (`{ kind, ... }`), validated by
+// parseRuleParams on the way in AND out, so a stale row is skipped rather
+// than trusted. It refers to people, roles, recurring sets and sets by id; a
+// rule left pointing at something deleted is dropped by the next save.
+model SchedulingRule {
+  id       String  @id @default(cuid())
+  tier     String
+  enabled  Boolean @default(true)
+  position Int
+  params   Json
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, position])
+  @@map("scheduling_rules")
 }

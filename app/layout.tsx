@@ -37,6 +37,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  // Let the page reach under the notch and home indicator so iOS reports the
+  // real safe area. Without this every env(safe-area-inset-*) reads 0 and the
+  // padding built on it (top bar, bottom nav, modals) silently collapses,
+  // leaving buttons in the screen's curved corners. Desktop has no safe area,
+  // so nothing changes there.
+  viewportFit: "cover",
   // Colors the status bar / browser UI around the page — the nav's colour,
   // one per OS scheme. A forced in-app mode retargets both tags
   // (lib/theme.ts syncThemeColor, mirrored in THEME_SCRIPT below).

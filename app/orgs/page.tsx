@@ -16,6 +16,7 @@ import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
 import OrgNotifications from "@/components/OrgNotifications";
 import OrgRetention from "@/components/OrgRetention";
+import OrgRules from "@/components/OrgRules";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
 import SlackSyncModal from "@/components/SlackSyncModal";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
@@ -538,6 +539,14 @@ export default function OrgSettingsPage() {
 
                 {/* Teams + scheduled weekly Slack reminders (admins only). */}
                 {selected.isAdmin && <OrgTeamsManager orgId={selected.id} />}
+
+                {/* How Auto schedule picks people, org-wide (admins only).
+                    Keyed on the org so it reloads its list on a switch. */}
+                {selected.isAdmin && (
+                  <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                    <OrgRules key={selected.id} orgId={selected.id} />
+                  </div>
+                )}
 
                 {/* Which of the bot's personal DMs this org sends (admins only).
                     Keyed on the org so it reloads its switches on a switch. */}
