@@ -694,8 +694,10 @@ export default function Navbar() {
         the hand reaches the bottom far more easily than the top (the number
         behind that `lg` is lib/layout.ts BOTTOM_NAV_MAX_WIDTH).
         The top strip's dots keep the data-testids; duplicating them here
-        would break Playwright's strict single-match lookups. */}
-    <nav className="fixed bottom-[calc(1rem+env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] z-30 lg:hidden">
+        would break Playwright's strict single-match lookups.
+        It floats 0.5rem above the safe area (the sides keep 1rem): at 1rem
+        it sat noticeably high over the iPhone home indicator. */}
+    <nav className="fixed bottom-[calc(0.5rem+env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] z-30 lg:hidden">
       <div
         className={`mx-auto flex items-stretch rounded-full border border-gray-200/60 bg-white/50 px-1.5 py-1.5 shadow-lg backdrop-blur-xl transition-all duration-300 ease-in-out dark:border-gray-700/60 dark:bg-gray-800/50 ${
           // Scroll down → also pull the pill in horizontally (centered), so it
