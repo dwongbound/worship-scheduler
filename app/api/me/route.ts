@@ -40,7 +40,6 @@ export async function GET() {
               spotifyDisplayName: true,
               spotifyUserId: true,
               googleCalRefreshToken: true,
-              googleCalEmail: true,
             },
           },
         },
@@ -86,9 +85,9 @@ export async function GET() {
       spotifyDisplayName: m.org.spotifyDisplayName,
       // Falls back into the label when Spotify gave us no display_name.
       spotifyUserId: m.org.spotifyUserId,
-      // Whether the ORG has connected Google Calendar, + which account.
+      // Whether the ORG has connected Google Calendar (the /profile hint).
+      // Which account is admin-only: /api/google-calendar/status.
       orgGoogleCalendarConnected: !!m.org.googleCalRefreshToken,
-      googleCalEmail: m.org.googleCalEmail,
     })),
     teams: teamMembers.map((tm) => ({
       id: tm.team.id,

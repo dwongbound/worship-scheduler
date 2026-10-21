@@ -478,10 +478,9 @@ export interface ApiMeMembership {
   // The connected account's Spotify user id — the label's fallback when the
   // account has no display_name set.
   spotifyUserId: string | null;
-  // Whether the ORG has connected Google Calendar (set events + invites), and
-  // the shared account it's connected as.
+  // Whether the ORG has connected Google Calendar (set events + invites). The
+  // account itself is admin-only, on /api/google-calendar/status.
   orgGoogleCalendarConnected: boolean;
-  googleCalEmail: string | null;
 }
 
 // The current user's own profile — GET /api/me. Fetched once by AuthGate and

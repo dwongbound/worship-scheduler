@@ -8,9 +8,11 @@
 //      set delete. Failures are logged and swallowed.
 //
 // Shape of it:
-//   • Connect (OAuth, `calendar.app.created`): the account grants access only
-//     to calendars THIS app creates, so we make one ("<Org> worship sets") and
-//     never see the rest of their calendar.
+//   • Connect (OAuth): we make a calendar of our own ("<Org> worship sets")
+//     and use it by default. The admin who connected may instead pick one of
+//     their account's existing calendars (listCalendarsFor / selectCalendar);
+//     that list is shown to THEM only — the routes refuse every other admin,
+//     who sees just the chosen calendar's name.
 //   • syncSetCalendar(setId) is idempotent: it rebuilds the set's event from
 //     the db (lib/calendarEvent.ts) and creates or patches it. Every route that
 //     changes a set, its roster or its setlist calls it after responding.
@@ -45,10 +47,18 @@ const ACCOUNTS = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN = "https://oauth2.googleapis.com/token";
 const API = "https://www.googleapis.com/calendar/v3";
 
-// `calendar.app.created` = make secondary calendars and manage events on the
-// ones this app made, nothing else. `openid email` names the account on the
-// Org settings row.
-const SCOPES = "openid email https://www.googleapis.com/auth/calendar.app.created";
+// `calendar.app.created` = make our own calendar; `calendar.calendarlist.readonly`
+// = list the account's calendars for the connecting admin's picker;
+// `calendar.events` = put the sets' events on whichever one they pick (and
+// watch it). Nothing here reads or changes the calendars themselves.
+// `openid email` names the account on the Org settings row.
+const SCOPES = [
+  "openid",
+  "email",
+  "https://www.googleapis.com/auth/calendar.app.created",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+  "https://www.googleapis.com/auth/calendar.events",
+].join(" ");
 
 // Renew a push channel once it's this close to expiring. The cron runs daily,
 // so anything under a day would risk a gap; Google caps channels at a week.
@@ -78,14 +88,13 @@ function webhookUrl(): string {
 }
 
 /**
- * Whether the integration is switched on: GOOGLE_CALENDAR_ENABLED=1 plus the
- * OAuth client. The flag is separate because the client is shared with
- * "Continue with Google" — a deployment that has Google sign-in shouldn't grow
- * a Connect Google Calendar button until someone has set up the Calendar side.
+ * Whether this deployment can offer Google Calendar at all: the OAuth client
+ * (shared with "Continue with Google") is set. Without it there's no Connect
+ * button and every entry point is a no-op. With it, nothing happens until an
+ * org admin connects in Org settings.
  */
 export function isGoogleCalendarAppConfigured(): boolean {
-  const flag = process.env.GOOGLE_CALENDAR_ENABLED;
-  return (flag === "1" || flag === "true") && !!clientId() && !!clientSecret();
+  return !!clientId() && !!clientSecret();
 }
 
 // ── OAuth handshake ────────────────────────────────────────────────────────
@@ -253,7 +262,10 @@ const cal = (org: OrgCal) => `/calendars/${encodeURIComponent(org.googleCalendar
 /** Swap the callback's code for tokens, make the calendar, start watching it. */
 export async function connectOrgFromCode(
   orgId: string,
-  code: string
+  code: string,
+  // The admin connecting. Only they may later pick another of this account's
+  // calendars — the account is theirs (or the church's, in their hands).
+  userId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch(TOKEN, {
@@ -283,7 +295,7 @@ export async function connectOrgFromCode(
 
     const prior = await prisma.org.findUnique({
       where: { id: orgId },
-      select: { ...ORG_CAL_FIELDS, googleCalEmail: true },
+      select: { ...ORG_CAL_FIELDS, googleCalEmail: true, googleCalendarName: true },
     });
     if (!prior) return { ok: false, error: "org not found" };
     // A reconnect drops the old channel first; it would otherwise keep pinging
@@ -306,9 +318,11 @@ export async function connectOrgFromCode(
     // Same account reconnecting keeps its calendar (and every event on it); a
     // different account can't see the old one, so it gets a fresh calendar.
     let calendarId = prior.googleCalEmail === email ? prior.googleCalendarId : null;
+    let calendarName = prior.googleCalendarName;
     if (calendarId) {
       const probe = await gapi({ ...org, googleCalendarId: calendarId }, "GET", `/calendars/${encodeURIComponent(calendarId)}`);
       if (!probe?.ok) calendarId = null;
+      else if (typeof probe.json.summary === "string") calendarName = probe.json.summary;
     }
     if (!calendarId) {
       const made = await gapi(org, "POST", "/calendars", {
@@ -320,6 +334,7 @@ export async function connectOrgFromCode(
         return { ok: false, error: `couldn't create the calendar (${made?.status ?? "no token"})` };
       }
       calendarId = made.json.id;
+      calendarName = typeof made.json.summary === "string" ? made.json.summary : `${prior.name} worship sets`;
       // Events on the old calendar aren't ours to patch any more.
       await prisma.set.updateMany({ where: { orgId }, data: { googleEventId: null } });
     }
@@ -330,6 +345,8 @@ export async function connectOrgFromCode(
         googleCalRefreshToken: org.googleCalRefreshToken,
         googleCalEmail: email,
         googleCalendarId: calendarId,
+        googleCalendarName: calendarName,
+        googleCalConnectedById: userId,
         googleCalSyncToken: null,
         googleCalChannelId: null,
         googleCalResourceId: null,
@@ -366,12 +383,95 @@ export async function disconnectOrg(orgId: string): Promise<void> {
     data: {
       googleCalRefreshToken: null,
       googleCalEmail: null,
+      googleCalConnectedById: null,
       googleCalSyncToken: null,
       googleCalChannelId: null,
       googleCalResourceId: null,
       googleCalChannelExpiresAt: null,
     },
   });
+}
+
+// ── Choosing the calendar (the connecting admin only) ──────────────────────
+
+export type CalendarChoice = { id: string; name: string; primary: boolean };
+
+/**
+ * The connected account's calendars that events can be written to. The ROUTE
+ * decides who may see this (only the admin who connected); this just asks
+ * Google. "scope" = connected before the picker existed, or the list box was
+ * unticked on the consent screen — reconnecting fixes it.
+ */
+export async function listCalendarsFor(
+  orgId: string
+): Promise<CalendarChoice[] | "scope" | null> {
+  try {
+    const org = await loadOrg(orgId);
+    if (!org) return null;
+    const res = await gapi(org, "GET", "/users/me/calendarList?minAccessRole=writer&maxResults=250");
+    if (!res) return null;
+    if (res.status === 403 || res.status === 401) return "scope";
+    if (!res.ok) return null;
+    type Entry = { id?: string; summary?: string; summaryOverride?: string; primary?: boolean; deleted?: boolean };
+    return ((res.json.items as Entry[] | undefined) ?? [])
+      .filter((c): c is Entry & { id: string } => typeof c.id === "string" && !c.deleted)
+      .map((c) => ({ id: c.id, name: c.summaryOverride ?? c.summary ?? c.id, primary: !!c.primary }))
+      .sort((a, b) => Number(b.primary) - Number(a.primary) || a.name.localeCompare(b.name));
+  } catch (err) {
+    console.error(`[gcal] listing calendars for org ${orgId} failed:`, err);
+    return null;
+  }
+}
+
+/**
+ * Move the org's sets onto another of the account's calendars. Each upcoming
+ * set's event is cancelled on the old calendar (guests are told) and the
+ * caller re-syncs them onto the new one — Google can't move an event's guest
+ * list between calendars quietly, and leaving the old ones would double-book
+ * everyone. Past sets' events stay where they were.
+ */
+export async function selectCalendar(
+  orgId: string,
+  calendarId: string
+): Promise<{ ok: true; changed: boolean } | { ok: false; error: string }> {
+  const org = await loadOrg(orgId);
+  if (!org) return { ok: false, error: "Google Calendar isn't connected." };
+  if (org.googleCalendarId === calendarId) return { ok: true, changed: false };
+  const choices = await listCalendarsFor(orgId);
+  if (choices === "scope") {
+    return { ok: false, error: "Reconnect Google Calendar to choose a calendar." };
+  }
+  const choice = choices?.find((c) => c.id === calendarId);
+  if (!choice) return { ok: false, error: "That calendar isn't one you can add events to." };
+
+  await stopChannel(org).catch(() => {});
+  const upcoming = await prisma.set.findMany({
+    where: { orgId, startsAt: { gte: new Date() }, googleEventId: { not: null } },
+    select: { id: true, googleEventId: true },
+  });
+  for (const s of upcoming) {
+    await gapi(org, "DELETE", `${cal(org)}/events/${encodeURIComponent(s.googleEventId!)}?sendUpdates=all`);
+  }
+  await prisma.set.updateMany({ where: { orgId }, data: { googleEventId: null } });
+  await prisma.org.update({
+    where: { id: orgId },
+    data: {
+      googleCalendarId: calendarId,
+      googleCalendarName: choice.name,
+      googleCalSyncToken: null,
+      googleCalChannelId: null,
+      googleCalResourceId: null,
+      googleCalChannelExpiresAt: null,
+    },
+  });
+  await startWatch({
+    ...org,
+    googleCalendarId: calendarId,
+    googleCalSyncToken: null,
+    googleCalChannelId: null,
+    googleCalResourceId: null,
+  });
+  return { ok: true, changed: true };
 }
 
 // ── Set ⇄ event ────────────────────────────────────────────────────────────

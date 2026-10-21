@@ -118,8 +118,9 @@ model Org {
   spotifyDisplayName  String?
 
   // Per-org Google Calendar connection (lib/googleCalendar.ts): ONE shared
-  // church Google account owns a calendar the app creates, holding an event per
-  // set with its roster invited. Refresh token encrypted like the others; null
+  // church Google account owns the calendar holding an event per set with its
+  // roster invited — one the app creates, or another of that account's
+  // calendars picked by the admin who connected. Refresh token encrypted like the others; null
   // = not connected (every sync no-ops). The watch channel is Google's push
   // subscription to that calendar — how an attendee's RSVP reaches us — and
   // the sync token is where the last read of its changes stopped.
@@ -130,6 +131,10 @@ model Org {
   googleCalChannelId        String?   @unique
   googleCalResourceId       String?
   googleCalChannelExpiresAt DateTime?
+  // The chosen calendar's name, for every admin to read, and the admin who
+  // connected — the only one allowed to list the account's calendars.
+  googleCalendarName     String?
+  googleCalConnectedById String?
 
   // How many days ahead this org's daily digest looks when it counts sets that
   // still need attention — and the number the digest's own copy quotes. Per org

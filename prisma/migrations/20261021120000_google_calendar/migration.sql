@@ -7,7 +7,9 @@ ADD COLUMN "googleCalendarId" TEXT,
 ADD COLUMN "googleCalSyncToken" TEXT,
 ADD COLUMN "googleCalChannelId" TEXT,
 ADD COLUMN "googleCalResourceId" TEXT,
-ADD COLUMN "googleCalChannelExpiresAt" TIMESTAMP(3);
+ADD COLUMN "googleCalChannelExpiresAt" TIMESTAMP(3),
+ADD COLUMN "googleCalendarName" TEXT,
+ADD COLUMN "googleCalConnectedById" TEXT;
 
 CREATE UNIQUE INDEX "orgs_googleCalChannelId_key" ON "orgs"("googleCalChannelId");
 

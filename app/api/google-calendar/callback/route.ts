@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     return back("forbidden", `user ${parsed.userId} is not an admin of org ${parsed.orgId}`);
   }
 
-  const result = await connectOrgFromCode(parsed.orgId, code);
+  const result = await connectOrgFromCode(parsed.orgId, code, parsed.userId);
   if (!result.ok) return back("error", result.error);
   after(() => syncUpcomingSets(parsed.orgId));
   return back("connected");

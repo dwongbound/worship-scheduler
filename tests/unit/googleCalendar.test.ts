@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/prisma", () => ({
   prisma: {
-    set: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    set: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     org: { findUnique: vi.fn(), update: vi.fn() },
     user: { findMany: vi.fn() },
     assignment: { findMany: vi.fn(), updateMany: vi.fn() },
@@ -26,7 +26,9 @@ import {
   calendarEventOf,
   handleNotification,
   isGoogleCalendarAppConfigured,
+  listCalendarsFor,
   maintainCalendarWatches,
+  selectCalendar,
   signState,
   syncSetCalendar,
   verifyState,
@@ -94,7 +96,6 @@ beforeEach(() => {
   process.env.NEXTAUTH_URL = "https://app.test";
   process.env.GOOGLE_CLIENT_ID = "cid";
   process.env.GOOGLE_CLIENT_SECRET = "csecret";
-  process.env.GOOGLE_CALENDAR_ENABLED = "1";
   calls = [];
   routes = () => undefined;
   m(prisma.org.findUnique).mockResolvedValue(org());
@@ -250,9 +251,13 @@ describe("syncSetCalendar", () => {
   });
 });
 
-describe("GOOGLE_CALENDAR_ENABLED", () => {
-  it("keeps the whole integration off without the flag, even with Google sign-in set up", async () => {
-    delete process.env.GOOGLE_CALENDAR_ENABLED;
+describe("isGoogleCalendarAppConfigured", () => {
+  it("is on with just the OAuth client — no extra flag", () => {
+    expect(isGoogleCalendarAppConfigured()).toBe(true);
+  });
+
+  it("keeps everything off without the OAuth client", async () => {
+    delete process.env.GOOGLE_CLIENT_SECRET;
     expect(isGoogleCalendarAppConfigured()).toBe(false);
     expect(await maintainCalendarWatches()).toEqual({ renewed: 0, orgs: 0 });
     expect(await calendarEventOf("s1")).toBeNull();
@@ -261,11 +266,76 @@ describe("GOOGLE_CALENDAR_ENABLED", () => {
     expect(prisma.org.findUnique).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
   });
+});
 
-  it("is on with the flag and the OAuth client", () => {
-    expect(isGoogleCalendarAppConfigured()).toBe(true);
-    delete process.env.GOOGLE_CLIENT_SECRET;
-    expect(isGoogleCalendarAppConfigured()).toBe(false);
+describe("choosing the calendar", () => {
+  const list = {
+    items: [
+      { id: "work", summary: "Work" },
+      { id: "me@example.com", summary: "me@example.com", primary: true },
+      { id: "cal1", summary: "Grace worship sets" },
+      { id: "gone", summary: "Old", deleted: true },
+    ],
+  };
+
+  it("lists the writable calendars, main one first, deleted ones dropped", async () => {
+    routes = (method, url) => (url.includes("/calendarList") ? { body: list } : undefined);
+    expect(await listCalendarsFor("org1")).toEqual([
+      { id: "me@example.com", name: "me@example.com", primary: true },
+      { id: "cal1", name: "Grace worship sets", primary: false },
+      { id: "work", name: "Work", primary: false },
+    ]);
+    // Only calendars events can be written to are asked for.
+    expect(calls[0].url).toContain("minAccessRole=writer");
+  });
+
+  it("asks for a reconnect when the list scope wasn't granted", async () => {
+    routes = () => ({ status: 403 });
+    expect(await listCalendarsFor("org1")).toBe("scope");
+  });
+
+  it("refuses a calendar that isn't in the account's writable list", async () => {
+    routes = (method, url) => (url.includes("/calendarList") ? { body: list } : undefined);
+    expect(await selectCalendar("org1", "someone-elses")).toMatchObject({ ok: false });
+    expect(prisma.org.update).not.toHaveBeenCalled();
+  });
+
+  it("moves upcoming sets: cancels their old events, forgets the ids, watches the new calendar", async () => {
+    routes = (method, url) => {
+      if (url.includes("/calendarList")) return { body: list };
+      if (url.includes("/events/watch")) return { body: { resourceId: "res2" } };
+      if (url.includes("/events?")) return { body: { items: [], nextSyncToken: "tok2" } };
+      return undefined;
+    };
+    m(prisma.set.findMany).mockResolvedValue([{ id: "s1", googleEventId: "ev1" }]);
+    expect(await selectCalendar("org1", "work")).toEqual({ ok: true, changed: true });
+
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        method: "DELETE",
+        url: expect.stringContaining("/calendars/cal1/events/ev1?sendUpdates=all"),
+      })
+    );
+    expect(prisma.set.updateMany).toHaveBeenCalledWith({
+      where: { orgId: "org1" },
+      data: { googleEventId: null },
+    });
+    expect(prisma.org.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ googleCalendarId: "work", googleCalendarName: "Work" }),
+      })
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        method: "POST",
+        url: expect.stringContaining("/calendars/work/events/watch"),
+      })
+    );
+  });
+
+  it("does nothing when the calendar is already the chosen one", async () => {
+    expect(await selectCalendar("org1", "cal1")).toEqual({ ok: true, changed: false });
+    expect(calls).toEqual([]);
   });
 });
 

@@ -164,8 +164,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Google Calendar: `google-calendar/connect` (GET → consent, DELETE →
-  disconnect; org admin), `/callback`, `/status` (admin: connected account +
-  members with no email), `/webhook` (Google's push channel — public, checked
+  disconnect; org admin), `/callback`, `/status` (admin: connected account,
+  chosen calendar's NAME, who connected, members with no email), `/calendars`
+  (GET list / PUT choose — ONLY the admin who connected,
+  `Org.googleCalConnectedById`; everyone else 403s, since the list is their
+  account's), `/webhook` (Google's push channel — public, checked
   by a per-org HMAC token, reads changes AFTER responding).
 - Rules: `orgs/[id]/rules` (org admin) — GET the list + dropdown options (or,
   with `?forSet=`, what one set's Auto schedule needs); PUT replaces the whole
@@ -367,9 +370,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   belongs here too. A new integration = a new folder + one branch in
   `orgIntegration.ts`.
 - `googleCalendar.ts` — the per-org Google Calendar integration (README
-  "Google Calendar"): one shared church account, one app-made calendar
-  (`calendar.app.created` scope), an event per upcoming set with the roster
-  invited. `syncSetCalendar(setId)` is idempotent (create or patch from the
+  "Google Calendar"): one connected account per org, an app-made calendar by
+  default or one the connecting admin picks (`listCalendarsFor`/`selectCalendar`
+  — a move cancels the old events and re-creates them), an event per upcoming
+  set with the roster invited. On whenever `GOOGLE_CLIENT_ID`/`_SECRET` are
+  set — there's deliberately NO enable flag; the UI is an admin-only row in Org
+  settings (`components/OrgGoogleCalendar.tsx`). `syncSetCalendar(setId)` is idempotent (create or patch from the
   db); routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
   roster, swap-approval and setlist change, and DELETE reads
   `calendarEventOf` before the row goes. Write-back: a watch channel pings

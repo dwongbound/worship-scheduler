@@ -150,8 +150,7 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `TZ` | `America/Los_Angeles` | same | same (Vercel defaults to UTC — set it!) |
 | `SEED_ADMIN_USERNAME` / `_PASSWORD` | used by `npm run db:seed` | — (don't seed) | — (**never** seed prod) |
 | `SLACK_DRY_RUN` | `1` (log, never send) | `1` (optional) | unset (send for real) |
-| `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² (also enables Google Calendar⁷) |
-| `GOOGLE_CALENDAR_ENABLED` | `1` to try it⁷ | `1` to turn it on⁷ | `1` to turn it on⁷ |
+| `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² (also offers Google Calendar⁷) |
 | `GOOGLE_CALENDAR_REDIRECT_URI` | only if not `<NEXTAUTH_URL>/api/google-calendar/callback`⁷ | unset | unset |
 | `GOOGLE_CALENDAR_WEBHOOK_URL` | your HTTPS tunnel's `…/api/google-calendar/webhook`⁷ | unset | unset |
 | `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
@@ -179,9 +178,10 @@ account, whose refresh token is stored encrypted on the `Org` row. Redirect URI:
 `…/api/spotify/callback` (override with `SPOTIFY_REDIRECT_URI`). `SPOTIFY_DRY_RUN=1`
 stamps placeholder playlists instead of calling the API.
 ⁷ Google Calendar is a **per-org integration** riding on the same Google OAuth
-client as "Continue with Google", switched on by `GOOGLE_CALENDAR_ENABLED=1` —
-see [Google Calendar](#google-calendar).
-Each org connects one shared church account (Org settings → *Connect Google
+client as "Continue with Google" — see [Google Calendar](#google-calendar).
+With that client set, org admins see a *Connect Google Calendar* button in Org
+settings; nothing changes for an org until one of them connects.
+Each org connects one Google account (Org settings → *Connect Google
 Calendar*); its refresh token is stored encrypted on the `Org` row. Redirect
 URI: `…/api/google-calendar/callback`. RSVPs come back through Google's push
 channel at `…/api/google-calendar/webhook`, which must be public HTTPS, so on
@@ -272,8 +272,9 @@ directly. Changing it takes effect on the next deploy.
 
 ## Google Calendar
 
-Every upcoming set becomes an **event on a calendar owned by the org's shared
-church Google account**, with everyone on its roster invited by email. The
+Every upcoming set becomes an **event on a calendar in the Google account an
+org admin connects** (ideally a shared church account), with everyone on its
+roster invited by email. The
 event's description carries what the Slack messages do — the roster by role,
 the setlist, a link back to the set. **Accepting the invite confirms that seat
 in the app**; declining (or "maybe") changes nothing, so the person still asks
@@ -285,45 +286,54 @@ for cover in the app. Code: `lib/googleCalendar.ts` (Google + db side),
 "Continue with Google" OAuth client (`GOOGLE_CLIENT_ID` / `_SECRET`):
 
 - *APIs & Services → Library*: enable the **Google Calendar API**.
-- *OAuth consent screen → Data access*: add the scope
-  `https://www.googleapis.com/auth/calendar.app.created` (lets the app create
-  its own calendars and manage events on those, and nothing else in the
-  account). While the app is in *Testing*, add each church account as a test
-  user; publishing it for real use may need Google's verification.
+- *OAuth consent screen → Data access*: add the scopes
+  `https://www.googleapis.com/auth/calendar.app.created` (create the app's own
+  calendar), `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+  (list the account's calendars for the picker below) and
+  `https://www.googleapis.com/auth/calendar.events` (put the sets' events on
+  whichever calendar is picked, and watch it for RSVPs). `calendar.events` is a
+  *sensitive* scope: while the app is in *Testing*, add each connecting account
+  as a test user; publishing it for real use needs Google's verification.
 - *Credentials → the OAuth client → Authorized redirect URIs*: add
   `https://<your-host>/api/google-calendar/callback` for each of staging and
   prod (and `http://localhost:3000/api/google-calendar/callback` for dev).
 
-**2. Env vars** — it's **off until `GOOGLE_CALENDAR_ENABLED=1`**, even where
-`GOOGLE_CLIENT_ID` / `_SECRET` are already set for Google sign-in, so a
-deployment without the flag shows no Google Calendar row and makes no Google
-calls. On staging/prod the flag is the only new variable (with
-`GOOGLE_CLIENT_ID` / `_SECRET` and `NEXTAUTH_URL`). Locally, Google can't push
-to `localhost`, so for RSVP write-back point a tunnel (e.g. `cloudflared`,
+**2. Env vars** — no new ones on staging/prod: Google Calendar is offered
+wherever `GOOGLE_CLIENT_ID` / `_SECRET` (and `NEXTAUTH_URL`) are set, as an
+admin-only *Connect Google Calendar* button in Org settings. Until an admin of
+an org connects, that org makes no Google calls and nothing about it changes.
+Without the id/secret there's no button at all, and every sync, the cron step
+and the webhook return before touching the db. Locally, Google can't push to
+`localhost`, so for RSVP write-back point a tunnel (e.g. `cloudflared`,
 `ngrok`) at the app and set:
 
 ```
-GOOGLE_CALENDAR_ENABLED=1
 GOOGLE_CALENDAR_WEBHOOK_URL=https://<tunnel>/api/google-calendar/webhook
 GOOGLE_CALENDAR_REDIRECT_URI=…   # only if it isn't <NEXTAUTH_URL>/api/google-calendar/callback
 ```
 
-Without the flag (or the id/secret), Google Calendar stays off: Org settings
-has no Google Calendar row, the connect route answers "not configured", and
-and every sync, the cron step and the webhook return before touching the db.
-
 **3. Migration** — `prisma/migrations/20261021120000_google_calendar` adds the
-`Org.googleCal*` columns and `Set.googleEventId`. Run
+`Org.googleCal*` columns (plus `googleCalendarName` and
+`googleCalConnectedById`) and `Set.googleEventId`. Run
 `prisma migrate deploy` on each database (staging, then prod) before the code
 that reads them goes live.
 
 **4. Connect an org** — as an org admin, **Org settings** (`/orgs`) → *Connect
-Google Calendar*, sign in as the shared church account, approve calendar
-access. The app creates a calendar named "<Org> worship sets", opens a push
-channel on it, and adds every upcoming set. The row then lists members with no
+Google Calendar*, sign in as the account to use, approve calendar access. The
+app creates a calendar named "<Org> worship sets", opens a push channel on it,
+and adds every upcoming set. Only admins see the row. It lists members with no
 email on file (they get no invites until they add one on their Profile, which
 sends their invites). *Disconnect* stops syncing; the calendar and its events
-stay in the church account.
+stay in the account.
+
+**Choosing a calendar** — the admin who connected (and only them) gets a
+*Calendar for sets* dropdown of the account's calendars they can write to.
+Picking another moves every upcoming set there: the old events are cancelled
+(guests are emailed) and re-created on the new calendar with fresh invites.
+Other admins never see that list — `/api/google-calendar/calendars` refuses
+them — only the chosen calendar's name and who connected it. A different admin
+who reconnects becomes the one who can choose. An org connected before the
+picker existed reconnects once to grant the list scope.
 
 **How it stays in sync** — every route that changes a set calls
 `syncSetsAfterResponse` (after the response, so Google's latency never sits on
