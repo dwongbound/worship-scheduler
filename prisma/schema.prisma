@@ -117,6 +117,25 @@ model Org {
   spotifyUserId       String?
   spotifyDisplayName  String?
 
+  // Per-org Google Calendar connection (lib/googleCalendar.ts): ONE shared
+  // church Google account owns the calendar holding an event per set with its
+  // roster invited — one the app creates, or another of that account's
+  // calendars picked by the admin who connected. Refresh token encrypted like the others; null
+  // = not connected (every sync no-ops). The watch channel is Google's push
+  // subscription to that calendar — how an attendee's RSVP reaches us — and
+  // the sync token is where the last read of its changes stopped.
+  googleCalRefreshToken     String?
+  googleCalEmail            String?
+  googleCalendarId          String?
+  googleCalSyncToken        String?
+  googleCalChannelId        String?   @unique
+  googleCalResourceId       String?
+  googleCalChannelExpiresAt DateTime?
+  // The chosen calendar's name, for every admin to read, and the admin who
+  // connected — the only one allowed to list the account's calendars.
+  googleCalendarName     String?
+  googleCalConnectedById String?
+
   // How many days ahead this org's daily digest looks when it counts sets that
   // still need attention — and the number the digest's own copy quotes. Per org
   // because a church running two services a week wants a different horizon than
@@ -215,13 +234,13 @@ model Team {
   // This team's role catalog — what roles exist here, how many of each a set
   // wants by default, and which are admin-only. Seeded with the built-in
   // defaults (lib/teamRoles.ts DEFAULT_TEAM_ROLES) and edited per team.
-  roles     TeamRole[]
-  members   TeamMember[]
+  roles                TeamRole[]
+  members              TeamMember[]
   // DEPRECATED: old role-less membership — see User.teams. Dropped after backfill.
-  users     User[]           @relation("TeamMembers")
-  sets      Set[]
-  templates SetTemplate[]
-  reminders WeeklyReminder[]
+  users                User[]                @relation("TeamMembers")
+  sets                 Set[]
+  templates            SetTemplate[]
+  reminders            WeeklyReminder[]
   // Availability requests aimed at this team (see AvailabilityRequest.teams).
   availabilityRequests AvailabilityRequest[] @relation("AvailabilityRequestTeams")
   // Sets this team guests on (it doesn't own them) — see SetGuestTeam.
@@ -306,8 +325,8 @@ model TeamMember {
 model WeeklyReminder {
   id String @id @default(cuid())
 
-  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  orgId String
+  org    Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId  String
   team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
   teamId String
 
@@ -342,7 +361,7 @@ model User {
 
   // Musical director: can be the designated MD on a set that requires one.
   // Note: isMD is global to the person, not per-org.
-  isMD        Boolean      @default(false)
+  isMD        Boolean         @default(false)
   // DEPRECATED: roles are now per-team (see TeamMember.roles). Kept only so the
   // backfill (prisma/backfillTeamRoles.ts) can copy each person's old global
   // roles onto their teams; a follow-up migration drops this column.
@@ -354,7 +373,7 @@ model User {
   teamMembers TeamMember[]
   // DEPRECATED: the old role-less team membership. Kept alongside teamMembers
   // only so the backfill can read existing edges; a follow-up migration drops it.
-  teams       Team[]       @relation("TeamMembers")
+  teams       Team[]          @relation("TeamMembers")
 
   assignments           Assignment[]
   unavailability        Unavailability[]
@@ -456,6 +475,10 @@ model Set {
   spotifyPlaylistId  String?
   spotifyPlaylistUrl String?
 
+  // This set's event on the org's Google Calendar (lib/googleCalendar.ts), so
+  // a re-sync patches the SAME event. Null until first synced.
+  googleEventId String?
+
   assignments Assignment[]
   history     SetHistoryEvent[]
 
@@ -523,10 +546,10 @@ model Song {
 
 // One user filling one role slot on one set.
 model Assignment {
-  id     String           @id @default(cuid())
-  set    Set              @relation(fields: [setId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  set    Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
   setId  String
-  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
   // The TeamRole.key this slot is for. Read against the set's OWN team catalog
   // normally, or against `guestTeam`'s catalog when this is a guest seat.
@@ -536,9 +559,9 @@ model Assignment {
   // SetGuestTeam row they were seated under. Null (every pre-existing row) =
   // an ordinary seat on the set's own team. Role keys are unique only within a
   // team, so this is what disambiguates two same-keyed roles on one set.
-  guestTeam   SetGuestTeam? @relation(fields: [guestTeamId], references: [id], onDelete: SetNull)
+  guestTeam   SetGuestTeam?    @relation(fields: [guestTeamId], references: [id], onDelete: SetNull)
   guestTeamId String?
-  status AssignmentStatus @default(PENDING)
+  status      AssignmentStatus @default(PENDING)
 
   // Optional note the owner leaves when requesting cover (status
   // SWAP_REQUESTED) — shown to people who could take the set. Cleared when the
@@ -654,16 +677,16 @@ enum SwapProposalStatus {
 // type means. Written alongside the assignment change it describes, never
 // edited afterwards.
 model SetHistoryEvent {
-  id     String              @id @default(cuid())
-  set    Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
-  setId  String
-  type   SetHistoryEventType
+  id    String              @id @default(cuid())
+  set   Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId String
+  type  SetHistoryEventType
   // The slot this event is about (a TeamRole.key). Null for the two set-level
   // types — SETLIST_CHANGED and NOTES_CHANGED — which concern the set's songs
   // and notes rather than any one role.
   // Kept as a bare string even if the role is later deleted — the log is a
   // record of what happened, not a live reference.
-  role   String?
+  role  String?
 
   // Human summary for events that type + people don't fully describe:
   // SETLIST_CHANGED (e.g. 'added "Who Else" (E)') and NOTES_CHANGED (e.g.
@@ -789,16 +812,16 @@ model AvailabilityRequest {
 // that request. Presence = complete; absence = still owes a response. Replaces
 // the old global User.scheduleCompletedAt so completion is tracked per request.
 model AvailabilityResponse {
-  id        String              @id @default(cuid())
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String
-  request   AvailabilityRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  requestId String
+  id          String              @id @default(cuid())
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  request     AvailabilityRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId   String
   // null = the row exists but is currently marked "not submitted". The row
   // persists across un/re-submits so we can remember it was edited.
   completedAt DateTime?
   // True once re-submitted after having been un-submitted at least once.
-  edited      Boolean           @default(false)
+  edited      Boolean             @default(false)
   // Optional free-text note the person left when they submitted ("away the
   // first weekend, back for the rest"). Written from the submit-confirmation
   // modal and read by admins in the Create tab's availability status panel;
