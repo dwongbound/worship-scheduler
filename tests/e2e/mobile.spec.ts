@@ -552,7 +552,7 @@ test("phone calendar hides the desktop-only Preview Mode button", async ({
 async function pullDownShowsSpinner(page: import("@playwright/test").Page) {
   const cdp = await page.context().newCDPSession(page);
   const x = 200;
-  const touch = (type: string, y: number) =>
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", y: number) =>
     cdp.send("Input.dispatchTouchEvent", {
       type,
       touchPoints: type === "touchEnd" ? [] : [{ x, y }],

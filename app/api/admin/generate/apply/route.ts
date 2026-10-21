@@ -23,6 +23,7 @@ import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { DEFAULT_TEAM_ROLES } from "@/lib/teamRoles";
 import type { StagedPlan, StagedSet } from "@/lib/types";
 import { notifyAssignmentsAdded, type NewSeat } from "@/lib/slack";
+import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 // Light validation of one staged set from the request body. Returns a
 // normalized set, or null to skip anything malformed (admin-only route, so
@@ -112,6 +113,7 @@ export async function POST(req: NextRequest) {
   const catalogs = await getTeamCatalogs(sets.map((s) => s.teamId));
 
   let setsCreated = 0;
+  const touched: string[] = [];
   let assignmentsCreated = 0;
   // Every seat this apply actually created, collected for the batched DMs at
   // the end. Only genuinely-new rows land here — see createManyAndReturn below.
@@ -175,6 +177,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    touched.push(set.id);
+
     if (roster.length > 0) {
       // …AndReturn rather than plain createMany: with skipDuplicates a re-apply
       // silently drops rows, and a count alone can't say WHICH. The returned
@@ -211,6 +215,7 @@ export async function POST(req: NextRequest) {
   // it, one message each. Non-throwing, so a Slack outage can't undo an apply
   // that already committed.
   await notifyAssignmentsAdded(admin.orgId, newSeats);
+  syncSetsAfterResponse(...touched);
 
   return NextResponse.json({ setsCreated, assignmentsCreated });
 }

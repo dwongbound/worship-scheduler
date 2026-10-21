@@ -6,6 +6,7 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
 import { resolveProfileEmail } from "@/lib/profile";
+import { isGoogleCalendarAppConfigured, syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -38,6 +39,7 @@ export async function GET() {
               spotifyRefreshToken: true,
               spotifyDisplayName: true,
               spotifyUserId: true,
+              googleCalRefreshToken: true,
             },
           },
         },
@@ -83,6 +85,9 @@ export async function GET() {
       spotifyDisplayName: m.org.spotifyDisplayName,
       // Falls back into the label when Spotify gave us no display_name.
       spotifyUserId: m.org.spotifyUserId,
+      // Whether the ORG has connected Google Calendar (the /profile hint).
+      // Which account is admin-only: /api/google-calendar/status.
+      orgGoogleCalendarConnected: !!m.org.googleCalRefreshToken,
     })),
     teams: teamMembers.map((tm) => ({
       id: tm.team.id,
@@ -151,6 +156,15 @@ export async function PUT(req: NextRequest) {
       data,
       select: { name: true, email: true, dailyDigest: true },
     });
+    // A new (or changed) email is where set invites go, so every upcoming set
+    // they're on re-syncs its guest list — that's what sends the invites.
+    if (isGoogleCalendarAppConfigured() && (current?.email ?? null) !== updated.email) {
+      const seats = await prisma.assignment.findMany({
+        where: { userId: user.id, set: { startsAt: { gte: new Date() } } },
+        select: { setId: true },
+      });
+      syncSetsAfterResponse(...seats.map((a) => a.setId));
+    }
     return NextResponse.json(updated);
   } catch {
     // Most likely a unique-constraint hit on email.

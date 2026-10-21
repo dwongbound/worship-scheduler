@@ -1,6 +1,6 @@
 // GET /api/cron/daily — the app's single Vercel Cron, and the only scheduled
 // work in the app: the free tier allows one cron a day, so everything on a
-// timer lives here. It does four jobs:
+// timer lives here. It does these jobs:
 //   1. Weekly reminders: send every scheduled reminder whose dayOfWeek is today
 //      and that hasn't gone out yet today (lastSentAt guard), posting each
 //      team's "this week's sets" to Slack.
@@ -11,7 +11,10 @@
 //   4. Daily digests: DM each person their morning "here's your day" summary,
 //      one per org they belong to (sendDailyDigests) — skipped for anyone with
 //      nothing to do in that org.
-//   5. Data retention: delete history past each workspace's own cutoff
+//   5. Google Calendar upkeep: renew each connected org's push channel before
+//      it lapses (Google caps them at a week) and read its changes once, in
+//      case an RSVP ping went missing (maintainCalendarWatches).
+//   6. Data retention: delete history past each workspace's own cutoff
 //      (runDuePrunes). Weekly per org, not daily — see lib/retention
 //      PRUNE_INTERVAL_DAYS — so a bulk delete doesn't run every night for
 //      workspaces that generate a handful of rows a week.
@@ -28,6 +31,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { runDuePrunes } from "@/lib/retentionStore";
+import { maintainCalendarWatches } from "@/lib/googleCalendar";
 import {
   runDueGroupChats,
   archiveDueGroupChats,
@@ -91,6 +95,8 @@ export async function GET(req: NextRequest) {
   // group chats, and independently of everything above.
   const digests = await sendDailyDigests(now);
 
+  const calendars = await maintainCalendarWatches();
+
   // Retention last: it's the only destructive job here, and running it after
   // the messaging work means a slow Slack pass can't leave a sweep half done
   // if the platform cuts the invocation short. Whatever misses its turn is
@@ -104,6 +110,7 @@ export async function GET(req: NextRequest) {
     groupChats,
     archived,
     digests,
+    calendars,
     pruned,
   });
 }
