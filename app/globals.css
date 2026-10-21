@@ -45,10 +45,14 @@
      can't drag the whole page — and with it the sticky navbar — sideways.
      `clip` (not `hidden`) doesn't turn the body into a scroll container, so the
      viewport still scrolls vertically and `position: sticky` keeps working.
-     The y axis is deliberately left alone so the page keeps its rubber-band
-     bounce; the navbar is `fixed` (not `sticky`) so it stays put through it. */
+     The y axis is `contain`, not `none`: the page keeps its rubber-band
+     bounce (the navbar is `fixed`, not `sticky`, so it stays put through it),
+     but the BROWSER's own pull-to-refresh is off. Ours (PullToRefresh.tsx)
+     runs only on pages with live data; Chrome's would full-reload every page,
+     splash screen and all. */
   html {
     overscroll-behavior-x: none;
+    overscroll-behavior-y: contain;
   }
   body {
     overflow-x: clip;
