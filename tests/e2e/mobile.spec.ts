@@ -545,3 +545,43 @@ test("phone calendar hides the desktop-only Preview Mode button", async ({
   // wrapper is `hidden md:block`) but never shown.
   await expect(page.getByRole("button", { name: "Preview Mode" })).toBeHidden();
 });
+
+// Drag a finger straight down from the top of the page and report whether the
+// pull-to-refresh spinner came out, checked BEFORE letting go. CDP touch input,
+// so Chromium only — the WebKit project skips the tests that use it.
+async function pullDownShowsSpinner(page: import("@playwright/test").Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const x = 200;
+  const touch = (type: string, y: number) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+    });
+  await touch("touchStart", 260);
+  for (let y = 270; y <= 460; y += 15) await touch("touchMove", y);
+  const shown = await page.getByTestId("pull-indicator").count();
+  await touch("touchEnd", 460);
+  return shown > 0;
+}
+
+test("phone: pull-to-refresh only on pages with live data", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "CDP touch input is Chromium-only");
+  await login(page, "bob");
+
+  // The calendar's sets come straight from the db: pulling refreshes them.
+  await gotoReady(page, "/calendar");
+  expect(await pullDownShowsSpinner(page)).toBe(true);
+
+  // A profile has nothing a pull would update, so the gesture doesn't engage —
+  // and in particular doesn't full-reload the page through the splash screen.
+  await gotoReady(page, "/profile");
+  await page.evaluate(() => ((window as unknown as { __kept: boolean }).__kept = true));
+  expect(await pullDownShowsSpinner(page)).toBe(false);
+  await page.waitForTimeout(800);
+  expect(
+    await page.evaluate(() => (window as unknown as { __kept?: boolean }).__kept)
+  ).toBe(true);
+});

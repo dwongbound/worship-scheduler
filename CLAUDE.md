@@ -439,8 +439,10 @@ can't become the containing block for a `fixed` modal. Touches starting in a
 dialog or a sideways-scrolling box aren't ours),
 `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
 `app/layout.tsx` around `SwipePager`; a page registers its own refetch with
-`usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that
-doesn't falls back to `location.reload()`. A surface with its own drag gesture
+`usePullToRefresh(reload)` — calendar/set-manager/schedule/approvals do, the
+pages showing live db data. A page that doesn't register gets NO gesture at all
+(profile, org settings…): there's deliberately no `location.reload()` fallback,
+which flashed the full-app splash. A surface with its own drag gesture
 opts out with `data-no-pull`),
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
 Primitives in `components/common/`: `Badge Banner Button Card Checkbox
