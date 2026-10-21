@@ -25,6 +25,14 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   const setsTab = page.getByRole("link", { name: "My Sets", exact: true });
   await expect(setsTab).toHaveCount(1);
   await expect(setsTab).toBeVisible();
+
+  // The pill floats just 0.5rem (8px) above the bottom edge plus the safe
+  // area, which device emulation reports as 0.
+  const bar = page.locator("nav", { has: setsTab });
+  const box = await bar.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box && viewport && Math.round(viewport.height - (box.y + box.height))).toBe(8);
+
   await setsTab.click();
 
   await expect(page).toHaveURL(/\/set-manager/);
