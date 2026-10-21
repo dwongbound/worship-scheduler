@@ -585,3 +585,19 @@ test("phone: pull-to-refresh only on pages with live data", async ({
     await page.evaluate(() => (window as unknown as { __kept?: boolean }).__kept)
   ).toBe(true);
 });
+
+test("phone My Sets: a pending card's buttons share one height", async ({ page }) => {
+  // On a narrow phone "Request cover" wraps to two lines; Swap and Confirm
+  // must grow with it rather than sit shorter, centred beside it.
+  await login(page, "henry");
+  await page.goto("/set-manager");
+  const cover = page.getByRole("button", { name: "Request cover" }).first();
+  await expect(cover).toBeVisible();
+  const row = cover.locator("xpath=..");
+  const heights = await Promise.all(
+    ["Request cover", "Swap", "Confirm"].map(async (name) =>
+      Math.round((await row.getByRole("button", { name, exact: true }).boundingBox())!.height)
+    )
+  );
+  expect(new Set(heights).size).toBe(1);
+});
