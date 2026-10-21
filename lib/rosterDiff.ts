@@ -19,6 +19,7 @@ import { prisma } from "./prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "./setMd";
 import { describeRosterChanges, type RosterChange } from "./rosterChanges";
 import { notifyAssignmentChange, notifySetChange } from "./slack";
+import { syncSetsAfterResponse } from "./googleCalendar";
 import { roleLabel, type TeamRoleDef } from "./teamRoles";
 import { getTeamCatalog, getTeamCatalogs } from "./teamRoleStore";
 import type { AssignmentOps } from "./setDraft";
@@ -290,6 +291,7 @@ export async function rosterAftermath(p: PreparedRoster): Promise<void> {
     roleLabel(role, p.ownCatalog)
   );
   if (notice) await notifySetChange(p.setId, notice);
+  syncSetsAfterResponse(p.setId);
 
   // DMs stay per person: each is about one seat, and only the people affected
   // get one. The group chat may not exist (or may not be in its lead window),

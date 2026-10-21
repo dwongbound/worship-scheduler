@@ -44,6 +44,8 @@ const SLACK_CONNECT_MESSAGE = "slack-connect-result";
 export default function ProfilePage() {
   const { update } = useSession();
   const { me } = useMe();
+  // Whether any org I belong to has connected Google Calendar (set invites).
+  const calendarOrgs = me?.memberships.some((m) => m.orgGoogleCalendarConnected) ?? false;
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -295,6 +297,20 @@ export default function ProfilePage() {
             {!hasPassword && (
               <p className="mt-1 text-xs text-gray-500">
                 Managed by your Google account.
+              </p>
+            )}
+            {/* Set invites go to this address once one of my orgs has
+                connected Google Calendar, so say so where the address is
+                typed. Keyed off the SAVED email, not the draft. */}
+            {calendarOrgs && (
+              <p
+                className={`mt-1 text-xs ${
+                  me?.email ? "text-gray-500" : "text-indigo-700 dark:text-indigo-300"
+                }`}
+              >
+                {me?.email
+                  ? "Calendar invites for your sets go here."
+                  : "Add your email to get each set you're on as a calendar invite. Accepting it confirms you here."}
               </p>
             )}
           </div>

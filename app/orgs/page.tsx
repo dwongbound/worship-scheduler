@@ -4,7 +4,7 @@
 // per-org Slack workspace connection, which only an org admin can change.
 // Reached from the navbar org switcher's "Org settings" item. This replaces the
 // old cramped per-org settings modal that used to live in OrgSwitcher.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
@@ -54,6 +54,27 @@ const SPOTIFY_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }
   },
 };
 
+// The same, for /api/google-calendar/callback's ?gcal=<status>.
+const GCAL_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }> = {
+  connected: {
+    tone: "indigo",
+    text: "Google Calendar connected. Upcoming sets are being added now, with their rosters invited.",
+  },
+  denied: { tone: "amber", text: "Google authorization was cancelled, so nothing changed." },
+  expired: {
+    tone: "amber",
+    text: "That Google link had already been used or expired. Click Connect Google Calendar to start again.",
+  },
+  forbidden: { tone: "amber", text: "Only an admin of that org can connect its Google Calendar." },
+  error: {
+    tone: "amber",
+    text: "Google refused the connection. Make sure calendar access is ticked on the consent screen; the server log has Google's reason.",
+  },
+};
+
+// What GET /api/google-calendar/status says about one org (admins only).
+type GcalStatus = { configured: boolean; connected: boolean; email: string | null; missingEmail: string[] };
+
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
   const { update } = useSession();
@@ -64,8 +85,9 @@ export default function OrgSettingsPage() {
   const memberships = me?.memberships ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Add-an-org modal (same join-by-key flow as the navbar switcher).
-  // Outcome of a Spotify connect round-trip, read once from ?spotify= on mount.
-  const [spotifyNotice, setSpotifyNotice] =
+  // Outcome of a Spotify or Google Calendar connect round-trip, read once from
+  // ?spotify= / ?gcal= on mount.
+  const [connectNotice, setConnectNotice] =
     useState<{ tone: "indigo" | "amber"; text: string } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   // "Sync team members" — the org-wide email→Slack-ID sweep, which owns its own
@@ -89,12 +111,22 @@ export default function OrgSettingsPage() {
   const [keyError, setKeyError] = useState("");
   const [keyCopied, setKeyCopied] = useState(false);
 
+  // Google Calendar row's admin-only detail: the members who'd get no invite.
+  const [gcal, setGcal] = useState<GcalStatus | null>(null);
+
   // /api/spotify/callback sends the admin back here with ?spotify=<status>.
   // Show what happened, then strip the param so a reload doesn't re-announce it.
   useEffect(() => {
-    const status = new URLSearchParams(window.location.search).get("spotify");
+    const params = new URLSearchParams(window.location.search);
+    const spotify = params.get("spotify");
+    const gcal = params.get("gcal");
+    const status = spotify ?? gcal;
     if (!status) return;
-    setSpotifyNotice(SPOTIFY_NOTICES[status] ?? SPOTIFY_NOTICES.error);
+    setConnectNotice(
+      spotify
+        ? SPOTIFY_NOTICES[status] ?? SPOTIFY_NOTICES.error
+        : GCAL_NOTICES[status] ?? GCAL_NOTICES.error
+    );
     window.history.replaceState(null, "", window.location.pathname);
     if (status === "connected") refreshMe();
   }, [refreshMe]);
@@ -144,6 +176,22 @@ export default function OrgSettingsPage() {
       cancelled = true;
     };
   }, [selectedId, orgs]);
+
+  // The Google Calendar row's detail. Refetched when the connection flips, so
+  // the no-email list appears the moment the org connects.
+  const gcalConnected =
+    memberships?.find((m) => m.orgId === selectedId)?.orgGoogleCalendarConnected ?? false;
+  const loadGcal = useCallback(() => {
+    setGcal(null);
+    if (!selectedId || !orgs?.find((o) => o.id === selectedId)?.isAdmin) return;
+    fetch(`/api/google-calendar/status?orgId=${selectedId}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: GcalStatus | null) => setGcal(data))
+      .catch(() => {});
+  }, [selectedId, orgs]);
+  useEffect(() => {
+    loadGcal();
+  }, [loadGcal, gcalConnected]);
 
   // Save the digest window. Optimistic: the select moves immediately and rolls
   // back only if the API rejects it, so the control never feels laggy.
@@ -231,9 +279,9 @@ export default function OrgSettingsPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold">Org settings</h1>
 
-      {spotifyNotice && (
-        <Banner tone={spotifyNotice.tone} onDismiss={() => setSpotifyNotice(null)}>
-          {spotifyNotice.text}
+      {connectNotice && (
+        <Banner tone={connectNotice.tone} onDismiss={() => setConnectNotice(null)}>
+          {connectNotice.text}
         </Banner>
       )}
 
@@ -409,6 +457,73 @@ export default function OrgSettingsPage() {
                     </p>
                   )}
                 </div>
+
+                {/* Google Calendar — the shared church account whose calendar
+                    holds an event per set, roster invited. Accepting an invite
+                    confirms that seat (lib/googleCalendar.ts). Same connect /
+                    disconnect shape as Slack. Hidden until the deployment
+                    switches it on (GOOGLE_CALENDAR_ENABLED) — or, for
+                    members, until their org has actually connected. */}
+                {(slack?.orgGoogleCalendarConnected || gcal?.configured) && (
+                <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium">Google Calendar</p>
+                    <InfoTooltip text="One shared church Google account owns a calendar of every set. Each set's event invites its roster by email, with the same roles and setlist the Slack messages carry, and follows every change: roster edits, approved swaps and covers, setlist updates, a deleted set. Accepting the invite confirms you for that set here; declining changes nothing. Connect the account the whole team should share, not your personal one." />
+                  </div>
+                  <p className="text-sm text-gray-500">
+                    {slack?.orgGoogleCalendarConnected
+                      ? slack.googleCalEmail
+                        ? `Connected as ${slack.googleCalEmail} ✓`
+                        : "Connected ✓"
+                      : "Not connected. Sets aren't on a calendar and nobody gets invites yet."}
+                  </p>
+
+                  {selected.isAdmin && slack?.orgGoogleCalendarConnected && gcal && gcal.missingEmail.length > 0 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                      <p className="font-medium">
+                        {gcal.missingEmail.length === 1
+                          ? "1 member has no email, so they get no invites"
+                          : `${gcal.missingEmail.length} members have no email, so they get no invites`}
+                      </p>
+                      <p className="mt-1">{gcal.missingEmail.join(" · ")}</p>
+                      <p className="mt-1 text-xs">They can add one on their Profile page.</p>
+                    </div>
+                  )}
+
+                  {selected.isAdmin ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <Button
+                        onClick={() => {
+                          window.location.href = `/api/google-calendar/connect?orgId=${selected.id}`;
+                        }}
+                      >
+                        {slack?.orgGoogleCalendarConnected
+                          ? "Reconnect Google Calendar"
+                          : "Connect Google Calendar"}
+                      </Button>
+                      {slack?.orgGoogleCalendarConnected && (
+                        <Button
+                          variant="dangerOutline"
+                          className="ml-auto"
+                          onClick={async () => {
+                            await fetch(
+                              `/api/google-calendar/connect?orgId=${selected.id}`,
+                              { method: "DELETE" }
+                            );
+                            await refreshMe();
+                          }}
+                        >
+                          Disconnect
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="pt-1 text-xs text-gray-400">
+                      Only an admin of this org can change its Google Calendar connection.
+                    </p>
+                  )}
+                </div>
+                )}
 
                 {/* Daily digest window — how far ahead the morning Slack DM
                     looks when it counts what still needs attention. The digest

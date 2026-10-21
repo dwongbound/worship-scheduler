@@ -79,7 +79,9 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   never), the lead window has opened, a channel exists, and the set is still
   upcoming.
 - **Set** — `startsAt`+`durationMinutes`, optional `label`/`notes`, required
-  `orgId` (tenant anchor even when teamId is null), `teamId`,
+  `orgId` (tenant anchor even when teamId is null), `teamId`, `googleEventId`
+  (its event on the org's Google Calendar; `Org.googleCal*` holds the
+  connection),
   `slotCapacities: Json?` (per-set team-shape override; null = global default).
 - **Assignment** — one User in one `role` (a TeamRole.key **string**, not an
   enum) on one Set; a user may fill several roles on a set.
@@ -161,6 +163,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
+- Google Calendar: `google-calendar/connect` (GET → consent, DELETE →
+  disconnect; org admin), `/callback`, `/status` (admin: connected account +
+  members with no email), `/webhook` (Google's push channel — public, checked
+  by a per-org HMAC token, reads changes AFTER responding).
 - Rules: `orgs/[id]/rules` (org admin) — GET the list + dropdown options (or,
   with `?forSet=`, what one set's Auto schedule needs); PUT replaces the whole
   ordered list, refusing a contradiction with `{ error, index }`.
@@ -360,6 +366,19 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   (`format.ts` only, so far). Integration-specific UI — icons and the like —
   belongs here too. A new integration = a new folder + one branch in
   `orgIntegration.ts`.
+- `googleCalendar.ts` — the per-org Google Calendar integration (README
+  "Google Calendar"): one shared church account, one app-made calendar
+  (`calendar.app.created` scope), an event per upcoming set with the roster
+  invited. `syncSetCalendar(setId)` is idempotent (create or patch from the
+  db); routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
+  roster, swap-approval and setlist change, and DELETE reads
+  `calendarEventOf` before the row goes. Write-back: a watch channel pings
+  `/api/google-calendar/webhook`, the stored sync token reads what changed, and
+  an ACCEPTED invite confirms that person's PENDING seats (a No changes
+  nothing). The daily cron renews channels (`maintainCalendarWatches`). A seat
+  mid-handoff stays on the old owner's invite until approved. Never throws.
+  The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
+  `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
 - `pendingHandoff.ts` — who a seat mid-handoff STILL belongs to (cover-take →
   `Assignment.pendingCoverFromUserId`; accepted swap → the SwapProposal). Feeds
   `pendingFromUser` on the wire and the MD rules, so a pending cover can't
