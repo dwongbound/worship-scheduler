@@ -172,7 +172,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   `admin/sets/[id]/roster` (the WHOLE roster diff — removals, swaps and
   additions — in one PATCH, applied as one transaction with one grouped Slack
   notice; it replaced the per-seat `admin/assignments` routes, which fired a
-  round trip and a Slack message per person), `admin/templates(+/[id])`,
+  round trip and a Slack message per person), `admin/sets/roster` (PUT: MANY
+  sets' diffs + optional `mdUserId` each, one org, every set validated before
+  ONE transaction — the calendar Preview Mode's Save; an MD the new roster
+  can't hold comes back in `mdRejected`. Both share `lib/rosterDiff.ts`
+  `prepareRosterDiff`/`rosterAftermath`), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`,
   `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
   their plan payloads, `[id]` GET is what carries one back).
@@ -269,6 +273,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   other) + `hasSeenTour`/`markTourSeen`. Every access is wrapped — private mode
   THROWS rather than returning null — and an unreadable store reports "seen", so
   a browser that can never record the flag isn't nagged every visit. ✅tested
+- `calendarPreview.ts` — the calendar's Preview Mode: set types, `toStagedSet`
+  (every real seat opens LOCKED, so Auto schedule only fills gaps until the
+  admin unlocks), `previewSaves` (the save diff; re-proposed seats are matched
+  back to their rows — same person+role = no change, same role = reassignment —
+  so a Clear all + Auto schedule doesn't delete and re-add people), and
+  `describePreviewSaves` (the batch confirm's sentence). ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
   (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.
@@ -383,7 +393,10 @@ arrow, empty on every open, its log below holding what's been written; there's
 no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFields`,
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
 `GenerateModal` (the "Generate New Schedule" options — window, which recurring sets, and an
-optional per-set-type color) → `StagedScheduleModal` (the preview; a set type's
+optional per-set-type color) → `StagedScheduleModal` (the preview — and, as
+`mode="preview"`, the calendar's Preview Mode too, which has the same plan-wide
+Auto schedule · Clear all people · Lock all/Unlock all row and confirms the
+batch before Save; a set type's
 color tints its cards at 10%, matched via `StagedSet.templateId`; every slot row
 leads with a ✕ that drops THAT slot from THAT set — capacity − 1 plus its
 occupant, written into `StagedSet.slotCapacities`, which both apply and the
