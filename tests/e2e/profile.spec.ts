@@ -136,3 +136,37 @@ test("editing a profile field fires one write and no session/org refetch", async
   await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
 });
+
+test("with Google Calendar connected, a member with no email is asked for one on their profile", async ({
+  page,
+}) => {
+  // No test org has a real Google account, so mark Carol's orgs connected on
+  // the way out of GET /api/me — that flag is all /profile reads.
+  await page.route("**/api/me", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const m of body.memberships ?? []) m.orgGoogleCalendarConnected = true;
+    await route.fulfill({ response: res, json: body });
+  });
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  const banner = page.getByTestId("profile-calendar-banner");
+  // Seeded users have no email, so the banner shows until one is saved.
+  if (!original) await expect(banner).toContainText("calendar invite");
+
+  await email.fill("carol.cal@example.com");
+  await email.blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await expect(banner).toHaveCount(0);
+  await expect(page.getByText("Calendar invites for your sets go here.")).toBeVisible();
+
+  // Clearing it brings the banner back; this also restores the seed state.
+  await email.fill(original);
+  await email.blur();
+  if (!original) await expect(banner).toBeVisible();
+});

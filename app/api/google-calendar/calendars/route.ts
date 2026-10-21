@@ -20,7 +20,9 @@ import {
 // Moving calendars re-creates one event per upcoming set.
 export const maxDuration = 300;
 
-async function gate(req: NextRequest) {
+async function gate(
+  req: NextRequest
+): Promise<{ error: NextResponse } | { orgId: string; selectedId: string | null }> {
   const orgId = req.nextUrl.searchParams.get("orgId");
   if (!orgId) {
     return { error: NextResponse.json({ error: "orgId required" }, { status: 400 }) };

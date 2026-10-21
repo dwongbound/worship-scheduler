@@ -165,7 +165,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Google Calendar: `google-calendar/connect` (GET → consent, DELETE →
   disconnect; org admin), `/callback`, `/status` (admin: connected account,
-  chosen calendar's NAME, who connected, members with no email), `/calendars`
+  chosen calendar's NAME, who connected; members with no email get an
+  add-your-email Banner on /profile instead), `/calendars`
   (GET list / PUT choose — ONLY the admin who connected,
   `Org.googleCalConnectedById`; everyone else 403s, since the list is their
   account's), `/webhook` (Google's push channel — public, checked

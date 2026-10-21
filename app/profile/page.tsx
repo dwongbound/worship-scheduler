@@ -49,6 +49,9 @@ export default function ProfilePage() {
   const [loaded, setLoaded] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // The email as last SAVED (not the draft being typed): the calendar banner
+  // keys off it, so it clears the moment a save lands without a /api/me refetch.
+  const [savedEmail, setSavedEmail] = useState("");
   const [memberships, setMemberships] = useState<Membership[]>([]);
   // Teams I'm on, each with the roles I play there (roles are per-team now).
   const [teams, setTeams] = useState<ApiTeamRole[]>([]);
@@ -100,6 +103,7 @@ export default function ProfilePage() {
     if (!me) return;
     setName(me.name);
     setEmail(me.email ?? "");
+    setSavedEmail(me.email ?? "");
     setMemberships(me.memberships ?? []);
     setTeams(me.teams ?? []);
     setHasPassword(me.hasPassword);
@@ -190,6 +194,7 @@ export default function ProfilePage() {
           string,
         ];
         savedKeyRef.current = key;
+        setSavedEmail(payload.email ?? "");
         setSaved(true);
         if (savedTimer.current) clearTimeout(savedTimer.current);
         savedTimer.current = setTimeout(() => setSaved(false), 2000);
@@ -252,6 +257,17 @@ export default function ProfilePage() {
   return (
     <div className="mx-auto max-w-lg space-y-6">
       <h1 className="text-2xl font-bold">Edit Profile</h1>
+      {/* Set invites go out by email once one of my orgs has connected Google
+          Calendar, so someone without one is told here, on their own page,
+          rather than listed for admins in Org settings. */}
+      {calendarOrgs && !savedEmail && (
+        <div data-testid="profile-calendar-banner">
+          <Banner inset tone="amber">
+            Add your email below to get each set you&rsquo;re on as a calendar
+            invite. Accepting it confirms you here.
+          </Banner>
+        </div>
+      )}
       <Card>
         {/* No Save button: changes persist as you make them — roles save on
             click, name/email on blur. Enter in a text field saves too. */}
@@ -299,18 +315,11 @@ export default function ProfilePage() {
                 Managed by your Google account.
               </p>
             )}
-            {/* Set invites go to this address once one of my orgs has
-                connected Google Calendar, so say so where the address is
-                typed. Keyed off the SAVED email, not the draft. */}
-            {calendarOrgs && (
-              <p
-                className={`mt-1 text-xs ${
-                  me?.email ? "text-gray-500" : "text-indigo-700 dark:text-indigo-300"
-                }`}
-              >
-                {me?.email
-                  ? "Calendar invites for your sets go here."
-                  : "Add your email to get each set you're on as a calendar invite. Accepting it confirms you here."}
+            {/* With no email the banner above says why to add one; once
+                there is one, say what it's used for. */}
+            {calendarOrgs && savedEmail && (
+              <p className="mt-1 text-xs text-gray-500">
+                Calendar invites for your sets go here.
               </p>
             )}
           </div>

@@ -1,9 +1,8 @@
 // GET /api/google-calendar/status?orgId= — for Org settings' Google Calendar
 // row (org admins only): which account is connected, which calendar holds the
 // sets (its NAME only — the account's other calendars are for the admin who
-// connected, via /calendars), who connected it, and which members have no
-// email on file, so get no invites. The connected flag alone also rides on
-// /api/me; this adds the admin-only name list.
+// connected, via /calendars) and who connected it. The connected flag alone
+// also rides on /api/me, which is what /profile's add-your-email banner reads.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -32,11 +31,6 @@ export async function GET(req: NextRequest) {
         select: { name: true },
       })
     : null;
-  const missing = await prisma.orgMembership.findMany({
-    where: { orgId, user: { email: null } },
-    select: { user: { select: { name: true } } },
-    orderBy: { user: { name: "asc" } },
-  });
   return NextResponse.json({
     configured: isGoogleCalendarAppConfigured(),
     connected: !!org?.googleCalRefreshToken,
@@ -45,6 +39,5 @@ export async function GET(req: NextRequest) {
     connectedByName: connectedBy?.name ?? null,
     connectedByMe:
       !!org?.googleCalConnectedById && org.googleCalConnectedById === admin.user.id,
-    missingEmail: missing.map((m) => m.user.name),
   });
 }
