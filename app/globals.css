@@ -13,6 +13,19 @@
     cursor: pointer;
   }
 
+  /* A control's label isn't content: long-pressing a button or a nav tab
+     shouldn't select its text or pop iOS's Copy/Share callout. Ordinary text
+     (names, notes, links inside prose) stays selectable. (The gray tap-flash
+     is already off — Tailwind's preflight sets -webkit-tap-highlight-color.) */
+  button,
+  [role="button"],
+  [role="tab"],
+  nav a {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
   /* Tell the browser which scheme to paint native controls in (date pickers,
      the calendar/spinner icons, scrollbars) so they match light/dark. The
      `.dark` class is toggled on <html> by the theme script. */
@@ -32,10 +45,14 @@
      can't drag the whole page — and with it the sticky navbar — sideways.
      `clip` (not `hidden`) doesn't turn the body into a scroll container, so the
      viewport still scrolls vertically and `position: sticky` keeps working.
-     The y axis is deliberately left alone so the page keeps its rubber-band
-     bounce; the navbar is `fixed` (not `sticky`) so it stays put through it. */
+     The y axis is `contain`, not `none`: the page keeps its rubber-band
+     bounce (the navbar is `fixed`, not `sticky`, so it stays put through it),
+     but the BROWSER's own pull-to-refresh is off. Ours (PullToRefresh.tsx)
+     runs only on pages with live data; Chrome's would full-reload every page,
+     splash screen and all. */
   html {
     overscroll-behavior-x: none;
+    overscroll-behavior-y: contain;
   }
   body {
     overflow-x: clip;
@@ -85,6 +102,23 @@ html.dark .scrollbar-visible::-webkit-scrollbar-thumb {
   background-color: #4b5563; /* gray-600 */
 }
 
+/* Press feedback for touch. With the tap highlight off (Tailwind preflight) and hover
+   styles gated to mouse devices by Tailwind, a tap otherwise shows NOTHING
+   until the next screen arrives — which reads as lag. Every tappable thing
+   dims the instant a finger lands and comes back on release, the way iOS
+   controls do. In @layer base so a component's own `active:` style (Button's
+   press-in, for one) wins over this generic one. Pointer-scoped: a mouse has
+   hover feedback already and doesn't need the dim. */
+@layer base {
+  @media (pointer: coarse) {
+    button:not(:disabled):active,
+    [role="button"]:not([aria-disabled="true"]):active,
+    a[href]:active {
+      opacity: 0.6;
+    }
+  }
+}
+
 /* iOS zooms the whole page in when you focus a field whose text is under 16px,
    and it never zooms back out — you're left pinching your way back. The fix is
    simply never to ship a focusable field below 16px on a touch screen.
@@ -103,5 +137,39 @@ html.dark .scrollbar-visible::-webkit-scrollbar-thumb {
   select,
   [contenteditable]:not([contenteditable="false"]) {
     font-size: 16px;
+  }
+}
+
+/* A phone held sideways has its notch on one side. With viewport-fit=cover
+   (app/layout.tsx) the page reaches under it, so the page content is padded in
+   past it. 0 on every screen without a cut-out. */
+body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Modal footers on phones (components/common/Modal.tsx tags them
+   `modal-footer`): the buttons share the row in equal widths at Apple's 44px
+   touch height, instead of sitting small and right-aligned in the panel's
+   bottom corner — where an iPhone's screen curves away. Only a footer's own
+   buttons and the buttons of a plain wrapper row directly inside it are
+   touched; anything nested deeper (the review workspace's action bar) keeps
+   its own layout. A wrapper holding no button (a step indicator) is left as
+   it is. Unlayered for the same reason as the rule above. */
+@media (max-width: 639px) {
+  .modal-footer > button,
+  .modal-footer > div > button {
+    flex: 1 1 0;
+    min-height: 44px;
+  }
+  .modal-footer > div:has(> button) {
+    flex: 1 1 auto;
+  }
+  /* A destructive button (Button marks it `data-destructive`) keeps the full
+     44px height but only its label's width: the buttons that keep your work
+     share the rest of the row, so Delete is never the widest target there. */
+  .modal-footer > button[data-destructive],
+  .modal-footer > div > button[data-destructive] {
+    flex: 0 0 auto;
   }
 }

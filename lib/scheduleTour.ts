@@ -94,8 +94,10 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       art: "lock",
       title: "Locking keeps your picks",
       body: [
-        "Anyone you choose by hand is locked. Re-run auto schedule and they stay exactly where you put them — only empty and auto-filled slots get reshuffled.",
-        "To release one, set its slot back to “None” or click the padlock.",
+        preview
+          ? "Everyone already on the calendar opens locked, and so does anyone you choose by hand. Auto schedule leaves locked seats exactly where they are and fills only the rest."
+          : "Anyone you choose by hand is locked. Re-run auto schedule and they stay exactly where you put them — only empty and auto-filled slots get reshuffled.",
+        "To release one, set its slot back to “None” or click the padlock. Lock all and Unlock all do the whole plan at once.",
       ],
     },
     {
@@ -132,8 +134,8 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
           art: "commit",
           title: "Saving your changes",
           body: [
-            "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone.",
-            "Cancel backs out. If you have made changes it asks first, and lists what it is about to throw away.",
+            "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone. It shows how many changes you are about to save first, then saves them all together.",
+            "Close backs out. If you have made changes it asks first, and lists what it is about to throw away.",
           ],
         }
       : {

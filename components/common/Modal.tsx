@@ -48,10 +48,14 @@ interface ModalProps {
 // workspace: no width cap at all, so it stretches to the viewport minus the
 // thin margin below — just enough for the backdrop to still read as a modal.
 const SIZE_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
-  lg: "max-w-lg max-h-[85vh]",
-  wide: "max-w-2xl max-h-[85vh]",
-  xl: "max-w-3xl max-h-[88vh]",
-  full: "max-w-none h-[96vh]",
+  // dvh, not vh: on iOS Safari `vh` is the height with the toolbar HIDDEN, so
+  // while it shows, a vh-sized panel runs under it and its footer buttons end
+  // up against the bottom edge. `full` fills the overlay's padded box, which
+  // already keeps clear of the screen edges and the safe area.
+  lg: "max-w-lg max-h-[85dvh]",
+  wide: "max-w-2xl max-h-[85dvh]",
+  xl: "max-w-3xl max-h-[88dvh]",
+  full: "max-w-none h-full",
 };
 
 // useLayoutEffect warns when React renders this on the server; fall back to
@@ -93,11 +97,20 @@ function lockBodyScroll(): () => void {
 
 // Gap between the panel and the viewport edge. "full" wants nearly all of the
 // screen, so its margin is a hairline compared to a centered dialog's.
+// Every side also stays out of the device's safe area (notch, home indicator,
+// the landscape cut-outs); env() is 0 where there is none, leaving the plain
+// padding. Spelled out in full rather than built from a template, because
+// Tailwind only generates classes it can read literally in the source.
+const SAFE_1REM =
+  "pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] " +
+  "pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]";
 const PADDING_CLASSES: Record<NonNullable<ModalProps["size"]>, string> = {
-  lg: "p-4",
-  wide: "p-4",
-  xl: "p-4",
-  full: "p-2 sm:p-3",
+  lg: SAFE_1REM,
+  wide: SAFE_1REM,
+  xl: SAFE_1REM,
+  full:
+    "pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] " +
+    "pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]",
 };
 
 export default function Modal({
@@ -170,9 +183,10 @@ export default function Modal({
     <div
       className={`fixed inset-0 z-50 flex items-center justify-center ${PADDING_CLASSES[size]}`}
     >
-      {/* backdrop */}
+      {/* backdrop. touch-none: a swipe on the dimmed area would otherwise
+          scroll the page underneath on iOS, which ignores the body lock. */}
       <div
-        className="absolute inset-0 bg-black/50"
+        className="absolute inset-0 touch-none bg-black/50"
         onClick={onClose}
         aria-hidden
       />
@@ -204,12 +218,32 @@ export default function Modal({
               panel, never the controls. */}
           <div className="flex shrink-0 items-center gap-3">
             {headerActions}
+            {/* A drawn X rather than the "✕" glyph: the glyph rendered as a
+                hairline in Figtree, and its tiny box was hard to hit on a
+                phone. 44px square target on phones (40px from sm up); the glyph
+                itself stays 18px at a 2.25 stroke, about the weight of the title,
+                so the bigger target doesn't read as a bigger button. The
+                negative TOP margin lets the bigger box reach up into the
+                header's padding instead of pushing the header taller — top
+                only, because a box that also hangs out the bottom makes this
+                row overflow (and look scrollable to anything measuring it). */}
             <button
               onClick={onClose}
-              aria-label="Close"
-              className="rounded p-1 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
+              aria-label="Close dialog"
+              className="-mr-2 -mt-2.5 flex h-11 w-11 items-center justify-center sm:-mt-2 sm:h-10 sm:w-10 rounded-lg text-gray-600 hover:bg-gray-100 hover:text-gray-900 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
             >
-              ✕
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={2.25}
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <path d="M6 6l12 12M18 6L6 18" />
+              </svg>
             </button>
           </div>
         </div>
@@ -219,12 +253,19 @@ export default function Modal({
             below the title is unchanged at 12px): this is a scroll container,
             so it clips at its own edge, and with no top padding a first child's
             focus ring — a textarea's, say — lost its top edge. */}
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-1">
+        {/* overscroll-contain: reaching the end of the body stops there instead
+            of handing the swipe to the page behind (the body-overflow lock
+            below isn't enough on iOS Safari, which scrolls it anyway). */}
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-1">
           {children}
         </div>
 
         {footer && (
-          <div className="flex items-center justify-end gap-2 border-t border-gray-200 px-6 py-3 dark:border-gray-700">
+          // `modal-footer` is what globals.css hooks for the phone layout:
+          // its buttons share the row in equal widths at a 44px height, so
+          // none is left alone in the panel's bottom-right corner — which on an
+          // iPhone is where the screen itself curves away.
+          <div className="modal-footer flex items-center justify-end gap-2 border-t border-gray-200 px-4 pb-4 pt-3 dark:border-gray-700 sm:px-6 sm:py-3">
             {typeof footer === "function" ? footer({ atEnd }) : footer}
           </div>
         )}

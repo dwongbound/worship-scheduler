@@ -79,7 +79,9 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   never), the lead window has opened, a channel exists, and the set is still
   upcoming.
 - **Set** — `startsAt`+`durationMinutes`, optional `label`/`notes`, required
-  `orgId` (tenant anchor even when teamId is null), `teamId`,
+  `orgId` (tenant anchor even when teamId is null), `teamId`, `googleEventId`
+  (its event on the org's Google Calendar; `Org.googleCal*` holds the
+  connection),
   `slotCapacities: Json?` (per-set team-shape override; null = global default).
 - **Assignment** — one User in one `role` (a TeamRole.key **string**, not an
   enum) on one Set; a user may fill several roles on a set.
@@ -101,6 +103,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
   replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
   ordinary counted role.
+- **SchedulingRule** — one of an org's rules for Auto schedule (ORG-wide,
+  never per team): `tier` REQUIRED|PREFERENCE, `enabled`, `position` (list
+  order = the preference ranking), `params: Json` (the kind + its ids; see
+  `lib/schedulingRules.ts`). Rules naming something since deleted are dropped
+  on load. Edited in Org settings → Scheduling rules (`components/OrgRules.tsx`).
 - **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute, plus an
   optional startDate/endDate bounding the span it repeats over — the /schedule
   form's Repeats: Forever · N weeks · Until a date · Time Range),
@@ -156,6 +163,17 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
+- Google Calendar: `google-calendar/connect` (GET → consent, DELETE →
+  disconnect; org admin), `/callback`, `/status` (admin: connected account,
+  chosen calendar's NAME, who connected; members with no email get an
+  add-your-email Banner on /profile instead), `/calendars`
+  (GET list / PUT choose — ONLY the admin who connected,
+  `Org.googleCalConnectedById`; everyone else 403s, since the list is their
+  account's), `/webhook` (Google's push channel — public, checked
+  by a per-org HMAC token, reads changes AFTER responding).
+- Rules: `orgs/[id]/rules` (org admin) — GET the list + dropdown options (or,
+  with `?forSet=`, what one set's Auto schedule needs); PUT replaces the whole
+  ordered list, refusing a contradiction with `{ error, index }`.
 - Availability: `availability`, `availability/[id]`, `availability/complete`,
   `availability-request`.
 - Export: `export`, `export/[id]` (ICS).
@@ -164,7 +182,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   `admin/sets/[id]/roster` (the WHOLE roster diff — removals, swaps and
   additions — in one PATCH, applied as one transaction with one grouped Slack
   notice; it replaced the per-seat `admin/assignments` routes, which fired a
-  round trip and a Slack message per person), `admin/templates(+/[id])`,
+  round trip and a Slack message per person), `admin/sets/roster` (PUT: MANY
+  sets' diffs + optional `mdUserId` each, one org, every set validated before
+  ONE transaction — the calendar Preview Mode's Save; an MD the new roster
+  can't hold comes back in `mdRejected`. Both share `lib/rosterDiff.ts`
+  `prepareRosterDiff`/`rosterAftermath`), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`,
   `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
   their plan payloads, `[id]` GET is what carries one back).
@@ -190,6 +212,19 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
   `shortDateTimeCompact` ("8/20/26 10PM") is THE date every chat message names
   a set by — short enough that a swap can name two sets in one sentence.
+- `schedulingRules.ts` — the Rules vocabulary: five kinds (ONLY_IF_NEEDED,
+  PREFER, SAME_PLAYER weekly-by-set-type or two specific sets, TOGETHER
+  always/never, LIMIT per Mon–Sun week or month), `parseRuleParams` /
+  `validateRules` (ids checked against the org), `findContradiction` (between
+  REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
+  `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and
+  `templateIdOf` (sets don't store their template, so it's recognised by
+  label + team + weekday + time). `buildSchedule`'s 7th arg `ScheduleOptions`
+  feeds them in: REQUIRED never bends (a slot is left open instead — a held
+  SAME_PLAYER seat is the `HOLD` case), PREFERENCES rank lexicographically
+  above rotation. All three callers pass them; the prisma side is
+  `schedulingRuleStore.ts` (`ruleContext` = nearby sets + a month of bookings
+  either side). ✅tested
 - `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops
   inactive memberships, so the auto-fill can't propose them) +
   `inactiveMemberIds()` (who the swap picker flags). ✅tested
@@ -248,6 +283,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   other) + `hasSeenTour`/`markTourSeen`. Every access is wrapped — private mode
   THROWS rather than returning null — and an unreadable store reports "seen", so
   a browser that can never record the flag isn't nagged every visit. ✅tested
+- `calendarPreview.ts` — the calendar's Preview Mode: set types, `toStagedSet`
+  (every real seat opens LOCKED, so Auto schedule only fills gaps until the
+  admin unlocks), `previewSaves` (the save diff; re-proposed seats are matched
+  back to their rows — same person+role = no change, same role = reassignment —
+  so a Clear all + Auto schedule doesn't delete and re-add people), and
+  `describePreviewSaves` (the batch confirm's sentence). ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
   (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.
@@ -329,6 +370,22 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   (`format.ts` only, so far). Integration-specific UI — icons and the like —
   belongs here too. A new integration = a new folder + one branch in
   `orgIntegration.ts`.
+- `googleCalendar.ts` — the per-org Google Calendar integration (README
+  "Google Calendar"): one connected account per org, an app-made calendar by
+  default or one the connecting admin picks (`listCalendarsFor`/`selectCalendar`
+  — a move cancels the old events and re-creates them), an event per upcoming
+  set with the roster invited. On whenever `GOOGLE_CLIENT_ID`/`_SECRET` are
+  set — there's deliberately NO enable flag; the UI is an admin-only row in Org
+  settings (`components/OrgGoogleCalendar.tsx`). `syncSetCalendar(setId)` is idempotent (create or patch from the
+  db); routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
+  roster, swap-approval and setlist change, and DELETE reads
+  `calendarEventOf` before the row goes. Write-back: a watch channel pings
+  `/api/google-calendar/webhook`, the stored sync token reads what changed, and
+  an ACCEPTED invite confirms that person's PENDING seats (a No changes
+  nothing). The daily cron renews channels (`maintainCalendarWatches`). A seat
+  mid-handoff stays on the old owner's invite until approved. Never throws.
+  The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
+  `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
 - `pendingHandoff.ts` — who a seat mid-handoff STILL belongs to (cover-take →
   `Assignment.pendingCoverFromUserId`; accepted swap → the SwapProposal). Feeds
   `pendingFromUser` on the wire and the MD rules, so a pending cover can't
@@ -354,7 +411,7 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 ## Components
 
 Feature: `CalendarMonth`, `CreateSetModal`, `SetDetailModal` (edits are STAGED:
-everything writes to a local copy, a sticky footer has Delete · Cancel · Save,
+everything writes to a local copy, a sticky footer has Delete · Close · Save,
 Save COMMITS AND CLOSES (a failed save keeps the modal + edits up), and any
 exit with changes hits a confirm that lists them — Delete-set, Slack messaging
 and sending a note act immediately; the Notes box is a composer with a send
@@ -362,7 +419,10 @@ arrow, empty on every open, its log below holding what's been written; there's
 no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFields`,
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
 `GenerateModal` (the "Generate New Schedule" options — window, which recurring sets, and an
-optional per-set-type color) → `StagedScheduleModal` (the preview; a set type's
+optional per-set-type color) → `StagedScheduleModal` (the preview — and, as
+`mode="preview"`, the calendar's Preview Mode too, which has the same plan-wide
+Auto schedule · Clear all people · Lock all/Unlock all row and confirms the
+batch before Save; a set type's
 color tints its cards at 10%, matched via `StagedSet.templateId`; every slot row
 leads with a ✕ that drops THAT slot from THAT set — capacity − 1 plus its
 occupant, written into `StagedSet.slotCapacities`, which both apply and the
@@ -405,8 +465,10 @@ can't become the containing block for a `fixed` modal. Touches starting in a
 dialog or a sideways-scrolling box aren't ours),
 `Logo`, `PullToRefresh` (phone pull-down-to-refresh, mounted in
 `app/layout.tsx` around `SwipePager`; a page registers its own refetch with
-`usePullToRefresh(reload)` — calendar/set-manager/schedule do — and anything that
-doesn't falls back to `location.reload()`. A surface with its own drag gesture
+`usePullToRefresh(reload)` — calendar/set-manager/schedule/approvals do, the
+pages showing live db data. A page that doesn't register gets NO gesture at all
+(profile, org settings…): there's deliberately no `location.reload()` fallback,
+which flashed the full-app splash. A surface with its own drag gesture
 opts out with `data-no-pull`),
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
 Primitives in `components/common/`: `Badge Banner Button Card Checkbox
@@ -425,7 +487,11 @@ the majority rule and the rate limit live in `lib/calendarScroll.ts` ✅tested;
 `range` mode highlights start→hovered-day live; `Badge` takes `size="sm"` for a
 pill that rides inside another control; `Button` takes `loading` — dots ON the
 button, label hidden but still holding its width, so a pressed button can't
-resize mid-click (it implies `disabled`); `Checkbox` takes `rowTarget` to make
+resize mid-click (it implies `disabled`); on phones a modal footer keeps a destructive `Button`
+(`danger`/`dangerOutline`, tagged `data-destructive`) at full height but only
+its label's width while the other buttons fill the row, so it's never the
+widest target; dismiss buttons say **Close**, never "Cancel" (that word is
+kept for undoing a request, e.g. "Cancel swap"); `Checkbox` takes `rowTarget` to make
 the whole row a real `<label>` (off by default: most rows carry chips and text
 you may want to click without flipping a tick); `Input`/`Select` set their own
 `text-base sm:text-sm` — 16px on phones is what stops iOS zooming into a
@@ -461,6 +527,13 @@ needs across DST — move one and `tests/unit/digest.test.ts` pins the other.
   `<input>`/`<textarea>`; the backstop is the `@media (pointer: coarse)` rule
   at the bottom of `app/globals.css`, deliberately UNLAYERED so it beats
   Tailwind's utilities layer.
+- **Touch feel lives in `app/globals.css`, not per component.** Buttons, tabs
+  and nav links can't be long-press-selected (`user-select`/`touch-callout`),
+  and on a coarse pointer anything tappable dims while pressed; `Button` has
+  its own `active:` press-in, which wins. Tailwind's preflight already kills the
+  tap-highlight flash. The status-bar colour is `lib/theme.ts THEME_COLORS`
+  (= the nav's colours), retargeted by `applyTheme` when the in-app theme is
+  forced. Inner popup lists and the Modal body use `overscroll-contain`.
 - Recurring times interpreted in server `TZ` (default `America/Los_Angeles`);
   keep app + db containers on the same TZ.
 - Playwright `tests/e2e/global-setup.ts` force-resets + reseeds the test db each run.

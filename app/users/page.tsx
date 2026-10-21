@@ -812,7 +812,7 @@ function UsersPageInner() {
                           onClick={() => setEditingSlackFor(null)}
                           className="text-xs text-gray-500 hover:underline dark:text-gray-400"
                         >
-                          Cancel
+                          Close
                         </button>
                         {slackError && (
                           <span className="text-xs text-red-600">{slackError}</span>
@@ -1178,7 +1178,7 @@ function UsersPageInner() {
                 onClick={() => setDetailsFor(null)}
                 disabled={savingDetails}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={saveDetails} disabled={savingDetails}>
                 {savingDetails ? <LoadingDots size="sm" /> : "Save"}
@@ -1226,7 +1226,7 @@ function UsersPageInner() {
                 variant="secondary"
                 onClick={() => setAdminConfirm(null)}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"
@@ -1274,7 +1274,7 @@ function UsersPageInner() {
                 onClick={() => setRemoveConfirm(null)}
                 disabled={removing}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"

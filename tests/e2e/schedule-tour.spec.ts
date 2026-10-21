@@ -68,7 +68,7 @@ test("the tour opens itself the first time, then leaves you alone", async ({
   await expect(tour).toBeHidden();
 
   // Closing it is what records "seen" — reopening the workspace is quiet now.
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await openPreviewMode(page);
   await expect(tourOf(page)).toBeHidden();
 });
@@ -116,15 +116,18 @@ test("the tour describes the mode it was opened in", async ({ page }) => {
   // action bar, which has to be the bar this mode actually shows.
   await expect(tour.getByText(/Save Draft/)).toHaveCount(0);
   await tour.getByRole("button", { name: "Done" }).click();
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
 
   // The generate flow does have drafts, and applies rather than saves.
   await page.goto("/create");
   await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
+  // The seeded month-long "Fall 2026" request, not just the newest one: an
+  // earlier spec sends a ONE-day request for today, and on a weekday no
+  // template falls on that window generates an empty plan.
   const reqValue = await scope
-    .locator('option[value^="req:"]')
+    .locator('option[value^="req:"]', { hasText: /^Fall 2026 \(/ })
     .first()
     .getAttribute("value");
   await scope.selectOption(reqValue!);

@@ -25,6 +25,14 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   const setsTab = page.getByRole("link", { name: "My Sets", exact: true });
   await expect(setsTab).toHaveCount(1);
   await expect(setsTab).toBeVisible();
+
+  // The pill floats just 0.5rem (8px) above the bottom edge plus the safe
+  // area, which device emulation reports as 0.
+  const bar = page.locator("nav", { has: setsTab });
+  const box = await bar.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box && viewport && Math.round(viewport.height - (box.y + box.height))).toBe(8);
+
   await setsTab.click();
 
   await expect(page).toHaveURL(/\/set-manager/);
@@ -115,7 +123,7 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
 test("phone: the set modal's staged edits and sticky footer work on a phone", async ({
   page,
 }) => {
-  // The detail modal stages every edit behind a sticky Delete · Cancel · Save
+  // The detail modal stages every edit behind a sticky Delete · Close · Save
   // row. On a phone that row is the only way to commit or back out — there's no
   // room for it to scroll away — so it's worth proving it's reachable and that
   // the discard guard still names what would be lost.
@@ -143,7 +151,7 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
   await expect(save).toBeEnabled();
 
   // Backing out warns, and names the change.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   const warning = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -515,7 +523,7 @@ test("phone: sending a note posts it immediately and shows it in the log", async
 
   // It really reached the server — reopening the set (a fresh fetch) still
   // shows it, and the composer comes back empty rather than pre-filled.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   await expect(modal).not.toBeVisible();
   await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
   await expect(
@@ -536,4 +544,60 @@ test("phone calendar hides the desktop-only Preview Mode button", async ({
   // is desktop-only — the phone gets My Sets instead. It's in the DOM (the
   // wrapper is `hidden md:block`) but never shown.
   await expect(page.getByRole("button", { name: "Preview Mode" })).toBeHidden();
+});
+
+// Drag a finger straight down from the top of the page and report whether the
+// pull-to-refresh spinner came out, checked BEFORE letting go. CDP touch input,
+// so Chromium only — the WebKit project skips the tests that use it.
+async function pullDownShowsSpinner(page: import("@playwright/test").Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const x = 200;
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", y: number) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+    });
+  await touch("touchStart", 260);
+  for (let y = 270; y <= 460; y += 15) await touch("touchMove", y);
+  const shown = await page.getByTestId("pull-indicator").count();
+  await touch("touchEnd", 460);
+  return shown > 0;
+}
+
+test("phone: pull-to-refresh only on pages with live data", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "CDP touch input is Chromium-only");
+  await login(page, "bob");
+
+  // The calendar's sets come straight from the db: pulling refreshes them.
+  await gotoReady(page, "/calendar");
+  expect(await pullDownShowsSpinner(page)).toBe(true);
+
+  // A profile has nothing a pull would update, so the gesture doesn't engage —
+  // and in particular doesn't full-reload the page through the splash screen.
+  await gotoReady(page, "/profile");
+  await page.evaluate(() => ((window as unknown as { __kept: boolean }).__kept = true));
+  expect(await pullDownShowsSpinner(page)).toBe(false);
+  await page.waitForTimeout(800);
+  expect(
+    await page.evaluate(() => (window as unknown as { __kept?: boolean }).__kept)
+  ).toBe(true);
+});
+
+test("phone My Sets: a pending card's buttons share one height", async ({ page }) => {
+  // On a narrow phone "Request cover" wraps to two lines; Swap and Confirm
+  // must grow with it rather than sit shorter, centred beside it.
+  await login(page, "henry");
+  await page.goto("/set-manager");
+  const cover = page.getByRole("button", { name: "Request cover" }).first();
+  await expect(cover).toBeVisible();
+  const row = cover.locator("xpath=..");
+  const heights = await Promise.all(
+    ["Request cover", "Swap", "Confirm"].map(async (name) =>
+      Math.round((await row.getByRole("button", { name, exact: true }).boundingBox())!.height)
+    )
+  );
+  expect(new Set(heights).size).toBe(1);
 });

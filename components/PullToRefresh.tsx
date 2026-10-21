@@ -4,10 +4,13 @@
 // follows your finger with a spinner tucked above it; let go past the threshold
 // and the tab reloads its data.
 //
-// What "reload" means is up to the page: a client page registers its own
-// refetch with `usePullToRefresh(reload)`, which is instant and keeps you where
-// you were. Anything that hasn't registered falls back to a real
-// `location.reload()`, so the gesture always does something honest.
+// Only pages that show live database data opt in — the calendar, the set
+// manager, availability, approvals — by registering their own refetch with
+// `usePullToRefresh(reload)`, which is instant and keeps you where you were.
+// Every other page (profile, org settings…) has nothing a pull would update,
+// so the gesture simply doesn't engage there. There is deliberately no
+// `location.reload()` fallback: a full reload flashed the whole-app splash
+// screen for a page that had nothing new to show.
 //
 // Only the vertical half of the gesture is ours — a horizontal drag is the tab
 // swipe (SwipePager), and the two never both engage: each locks in on the first
@@ -36,9 +39,9 @@ type RefreshRef = { current: (() => void | Promise<void>) | null };
 const PullToRefreshContext = createContext<RefreshRef | null>(null);
 
 /**
- * Register this page's refresh with the pull-to-refresh wrapper. Pass the same
- * `reload` the page already uses (a `useCallback`, so it stays stable); on
- * unmount the registration drops and the gesture falls back to a full reload.
+ * Opt this page into pull-to-refresh. Pass the same `reload` the page already
+ * uses (a `useCallback`, so it stays stable); on unmount the registration drops
+ * and the gesture stops engaging until another page registers.
  */
 export function usePullToRefresh(refresh: () => void | Promise<void>) {
   const ref = useContext(PullToRefreshContext);
@@ -72,12 +75,7 @@ export default function PullToRefresh({ children }: { children: ReactNode }) {
     setPull(REST);
     try {
       const handler = refreshRef.current;
-      // Nothing registered: the honest fallback is an actual page reload. It
-      // never resolves — the document goes away — so we stop here.
-      if (!handler) {
-        window.location.reload();
-        return;
-      }
+      if (!handler) return; // the page left mid-pull; nothing to refresh
       // A cached refetch can finish in 20ms; hold the spinner a beat so the
       // gesture visibly did something.
       await Promise.all([
@@ -108,6 +106,9 @@ export default function PullToRefresh({ children }: { children: ReactNode }) {
       clear();
       if (e.touches.length !== 1 || !isBottomNavWidth()) return;
       if (refreshingRef.current) return;
+      // A page that didn't opt in has nothing to refresh, so a downward drag
+      // there is just the page's own (rubber-band) scroll.
+      if (!refreshRef.current) return;
       // Only from the very top of the page — mid-scroll, a downward drag is
       // scrolling.
       if (window.scrollY > 0) return;
@@ -195,6 +196,7 @@ export default function PullToRefresh({ children }: { children: ReactNode }) {
         {active && (
           <div
             aria-hidden
+            data-testid="pull-indicator"
             className="pointer-events-none absolute inset-x-0 -top-10 flex justify-center"
             style={{ opacity: Math.min(1, pull / THRESHOLD) }}
           >

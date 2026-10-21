@@ -418,6 +418,10 @@ export interface StagedSet {
   // True if an (empty) Set row already exists at this time — apply fills it
   // rather than creating a new one. False = apply creates the set.
   existing: boolean;
+  // That existing row's id, so a scheduling rule naming a specific set can
+  // find it. Apply ignores it (it matches by startsAt/label). Preview Mode's
+  // sets carry their id as `stagingId` instead.
+  setId?: string | null;
   assignments: StagedAssignment[];
 }
 
@@ -443,6 +447,16 @@ export interface StagedPlan {
     // re-run starts where the server's did, rather than handing set one back to
     // last week's director.
     previousMDByTeam?: Record<string, string | null>;
+    // Real sets around the window, for SAME_PLAYER rules (lib/schedulingRules)
+    // whose partner set isn't in the plan.
+    fixedSets?: {
+      setId?: string | null;
+      templateId?: string | null;
+      startsAt: string;
+      assignments: { userId: string; role: string }[];
+    }[];
+    // A month either side of bookings, counted only by LIMIT rules.
+    periodBookings?: { userId: string; startsAt: string }[];
   };
 }
 
@@ -464,6 +478,9 @@ export interface ApiMeMembership {
   // The connected account's Spotify user id — the label's fallback when the
   // account has no display_name set.
   spotifyUserId: string | null;
+  // Whether the ORG has connected Google Calendar (set events + invites). The
+  // account itself is admin-only, on /api/google-calendar/status.
+  orgGoogleCalendarConnected: boolean;
 }
 
 // The current user's own profile — GET /api/me. Fetched once by AuthGate and

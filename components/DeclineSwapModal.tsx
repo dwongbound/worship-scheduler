@@ -68,7 +68,7 @@ export default function DeclineSwapModal({
       footer={
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            Close
           </Button>
           <Button variant="danger" onClick={() => onConfirm(note)} loading={busy}>
             Decline

@@ -137,7 +137,7 @@ test("changing data retention asks first, and says what it would delete", async 
   ).toBeVisible();
 
   // Backing out leaves the stored window alone.
-  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await confirm.getByRole("button", { name: "Close", exact: true }).click();
   await expect(confirm).not.toBeVisible();
   await page.reload();
   await page.getByRole("button", { name: orgName(1) }).click();

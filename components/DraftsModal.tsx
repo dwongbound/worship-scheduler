@@ -148,7 +148,7 @@ export default function DraftsModal({
               onClick={() => setConfirming(null)}
               disabled={deleting}
             >
-              Cancel
+              Close
             </Button>
             <Button variant="danger" onClick={confirmDelete} disabled={deleting}>
               {deleting ? <LoadingDots size="sm" /> : "Delete"}

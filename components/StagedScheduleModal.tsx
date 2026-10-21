@@ -48,14 +48,17 @@
 // opens this same workspace over the sets that ALREADY exist, so a whole
 // season's rosters read and edit as one screen. Same layout, same cards, same
 // load panel, same staged-until-you-commit rule — the differences are:
-//   • the footer is Cancel / Save Changes, and Save hands the edited sets back
-//     for the caller to diff and PATCH (lib/calendarPreview.previewSaves);
+//   • the footer is Close / Save Changes, and Save first CONFIRMS the batch
+//     (how many seat and MD changes across how many sets), then hands the
+//     edited sets back for the caller to diff (lib/calendarPreview.previewSaves)
+//     and save in one PUT /api/admin/sets/roster;
 //   • a preview opens as an exact mirror of the calendar, so it only asks
 //     before you leave once something has actually changed;
-//   • "Already exists" on every card would be noise, so that badge and the
-//     plan-wide Auto schedule / Clear all buttons sit this one out — a card's
-//     own ⟳ is the fill affordance here, and there's no scheduler baseline
-//     behind a real calendar for a whole-plan re-roll to balance against.
+//   • every real seat opens LOCKED (toStagedSet), so the plan-wide Auto
+//     schedule fills only the gaps until the admin unlocks seats — one at a
+//     time with a card's 🔒, or all at once with Unlock all (Lock all puts
+//     them back);
+//   • "Already exists" on every card would be noise, so that badge sits out.
 import {
   useCallback,
   useEffect,
@@ -92,8 +95,11 @@ import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   buildSchedule,
   teamKey,
+  type FixedSet,
+  type ScheduleOptions,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
+import type { SchedulingRule } from "@/lib/schedulingRules";
 import {
   conflictedUserIds,
   countAssignments,
@@ -183,6 +189,9 @@ interface StagedScheduleModalProps {
   // preview (where the caller diffs the returned sets against what it opened
   // the preview with).
   onApply: (sets: StagedSet[]) => void;
+  // Preview only: why the last Save was refused. Shown in the batch confirm,
+  // which stays open so the admin can retry or back out.
+  applyError?: string;
   onClose: () => void; // discard the staged plan
 }
 
@@ -252,6 +261,7 @@ export default function StagedScheduleModal({
   mode = "generate",
   orgId: orgIdProp,
   onApply,
+  applyError = "",
   onSaveDraft,
   openedDraft,
   loading = false,
@@ -365,6 +375,8 @@ export default function StagedScheduleModal({
   // and the ✕/backdrop), which is why it wraps onClose rather than sitting on
   // the button.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Preview only: the "you're about to save N changes across K sets" step.
+  const [confirmSave, setConfirmSave] = useState(false);
 
   // Adopt a new plan DURING RENDER, not in an effect.
   //
@@ -605,6 +617,55 @@ export default function StagedScheduleModal({
   // boolean so a failure on one window doesn't mislabel the next one you pick.
   const [loadErrorKey, setLoadErrorKey] = useState<string | null>(null);
 
+  // The org's scheduling rules (Org settings → Scheduling rules), so a re-run
+  // here obeys them the way the server's fill did. Empty until they land, or if
+  // they can't be read — the re-run then falls back to plain rotation.
+  const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  useEffect(() => {
+    if (!orgId) return;
+    let cancelled = false;
+    fetch(`/api/orgs/${orgId}/rules`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => !cancelled && d && setSchedulingRules(d.rules ?? []))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId]);
+
+  // A staged set's database id, when it has one: an existing set the plan
+  // fills (generate), or the real set itself (Preview Mode).
+  const setIdOf = (s: StagedSet) => s.setId ?? s.stagingId ?? null;
+
+  // Everything the rules read from outside the sets being filled: the real
+  // sets around the plan, plus — when re-running ONE set — the plan's other
+  // sets as they now stand.
+  const ruleOptions = (exceptIdx?: number): ScheduleOptions => {
+    const fixedSets: FixedSet[] = (plan?.baseline?.fixedSets ?? []).map((f) => ({
+      ...f,
+      startsAt: new Date(f.startsAt),
+    }));
+    if (exceptIdx !== undefined) {
+      sets.forEach((s, i) => {
+        if (i === exceptIdx) return;
+        fixedSets.unshift({
+          setId: setIdOf(s),
+          templateId: s.templateId ?? null,
+          startsAt: new Date(s.startsAt),
+          assignments: s.assignments.map((a) => ({ userId: a.userId, role: a.role })),
+        });
+      });
+    }
+    return {
+      schedulingRules,
+      fixedSets,
+      periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
+        userId: b.userId,
+        startsAt: new Date(b.startsAt),
+      })),
+    };
+  };
+
   // Fetch the selected window's tally, unless it's the plan (counted locally)
   // or we already have it. A wide window is a big read, which is exactly why
   // it's on demand instead of riding along with every generated plan.
@@ -819,6 +880,19 @@ export default function StagedScheduleModal({
       ),
     }));
 
+  // Lock or unlock EVERY filled seat in the plan. Locked seats survive Auto
+  // schedule; unlocked ones are re-proposed. A preview opens all-locked, so
+  // Unlock all is how the admin hands the whole plan back to the scheduler.
+  const setAllLocked = (locked: boolean) =>
+    setSets((prev) =>
+      prev.map((s) => ({
+        ...s,
+        assignments: s.assignments.map(({ locked: _was, ...a }) =>
+          locked ? { ...a, locked: true } : a
+        ),
+      }))
+    );
+
   // Remove ONE slot of a role from ONE set (capacity − 1). For a filled slot
   // pass the person in it — they come out of the seat with it. Exactly the edit
   // SetDetailModal.deleteSlot makes, so the ✕ means the same thing in both
@@ -909,6 +983,8 @@ export default function StagedScheduleModal({
         capacities: s.slotCapacities,
         requiresMD: s.requiresMD,
         teamId: s.teamId,
+        templateId: s.templateId ?? null,
+        setId: setIdOf(s),
         preAssigned: (keptBySet.get(stagingKey(s)) ?? []).map((a) => ({
           userId: a.userId,
           role: a.role,
@@ -922,7 +998,8 @@ export default function StagedScheduleModal({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
       })),
-      new Map(Object.entries(plan?.baseline?.teamCounts ?? {}))
+      new Map(Object.entries(plan?.baseline?.teamCounts ?? {})),
+      ruleOptions()
     );
 
     const bySet = new Map<string, StagedSet["assignments"]>();
@@ -1006,6 +1083,8 @@ export default function StagedScheduleModal({
           capacities: set.slotCapacities,
           requiresMD: set.requiresMD,
           teamId: set.teamId,
+          templateId: set.templateId ?? null,
+          setId: setIdOf(set),
           preAssigned: set.assignments.map((a) => ({
             userId: a.userId,
             role: a.role,
@@ -1017,7 +1096,8 @@ export default function StagedScheduleModal({
       rules,
       counts,
       booked,
-      teamCounts
+      teamCounts,
+      ruleOptions(idx)
     );
 
     updateSet(idx, (s) => {
@@ -1179,11 +1259,11 @@ export default function StagedScheduleModal({
               // opened just to read can't write anything.
               <>
                 <Button variant="secondary" onClick={requestClose} disabled={busy}>
-                  Cancel
+                  Close
                 </Button>
                 <HelpButton onClick={() => setHelpOpen(true)} />
                 <Button
-                  onClick={() => onApply(sets)}
+                  onClick={() => setConfirmSave(true)}
                   disabled={busy || !dirty}
                   title={dirty ? undefined : "Nothing has been changed yet"}
                 >
@@ -1355,55 +1435,78 @@ export default function StagedScheduleModal({
         </p>
       </div>
 
-      {/* Plan-wide controls: re-run the fill, or empty the plan. They sit
-          between the stats and the cards because that's what they act on — the
-          load panel is what tells you whether to clear and start over.
-          (The grouping toggle used to share this row; it lives in the modal
-          header now, where scrolling can't take it away.)
+      {/* Plan-wide controls: re-run the fill, empty the plan, or lock/unlock
+          every seat. They sit between the stats and the cards because that's
+          what they act on — the load panel is what tells you whether to clear
+          and start over. (The grouping toggle used to share this row; it lives
+          in the modal header now, where scrolling can't take it away.)
 
-          Preview mode has no proposal to re-roll: there's no scheduler
-          baseline behind a real calendar, so a re-run would rebalance from
-          zero and read as advice it isn't — and "Clear all people" would look
-          like it emptied the real rosters. The whole row sits out there. */}
-      {!preview && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+          Preview mode has them too. Its seats open locked, so Auto schedule
+          there fills only the open seats until something is unlocked; and
+          nothing here touches the calendar until Save Changes, which confirms
+          the batch first. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={autoScheduleAll}
+          disabled={busy}
+          title={
+            lockedTotal > 0
+              ? `Run the scheduler — your ${lockedTotal} locked pick${
+                  lockedTotal === 1 ? "" : "s"
+                } stay put, everyone else is re-proposed`
+              : "Run the scheduler over every set again"
+          }
+        >
+          {preview
+            ? "Auto schedule"
+            : totalAssignments === 0
+              ? "Auto schedule all"
+              : "Re-run auto schedule"}
+        </Button>
+        {totalAssignments > 0 && (
           <Button
             size="sm"
             variant="secondary"
-            onClick={autoScheduleAll}
+            onClick={clearAllPeople}
             disabled={busy}
+            // Placeholder sets: the dates and shapes are what's wanted now,
+            // the people can come later. Nobody is notified about a set with
+            // an empty roster, so applying these is silent.
             title={
-              lockedTotal > 0
-                ? `Re-run the scheduler — your ${lockedTotal} locked pick${
-                    lockedTotal === 1 ? "" : "s"
-                  } stay put, everyone else is re-proposed`
-                : "Run the scheduler over every set again"
+              preview
+                ? "Empty every roster here — the calendar doesn't change until you Save Changes"
+                : "Empty every roster — the sets are still created, just with nobody on them"
             }
           >
-            {totalAssignments === 0 ? "Auto schedule all" : "Re-run auto schedule"}
+            Clear all people
           </Button>
-          {totalAssignments > 0 && (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={clearAllPeople}
-              disabled={busy}
-              // Placeholder sets: the dates and shapes are what's wanted now,
-              // the people can come later. Nobody is notified about a set with
-              // an empty roster, so applying these is silent.
-              title="Empty every roster — the sets are still created, just with nobody on them"
-            >
-              Clear all people
-            </Button>
-          )}
-          {lockedTotal > 0 && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
-              a re-run
-            </span>
-          )}
-        </div>
-      )}
+        )}
+        {totalAssignments > 0 && (
+          // One toggle rather than two buttons: it always offers the move
+          // that changes something. All locked → Unlock all, else Lock all.
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setAllLocked(lockedTotal < totalAssignments)}
+            disabled={busy}
+            title={
+              lockedTotal < totalAssignments
+                ? "Lock every seat, so Auto schedule only fills the open ones"
+                : "Unlock every seat, so Auto schedule may re-propose anyone"
+            }
+          >
+            {lockedTotal < totalAssignments ? "🔒 Lock all" : "🔓 Unlock all"}
+          </Button>
+        )}
+        {lockedTotal > 0 && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
+            a re-run
+          </span>
+        )}
+      </div>
 
       {/* The person filter, said in words right where it takes effect. A
           partial view of a plan that anyone could mistake for the whole plan
@@ -1864,7 +1967,7 @@ export default function StagedScheduleModal({
             onClick={() => setSavingDraft(false)}
             disabled={draftBusy}
           >
-            Cancel
+            Close
           </Button>
           <Button
             onClick={async () => {
@@ -1990,6 +2093,44 @@ export default function StagedScheduleModal({
         )}
       </div>
     </Modal>
+
+    {preview && (
+      <Modal
+        open={confirmSave}
+        onClose={() => !busy && setConfirmSave(false)}
+        title="Save these changes?"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmSave(false)}
+              disabled={busy}
+            >
+              Close
+            </Button>
+            <Button onClick={() => onApply(sets)} loading={busy}>
+              Save Changes
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 text-sm text-gray-600 dark:text-gray-400">
+          {/* A preview save is a BATCH: everything edited lands at once, and
+              everyone whose seat changed is notified. Saying how much before
+              it happens is the whole point of this step. */}
+          <p>
+            You&rsquo;re about to save {describePreviewSaves(pendingSaves)}{" "}
+            in one batch. Everyone whose seat changes is notified, and
+            it all lands together or not at all.
+          </p>
+          {applyError && (
+            <p role="alert" className="text-red-600 dark:text-red-400">
+              {applyError}
+            </p>
+          )}
+        </div>
+      </Modal>
+    )}
 
     <Modal
       open={confirmDiscard}

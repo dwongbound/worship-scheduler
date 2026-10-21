@@ -281,7 +281,7 @@ export default function PlayerSelect({
               dark:border-indigo-700 dark:bg-gray-800"
           />
         </div>
-        <ul role="listbox" className="min-h-0 flex-1 overflow-auto pb-1">
+        <ul role="listbox" className="min-h-0 flex-1 overflow-auto overscroll-contain pb-1">
           {/* "None" and the current occupant only show on an unfiltered list. */}
           {!q && (
             <OptionRow

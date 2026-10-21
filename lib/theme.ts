@@ -35,7 +35,27 @@ export function resolveDark(theme: Theme): boolean {
   return theme === "dark";
 }
 
-// Add/remove the `dark` class on <html> (Tailwind's class strategy).
+// The phone's status bar / browser chrome colour per scheme. It matches the
+// top nav (bg-white / dark:bg-gray-800), which is what sits right under it —
+// not the page's gray-50/gray-900, which made a visible seam. app/layout.tsx
+// emits one <meta name="theme-color"> per scheme from these.
+export const THEME_COLORS = { light: "#FFFFFF", dark: "#1F2937" } as const;
+
+// Point every theme-color meta at the colour this mode actually shows. The
+// tags are emitted with a prefers-color-scheme `media` each, which only
+// follows the OS — so a forced in-app mode overwrites both, and "system" puts
+// each back to its own scheme's colour.
+export function syncThemeColor(theme: Theme): void {
+  const forced = theme === "system" ? null : THEME_COLORS[theme];
+  document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+    const scheme = meta.getAttribute("media")?.includes("dark") ? "dark" : "light";
+    meta.setAttribute("content", forced ?? THEME_COLORS[scheme]);
+  });
+}
+
+// Add/remove the `dark` class on <html> (Tailwind's class strategy), and
+// recolour the status bar to match.
 export function applyTheme(theme: Theme): void {
   document.documentElement.classList.toggle("dark", resolveDark(theme));
+  syncThemeColor(theme);
 }

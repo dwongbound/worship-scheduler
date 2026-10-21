@@ -209,10 +209,22 @@ describe("toStagedSet", () => {
       templateId: "tpl-sunday",
       existing: true,
       assignments: [
-        { userId: "u1", role: "KEYS", assignmentId: "a1", pendingFromUserId: null },
-        { userId: "u2", role: "DRUMS", assignmentId: "a2", pendingFromUserId: null },
+        { userId: "u1", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: null },
+        { userId: "u2", role: "DRUMS", assignmentId: "a2", locked: true, pendingFromUserId: null },
       ],
     });
+  });
+
+  it("opens every real seat locked, so Auto schedule only fills the gaps", () => {
+    const set = apiSet({
+      startsAt: SUNDAY,
+      assignments: [
+        { id: "a1", role: "KEYS", status: "CONFIRMED", user: { id: "u1", name: "Carol" } },
+      ],
+    });
+    expect(
+      toStagedSet(set, templates, TZ).assignments.every((a) => a.locked)
+    ).toBe(true);
   });
 
   it("keeps the owner of a seat that's waiting on an approval", () => {
@@ -231,7 +243,7 @@ describe("toStagedSet", () => {
       ],
     });
     expect(toStagedSet(set, templates, TZ).assignments).toEqual([
-      { userId: "u4", role: "KEYS", assignmentId: "a1", pendingFromUserId: "u1" },
+      { userId: "u4", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: "u1" },
     ]);
   });
 
@@ -255,7 +267,7 @@ describe("toStagedSet", () => {
       ],
     });
     expect(toStagedSet(set, templates, TZ).assignments).toEqual([
-      { userId: "u1", role: "KEYS", assignmentId: "a1", pendingFromUserId: null },
+      { userId: "u1", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: null },
     ]);
   });
 
@@ -420,6 +432,51 @@ describe("previewSaves", () => {
       two[1],
     ];
     expect(previewSaves(two, after).map((s) => s.setId)).toEqual(["set-1"]);
+  });
+
+  it("a re-proposed person in their own seat is no change at all", () => {
+    // Auto schedule / Clear all rebuild rosters without row ids. Putting Carol
+    // back on keys must not delete and re-insert her seat.
+    expect(
+      previewSaves(
+        opened,
+        edited([
+          { userId: "u1", role: "KEYS" },
+          { userId: "u2", role: "DRUMS", assignmentId: "a2" },
+        ])
+      )
+    ).toEqual([]);
+  });
+
+  it("a different person in a dropped seat's role is a reassignment", () => {
+    const [save] = previewSaves(
+      opened,
+      edited([
+        { userId: "u1", role: "KEYS", assignmentId: "a1" },
+        { userId: "u7", role: "DRUMS" },
+      ])
+    );
+    expect(save.ops).toEqual({
+      removed: [],
+      reassigned: [{ id: "a2", userId: "u7" }],
+      added: [],
+    });
+  });
+
+  it("clear all then refill: matches people back, reassigns the rest", () => {
+    const [save] = previewSaves(
+      opened,
+      edited([
+        { userId: "u2", role: "DRUMS" }, // same as before
+        { userId: "u5", role: "KEYS" }, // keys changed hands
+        { userId: "u6", role: "BASS" }, // a seat that wasn't there
+      ])
+    );
+    expect(save.ops).toEqual({
+      removed: [],
+      reassigned: [{ id: "a1", userId: "u5" }],
+      added: [{ role: "BASS", userId: "u6" }],
+    });
   });
 
   it("never diffs away a guest seat it was never shown", () => {

@@ -144,13 +144,13 @@ export default function SlackSyncModal({
           // dialog. It cancels the REST of the run, not what it already did —
           // everyone matched up to this point stays matched.
           <Button variant="secondary" onClick={close}>
-            Cancel
+            Close
           </Button>
         ) : phase === "confirm" ? (
           // Modal's footer is already a right-aligned row, so these are bare.
           <>
             <Button variant="secondary" onClick={close}>
-              Cancel
+              Close
             </Button>
             <Button onClick={() => run()}>Sync now</Button>
           </>

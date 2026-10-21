@@ -14,8 +14,10 @@ import InfoTooltip from "@/components/common/InfoTooltip";
 import Modal from "@/components/common/Modal";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
+import OrgGoogleCalendar from "@/components/OrgGoogleCalendar";
 import OrgNotifications from "@/components/OrgNotifications";
 import OrgRetention from "@/components/OrgRetention";
+import OrgRules from "@/components/OrgRules";
 import OrgTeamsManager from "@/components/OrgTeamsManager";
 import SlackSyncModal from "@/components/SlackSyncModal";
 import { ORGS_CHANGED_EVENT, useOrgs } from "@/components/OrgProvider";
@@ -53,6 +55,24 @@ const SPOTIFY_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }
   },
 };
 
+// The same, for /api/google-calendar/callback's ?gcal=<status>.
+const GCAL_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }> = {
+  connected: {
+    tone: "indigo",
+    text: "Google Calendar connected. Upcoming sets are being added now, with their rosters invited.",
+  },
+  denied: { tone: "amber", text: "Google authorization was cancelled, so nothing changed." },
+  expired: {
+    tone: "amber",
+    text: "That Google link had already been used or expired. Click Connect Google Calendar to start again.",
+  },
+  forbidden: { tone: "amber", text: "Only an admin of that org can connect its Google Calendar." },
+  error: {
+    tone: "amber",
+    text: "Google refused the connection. Make sure calendar access is ticked on the consent screen; the server log has Google's reason.",
+  },
+};
+
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
   const { update } = useSession();
@@ -63,8 +83,9 @@ export default function OrgSettingsPage() {
   const memberships = me?.memberships ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   // Add-an-org modal (same join-by-key flow as the navbar switcher).
-  // Outcome of a Spotify connect round-trip, read once from ?spotify= on mount.
-  const [spotifyNotice, setSpotifyNotice] =
+  // Outcome of a Spotify or Google Calendar connect round-trip, read once from
+  // ?spotify= / ?gcal= on mount.
+  const [connectNotice, setConnectNotice] =
     useState<{ tone: "indigo" | "amber"; text: string } | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   // "Sync team members" — the org-wide email→Slack-ID sweep, which owns its own
@@ -91,9 +112,16 @@ export default function OrgSettingsPage() {
   // /api/spotify/callback sends the admin back here with ?spotify=<status>.
   // Show what happened, then strip the param so a reload doesn't re-announce it.
   useEffect(() => {
-    const status = new URLSearchParams(window.location.search).get("spotify");
+    const params = new URLSearchParams(window.location.search);
+    const spotify = params.get("spotify");
+    const gcal = params.get("gcal");
+    const status = spotify ?? gcal;
     if (!status) return;
-    setSpotifyNotice(SPOTIFY_NOTICES[status] ?? SPOTIFY_NOTICES.error);
+    setConnectNotice(
+      spotify
+        ? SPOTIFY_NOTICES[status] ?? SPOTIFY_NOTICES.error
+        : GCAL_NOTICES[status] ?? GCAL_NOTICES.error
+    );
     window.history.replaceState(null, "", window.location.pathname);
     if (status === "connected") refreshMe();
   }, [refreshMe]);
@@ -230,9 +258,9 @@ export default function OrgSettingsPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold">Org settings</h1>
 
-      {spotifyNotice && (
-        <Banner tone={spotifyNotice.tone} onDismiss={() => setSpotifyNotice(null)}>
-          {spotifyNotice.text}
+      {connectNotice && (
+        <Banner tone={connectNotice.tone} onDismiss={() => setConnectNotice(null)}>
+          {connectNotice.text}
         </Banner>
       )}
 
@@ -409,6 +437,12 @@ export default function OrgSettingsPage() {
                   )}
                 </div>
 
+                {/* Google Calendar — admins only, like the rest of the
+                    integrations' controls (components/OrgGoogleCalendar.tsx). */}
+                {selected.isAdmin && (
+                  <OrgGoogleCalendar orgId={selected.id} onChanged={refreshMe} />
+                )}
+
                 {/* Daily digest window — how far ahead the morning Slack DM
                     looks when it counts what still needs attention. The digest
                     quotes this window in its own wording, so the number an
@@ -539,6 +573,14 @@ export default function OrgSettingsPage() {
                 {/* Teams + scheduled weekly Slack reminders (admins only). */}
                 {selected.isAdmin && <OrgTeamsManager orgId={selected.id} />}
 
+                {/* How Auto schedule picks people, org-wide (admins only).
+                    Keyed on the org so it reloads its list on a switch. */}
+                {selected.isAdmin && (
+                  <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                    <OrgRules key={selected.id} orgId={selected.id} />
+                  </div>
+                )}
+
                 {/* Which of the bot's personal DMs this org sends (admins only).
                     Keyed on the org so it reloads its switches on a switch. */}
                 {selected.isAdmin && (
@@ -583,6 +625,9 @@ export default function OrgSettingsPage() {
           >
             <Input
               label="Organization key"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={orgKey}
               onChange={(e) => setOrgKey(e.target.value)}
               autoComplete="off"
@@ -596,7 +641,7 @@ export default function OrgSettingsPage() {
                 type="button"
                 onClick={() => setAddOpen(false)}
               >
-                Cancel
+                Close
               </Button>
               <Button type="submit" disabled={addBusy || !orgKey.trim()}>
                 {addBusy ? "Joining…" : "Join"}

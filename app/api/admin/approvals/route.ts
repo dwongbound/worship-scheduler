@@ -12,6 +12,7 @@ import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { reconcileMD } from "@/lib/setMd";
 import { notifySetChange } from "@/lib/slack";
+import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 const setSelect = {
   select: {
@@ -186,6 +187,9 @@ async function handleCover(
       }),
     ]);
   }
+  // A cover's seat changes hands for the calendar only now (approve), or goes
+  // back (reject) — the invite follows who really holds it.
+  syncSetsAfterResponse(a.setId);
   return NextResponse.json({ ok: true });
 }
 
@@ -268,6 +272,7 @@ async function handleSwap(
       historyFor(to.setId, to.role, type, adminId),
     ]);
   }
+  syncSetsAfterResponse(from.setId, to.setId);
   return NextResponse.json({ ok: true });
 }
 

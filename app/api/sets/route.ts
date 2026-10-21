@@ -16,6 +16,7 @@ import { prisma } from "@/lib/prisma";
 import { SET_INCLUDE, withPendingOwners } from "@/lib/setPayload";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 import { resolveSetsWindow, visibleSetsFilter } from "@/lib/sets";
+import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -123,5 +124,6 @@ export async function POST(req: NextRequest) {
       orgId: team.orgId,
     },
   });
+  syncSetsAfterResponse(set.id);
   return NextResponse.json(set, { status: 201 });
 }
