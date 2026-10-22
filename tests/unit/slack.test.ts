@@ -141,7 +141,7 @@ describe("rosterDmText", () => {
     );
     const lines = text.split("\n");
     expect(lines[0]).toBe(`👍 *New Sets 3:*`);
-    expect(lines.slice(1, 4).map((l) => l.match(/on (.*)\.$/)![1])).toEqual([
+    expect(lines.slice(1, 4).map((l) => l.match(/(\d+\/\d+\/\d+ \d+[AP]M)/)![1])).toEqual([
       "11/1/26 10AM",
       "11/8/26 10AM",
       "11/15/26 10AM",
