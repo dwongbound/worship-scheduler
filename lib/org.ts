@@ -13,6 +13,7 @@ import type { NextRequest } from "next/server";
 import { prisma } from "./prisma";
 import { getSessionUser, isSuperAdmin } from "./auth";
 import { MIGRATION_PLACEHOLDER, parseOrgKeys } from "./orgKeys";
+import { defaultRuleRows } from "./schedulingRules";
 
 // Sync env orgs into the db once per server process. The migration's
 // placeholder org adopts the FIRST env org's name (so pre-org data lands in
@@ -45,7 +46,7 @@ export function ensureOrgsSynced(): Promise<void> {
       await prisma.org.upsert({
         where: { name },
         update: {},
-        create: { name, joinKey: key },
+        create: { name, joinKey: key, schedulingRules: { create: defaultRuleRows() } },
       });
       // Backfill the join key for orgs created before keys moved to the db.
       // Only fill when null so a key rotated via the platform admin page wins.

@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { requireSuperAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { defaultRuleRows } from "@/lib/schedulingRules";
 
 /** A short, URL-safe, human-shareable join key. */
 function generateKey(): string {
@@ -51,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const org = await prisma.org.create({
-      data: { name, joinKey },
+      data: { name, joinKey, schedulingRules: { create: defaultRuleRows() } },
       select: { id: true, name: true, joinKey: true },
     });
     return NextResponse.json(org, { status: 201 });

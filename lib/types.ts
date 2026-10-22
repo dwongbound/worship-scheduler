@@ -456,7 +456,8 @@ export interface StagedPlan {
       assignments: { userId: string; role: string }[];
     }[];
     // A month either side of bookings, counted only by LIMIT rules.
-    periodBookings?: { userId: string; startsAt: string }[];
+    // teamId: the booked set's team, for a team's own LIMIT rules.
+    periodBookings?: { userId: string; startsAt: string; teamId?: string | null }[];
   };
 }
 

@@ -103,11 +103,16 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
   replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
   ordinary counted role.
-- **SchedulingRule** — one of an org's rules for Auto schedule (ORG-wide,
-  never per team): `tier` REQUIRED|PREFERENCE, `enabled`, `position` (list
-  order = the preference ranking), `params: Json` (the kind + its ids; see
-  `lib/schedulingRules.ts`). Rules naming something since deleted are dropped
-  on load. Edited in Org settings → Scheduling rules (`components/OrgRules.tsx`).
+- **SchedulingRule** — one of an org's rules for Auto schedule: `tier`
+  REQUIRED|PREFERENCE, `enabled`, `position` (list order = the preference
+  ranking), nullable `teamId` (null = every team; a team's rule governs only
+  its sets, and a deleted team cascades its rules away), `params: Json` (the
+  kind + its ids; see `lib/schedulingRules.ts`). Rules naming something since
+  deleted are dropped on load. Edited in Org settings → Scheduling rules
+  (`components/OrgRules.tsx`). Every org STARTS with `DEFAULT_RULES` (the MD
+  order + the acoustic doubling, written onto existing orgs by the
+  `rule_team_scope` migration and onto new ones via `defaultRuleRows()` in
+  `lib/org.ts`, the platform orgs route and `prisma/seed.ts`).
 - **Unavailability** — `RECURRING` (dayOfWeek + startMinute/endMinute, plus an
   optional startDate/endDate bounding the span it repeats over — the /schedule
   form's Repeats: Forever · N weeks · Until a date · Time Range),
@@ -142,8 +147,8 @@ humanized key, so a custom/deleted role never renders blank), `roleKeyFromLabel`
 (`getTeamCatalog`/`getTeamCatalogs`/`seedTeamRoles`/`TEAM_ROLE_FIELDS`).
 `lib/constants.ts` keeps the BUILT-IN defaults only (`SLOT_CAPACITIES`,
 `ROLE_ORDER`, `INSTRUMENT_LABELS`, `ALL_INSTRUMENTS`) plus `MD_ROLES` /
-`ACOUSTIC_HOST_ROLES` — special behaviours pinned to built-in keys that custom
-roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`. `CHOIR` is
+`ACOUSTIC_HOST_ROLES` — now only the DEFAULTS of the MD_ORDER / SHARE_ROLES
+rules (see `schedulingRules.ts`) — and `validateSlotCapacities(raw, allowedKeys)`. `CHOIR` is
 just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 `lib/guestTeams.ts`, available to any team's any role.
 
@@ -205,24 +210,39 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   A required-MD set is filled on PURE ROTATION first and only refilled with a
   reserved MD seat if that roster has nobody who could lead (the old
   reserve-first pass pinned the seat to one person); the reserved seat goes to
-  the freshest MD, in the best role they play — `MD_ROLES` is preference-ordered
-  (electric guitar, keys, bass), and `lib/md.ts` designates the MD the same way.
-  ✅tested
+  the freshest MD, in the best role they play — the org's MD order for that
+  team (`mdRolesFor`; electric guitar, keys, bass by default), and `lib/md.ts`
+  designates the MD the same way. Every md.ts helper takes that list as
+  `mdRoles`, so EVERY MD check (routes via `lib/setMd.ts loadForMD().mdRoles`,
+  both modals, `designateMDs`, generate) must pass it or they disagree.
+  One role per person per set, except a pair a SHARE_ROLES rule allows; a
+  shared role fills LAST (its hosts seated first). A required ALWAYS group
+  (transitive: A–B + B–C) is seated whole or not at all (`seatGroup`).
+  ✅tested, incl. `schedulerScenarios.test.ts` — 400 seeded random orgs
+  (teams, availability, hand-picked seats, random rules on/off/scoped) checked
+  against every rule's promise; set `SEED` to replay one, raise `SCENARIOS`
+  to stress it (20,000 passed at the time of writing).
 - `constants.ts` ✅ · `dates.ts` ✅ (`upcomingOccurrences`, `format*`, minute⇄time)
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
   `shortDateTimeCompact` ("8/20/26 10PM") is THE date every chat message names
   a set by — short enough that a swap can name two sets in one sentence.
-- `schedulingRules.ts` — the Rules vocabulary: five kinds (ONLY_IF_NEEDED,
+- `schedulingRules.ts` — the Rules vocabulary: seven kinds (ONLY_IF_NEEDED,
   PREFER, SAME_PLAYER weekly-by-set-type or two specific sets, TOGETHER
-  always/never, LIMIT per Mon–Sun week or month), `parseRuleParams` /
-  `validateRules` (ids checked against the org), `findContradiction` (between
-  REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
+  always/never, LIMIT per Mon–Sun week or month — a team's counts only its
+  sets, MD_ORDER — required only, a team's own beats the every-team one,
+  read via `mdRolesFor` — and SHARE_ROLES — "whoever plays X or Y may also
+  play Z": required = Z ONLY goes to someone doubling, preference = them
+  first), `ruleAppliesTo` (team scope), `DEFAULT_RULES`, `parseRuleParams` /
+  `validateRules` (ids checked against the org, a team's rule against that
+  team's roles), `findContradiction` (between REQUIRED rules only, per team
+  scope; run by the PUT route AND the editor), `describeRule` /
   `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and
   `templateIdOf` (sets don't store their template, so it's recognised by
   label + team + weekday + time). `buildSchedule`'s 7th arg `ScheduleOptions`
   feeds them in: REQUIRED never bends (a slot is left open instead — a held
   SAME_PLAYER seat is the `HOLD` case), PREFERENCES rank lexicographically
-  above rotation. All three callers pass them; the prisma side is
+  above rotation. `schedulingRules` UNDEFINED = "no list" = DEFAULT_RULES; an
+  explicit list (even []) is the whole truth. All three callers pass them; the prisma side is
   `schedulingRuleStore.ts` (`ruleContext` = nearby sets + a month of bookings
   either side). ✅tested
 - `roster.ts` — the per-team `active` rule: `schedulableRolesByTeam()` (drops

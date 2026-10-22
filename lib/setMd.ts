@@ -5,6 +5,7 @@
 import { prisma } from "./prisma";
 import { eligibleMDIds, isValidMD, type MDAssignment } from "./md";
 import { pendingOwners } from "./pendingHandoff";
+import { orgMdRoles } from "./schedulingRuleStore";
 
 // Load a set's roster in the shape the MD rules expect — including, for a seat
 // mid-handoff, the person it still belongs to (see lib/pendingHandoff.ts), so a
@@ -15,6 +16,8 @@ export async function loadForMD(setId: string) {
     select: {
       requiresMD: true,
       mdUserId: true,
+      orgId: true,
+      teamId: true,
       assignments: {
         select: {
           id: true,
@@ -38,7 +41,10 @@ export async function loadForMD(setId: string) {
       pendingFrom: owner ? { userId: owner.id, isMD: owner.isMD } : null,
     };
   });
-  return { set, roster };
+  // The org's MD order for this set's team — every check below reads the
+  // roster against it, the same list the screens and the auto-fill use.
+  const mdRoles = await orgMdRoles(set.orgId, set.teamId);
+  return { set, roster, mdRoles };
 }
 
 /**
@@ -48,7 +54,7 @@ export async function loadForMD(setId: string) {
 export async function clearStaleMD(setId: string) {
   const data = await loadForMD(setId);
   if (!data || !data.set.mdUserId) return;
-  if (!isValidMD(data.set.mdUserId, data.roster)) {
+  if (!isValidMD(data.set.mdUserId, data.roster, data.mdRoles)) {
     await prisma.set.update({ where: { id: setId }, data: { mdUserId: null } });
   }
 }
@@ -62,8 +68,8 @@ export async function clearStaleMD(setId: string) {
 export async function promoteMDIfEmpty(setId: string, assignedUserId: string) {
   const data = await loadForMD(setId);
   if (!data || !data.set.requiresMD) return;
-  if (isValidMD(data.set.mdUserId, data.roster)) return;
-  if (eligibleMDIds(data.roster).includes(assignedUserId)) {
+  if (isValidMD(data.set.mdUserId, data.roster, data.mdRoles)) return;
+  if (eligibleMDIds(data.roster, null, data.mdRoles).includes(assignedUserId)) {
     await prisma.set.update({
       where: { id: setId },
       data: { mdUserId: assignedUserId },
@@ -82,15 +88,15 @@ export async function promoteMDIfEmpty(setId: string, assignedUserId: string) {
 export async function reconcileMD(setId: string, preferUserId?: string) {
   const data = await loadForMD(setId);
   if (!data) return;
-  const { set, roster } = data;
+  const { set, roster, mdRoles } = data;
   // A still-valid MD is left alone — an approval elsewhere on the set is no
   // reason to move the job.
-  if (isValidMD(set.mdUserId, roster)) return;
+  if (isValidMD(set.mdUserId, roster, mdRoles)) return;
 
   // Who takes the job now. Written as plain steps rather than one expression:
   // the order matters (the new arrival first, then the best of the rest) and
   // it's the kind of rule someone will come back to read.
-  const eligible = eligibleMDIds(roster);
+  const eligible = eligibleMDIds(roster, null, mdRoles);
   let next: string | null = null;
   if (set.requiresMD) {
     if (preferUserId && eligible.includes(preferUserId)) {

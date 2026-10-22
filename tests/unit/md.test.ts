@@ -165,3 +165,24 @@ describe("avoiding back-to-back MDs (previousMDId)", () => {
     }
   });
 });
+
+describe("a custom MD order", () => {
+  const roster = [
+    { userId: "eg", role: "ELECTRIC_GUITAR", isMD: true },
+    { userId: "k", role: "KEYS", isMD: true },
+    { userId: "dr", role: "DRUMS", isMD: true },
+  ];
+
+  it("is the only list of roles an MD may lead from, best first", () => {
+    expect(eligibleMDIds(roster)).toEqual(["eg", "k"]);
+    expect(eligibleMDIds(roster, null, ["DRUMS", "KEYS"])).toEqual(["dr", "k"]);
+    expect(defaultMDId(roster, null, ["KEYS"])).toBe("k");
+    expect(isValidMD("eg", roster, ["KEYS"])).toBe(false);
+    expect(isValidMD("dr", roster, ["DRUMS"])).toBe(true);
+  });
+
+  it("still never makes the worship leader the MD", () => {
+    const withWL = [...roster, { userId: "dr", role: "WORSHIP_LEADER", isMD: true }];
+    expect(eligibleMDIds(withWL, null, ["DRUMS"])).toEqual([]);
+  });
+});

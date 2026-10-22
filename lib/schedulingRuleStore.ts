@@ -4,8 +4,10 @@ import { prisma } from "./prisma";
 import { APP_TZ } from "./appTz";
 import type { FixedSet, ExistingAssignment } from "./scheduler";
 import {
+  mdRolesFor,
   parseStoredRules,
   ruleRefs,
+  teamScopeProblem,
   templateIdOf,
   type RuleRefs,
   type SchedulingRule,
@@ -25,16 +27,17 @@ export async function orgRuleRefs(orgId: string): Promise<RuleRefs> {
       where: { memberships: { some: { orgId } } },
       select: { id: true },
     }),
-    prisma.teamRole.findMany({
-      where: { team: { orgId } },
-      select: { key: true },
+    prisma.team.findMany({
+      where: { orgId },
+      select: { id: true, roles: { select: { key: true } } },
     }),
     prisma.setTemplate.findMany({ where: { orgId }, select: { id: true } }),
     prisma.set.findMany({ where: { orgId }, select: { id: true } }),
   ]);
   return {
     userIds: new Set(users.map((u) => u.id)),
-    roleKeys: new Set(roles.map((r) => r.key)),
+    roleKeys: new Set(roles.flatMap((t) => t.roles.map((r) => r.key))),
+    teamRoleKeys: new Map(roles.map((t) => [t.id, new Set(t.roles.map((r) => r.key))])),
     templateIds: new Set(templates.map((t) => t.id)),
     setIds: new Set(sets.map((s) => s.id)),
   };
@@ -47,7 +50,8 @@ export function ruleIsLive(rule: SchedulingRule, refs: RuleRefs): boolean {
     r.users.every((id) => refs.userIds.has(id)) &&
     r.roles.every((k) => refs.roleKeys.has(k)) &&
     r.templates.every((id) => refs.templateIds.has(id)) &&
-    r.sets.every((id) => refs.setIds.has(id))
+    r.sets.every((id) => refs.setIds.has(id)) &&
+    teamScopeProblem(rule.teamId, r.roles, refs) === null
   );
 }
 
@@ -61,7 +65,7 @@ export async function loadOrgRules(orgId: string, refs?: RuleRefs): Promise<Sche
     prisma.schedulingRule.findMany({
       where: { orgId },
       orderBy: { position: "asc" },
-      select: { id: true, tier: true, enabled: true, params: true },
+      select: { id: true, tier: true, enabled: true, teamId: true, params: true },
     }),
     refs ? Promise.resolve(refs) : orgRuleRefs(orgId),
   ]);
@@ -81,25 +85,45 @@ export async function saveOrgRules(
         position,
         tier: r.tier,
         enabled: r.enabled,
+        teamId: r.teamId ?? null,
         params: r.params,
       })),
     }),
   ]);
 }
 
+/**
+ * The roles an MD may lead from on a set of `teamId` in this org (see
+ * mdRolesFor). A cheap read — just the org's rule rows — for the server's MD
+ * checks, which run on every roster save.
+ */
+export async function orgMdRoles(orgId: string, teamId: string | null): Promise<string[]> {
+  const rows = await prisma.schedulingRule.findMany({
+    where: { orgId, OR: [{ teamId: null }, ...(teamId ? [{ teamId }] : [])] },
+    orderBy: { position: "asc" },
+    select: { id: true, tier: true, enabled: true, teamId: true, params: true },
+  });
+  return mdRolesFor(parseStoredRules(rows), teamId);
+}
+
 /** The names and choices the rules editor draws its dropdowns from. */
 export async function ruleEditorOptions(orgId: string) {
   const now = Date.now();
-  const [people, roles, templates, sets] = await Promise.all([
+  const [people, roles, teams, templates, sets] = await Promise.all([
     prisma.user.findMany({
       where: { memberships: { some: { orgId } } },
-      select: { id: true, name: true },
+      select: { id: true, name: true, teamMembers: { where: { team: { orgId } }, select: { teamId: true } } },
       orderBy: { name: "asc" },
     }),
     prisma.teamRole.findMany({
       where: { team: { orgId } },
-      select: { key: true, label: true, order: true },
+      select: { key: true, label: true, order: true, teamId: true },
       orderBy: { order: "asc" },
+    }),
+    prisma.team.findMany({
+      where: { orgId },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
     }),
     prisma.setTemplate.findMany({
       where: { orgId },
@@ -126,10 +150,21 @@ export async function ruleEditorOptions(orgId: string) {
   ]);
   // One entry per role KEY across every team — a rule's role applies wherever
   // a team has it. The first team's label (catalog order) names it.
-  const roleByKey = new Map<string, { key: string; label: string }>();
-  for (const r of roles) if (!roleByKey.has(r.key)) roleByKey.set(r.key, { key: r.key, label: r.label });
+  // `teamIds` says which teams have it, so a team-scoped rule only offers
+  // that team's roles (and `people[].teamIds` its members).
+  const roleByKey = new Map<string, { key: string; label: string; teamIds: string[] }>();
+  for (const r of roles) {
+    const entry = roleByKey.get(r.key) ?? { key: r.key, label: r.label, teamIds: [] };
+    entry.teamIds.push(r.teamId);
+    roleByKey.set(r.key, entry);
+  }
   return {
-    people,
+    people: people.map((p) => ({
+      id: p.id,
+      name: p.name,
+      teamIds: p.teamMembers.map((m) => m.teamId),
+    })),
+    teams,
     roles: [...roleByKey.values()],
     templates: templates.map((t) => ({
       id: t.id,
@@ -194,7 +229,7 @@ export async function ruleContext(
           },
         },
       },
-      select: { userId: true, set: { select: { startsAt: true } } },
+      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
     }),
   ]);
   return {
@@ -204,6 +239,10 @@ export async function ruleContext(
       startsAt: s.startsAt,
       assignments: s.assignments,
     })),
-    periodBookings: bookings.map((b) => ({ userId: b.userId, startsAt: b.set.startsAt })),
+    periodBookings: bookings.map((b) => ({
+      userId: b.userId,
+      startsAt: b.set.startsAt,
+      teamId: b.set.teamId,
+    })),
   };
 }

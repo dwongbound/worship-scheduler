@@ -134,8 +134,8 @@ export const ROLE_ORDER: BuiltInRole[] = [
   "VOCALS",
   // A/V sits last on purpose. It's tech rather than music, so it neither
   // competes with the band for people nor leads the roster when a set is read
-  // top to bottom — and A/V never doubles up with an instrument anyway (it's
-  // absent from OVERLAP_ALLOWED_PAIRS), so filling it late costs nothing.
+  // top to bottom — and A/V doesn't double up with an instrument by default
+  // (no SHARE_ROLES rule names it), so filling it late costs nothing.
   "AV",
 ];
 
@@ -146,44 +146,22 @@ export const ROLE_ORDER: BuiltInRole[] = [
 // role that exists": ask the team for that (lib/teamRoles.ts orderedRoles).
 export const ALL_INSTRUMENTS: Instrument[] = [...ROLE_ORDER, CHOIR];
 
-// The only roles a musical director can lead from, IN PREFERENCE ORDER. A
-// required-MD set is only "covered" when an MD is assigned to one of these;
-// the auto-scheduler seats a reserved MD into one of them (never
-// drums/vocals/etc.), and lib/md.ts designates the set's MD by walking this
-// list. Electric guitar leads because that's who typically MDs — keys and bass
-// are the fallbacks, used only when no MD is seated on electric.
+// The built-in MD order: the roles a musical director leads from, best first.
+// It's the DEFAULT of the org's MD order rule now (lib/schedulingRules.ts
+// MD_ORDER — every org starts with it written out, and mdRolesFor falls back
+// to it when an org has none). Electric guitar leads because that's who
+// typically MDs; keys and bass are the fallbacks.
 export const MD_ROLES: string[] = ["ELECTRIC_GUITAR", "KEYS", "BASS"];
 
-// A person normally fills at most one role on a set. The only sanctioned
-// double-ups are these unordered pairs: worship leader + acoustic guitar, and
-// acoustic guitar + vox. No other pairing is allowed (e.g. keys + electric
-// guitar), and a person may only double up when EVERY pair among their roles is
-// listed here — so worship leader + vox (not adjacent to acoustic) is out, as
-// is the three-way worship leader + acoustic + vox. See `rolesMayOverlap`.
-export const OVERLAP_ALLOWED_PAIRS: [Instrument, Instrument][] = [
-  ["WORSHIP_LEADER", "ACOUSTIC_GUITAR"],
-  ["ACOUSTIC_GUITAR", "VOCALS"],
-];
-
-// The acoustic guitarist must double as one of these — the auto-scheduler only
-// fills a set's acoustic slot with someone already seated as the worship leader
-// or a vocalist who also plays acoustic. If none of them play it, the slot is
-// left empty rather than seating a dedicated acoustic-only player. (These are
-// exactly the roles acoustic guitar may overlap with — see OVERLAP_ALLOWED_PAIRS.)
+// The built-in role sharing: the acoustic guitarist doubles as the worship
+// leader or a vocalist, and never plays on their own. The DEFAULT of the org's
+// "two roles, one person" rule (lib/schedulingRules.ts SHARE_ROLES, which is
+// now the only way one person holds two roles in Auto schedule).
 export const ACOUSTIC_HOST_ROLES: string[] = ["WORSHIP_LEADER", "VOCALS"];
 
-// The role ACOUSTIC_HOST_ROLES governs. A built-in key like CHOIR, named here
-// because two places have to agree on it: the scheduler (which fills it last,
-// and only from a seated host) and setStatus (which doesn't count an empty one
-// as a hole — see lib/setStatus.ts).
+// The role ACOUSTIC_HOST_ROLES governs. setStatus still names it directly: an
+// empty acoustic seat isn't a hole (see lib/setStatus.ts).
 export const ACOUSTIC_GUITAR = "ACOUSTIC_GUITAR" as const;
-
-// True if two distinct roles may be held by the same person on one set.
-export function rolesMayOverlap(a: Instrument, b: Instrument): boolean {
-  return OVERLAP_ALLOWED_PAIRS.some(
-    ([x, y]) => (x === a && y === b) || (x === b && y === a)
-  );
-}
 
 // Built-in labels only — a team's own labels live on its TeamRole rows. Read a
 // role's name through lib/teamRoles.ts roleLabel(), which prefers the team's.

@@ -27,6 +27,7 @@ import { schedulableRolesByTeam } from "@/lib/roster";
 import { buildSchedule, teamKey } from "@/lib/scheduler";
 import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { loadOrgRules, ruleContext } from "@/lib/schedulingRuleStore";
+import { mdRolesFor } from "@/lib/schedulingRules";
 import { defaultMDId } from "@/lib/md";
 import type { SlotCapacityMap } from "@/lib/constants";
 import { occurrencesInRange, parseLocalDate, upcomingOccurrences } from "@/lib/dates";
@@ -358,7 +359,8 @@ export async function POST(req: NextRequest) {
         role: a.role,
         isMD: isMDById.get(a.userId) ?? false,
       })),
-      previousMDByTeam.get(teamKey) ?? null
+      previousMDByTeam.get(teamKey) ?? null,
+      mdRolesFor(schedulingRules, set.teamId)
     );
     // Only a set that actually got a director advances the rotation; one that
     // couldn't find anyone leaves the previous name standing, so the set after
@@ -386,6 +388,7 @@ export async function POST(req: NextRequest) {
       periodBookings: periodBookings.map((b) => ({
         userId: b.userId,
         startsAt: b.startsAt.toISOString(),
+        teamId: b.teamId ?? null,
       })),
     },
   };

@@ -2,14 +2,16 @@
 //
 // A set has exactly one MD, stored explicitly as `Set.mdUserId`. To be eligible
 // a person must, on THIS set: be a musical director (`isMD`), hold an MD-capable
-// role (electric guitar / keys / bass — see MD_ROLES, which is ordered by
+// role (by default electric guitar / keys / bass — MD_ROLES, ordered by
 // preference: the MD is normally the electric guitarist), and NOT be the
 // worship leader. These helpers are the single source of that rule, reused by
 // the detail modal, the generate preview, the API, and the Slack summary.
 //
-// MD eligibility is pinned to the BUILT-IN role keys. Now that a team owns its
-// catalog, a team that renames or drops keys/electric/bass simply has nobody
-// eligible to MD — deliberately, since custom roles carry no MD semantics.
+// WHICH roles an MD leads from, and in what order, is the org's MD order rule
+// (lib/schedulingRules.ts MD_ORDER, resolved per team by mdRolesFor). Every
+// helper here takes that list as `mdRoles`, defaulting to the built-in
+// MD_ROLES for a caller with no rules in hand — so every check of one set's MD
+// must pass the same list, or the server and the screen disagree.
 import { MD_ROLES, type Instrument } from "@/lib/constants";
 
 // The minimal per-assignment shape these helpers need. `isMD` is the assignee's
@@ -62,7 +64,9 @@ export function eligibleMDIds(
   // that pick a single set's MD in isolation pass nothing and get the old
   // behaviour; the generate flow chains it down the run so nobody leads two in
   // a row (see app/api/admin/generate).
-  previousMDId?: string | null
+  previousMDId?: string | null,
+  // The roles an MD may lead from, best first (see the header).
+  mdRoles: readonly string[] = MD_ROLES
 ): string[] {
   const assignments = effectiveHolders(input);
   const wl = worshipLeaderIds(assignments);
@@ -70,7 +74,7 @@ export function eligibleMDIds(
   const ids: string[] = [];
   // Walk the MD roles in preference order — electric guitar first, since that's
   // who normally MDs, and only then keys/bass.
-  for (const role of MD_ROLES) {
+  for (const role of mdRoles) {
     const inRole = assignments
       .filter((a) => a.role === role && a.isMD && !wl.has(a.userId))
       .sort((a, b) => {
@@ -95,16 +99,18 @@ export function eligibleMDIds(
 // see eligibleMDIds for exactly how far that preference reaches.
 export function defaultMDId(
   assignments: MDAssignment[],
-  previousMDId?: string | null
+  previousMDId?: string | null,
+  mdRoles: readonly string[] = MD_ROLES
 ): string | null {
-  return eligibleMDIds(assignments, previousMDId)[0] ?? null;
+  return eligibleMDIds(assignments, previousMDId, mdRoles)[0] ?? null;
 }
 
 // Whether a stored mdUserId is still a valid MD for the set's current roster —
 // used to ignore a stale id (e.g. after the MD's slot was removed/reassigned).
 export function isValidMD(
   mdUserId: string | null | undefined,
-  assignments: MDAssignment[]
+  assignments: MDAssignment[],
+  mdRoles: readonly string[] = MD_ROLES
 ): boolean {
-  return !!mdUserId && eligibleMDIds(assignments).includes(mdUserId);
+  return !!mdUserId && eligibleMDIds(assignments, null, mdRoles).includes(mdUserId);
 }

@@ -90,7 +90,7 @@ import {
   type FixedSet,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
-import type { SchedulingRule } from "@/lib/schedulingRules";
+import { mdRolesFor, type SchedulingRule } from "@/lib/schedulingRules";
 import { isActiveForSet } from "@/lib/stagedPlan";
 import {
   DEFAULT_SET_METRIC,
@@ -345,9 +345,10 @@ export default function SetDetailModal({
             startsAt: new Date(f.startsAt),
           })),
           periodBookings: (d.periodBookings ?? []).map(
-            (b: { userId: string; startsAt: string }) => ({
+            (b: { userId: string; startsAt: string; teamId?: string | null }) => ({
               userId: b.userId,
               startsAt: new Date(b.startsAt),
+              teamId: b.teamId ?? null,
             })
           ),
         });
@@ -533,11 +534,19 @@ export default function SetDetailModal({
   // warning, and no "Require MD" in Change Roles. A leftover requiresMD flag on
   // such a set is ignored rather than acted on.
   const supportsMD = teamSupportsMD(catalog);
-  const eligibleMdIds = new Set(eligibleMDIds(mdAssignments));
+  // Which roles an MD leads from here: the org's MD order rule for this team
+  // (lib/schedulingRules.ts mdRolesFor). Only admins read the rules; anyone
+  // else trusts the stored MD, which the server already checked against them.
+  const mdRoles = ruleData
+    ? mdRolesFor(ruleData.rules, set.teamId ?? set.team?.id ?? null)
+    : undefined;
+  const eligibleMdIds = new Set(eligibleMDIds(mdAssignments, null, mdRoles));
   // The chosen MD, but only if still valid for the current roster (a stale id
   // — e.g. after their slot was removed — reads as "no MD").
   const mdUserId =
-    supportsMD && isValidMD(set.mdUserId, mdAssignments) ? set.mdUserId : null;
+    supportsMD && (isAdmin ? isValidMD(set.mdUserId, mdAssignments, mdRoles) : !!set.mdUserId)
+      ? set.mdUserId
+      : null;
   // A required-MD set is "unclosed" until one is chosen.
   const missingMD = supportsMD && set.requiresMD && !mdUserId;
   // Distinct assignees, for the MD dropdown (a person with several slots once).
@@ -616,7 +625,7 @@ export default function SetDetailModal({
   const eligibleFor = (role: Instrument): PlayerOption[] => {
     // In an MD-capable role, mark the musical directors — picking them here
     // makes them an eligible MD for the set.
-    const roleAllowsMD = (MD_ROLES as Instrument[]).includes(role);
+    const roleAllowsMD = (mdRoles ?? MD_ROLES).includes(role);
     return buildPlayerOptions({
       users,
       role,
@@ -786,7 +795,9 @@ export default function SetDetailModal({
       [],
       new Map(),
       {
-        schedulingRules: ruleData?.rules ?? [],
+        // Undefined until the rules land: the fill then follows the defaults
+        // every org starts with (lib/schedulingRules.ts DEFAULT_RULES).
+        schedulingRules: ruleData?.rules,
         fixedSets: ruleData?.fixedSets ?? [],
         periodBookings: ruleData?.periodBookings ?? [],
       }
@@ -816,11 +827,11 @@ export default function SetDetailModal({
       const assignments = [...current.assignments, ...seats];
       const roster = assignments.map(mdSeat);
       const needsNewMD =
-        supportsMD && current.requiresMD && !isValidMD(current.mdUserId, roster);
+        supportsMD && current.requiresMD && !isValidMD(current.mdUserId, roster, mdRoles);
       return {
         ...current,
         assignments,
-        mdUserId: needsNewMD ? defaultMDId(roster) : current.mdUserId,
+        mdUserId: needsNewMD ? defaultMDId(roster, null, mdRoles) : current.mdUserId,
       };
     });
   };

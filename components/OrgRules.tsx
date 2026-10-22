@@ -9,6 +9,10 @@
 // wins when two pull different ways. The vocabulary, the sentences and the
 // contradiction check all live in lib/schedulingRules.ts; this only draws them.
 //
+// Each rule applies to every team unless it names one ("Applies to"); a team's
+// rule offers only that team's roles and members, and its row carries the
+// team's name.
+//
 // Every change PUTs the whole list (required first, then preferences in rank
 // order). Toggles, deletes and reorders are optimistic and roll back if the
 // API refuses; the builder waits for the save so a refusal stays on screen
@@ -31,15 +35,19 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
 import InfoTooltip from "@/components/common/InfoTooltip";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import Toggle from "@/components/common/Toggle";
 import { DAY_ABBRS } from "@/lib/constants";
+import { MD_KEY } from "@/lib/teamRoles";
 import { minutesToShortTimeLabel, shortDateTimeCompact } from "@/lib/dates";
 import {
   LIMIT_MAX,
+  NOT_MD_ROLES,
+  ROLE_LIST_MAX,
   RULE_KINDS,
   describeRule,
   explainRule,
@@ -54,8 +62,11 @@ import {
 } from "@/lib/schedulingRules";
 
 interface RuleOptions {
-  people: { id: string; name: string }[];
-  roles: { key: string; label: string }[];
+  // teamIds: the teams each person is on / each role exists on, so a team's
+  // rule offers only its own.
+  people: { id: string; name: string; teamIds: string[] }[];
+  teams: { id: string; name: string }[];
+  roles: { key: string; label: string; teamIds: string[] }[];
   templates: {
     id: string;
     label: string;
@@ -82,6 +93,10 @@ interface Draft {
   mode: "ALWAYS" | "NEVER";
   max: number;
   period: "WEEK" | "MONTH";
+  // "" = every team.
+  teamId: string;
+  // MD_ORDER's roles, best first; SHARE_ROLES's host roles. "" = an unpicked row.
+  roles: string[];
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -98,10 +113,12 @@ const EMPTY_DRAFT: Draft = {
   mode: "NEVER",
   max: 2,
   period: "MONTH",
+  teamId: "",
+  roles: [""],
 };
 
 function draftFromRule(rule: SchedulingRule): Draft {
-  const d: Draft = { ...EMPTY_DRAFT, kind: rule.params.kind, tier: rule.tier };
+  const d: Draft = { ...EMPTY_DRAFT, kind: rule.params.kind, tier: rule.tier, teamId: rule.teamId ?? "" };
   const p = rule.params;
   switch (p.kind) {
     case "ONLY_IF_NEEDED":
@@ -116,6 +133,10 @@ function draftFromRule(rule: SchedulingRule): Draft {
       return { ...d, userId: p.userIds[0], otherUserId: p.userIds[1], mode: p.mode };
     case "LIMIT":
       return { ...d, userId: p.userId, max: p.max, period: p.period };
+    case "MD_ORDER":
+      return { ...d, roles: [...p.roles] };
+    case "SHARE_ROLES":
+      return { ...d, role: p.role, roles: [...p.withRoles] };
   }
 }
 
@@ -136,6 +157,10 @@ function paramsFromDraft(d: Draft): RuleParams | string {
       return parseRuleParams({ kind: d.kind, userIds: [d.userId, d.otherUserId], mode: d.mode });
     case "LIMIT":
       return parseRuleParams({ kind: d.kind, userId: d.userId, max: d.max, period: d.period });
+    case "MD_ORDER":
+      return parseRuleParams({ kind: d.kind, roles: d.roles.filter(Boolean) });
+    case "SHARE_ROLES":
+      return parseRuleParams({ kind: d.kind, role: d.role, withRoles: d.roles.filter(Boolean) });
   }
 }
 
@@ -182,10 +207,12 @@ export default function OrgRules({ orgId }: { orgId: string }) {
 
   const names = useMemo<RuleNames>(() => {
     const people = new Map(options?.people.map((p) => [p.id, p.name]));
+    const teams = new Map(options?.teams.map((t) => [t.id, t.name]));
     const roles = new Map(options?.roles.map((r) => [r.key, r.label]));
     const templates = new Map(options?.templates.map((t) => [t.id, templateLabel(t)]));
     const sets = new Map(options?.sets.map((s) => [s.id, setLabel(s)]));
     return {
+      team: (id) => teams.get(id) ?? "a team",
       user: (id) => people.get(id) ?? "someone",
       role: (key) => roles.get(key) ?? key,
       template: (id) => templates.get(id) ?? "a recurring set",
@@ -201,7 +228,12 @@ export default function OrgRules({ orgId }: { orgId: string }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          rules: next.map((r) => ({ tier: r.tier, enabled: r.enabled, params: r.params })),
+          rules: next.map((r) => ({
+            tier: r.tier,
+            enabled: r.enabled,
+            teamId: r.teamId ?? null,
+            params: r.params,
+          })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -260,11 +292,11 @@ export default function OrgRules({ orgId }: { orgId: string }) {
   // The list as it would be with the builder's rule saved: an edit stays where
   // it was unless its tier changed, which moves it to the end of the other
   // section (the bottom of the preference ranking, if it became one).
-  function withDraft(params: RuleParams, tier: RuleTier): SchedulingRule[] {
+  function withDraft(params: RuleParams, tier: RuleTier, teamId: string | null): SchedulingRule[] {
     const list = rules ?? [];
     const id = builder?.editingId ?? "new";
     const current = list.find((r) => r.id === id);
-    const rule: SchedulingRule = { id, tier, enabled: current?.enabled ?? true, params };
+    const rule: SchedulingRule = { id, tier, enabled: current?.enabled ?? true, teamId, params };
     if (current && current.tier === tier) {
       return list.map((r) => (r.id === id ? rule : r));
     }
@@ -274,9 +306,9 @@ export default function OrgRules({ orgId }: { orgId: string }) {
       : [...required, ...preferences, rule];
   }
 
-  async function saveBuilder(params: RuleParams, tier: RuleTier) {
+  async function saveBuilder(params: RuleParams, tier: RuleTier, teamId: string | null) {
     setBuilderError("");
-    const err = await persist(withDraft(params, tier));
+    const err = await persist(withDraft(params, tier, teamId));
     if (err) {
       setBuilderError(err);
       return;
@@ -386,7 +418,7 @@ function Heading() {
     <div className="mb-3">
       <div className="mb-1 flex items-center gap-2">
         <p className="text-sm font-medium">Scheduling rules</p>
-        <InfoTooltip text="Auto schedule normally rotates people fairly. Rules let you steer it: who to pick first, who to keep together or apart, who plays both of two sets, and how often someone serves. They apply to every team in this org. Picking people by hand is never blocked." />
+        <InfoTooltip text="Auto schedule normally rotates people fairly. Rules let you steer it: who to pick first, who to keep together or apart, who plays both of two sets, how often someone serves, which roles an MD leads from, and who may play two roles at once. Each rule applies to every team unless you pick one. Picking people by hand is never blocked." />
       </div>
       <p className="text-sm text-gray-500">How Auto schedule picks people.</p>
     </div>
@@ -470,6 +502,13 @@ function RuleRowBody({
           rule.enabled ? "" : "line-through opacity-50"
         }`}
       >
+        {rule.teamId && (
+          <span className="mr-1.5 inline-flex align-middle">
+            <Badge tone="indigo" size="sm">
+              {names.team?.(rule.teamId) ?? "One team"}
+            </Badge>
+          </span>
+        )}
         <Sentence params={rule.params} names={names} />
       </p>
       <div className="flex items-center gap-1 sm:contents">
@@ -682,24 +721,45 @@ function RuleBuilder({
   names: RuleNames;
   busy: boolean;
   error: string;
-  prospective: (params: RuleParams, tier: RuleTier) => SchedulingRule[];
+  prospective: (params: RuleParams, tier: RuleTier, teamId: string | null) => SchedulingRule[];
   onChange: (draft: Draft) => void;
   onClose: () => void;
-  onSave: (params: RuleParams, tier: RuleTier) => void;
+  onSave: (params: RuleParams, tier: RuleTier, teamId: string | null) => void;
 }) {
   const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
   const info = kindInfo(draft.kind);
-  // ONLY_IF_NEEDED can only be a preference.
+  // ONLY_IF_NEEDED can only be a preference, MD_ORDER only required.
   const tier: RuleTier = info.tiers.includes(draft.tier) ? draft.tier : info.tiers[0];
+  const teamId = draft.teamId || null;
   const params = paramsFromDraft(draft);
   const ready = typeof params !== "string";
-  const clash = ready ? findContradiction(prospective(params, tier)) : null;
+  const clash = ready ? findContradiction(prospective(params, tier, teamId)) : null;
+
+  // A team's rule offers only that team's members and roles.
+  const people = options.people.filter((p) => !teamId || p.teamIds.includes(teamId));
+  const roles = options.roles.filter((r) => !teamId || r.teamIds.includes(teamId));
+  // Switching team drops any pick the new team doesn't have.
+  const pickTeam = (next: string) => {
+    const inTeam = (ids: string[]) => !next || ids.includes(next);
+    const keepUser = (id: string) =>
+      id && inTeam(options.people.find((p) => p.id === id)?.teamIds ?? []) ? id : "";
+    const keepRole = (key: string) =>
+      key && inTeam(options.roles.find((r) => r.key === key)?.teamIds ?? []) ? key : "";
+    const kept = draft.roles.map(keepRole).filter(Boolean);
+    set({
+      teamId: next,
+      userId: keepUser(draft.userId),
+      otherUserId: keepUser(draft.otherUserId),
+      role: keepRole(draft.role),
+      roles: kept.length ? kept : [""],
+    });
+  };
 
   const person = (value: string, onPick: (id: string) => void, label: string, exclude?: string) => (
     <Blank>
       <Select label={label} hideLabel value={value} onChange={(e) => onPick(e.target.value)}>
         <option value="">Pick a person…</option>
-        {options.people
+        {people
           .filter((p) => p.id !== exclude)
           .map((p) => (
             <option key={p.id} value={p.id}>
@@ -709,11 +769,11 @@ function RuleBuilder({
       </Select>
     </Blank>
   );
-  const role = (allowAny = false) => (
+  const role = (allowAny = false, exclude: string[] = []) => (
     <Blank>
       <Select label="Role" hideLabel value={draft.role} onChange={(e) => set({ role: e.target.value })}>
         <option value="">{allowAny ? "any role" : "Pick a role…"}</option>
-        {options.roles.map((r) => (
+        {roles.filter((r) => !exclude.includes(r.key)).map((r) => (
           <option key={r.key} value={r.key}>
             {r.label}
           </option>
@@ -859,6 +919,36 @@ function RuleBuilder({
         </>
       );
       break;
+    case "MD_ORDER":
+      sentence = (
+        <>
+          <T>Musical directors lead from</T>
+          <RoleList
+            values={draft.roles}
+            roles={roles.filter((r) => !NOT_MD_ROLES.includes(r.key))}
+            joiner="then"
+            label="MD role"
+            onChange={(next) => set({ roles: next })}
+          />
+        </>
+      );
+      break;
+    case "SHARE_ROLES":
+      sentence = (
+        <>
+          <T>Whoever plays</T>
+          <RoleList
+            values={draft.roles}
+            roles={roles.filter((r) => r.key !== draft.role && r.key !== MD_KEY)}
+            joiner="or"
+            label="Role they already play"
+            onChange={(next) => set({ roles: next })}
+          />
+          <T>may also play</T>
+          {role(false, [...draft.roles, MD_KEY])}
+        </>
+      );
+      break;
   }
 
   return (
@@ -875,7 +965,7 @@ function RuleBuilder({
           <Button
             loading={busy}
             disabled={!ready || !!clash}
-            onClick={() => ready && onSave(params, tier)}
+            onClick={() => ready && onSave(params, tier, teamId)}
           >
             {editing ? "Save rule" : "Add rule"}
           </Button>
@@ -904,7 +994,32 @@ function RuleBuilder({
       </Step>
 
       <Step n={2} title="Fill in the blanks">
+        {options.teams.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-2">
+            <T>Applies to</T>
+            <Blank>
+              <Select
+                label="Applies to"
+                hideLabel
+                value={draft.teamId}
+                onChange={(e) => pickTeam(e.target.value)}
+              >
+                <option value="">Every team</option>
+                {options.teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} only
+                  </option>
+                ))}
+              </Select>
+            </Blank>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-2">{sentence}</div>
+        {draft.kind === "MD_ORDER" && teamId && (
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            Replaces the every-team MD order on this team&apos;s sets.
+          </p>
+        )}
       </Step>
 
       <Step n={3} title="How strict?">
@@ -916,18 +1031,23 @@ function RuleBuilder({
             title="Required"
             body={
               info.tiers.includes("REQUIRED")
-                ? "Never broken. If it can't be met, the slot stays open."
+                ? draft.kind === "SHARE_ROLES"
+                  ? "Never broken. The role only goes to someone doubling up; if nobody can, it stays open."
+                  : "Never broken. If it can't be met, the slot stays open."
                 : "Not for this kind: a required last resort would just mean never. Mark them inactive instead."
             }
           />
           <TierCard
             selected={tier === "PREFERENCE"}
+            disabled={!info.tiers.includes("PREFERENCE")}
             onClick={() => set({ tier: "PREFERENCE" })}
             title="Preference"
             body={
-              editing
-                ? "Followed when possible. Keeps its place in the ranking."
-                : "Followed when possible. Added at the bottom of the ranking; drag it up to give it more weight."
+              !info.tiers.includes("PREFERENCE")
+                ? "Not for this kind: every MD check in the app reads this list, so it always applies."
+                : editing
+                  ? "Followed when possible. Keeps its place in the ranking."
+                  : "Followed when possible. Added at the bottom of the ranking; drag it up to give it more weight."
             }
           />
         </div>
@@ -980,6 +1100,75 @@ function T({ children }: { children: React.ReactNode }) {
 // One blank in the sentence. Select fills its wrapper, so the width lives here.
 function Blank({ children, narrow = false }: { children: React.ReactNode; narrow?: boolean }) {
   return <div className={narrow ? "w-24" : "w-full sm:w-52"}>{children}</div>;
+}
+
+// An ordered list of role blanks joined by `joiner` ("then" / "or"), each
+// with a ✕ once there's more than one, and "+ role" to add another. A role
+// picked in one blank isn't offered in the others.
+function RoleList({
+  values,
+  roles,
+  joiner,
+  label,
+  onChange,
+}: {
+  values: string[];
+  roles: { key: string; label: string }[];
+  joiner: string;
+  label: string;
+  onChange: (next: string[]) => void;
+}) {
+  const canAdd =
+    values.length < ROLE_LIST_MAX && values.every(Boolean) && values.length < roles.length;
+  return (
+    <>
+      {values.map((value, i) => (
+        <span key={i} className="contents">
+          {i > 0 && <T>{joiner}</T>}
+          <Blank>
+            <div className="flex items-center gap-1">
+              <div className="min-w-0 flex-1">
+                <Select
+                  label={`${label} ${i + 1}`}
+                  hideLabel
+                  value={value}
+                  onChange={(e) => onChange(values.map((v, j) => (j === i ? e.target.value : v)))}
+                >
+                  <option value="">Pick a role…</option>
+                  {roles
+                    .filter((r) => r.key === value || !values.includes(r.key))
+                    .map((r) => (
+                      <option key={r.key} value={r.key}>
+                        {r.label}
+                      </option>
+                    ))}
+                </Select>
+              </div>
+              {values.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => onChange(values.filter((_, j) => j !== i))}
+                  aria-label={`Remove role ${i + 1}`}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          </Blank>
+        </span>
+      ))}
+      {canAdd && (
+        <button
+          type="button"
+          onClick={() => onChange([...values, ""])}
+          className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300"
+        >
+          + role
+        </button>
+      )}
+    </>
+  );
 }
 
 function Choice({

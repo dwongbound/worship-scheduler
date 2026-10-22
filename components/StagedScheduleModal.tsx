@@ -99,7 +99,7 @@ import {
   type ScheduleOptions,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
-import type { SchedulingRule } from "@/lib/schedulingRules";
+import { mdRolesFor, type SchedulingRule } from "@/lib/schedulingRules";
 import {
   conflictedUserIds,
   countAssignments,
@@ -564,7 +564,7 @@ export default function StagedScheduleModal({
       // arrays on both sides of the change.
       const next = designateMDs(
         sets.map((s, i) => (i === selectedIdx ? pasteSet(s, clipboard) : s)),
-        { isMD: isMdOf, seed: plan.baseline?.previousMDByTeam }
+        { isMD: isMdOf, seed: plan.baseline?.previousMDByTeam, mdRoles: mdRolesOf }
       );
       setUndoStack((stack) =>
         pushUndo(stack, { idx: selectedIdx, before: sets, after: next })
@@ -619,8 +619,11 @@ export default function StagedScheduleModal({
 
   // The org's scheduling rules (Org settings → Scheduling rules), so a re-run
   // here obeys them the way the server's fill did. Empty until they land, or if
-  // they can't be read — the re-run then falls back to plain rotation.
-  const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  // they can't be read — the re-run then follows the defaults every org starts
+  // with (lib/schedulingRules.ts DEFAULT_RULES).
+  const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[] | undefined>();
+  // The roles an MD leads from on a team's set, per the org's MD order rule.
+  const mdRolesOf = (teamId: string | null) => mdRolesFor(schedulingRules, teamId);
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
@@ -662,6 +665,7 @@ export default function StagedScheduleModal({
       periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId,
       })),
     };
   };
@@ -1113,9 +1117,9 @@ export default function StagedScheduleModal({
         // survives, otherwise the best of the newly-complete roster — passing
         // over whoever led the set before this one on the same team.
         mdUserId: s.requiresMD
-          ? isValidMD(s.mdUserId, a)
+          ? isValidMD(s.mdUserId, a, mdRolesOf(s.teamId ?? null))
             ? s.mdUserId
-            : defaultMDId(a, previousMDFor(sets.slice(0, idx), s.teamId))
+            : defaultMDId(a, previousMDFor(sets.slice(0, idx), s.teamId), mdRolesOf(s.teamId ?? null))
           : null,
       };
     });
@@ -1129,9 +1133,10 @@ export default function StagedScheduleModal({
   // eligible assignees, and the current pick if it's still valid.
   const mdInfo = (set: StagedSet) => {
     const a = mdRoster(set.assignments);
+    const mdRoles = mdRolesOf(set.teamId ?? null);
     return {
-      eligibleIds: new Set(eligibleMDIds(a)),
-      mdUserId: isValidMD(set.mdUserId, a) ? set.mdUserId : null,
+      eligibleIds: new Set(eligibleMDIds(a, null, mdRoles)),
+      mdUserId: isValidMD(set.mdUserId, a, mdRoles) ? set.mdUserId : null,
     };
   };
 
@@ -1148,6 +1153,7 @@ export default function StagedScheduleModal({
     designateMDs(list, {
       isMD: isMdOf,
       seed: plan?.baseline?.previousMDByTeam,
+      mdRoles: mdRolesOf,
     });
 
   // Options for a role's dropdown: users who play `role` and aren't already on

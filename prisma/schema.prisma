@@ -245,6 +245,7 @@ model Team {
   availabilityRequests AvailabilityRequest[] @relation("AvailabilityRequestTeams")
   // Sets this team guests on (it doesn't own them) — see SetGuestTeam.
   guestOnSets          SetGuestTeam[]
+  schedulingRules      SchedulingRule[]
 
   createdAt DateTime @default(now())
 
@@ -900,6 +901,11 @@ model SchedulingRule {
 
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
+
+  // The one team this rule is for; null = every team in the org. A deleted
+  // team takes its own rules with it.
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

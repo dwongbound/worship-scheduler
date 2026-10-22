@@ -13,11 +13,13 @@
 //   3. Ties break on user id so results are deterministic (nice for tests).
 // Slots with no viable candidate stay empty rather than blocking the run.
 //
-// ACOUSTIC GUITAR is a special case: it's filled LAST (after worship leader and
-// vocals are seated) and only by someone already holding one of those roles who
-// also plays acoustic — the acoustic guitarist should double as the leader/a
-// singer. If none of them play it, the slot is left empty (never a dedicated
-// acoustic-only player). See ACOUSTIC_HOST_ROLES.
+// SHARED ROLES (SHARE_ROLES rules): one person holds one role per set, except
+// where a rule lets whoever plays one of `withRoles` also play `role`. A shared
+// role is filled LAST, once its hosts are seated. Required: only a seated host
+// who plays it may take it, and if none do the slot is left empty (never a
+// dedicated player) — the built-in "the acoustic guitarist doubles as the
+// worship leader or a vocalist", which every org starts with as a rule. A
+// preference hands it to a seated host first and falls back to anyone.
 //
 // PER-TEAM BALANCE: overall load alone can seat someone on all four of one
 // team's sets and none of another's — both teams' sets are just "a set" to a
@@ -35,8 +37,9 @@
 // had any MD free — handed the same person every set as soon as they were the
 // only MD in some role. When a seat IS reserved, WHO gets it is the freshest MD
 // by the same rotation ranking as everyone else, and their ROLE is the most
-// preferred one they can take: electric guitar, then keys, then bass (MD_ROLES
-// is preference-ordered).
+// preferred one they can take, in the org's MD order for the set's team
+// (mdRolesFor — electric guitar, then keys, then bass unless an admin says
+// otherwise).
 //
 // SPACING: someone who served (or is being scheduled) within MIN_GAP_DAYS of
 // a set is deprioritized for it, not excluded — with enough people this makes
@@ -59,11 +62,14 @@
 //     load) decide, so with no rules the fill is exactly what it always was.
 //   • An ALWAYS pair is seated together: right after one of them is placed,
 //     the other is put in the first open role they play (fill order).
+//   • A rule scoped to a team governs only that team's sets (a team-less set
+//     follows the all-teams rules alone), and a team's LIMIT counts only that
+//     team's sets.
+//   • `schedulingRules` left undefined means "no list was given": the fill
+//     follows DEFAULT_RULES, the behaviour every org starts with. An explicit
+//     list — even an empty one — is the whole truth.
 
 import {
-  ACOUSTIC_HOST_ROLES,
-  MD_ROLES,
-  rolesMayOverlap,
   type BandRole,
   type Instrument,
   type SlotCapacityMap,
@@ -79,7 +85,10 @@ import { eligibleMDIds } from "./md";
 import { APP_TZ } from "./appTz";
 import { zonedParts } from "./dates";
 import {
+  DEFAULT_RULES,
+  mdRolesFor,
   periodKey,
+  ruleAppliesTo,
   weekKey,
   type RuleParams,
   type RulePeriod,
@@ -170,9 +179,11 @@ export interface ProposedAssignment {
 }
 
 // A date someone is already booked on (from the DB), for the spacing rule.
+// `teamId` (the booked set's team) is only read by a team's LIMIT rules.
 export interface ExistingAssignment {
   userId: string;
   startsAt: Date;
+  teamId?: string | null;
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -316,9 +327,9 @@ export function buildSchedule(
 
   // ── Scheduling rules — see SCHEDULING RULES above ──────────────────────
   const tz = options.timeZone ?? APP_TZ;
-  const activeRules = (options.schedulingRules ?? []).filter((r) => r.enabled);
-  const required = activeRules.filter((r) => r.tier === "REQUIRED");
-  const preferences = activeRules.filter((r) => r.tier === "PREFERENCE");
+  const allRules: SchedulingRule[] =
+    options.schedulingRules ?? DEFAULT_RULES.map((r, i) => ({ ...r, id: `default-${i}` }));
+  const enabledRules = allRules.filter((r) => r.enabled);
   // userId → the people a TOGETHER rule of this tier and mode pairs them with.
   const togetherMap = (list: SchedulingRule[], mode: "ALWAYS" | "NEVER") => {
     const map = new Map<string, string[]>();
@@ -330,15 +341,56 @@ export function buildSchedule(
     }
     return map;
   };
-  const neverRequired = togetherMap(required, "NEVER");
-  const alwaysRequired = togetherMap(required, "ALWAYS");
-  const alwaysPreferred = togetherMap(preferences, "ALWAYS");
-  const requiredLimits = required.flatMap((r) =>
-    r.params.kind === "LIMIT" ? [r.params] : []
-  );
-  const requiredPrefers = required.flatMap((r) =>
-    r.params.kind === "PREFER" ? [r.params] : []
-  );
+  // Everything the fill reads from the rules, for the sets of one team (team
+  // scope — see SCHEDULING RULES above). Built once per team per run.
+  const scopeCache = new Map<string, ReturnType<typeof scopeOf>>();
+  const scopeOf = (teamId: string | null) => {
+    const activeRules = enabledRules.filter((r) => ruleAppliesTo(r, teamId));
+    const required = activeRules.filter((r) => r.tier === "REQUIRED");
+    const preferences = activeRules.filter((r) => r.tier === "PREFERENCE");
+    const shares = activeRules.flatMap((r) =>
+      r.params.kind === "SHARE_ROLES" ? [{ tier: r.tier, ...r.params }] : []
+    );
+    // Unordered pairs one person may hold together on a set.
+    const sharedPairs = new Set(
+      shares.flatMap((r) => r.withRoles.flatMap((w) => [`${r.role}|${w}`, `${w}|${r.role}`]))
+    );
+    // A shared role → the roles whose holders may double into it, and whether
+    // ONLY they may (any required rule for it makes it host-only).
+    const sharedRoles = new Map<string, { hosts: Set<string>; requiredHosts: Set<string> }>();
+    for (const r of shares) {
+      const e = sharedRoles.get(r.role) ?? { hosts: new Set(), requiredHosts: new Set() };
+      for (const w of r.withRoles) {
+        e.hosts.add(w);
+        if (r.tier === "REQUIRED") e.requiredHosts.add(w);
+      }
+      sharedRoles.set(r.role, e);
+    }
+    return {
+      activeRules,
+      required,
+      preferences,
+      neverRequired: togetherMap(required, "NEVER"),
+      alwaysRequired: togetherMap(required, "ALWAYS"),
+      alwaysPreferred: togetherMap(preferences, "ALWAYS"),
+      requiredLimits: required.flatMap((r) =>
+        r.params.kind === "LIMIT" ? [{ ...r.params, teamId: r.teamId ?? null }] : []
+      ),
+      requiredPrefers: required.flatMap((r) => (r.params.kind === "PREFER" ? [r.params] : [])),
+      sharedPairs,
+      sharedRoles,
+      mdRoles: mdRolesFor(allRules, teamId),
+    };
+  };
+  const rulesForTeam = (teamId: string | null) => {
+    const k = teamId ?? "";
+    let v = scopeCache.get(k);
+    if (!v) {
+      v = scopeOf(teamId);
+      scopeCache.set(k, v);
+    }
+    return v;
+  };
 
   // LIMIT counting: distinct set times someone is booked on within a week or
   // month — this run's picks and DB bookings (bookedTimes), plus whatever the
@@ -346,6 +398,17 @@ export function buildSchedule(
   const extraTimes = new Map<string, number[]>();
   for (const a of options.periodBookings ?? []) {
     extraTimes.set(a.userId, [...(extraTimes.get(a.userId) ?? []), a.startsAt.getTime()]);
+  }
+  // The same bookings by team (teamKey), for a team's own LIMIT: only the
+  // team's sets count toward it. Fed by the DB bookings that carry a team and
+  // by every seat this run makes.
+  const teamTimes = new Map<string, number[]>();
+  const recordTeamTime = (userId: string, teamId: string | null | undefined, time: number) => {
+    const k = teamKey(userId, teamId);
+    teamTimes.set(k, [...(teamTimes.get(k) ?? []), time]);
+  };
+  for (const a of [...existingAssignments, ...(options.periodBookings ?? [])]) {
+    if (a.teamId !== undefined) recordTeamTime(a.userId, a.teamId, a.startsAt.getTime());
   }
   const periodCache = new Map<string, number>();
   const pkey = (t: number, period: RulePeriod) => {
@@ -357,10 +420,19 @@ export function buildSchedule(
     }
     return v;
   };
-  const setsInPeriod = (userId: string, time: number, period: RulePeriod) => {
+  // `teamId` set = only that team's sets (a team's own LIMIT).
+  const setsInPeriod = (
+    userId: string,
+    time: number,
+    period: RulePeriod,
+    teamId: string | null = null
+  ) => {
     const k = pkey(time, period);
     const seen = new Set<number>();
-    for (const t of [...(bookedTimes.get(userId) ?? []), ...(extraTimes.get(userId) ?? [])]) {
+    const times = teamId
+      ? teamTimes.get(teamKey(userId, teamId)) ?? []
+      : [...(bookedTimes.get(userId) ?? []), ...(extraTimes.get(userId) ?? [])];
+    for (const t of times) {
       if (t !== time && pkey(t, period) === k) seen.add(t);
     }
     return seen.size;
@@ -434,6 +506,18 @@ export function buildSchedule(
 
   for (const set of chronological) {
     const setTime = set.startsAt.getTime();
+    const {
+      activeRules,
+      preferences,
+      neverRequired,
+      alwaysRequired,
+      alwaysPreferred,
+      requiredLimits,
+      requiredPrefers,
+      sharedPairs,
+      sharedRoles,
+      mdRoles,
+    } = rulesForTeam(set.teamId ?? null);
     // Every pre-assigned seat is a fill constraint, choir included. (Choir was
     // dropped here while it was an unbounded list — seating every available
     // singer would otherwise have blocked them all from their band roles. Now
@@ -441,8 +525,8 @@ export function buildSchedule(
     // aren't also playing bass, which is what the rest of the fill assumes.)
     const preAssigned = set.preAssigned ?? [];
     // Roles each person already holds on this set — seeded with the pre-assigned
-    // people. Normally one slot per person, but one person may hold BOTH worship
-    // leader and acoustic guitar (OVERLAP_ALLOWED_ROLES); see canTakeRole.
+    // people. Normally one slot per person, but a SHARE_ROLES rule lets one
+    // person hold two (worship leader + acoustic guitar); see canTakeRole.
     const rolesOnSet = new Map<string, Set<Instrument>>();
     for (const p of preAssigned) {
       const held = rolesOnSet.get(p.userId) ?? new Set<Instrument>();
@@ -453,6 +537,7 @@ export function buildSchedule(
       // of the run the same way an auto-filled one does. (Deliberately NOT the
       // global tally; see the note on `preAssigned`.)
       recordBooking(p.userId, setTime);
+      recordTeamTime(p.userId, set.teamId, setTime);
       const preKey = teamKey(p.userId, set.teamId);
       teamCounts.set(preKey, (teamCounts.get(preKey) ?? 0) + 1);
     }
@@ -470,14 +555,22 @@ export function buildSchedule(
     for (const p of preAssigned) remaining[p.role] = (remaining[p.role] ?? 0) - 1;
 
     // Whether `userId` may additionally take `role`. Enforces one role per
-    // person, minus the sanctioned overlaps: the new role must be allowed to
-    // pair with EVERY role they already hold (see rolesMayOverlap).
+    // person, minus the pairs a SHARE_ROLES rule allows: the new role must be
+    // allowed to pair with EVERY role they already hold — so worship leader +
+    // acoustic and acoustic + vox don't add up to worship leader + vox.
     const canTakeRole = (userId: string, role: Instrument): boolean => {
       const held = rolesOnSet.get(userId);
       if (!held || held.size === 0) return true; // no role yet
       if (held.has(role)) return false; // already in this exact role
-      for (const r of held) if (!rolesMayOverlap(r, role)) return false;
+      for (const r of held) if (!sharedPairs.has(`${r}|${role}`)) return false;
       return true;
+    };
+    // Is `userId` seated here in one of `hosts`?
+    const holdsOneOf = (userId: string, hosts: Set<string>): boolean => {
+      const held = rolesOnSet.get(userId);
+      if (!held) return false;
+      for (const r of held) if (hosts.has(r)) return true;
+      return false;
     };
 
     // Picks made for THIS set, in order. They only reach `proposals` once the
@@ -493,25 +586,29 @@ export function buildSchedule(
       const tk = teamKey(userId, set.teamId);
       teamCounts.set(tk, (teamCounts.get(tk) ?? 0) + 1);
       recordBooking(userId, setTime);
+      recordTeamTime(userId, set.teamId, setTime);
       remaining[role]--;
       picks.push({ setId: set.id, userId, role });
       runRoster.get(set.id)?.roster.push({ userId, role });
     };
 
-    // Undo every pick this set has made, reversing exactly what `assign` did so
-    // the set can be re-filled from scratch. Pre-assigned seats are untouched —
-    // they're constraints, not picks. Used only by the required-MD retry.
-    const undoPicks = () => {
-      for (const p of picks.reverse()) {
+    // Undo this set's picks back to `mark` (all of them by default), reversing
+    // exactly what `assign` did. Pre-assigned seats are untouched — they're
+    // constraints, not picks. Used by the required-MD retry (everything) and by
+    // a required-ALWAYS group that couldn't all be seated (just that group).
+    const undoPicks = (mark = 0) => {
+      while (picks.length > mark) {
+        const p = picks.pop()!;
         rolesOnSet.get(p.userId)?.delete(p.role);
         counts.set(p.userId, (counts.get(p.userId) ?? 1) - 1);
         const tk = teamKey(p.userId, set.teamId);
         teamCounts.set(tk, (teamCounts.get(tk) ?? 1) - 1);
         // Drop ONE booking at this set's time: the person may legitimately
         // still have another here (a pre-assigned seat, or an overlapping role).
-        const times = bookedTimes.get(p.userId);
-        const at = times ? times.indexOf(setTime) : -1;
-        if (times && at >= 0) times.splice(at, 1);
+        for (const times of [bookedTimes.get(p.userId), teamTimes.get(teamKey(p.userId, set.teamId))]) {
+          const at = times ? times.indexOf(setTime) : -1;
+          if (times && at >= 0) times.splice(at, 1);
+        }
         remaining[p.role]++;
         const roster = runRoster.get(set.id)?.roster;
         const seatAt = roster
@@ -519,7 +616,6 @@ export function buildSchedule(
           : -1;
         if (roster && seatAt >= 0) roster.splice(seatAt, 1);
       }
-      picks.length = 0;
     };
 
     // The rotation ranking EVERY pick is made with — the MD pass included, so
@@ -537,25 +633,31 @@ export function buildSchedule(
     // ── Rule helpers for THIS set ───────────────────────────────────────
     const onSet = (userId: string) => (rolesOnSet.get(userId)?.size ?? 0) > 0;
     // Adding a role to someone already on this set adds no set to their tally.
-    const overLimit = (userId: string, max: number, period: RulePeriod) =>
-      !onSet(userId) && setsInPeriod(userId, setTime, period) >= max;
+    const overLimit = (
+      userId: string,
+      max: number,
+      period: RulePeriod,
+      teamId: string | null = null
+    ) => !onSet(userId) && setsInPeriod(userId, setTime, period, teamId) >= max;
 
     // The first open role (fill order) `userId` could still take here — where
     // an ALWAYS partner gets seated. `takingRole` is about to lose a slot to
-    // the person being placed, so it needs one to spare.
+    // the person being placed, so it needs one to spare. A seat a required
+    // SAME_PLAYER rule holds for someone else isn't theirs to walk into either.
     const openRoleFor = (userId: string, takingRole?: string) => {
       const user = userById.get(userId);
       if (!user) return undefined;
       const plays = rolesFor(user, set);
       return fillOrder
         .map((r) => r.key)
-        .find(
-          (r) =>
-            r !== "ACOUSTIC_GUITAR" &&
-            (remaining[r] ?? 0) - (r === takingRole ? 1 : 0) > 0 &&
-            plays.includes(r) &&
-            canTakeRole(userId, r)
-        );
+        .find((r) => {
+          const free = (remaining[r] ?? 0) - (r === takingRole ? 1 : 0);
+          if (free <= 0 || !plays.includes(r) || !canTakeRole(userId, r)) return false;
+          // A host-only shared role isn't a seat someone walks into.
+          if (sharedRoles.get(r)?.requiredHosts.size) return false;
+          const held = owed(r, "REQUIRED");
+          return held.length < free || held.includes(userId);
+        });
     };
 
     // Every REQUIRED rule, as a yes/no on one candidate. `withPartners` also
@@ -568,7 +670,7 @@ export function buildSchedule(
     ): boolean => {
       for (const other of neverRequired.get(userId) ?? []) if (onSet(other)) return false;
       for (const l of requiredLimits) {
-        if (l.userId === userId && overLimit(userId, l.max, l.period)) return false;
+        if (l.userId === userId && overLimit(userId, l.max, l.period, l.teamId)) return false;
       }
       if (withPartners) {
         for (const other of alwaysRequired.get(userId) ?? []) {
@@ -623,7 +725,13 @@ export function buildSchedule(
             return p.mode === "ALWAYS" ? -1 : 1;
           }
           case "LIMIT":
-            return p.userId === user.id && overLimit(user.id, p.max, p.period) ? 1 : 0;
+            return p.userId === user.id && overLimit(user.id, p.max, p.period, r.teamId ?? null)
+              ? 1
+              : 0;
+          case "SHARE_ROLES":
+            return p.role === role && holdsOneOf(user.id, new Set(p.withRoles)) ? -1 : 0;
+          case "MD_ORDER":
+            return 0; // read by the MD pass, not a per-pick preference
         }
       });
 
@@ -670,23 +778,24 @@ export function buildSchedule(
       return sorted;
     };
 
-    // Pick the best candidate for a role, honoring availability, the
+    // Rank the candidates for a role, honoring availability, the
     // one-slot-per-person rule (plus its lone overlap exception) and the
     // required rules. MDs are ordinary players here — they may fill any role
     // on any set; being the set's designated MD is a separate choice
     // (Set.mdUserId, see lib/md.ts).
     //
     // Returns HOLD when a required SAME_PLAYER rule reserves this slot for
-    // someone who can't take it: the caller leaves that slot open. `held` is
+    // someone who can't take it: the caller leaves that slot open. `reserved`
+    // says the list is only those owed it. `held` is
     // how many slots of this role have already been held that way, so a role
     // with more slots than owed players still fills the rest normally.
     const pickFor = (
       role: Instrument,
       // Extra hard filter on candidates (e.g. "already seated as WL/vocals" for
-      // the acoustic pass below). Defaults to no restriction.
+      // the shared-role pass below). Defaults to no restriction.
       eligible: (u: SchedulerUser) => boolean = () => true,
       held = 0
-    ): SchedulerUser | typeof HOLD | undefined => {
+    ): { ranked: SchedulerUser[]; reserved: boolean } | typeof HOLD => {
       let pool = users
         // Eligible = plays this role on the set's team (team-restricted set), or
         // on any team for a team-less set. A person on the team with no roles
@@ -696,30 +805,85 @@ export function buildSchedule(
         .filter((u) => canTakeRole(u.id, role))
         .filter((u) => isUserAvailable(u.id, set, rules))
         .filter((u) => passesRequired(u.id, role, true));
-      const reserved = owed(role, "REQUIRED");
-      if (reserved.length > held) {
-        pool = pool.filter((u) => reserved.includes(u.id));
+      const owedTo = owed(role, "REQUIRED");
+      const reserved = owedTo.length > held;
+      if (reserved) {
+        pool = pool.filter((u) => owedTo.includes(u.id));
         if (pool.length === 0) return HOLD;
       }
-      return rank(pool.map((user) => ({ user, role })))[0]?.user;
+      return { ranked: rank(pool.map((user) => ({ user, role }))).map((c) => c.user), reserved };
     };
 
-    // Seat someone, then their ALWAYS partners (required first), each in the
-    // first open role they play — and theirs in turn.
-    const seat = (userId: string, role: Instrument, visited = new Set<string>()) => {
-      assign(userId, role);
-      visited.add(userId);
-      for (const other of [
-        ...(alwaysRequired.get(userId) ?? []),
-        ...(alwaysPreferred.get(userId) ?? []),
-      ]) {
-        if (visited.has(other) || onSet(other)) continue;
-        if (!isUserAvailable(other, set, rules) || !passesRequired(other, undefined, false)) {
-          continue;
+    // Everyone a required ALWAYS rule ties `userId` to, through any chain of
+    // them (A–B and B–C tie A to C), in a fixed order.
+    const requiredGroup = (userId: string): string[] => {
+      const out: string[] = [];
+      const seen = new Set([userId]);
+      const queue = [userId];
+      while (queue.length) {
+        for (const other of alwaysRequired.get(queue.shift()!) ?? []) {
+          if (seen.has(other)) continue;
+          seen.add(other);
+          out.push(other);
+          queue.push(other);
         }
-        const r = openRoleFor(other);
-        if (r) seat(other, r, visited);
       }
+      return out;
+    };
+
+    // Seat someone and their WHOLE required-ALWAYS group, each partner in the
+    // first open role they play — or nobody: if any of them can't be seated,
+    // every seat this made is taken back and the answer is false.
+    const seatGroup = (userId: string, role: Instrument): boolean => {
+      const mark = picks.length;
+      assign(userId, role);
+      for (const other of requiredGroup(userId)) {
+        if (onSet(other)) continue;
+        const r =
+          isUserAvailable(other, set, rules) && passesRequired(other, undefined, false)
+            ? openRoleFor(other)
+            : undefined;
+        if (!r) {
+          undoPicks(mark);
+          return false;
+        }
+        assign(other, r);
+      }
+      return true;
+    };
+
+    // Seat someone (with their required group), then — best effort — the
+    // people a PREFERENCE ALWAYS pairs with anyone just seated, and theirs in
+    // turn. False only when the person themselves couldn't be seated.
+    const seat = (userId: string, role: Instrument): boolean => {
+      const mark = picks.length;
+      if (!seatGroup(userId, role)) return false;
+      for (let i = mark; i < picks.length; i++) {
+        for (const other of alwaysPreferred.get(picks[i].userId) ?? []) {
+          if (onSet(other)) continue;
+          if (!isUserAvailable(other, set, rules) || !passesRequired(other, undefined, false)) {
+            continue;
+          }
+          const r = openRoleFor(other);
+          if (r) seatGroup(other, r);
+        }
+      }
+      return true;
+    };
+
+    // Fill ONE seat of `role`: the best-ranked candidate who can actually be
+    // seated (with their group) gets it. HOLD = a required SAME_PLAYER rule
+    // keeps it for someone who can't take it; "none" = nobody can.
+    const fillOne = (
+      role: Instrument,
+      eligible: ((u: SchedulerUser) => boolean) | undefined,
+      held: number,
+      place: (userId: string, role: Instrument) => boolean = seat
+    ): "seated" | typeof HOLD | "none" => {
+      const found = pickFor(role, eligible, held);
+      if (found === HOLD) return HOLD;
+      for (const u of found.ranked) if (place(u.id, role)) return "seated";
+      return found.reserved ? HOLD : "none";
     };
 
     // ── MD reservation (retry only — see the fill/retry block below) ─────
@@ -733,10 +897,10 @@ export function buildSchedule(
     // than blocking the run.
     const seatMD = () => {
       // The MD-capable slots this team has AND still has room in.
-      const openMDRoles = MD_ROLES.filter(
+      const openMDRoles = mdRoles.filter(
         (r) => catalog.some((c) => c.key === r) && (remaining[r] ?? 0) > 0
       );
-      const best = rank(
+      const ranked = rank(
         users
           .filter((u) => u.isMD)
           .filter((u) => isUserAvailable(u.id, set, rules))
@@ -747,6 +911,8 @@ export function buildSchedule(
               (r) =>
                 rolesFor(u, set).includes(r) &&
                 canTakeRole(u.id, r) &&
+                // A host-only shared role isn't the MD's to walk into either.
+                !sharedRoles.get(r)?.requiredHosts.size &&
                 passesRequired(u.id, r, true) &&
                 // A seat a required SAME_PLAYER rule holds for someone else
                 // isn't the MD's to take.
@@ -754,8 +920,9 @@ export function buildSchedule(
             ),
           }))
           .filter((c): c is { user: SchedulerUser; role: Instrument } => !!c.role)
-      )[0];
-      if (best) seat(best.user.id, best.role as Instrument);
+      );
+      // The first who can be seated with their whole required group.
+      for (const c of ranked) if (seat(c.user.id, c.role as Instrument)) break;
     };
 
     // One complete fill of this set's open slots. `reserveMD` seats an MD
@@ -764,45 +931,46 @@ export function buildSchedule(
       if (reserveMD) seatMD();
 
       // ── Normal greedy fill of the remaining slots ─────────────────────
-      // Every slotted role is capacity-filled here, choir included.
-      // ACOUSTIC_GUITAR is skipped here and filled in its own pass afterward,
-      // because its candidate must ALREADY be seated as the worship leader or a
-      // vocalist (which VOCALS, filled last in ROLE_ORDER, only becomes after).
+      // Every slotted role is capacity-filled here, choir included — except a
+      // SHARED role, which waits for its own pass below: its first candidates
+      // are people ALREADY seated in a host role, and those are only all seated
+      // once everything else is.
       for (const { key: role } of fillOrder) {
-        if (role === "ACOUSTIC_GUITAR") continue;
+        if (sharedRoles.has(role)) continue;
         let held = 0;
         while (remaining[role] - held > 0) {
-          const pick = pickFor(role, undefined, held);
-          if (pick === HOLD) {
+          const result = fillOne(role, undefined, held);
+          if (result === HOLD) {
             held++; // reserved by a required SAME_PLAYER rule — leave it open
             continue;
           }
-          if (!pick) break; // nobody left for this role — leave slot empty
-          seat(pick.id, role);
+          if (result === "none") break; // nobody left for this role — leave slot empty
         }
       }
 
-      // ── Acoustic guitar: only a seated worship leader or vocalist ──────
-      // The acoustic guitarist should also be singing/leading — never a
-      // dedicated acoustic-only player. Now that every other role is seated,
-      // hand the slot to a worship leader or vocalist on this set who also
-      // plays acoustic (canTakeRole already sanctions that double-up). If none
-      // do, leave it empty. Only fires if this team kept the built-in acoustic
-      // role — the double-up rule is built-in behaviour a custom role never
-      // inherits.
-      const holdsHostRole = (userId: string): boolean => {
-        const held = rolesOnSet.get(userId);
-        return held ? ACOUSTIC_HOST_ROLES.some((r) => held.has(r)) : false;
-      };
-      let heldAcoustic = 0;
-      while ((remaining.ACOUSTIC_GUITAR ?? 0) - heldAcoustic > 0) {
-        const pick = pickFor("ACOUSTIC_GUITAR", (u) => holdsHostRole(u.id), heldAcoustic);
-        if (pick === HOLD) {
-          heldAcoustic++;
-          continue;
+      // ── Shared roles: seated hosts first (SHARED ROLES above) ──────────
+      // Under a required rule only a host who plays the role may take it, and
+      // the slot is left empty if none do. Under a preference, hosts rank first
+      // (preferenceScore) and anyone who plays it is the fallback.
+      for (const { key: role } of fillOrder) {
+        const shared = sharedRoles.get(role);
+        if (!shared) continue;
+        const hostOnly = shared.requiredHosts.size > 0;
+        let held = 0;
+        while ((remaining[role] ?? 0) - held > 0) {
+          const result = fillOne(
+            role,
+            hostOnly ? (u) => holdsOneOf(u.id, shared.requiredHosts) : undefined,
+            held,
+            // A host is already on the set, so their group already is too.
+            hostOnly ? (id, r) => (assign(id, r), true) : seat
+          );
+          if (result === HOLD) {
+            held++;
+            continue;
+          }
+          if (result === "none") break;
         }
-        if (!pick) break; // no seated WL/vocalist plays acoustic — leave empty
-        assign(pick.id, "ACOUSTIC_GUITAR");
       }
     };
 
@@ -810,14 +978,18 @@ export function buildSchedule(
     // with (lib/md.ts): an MD in an MD-capable role who isn't the worship
     // leader. Pre-assigned seats count — a hand-picked MD needs no reservation.
     const rosterCanLead = () =>
-      eligibleMDIds([
-        ...preAssigned,
-        ...picks.map((p) => ({
-          userId: p.userId,
-          role: p.role,
-          isMD: isMDById.get(p.userId) ?? false,
-        })),
-      ]).length > 0;
+      eligibleMDIds(
+        [
+          ...preAssigned,
+          ...picks.map((p) => ({
+            userId: p.userId,
+            role: p.role,
+            isMD: isMDById.get(p.userId) ?? false,
+          })),
+        ],
+        null,
+        mdRoles
+      ).length > 0;
 
     // ── Fill, then only reserve an MD if the fill didn't produce one ─────
     // Rotation comes first. Reserving the MD up front (which is what this used

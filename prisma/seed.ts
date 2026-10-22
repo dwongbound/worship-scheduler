@@ -26,6 +26,7 @@
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "../lib/generated/prisma/client";
 import { DEFAULT_TEAM_ROLES } from "../lib/teamRoles";
+import { defaultRuleRows } from "../lib/schedulingRules";
 
 // A role key. Roles are per-team data now — every seeded team gets the built-in
 // catalog below, and these are its keys.
@@ -185,10 +186,16 @@ async function main() {
   //    fallbacks keep `db:seed` working without the env var). ─────────────
   const orgEntries = parseOrgKeys();
   const org1 = await prisma.org.create({
-    data: { name: orgEntries[0]?.name ?? "Sunday Church" },
+    data: {
+      name: orgEntries[0]?.name ?? "Sunday Church",
+      schedulingRules: { create: defaultRuleRows() },
+    },
   });
   const org2 = await prisma.org.create({
-    data: { name: orgEntries[1]?.name ?? "Youth Ministry" },
+    data: {
+      name: orgEntries[1]?.name ?? "Youth Ministry",
+      schedulingRules: { create: defaultRuleRows() },
+    },
   });
 
   // ── Teams: everyone serves on Sunday Team; `prayer` users also serve on

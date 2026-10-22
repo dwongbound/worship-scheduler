@@ -272,7 +272,13 @@ export function designateMDs(
   sets: StagedSet[],
   // Whether a user is flagged a musical director (User.isMD), and who led each
   // team's last set before this run — see previousMDForTeam.
-  opts: { isMD: (userId: string) => boolean; seed?: Record<string, string | null> }
+  opts: {
+    isMD: (userId: string) => boolean;
+    seed?: Record<string, string | null>;
+    // The roles an MD leads from on a team's set — the org's MD order rule
+    // (lib/schedulingRules.ts mdRolesFor). Absent = the built-in order.
+    mdRoles?: (teamId: string | null) => readonly string[];
+  }
 ): StagedSet[] {
   // The roster as the MD rules read it: a seat awaiting approval counts for the
   // person who still owns it, not the one hoping to take it.
@@ -293,11 +299,12 @@ export function designateMDs(
       continue;
     }
     const roster = mdRoster(set.assignments);
+    const mdRoles = opts.mdRoles?.(set.teamId ?? null);
     settled.push({
       ...set,
-      mdUserId: isValidMD(set.mdUserId, roster)
+      mdUserId: isValidMD(set.mdUserId, roster, mdRoles)
         ? set.mdUserId
-        : defaultMDId(roster, previousMDForTeam(settled, set.teamId, opts.seed)),
+        : defaultMDId(roster, previousMDForTeam(settled, set.teamId, opts.seed), mdRoles),
     });
   }
   return settled;

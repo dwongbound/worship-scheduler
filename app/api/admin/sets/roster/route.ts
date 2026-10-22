@@ -120,7 +120,7 @@ export async function PUT(req: NextRequest) {
     if (item.md === undefined) continue;
     if (item.md !== null) {
       const data = await loadForMD(item.setId);
-      if (!isValidMD(item.md, data?.roster ?? [])) {
+      if (!data || !isValidMD(item.md, data.roster, data.mdRoles)) {
         mdRejected.push(item.setId);
         continue;
       }

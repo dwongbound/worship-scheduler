@@ -263,7 +263,7 @@ export async function PATCH(
     // stay themselves while their cover request is pending.
     if (mdUserId !== null) {
       const data = await loadForMD(id);
-      const eligible = isValidMD(mdUserId, data?.roster ?? []);
+      const eligible = !!data && isValidMD(mdUserId, data.roster, data.mdRoles);
       if (!eligible) {
         return NextResponse.json(
           { error: "That person can't be the MD of this set." },

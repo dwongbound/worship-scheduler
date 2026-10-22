@@ -3,8 +3,10 @@
 // lib/scheduler.ts, the prisma side is the SchedulingRule model, the editor is
 // components/OrgRules.tsx.
 //
-// Rules are ORG-WIDE: one list per org, applied to every set on every team. A
-// rule that names a role applies wherever a team has a role with that key.
+// One list per org. Each rule applies to EVERY team unless it names one
+// (`teamId`), and then only to that team's sets — a team-less set ("open to
+// the whole org") only ever follows the all-teams rules. A rule that names a
+// role applies wherever a team in its scope has a role with that key.
 //
 // Two tiers:
 //   • REQUIRED — never broken. When one can't be met, the slot it governs is
@@ -16,7 +18,7 @@
 //     priority. When two pull different ways on one pick, the higher one wins,
 //     and every preference outranks plain rotation (see `preferenceScore`).
 //
-// Five kinds (see RULE_KINDS):
+// Seven kinds (see RULE_KINDS):
 //   ONLY_IF_NEEDED  this person (optionally: in this role) is a last resort.
 //                   Preference only — "required last resort" would just mean
 //                   "never", which is what marking them inactive already is.
@@ -25,13 +27,33 @@
 //                   recurring set types (same Mon–Sun week), or two specific
 //                   sets once.
 //   TOGETHER        two people ALWAYS or NEVER serve on the same set.
-//   LIMIT           at most N sets a WEEK (Mon–Sun) or calendar MONTH.
+//   LIMIT           at most N sets a WEEK (Mon–Sun) or calendar MONTH. A
+//                   team's limit counts only that team's sets.
+//   MD_ORDER        which roles a musical director leads from, best first.
+//                   Required only: it's the definition the whole app checks an
+//                   MD against (lib/md.ts). The team's own beats the all-teams
+//                   one; with neither, the built-in MD_ROLES.
+//   SHARE_ROLES     whoever plays one of `withRoles` may also play `role` on
+//                   the same set — the only way one person holds two roles on
+//                   a set in Auto schedule. REQUIRED also means `role` goes
+//                   ONLY to someone doubling that way (never a player of its
+//                   own); a PREFERENCE gives it to them first and falls back
+//                   to anyone who plays it.
+//
+// Every org starts with today's built-in behaviour written out as rules
+// (DEFAULT_RULES), so it can be read, scoped to a team, or turned off.
 //
 // Weeks and months are read on the app's clock (lib/appTz.ts), for the same
 // reason availability is: "the same week" has to mean the church's week.
 
 import { APP_TZ } from "./appTz";
 import { zonedParts } from "./dates";
+import { ACOUSTIC_GUITAR, ACOUSTIC_HOST_ROLES, MD_ROLES } from "./constants";
+import { MD_KEY } from "./teamRoles";
+
+// Never in an MD order: the worship leader can't also direct (lib/md.ts), and
+// MD itself isn't a seat anyone plays from.
+export const NOT_MD_ROLES = ["WORSHIP_LEADER", MD_KEY];
 
 export type RuleTier = "REQUIRED" | "PREFERENCE";
 export type RulePeriod = "WEEK" | "MONTH";
@@ -54,7 +76,10 @@ export type RuleParams =
       setIds: [string, string];
     }
   | { kind: "TOGETHER"; userIds: [string, string]; mode: "ALWAYS" | "NEVER" }
-  | { kind: "LIMIT"; userId: string; max: number; period: RulePeriod };
+  | { kind: "LIMIT"; userId: string; max: number; period: RulePeriod }
+  // Roles in preference order — the MD leads from the first one seated.
+  | { kind: "MD_ORDER"; roles: string[] }
+  | { kind: "SHARE_ROLES"; role: string; withRoles: string[] };
 
 export type RuleKind = RuleParams["kind"];
 
@@ -62,6 +87,8 @@ export interface SchedulingRule {
   id: string;
   tier: RuleTier;
   enabled: boolean;
+  // The one team this rule is for; null/absent = every team.
+  teamId?: string | null;
   params: RuleParams;
 }
 
@@ -102,10 +129,55 @@ export const RULE_KINDS: {
     description: "Cap how often someone is scheduled.",
     tiers: ["REQUIRED", "PREFERENCE"],
   },
+  {
+    kind: "MD_ORDER",
+    title: "MD order",
+    description: "Which roles a musical director leads from, best first.",
+    tiers: ["REQUIRED"],
+  },
+  {
+    kind: "SHARE_ROLES",
+    title: "Two roles, one person",
+    description: "Let someone play a second role on the same set.",
+    tiers: ["REQUIRED", "PREFERENCE"],
+  },
 ];
 
 export const MAX_RULES = 200;
 export const LIMIT_MAX = 31;
+// How many roles an MD order or a shared role may list.
+export const ROLE_LIST_MAX = 8;
+
+/**
+ * What every org starts with: the behaviour that used to be built in, as
+ * rules. The migration that introduced MD_ORDER and SHARE_ROLES wrote these
+ * onto every existing org; new orgs get them on creation (see
+ * lib/schedulingRuleStore.ts defaultRuleRows).
+ */
+export const DEFAULT_RULES: Omit<SchedulingRule, "id">[] = [
+  { tier: "REQUIRED", enabled: true, teamId: null, params: { kind: "MD_ORDER", roles: [...MD_ROLES] } },
+  {
+    tier: "REQUIRED",
+    enabled: true,
+    teamId: null,
+    params: { kind: "SHARE_ROLES", role: ACOUSTIC_GUITAR, withRoles: [...ACOUSTIC_HOST_ROLES] },
+  },
+];
+
+/**
+ * DEFAULT_RULES as rows for a brand-new org — pass as
+ * `schedulingRules: { create: defaultRuleRows() }` wherever an org is created
+ * (lib/org.ts, the platform orgs route, prisma/seed.ts), so every org starts
+ * with the behaviour that used to be built in.
+ */
+export function defaultRuleRows() {
+  return DEFAULT_RULES.map((r, position) => ({
+    position,
+    tier: r.tier,
+    enabled: r.enabled,
+    params: r.params as unknown as Record<string, string | string[]>,
+  }));
+}
 
 // ── Parsing ───────────────────────────────────────────────────────────────
 
@@ -113,6 +185,15 @@ const isId = (v: unknown): v is string =>
   typeof v === "string" && v.length > 0 && v.length <= 100;
 const isPair = (v: unknown): v is [string, string] =>
   Array.isArray(v) && v.length === 2 && isId(v[0]) && isId(v[1]);
+// A non-empty list of distinct role keys, at most ROLE_LIST_MAX long.
+const roleList = (v: unknown): string[] | null =>
+  Array.isArray(v) &&
+  v.length > 0 &&
+  v.length <= ROLE_LIST_MAX &&
+  v.every(isId) &&
+  new Set(v).size === v.length
+    ? [...(v as string[])]
+    : null;
 
 /**
  * One rule's params from untrusted JSON (a request body, or a stored row), or
@@ -156,6 +237,29 @@ export function parseRuleParams(raw: unknown): RuleParams | string {
       if (r.period !== "WEEK" && r.period !== "MONTH") return "Pick a week or a month.";
       return { kind: "LIMIT", userId: r.userId, max, period: r.period };
     }
+    case "MD_ORDER": {
+      const roles = roleList(r.roles);
+      if (!roles) {
+        return Array.isArray(r.roles) && r.roles.length > 0 && new Set(r.roles).size !== r.roles.length
+          ? "Pick each role once."
+          : `Pick 1–${ROLE_LIST_MAX} roles.`;
+      }
+      if (roles.includes("WORSHIP_LEADER")) return "The worship leader can't also be the MD.";
+      if (roles.includes(MD_KEY)) return "Pick the instruments an MD plays from.";
+      return { kind: "MD_ORDER", roles };
+    }
+    case "SHARE_ROLES": {
+      if (!isId(r.role)) return "Pick the role they also play.";
+      const withRoles = roleList(r.withRoles);
+      if (!withRoles) {
+        return Array.isArray(r.withRoles) && r.withRoles.length > 0 && new Set(r.withRoles).size !== r.withRoles.length
+          ? "Pick each role once."
+          : `Pick 1–${ROLE_LIST_MAX} roles they already play.`;
+      }
+      if (withRoles.includes(r.role)) return "A role can't be shared with itself.";
+      if (r.role === MD_KEY || withRoles.includes(MD_KEY)) return "MD isn't a seat to share.";
+      return { kind: "SHARE_ROLES", role: r.role, withRoles };
+    }
     default:
       return "Unknown kind of rule.";
   }
@@ -166,16 +270,43 @@ export function parseRuleParams(raw: unknown): RuleParams | string {
  * from a future version) is skipped rather than breaking the whole list.
  */
 export function parseStoredRules(
-  rows: { id: string; tier: string; enabled: boolean; params: unknown }[]
+  rows: { id: string; tier: string; enabled: boolean; teamId?: string | null; params: unknown }[]
 ): SchedulingRule[] {
   const out: SchedulingRule[] = [];
   for (const row of rows) {
     const params = parseRuleParams(row.params);
     if (typeof params === "string") continue;
     const tier: RuleTier = row.tier === "REQUIRED" ? "REQUIRED" : "PREFERENCE";
-    out.push({ id: row.id, tier: forcedTier(params.kind) ?? tier, enabled: row.enabled, params });
+    out.push({
+      id: row.id,
+      tier: forcedTier(params.kind) ?? tier,
+      enabled: row.enabled,
+      teamId: row.teamId ?? null,
+      params,
+    });
   }
   return out;
+}
+
+/** Does `rule` govern a set on `teamId`? A team-less set follows only all-teams rules. */
+export function ruleAppliesTo(rule: Pick<SchedulingRule, "teamId">, teamId: string | null | undefined): boolean {
+  return !rule.teamId || rule.teamId === (teamId ?? null);
+}
+
+/**
+ * The roles an MD leads from on a set of `teamId`, best first: the team's own
+ * enabled MD order, else the all-teams one, else the built-in MD_ROLES. The
+ * one answer lib/md.ts, the auto-fill and every MD check share.
+ */
+export function mdRolesFor(
+  rules: SchedulingRule[] | null | undefined,
+  teamId: string | null | undefined
+): string[] {
+  const orders = (rules ?? []).filter((r) => r.enabled && r.params.kind === "MD_ORDER");
+  const own = teamId ? orders.find((r) => r.teamId === teamId) : undefined;
+  const all = orders.find((r) => !r.teamId);
+  const pick = own ?? all;
+  return pick && pick.params.kind === "MD_ORDER" ? pick.params.roles : MD_ROLES;
 }
 
 /** The only tier a kind may take, when it may take only one. */
@@ -190,6 +321,9 @@ export interface RuleRefs {
   roleKeys: Set<string>;
   templateIds: Set<string>;
   setIds: Set<string>;
+  // Each team's role keys — a rule scoped to a team may only name its roles.
+  // Absent (older callers): team scope isn't checked beyond `roleKeys`.
+  teamRoleKeys?: Map<string, Set<string>>;
 }
 
 /** The ids a rule points at, by what they are. */
@@ -212,7 +346,24 @@ export function ruleRefs(p: RuleParams): {
       return { users: [...p.userIds], roles: [], templates: [], sets: [] };
     case "LIMIT":
       return { users: [p.userId], roles: [], templates: [], sets: [] };
+    case "MD_ORDER":
+      return { users: [], roles: [...p.roles], templates: [], sets: [] };
+    case "SHARE_ROLES":
+      return { users: [], roles: [p.role, ...p.withRoles], templates: [], sets: [] };
   }
+}
+
+/** Why `teamId` can't scope a rule naming `roles` in this org, or null if it can. */
+export function teamScopeProblem(
+  teamId: string | null | undefined,
+  roles: string[],
+  refs: RuleRefs
+): string | null {
+  if (!teamId || !refs.teamRoleKeys) return null;
+  const own = refs.teamRoleKeys.get(teamId);
+  if (!own) return "That team doesn't exist any more.";
+  if (roles.some((k) => !own.has(k))) return "That team doesn't have that role.";
+  return null;
 }
 
 /**
@@ -249,11 +400,17 @@ export function validateRules(
     if (r.sets.some((id) => !refs.setIds.has(id))) {
       return { ok: false, error: "That set doesn't exist any more.", index: i };
     }
+    const rawTeam = item?.teamId;
+    if (rawTeam != null && !isId(rawTeam)) return { ok: false, error: "Pick a team.", index: i };
+    const teamId = (rawTeam as string | null | undefined) ?? null;
+    const scope = teamScopeProblem(teamId, r.roles, refs);
+    if (scope) return { ok: false, error: scope, index: i };
     const asked: RuleTier = item?.tier === "REQUIRED" ? "REQUIRED" : "PREFERENCE";
     rules.push({
       id: String(i),
       tier: forcedTier(params.kind) ?? asked,
       enabled: item?.enabled !== false,
+      teamId,
       params,
     });
   }
@@ -275,7 +432,9 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
  *   • TOGETHER: two people who must always serve together but, through any
  *     chain of "always" rules, must also never;
  *   • PREFER: a cycle in one role (A over B, B over C, C over A);
- *   • LIMIT: two different caps on one person for the same period.
+ *   • LIMIT: two different caps on one person for the same period (and scope);
+ *   • MD_ORDER: two orders for the same scope.
+ * Rules scoped to different teams never meet (see the scope note inside).
  * SAME_PLAYER isn't checked: it can always hold on its own terms, because when
  * the shared player can't make the second set the slot is simply left open.
  * `index` is the position (in the list given) of the rule that tipped it over;
@@ -284,7 +443,32 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 export function findContradiction(
   rules: SchedulingRule[]
 ): { index: number; otherIndex: number | null; message: string } | null {
+  // Team scope: two rules only meet on sets they both govern, so the check runs
+  // once over the all-teams rules and once per team over that team's rules
+  // plus the all-teams ones. The earliest rule to tip any of them over wins.
+  const live = rules
+    .map((rule, i) => ({ rule, i }))
+    .filter(({ rule }) => rule.enabled && rule.tier === "REQUIRED");
+  const teams = [...new Set(live.flatMap(({ rule }) => (rule.teamId ? [rule.teamId] : [])))];
+  let first: ReturnType<typeof contradictionAmong> = null;
+  for (const team of [null, ...teams]) {
+    const clash = contradictionAmong(
+      live.filter(({ rule }) => !rule.teamId || rule.teamId === team)
+    );
+    if (clash && (!first || clash.index < first.index)) first = clash;
+  }
+  return first;
+}
+
+type Clash = { index: number; otherIndex: number | null; message: string };
+
+// findContradiction over one scope's enabled required rules, each with its
+// index in the full list.
+function contradictionAmong(list: { rule: SchedulingRule; i: number }[]): Clash | null {
   const seen = new Map<string, number>();
+  // MD_ORDER: one per exact scope (a team's own order overrides the
+  // all-teams one rather than clashing with it).
+  const mdOrders = new Map<string, number>();
   // TOGETHER: union-find over ALWAYS links; NEVER pairs are checked against it.
   const parent = new Map<string, string>();
   const find = (x: string): string => {
@@ -299,11 +483,10 @@ export function findContradiction(
   // LIMIT: user|period → { max, index }.
   const limits = new Map<string, { max: number; i: number }>();
 
-  for (let i = 0; i < rules.length; i++) {
-    const rule = rules[i];
-    if (!rule.enabled || rule.tier !== "REQUIRED") continue;
+  for (const { rule, i } of list) {
     const p = rule.params;
-    const key = canonicalKey(p);
+    const scope = rule.teamId ?? "";
+    const key = `${scope}|${canonicalKey(p)}`;
     const dup = seen.get(key);
     if (dup !== undefined) {
       return { index: i, otherIndex: dup, message: "This required rule is already on the list." };
@@ -348,8 +531,24 @@ export function findContradiction(
       }
     }
 
+    if (p.kind === "MD_ORDER") {
+      const prev = mdOrders.get(scope);
+      if (prev !== undefined) {
+        return {
+          index: i,
+          otherIndex: prev,
+          message: scope
+            ? "This team already has an MD order."
+            : "There's already an MD order for every team.",
+        };
+      }
+      mdOrders.set(scope, i);
+    }
+
+    // A team's own limit counts only that team's sets, so it never clashes
+    // with an all-teams cap on the same person.
     if (p.kind === "LIMIT") {
-      const k = `${p.userId}|${p.period}`;
+      const k = `${p.userId}|${p.period}|${scope}`;
       const prev = limits.get(k);
       if (prev && prev.max !== p.max) {
         return {
@@ -416,6 +615,10 @@ export function canonicalKey(p: RuleParams): string {
       return `T|${p.mode}|${pairKey(...p.userIds)}`;
     case "LIMIT":
       return `L|${p.userId}|${p.period}|${p.max}`;
+    case "MD_ORDER":
+      return `M|${p.roles.join(",")}`;
+    case "SHARE_ROLES":
+      return `R|${p.role}|${[...p.withRoles].sort().join(",")}`;
   }
 }
 
@@ -432,7 +635,21 @@ export interface RuleNames {
   role: (key: string) => string;
   template: (id: string) => string;
   set: (id: string) => string;
+  team?: (id: string) => string;
 }
+
+// "A", "A or B", "A, B or C" as parts, each name strong.
+function roleListParts(keys: string[], names: RuleNames, joiner: string): RulePart[] {
+  const out: RulePart[] = [];
+  keys.forEach((k, i) => {
+    if (i > 0) out.push({ text: i === keys.length - 1 ? ` ${joiner} ` : ", ", strong: false });
+    out.push({ text: names.role(k), strong: true });
+  });
+  return out;
+}
+
+const roleListText = (keys: string[], names: RuleNames, joiner: string) =>
+  roleListParts(keys, names, joiner).map((x) => x.text).join("");
 
 /** The rule as the sentence the editor shows: "Pick Priya over Hannah on Keys". */
 export function describeRule(p: RuleParams, names: RuleNames): RulePart[] {
@@ -453,6 +670,10 @@ export function describeRule(p: RuleParams, names: RuleNames): RulePart[] {
       return [S(names.user(p.userIds[0])), T(" and "), S(names.user(p.userIds[1])), T(p.mode === "ALWAYS" ? " always serve on the same set" : " never serve on the same set")];
     case "LIMIT":
       return [S(names.user(p.userId)), T(" plays at most "), S(String(p.max)), T(` set${p.max === 1 ? "" : "s"} a ${p.period === "WEEK" ? "week" : "month"}`)];
+    case "MD_ORDER":
+      return [T("Musical directors lead from "), ...roleListParts(p.roles, names, "then")];
+    case "SHARE_ROLES":
+      return [T("Whoever plays "), ...roleListParts(p.withRoles, names, "or"), T(" may also play "), S(names.role(p.role))];
   }
 }
 
@@ -503,6 +724,19 @@ export function explainRule(p: RuleParams, tier: RuleTier, names: RuleNames): st
       return `Auto schedule won't seat ${a} more than ${p.max} time${p.max === 1 ? "" : "s"} in a ${span}. ${
         req ? "Picking them by hand still works." : "It can go over to avoid an empty slot."
       }`;
+    }
+    case "MD_ORDER": {
+      const first = names.role(p.roles[0]);
+      return `A musical director only leads from ${roleListText(p.roles, names, "or")}, never from any other role or as the worship leader. When a set needs an MD, ${first} is tried first${
+        p.roles.length > 1 ? ", then the rest in this order" : ""
+      }.`;
+    }
+    case "SHARE_ROLES": {
+      const role = names.role(p.role);
+      const hosts = roleListText(p.withRoles, names, "or");
+      return req
+        ? `${role} only goes to someone already seated as ${hosts} on that set who also plays it. If none of them do, it stays open rather than going to a separate player.`
+        : `${role} goes first to someone already seated as ${hosts} who also plays it. If none of them do, anyone who plays ${role} can take it.`;
     }
   }
 }

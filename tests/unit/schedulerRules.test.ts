@@ -328,3 +328,241 @@ describe("switched-off rules", () => {
     expect(seated(result, "s")).toEqual(["d1"]);
   });
 });
+
+describe("team scope", () => {
+  const OTHER = "team-2";
+  const users = [user("d1", ["DRUMS"]), user("d2", ["DRUMS"])];
+  const scoped = (teamId: string | null, params: RuleParams, tier: RuleTier = "PREFERENCE") => ({
+    ...rule(params, tier),
+    teamId,
+  });
+
+  it("a rule for another team changes nothing here", () => {
+    const result = run([set("s", tue(0), { DRUMS: 1 })], users, [
+      scoped(OTHER, { kind: "ONLY_IF_NEEDED", userId: "d1", role: null }),
+    ]);
+    expect(seated(result, "s")).toEqual(["d1"]);
+  });
+
+  it("a rule for this team applies", () => {
+    const result = run([set("s", tue(0), { DRUMS: 1 })], users, [
+      scoped(TEAM, { kind: "ONLY_IF_NEEDED", userId: "d1", role: null }),
+    ]);
+    expect(seated(result, "s")).toEqual(["d2"]);
+  });
+
+  it("a team-less set follows only the every-team rules", () => {
+    const result = run([set("s", tue(0), { DRUMS: 1 }, { teamId: null })], users, [
+      scoped(TEAM, { kind: "ONLY_IF_NEEDED", userId: "d1", role: null }),
+    ]);
+    expect(seated(result, "s")).toEqual(["d1"]);
+  });
+
+  it("a team's limit counts only that team's sets", () => {
+    const b1: SchedulerUser = { id: "b1", rolesByTeam: { [TEAM]: ["BASS"], [OTHER]: ["BASS"] } };
+    const sets = [
+      set("other", tue(0), { BASS: 1 }, { teamId: OTHER }),
+      set("mine-1", tue(1), { BASS: 1 }),
+      set("mine-2", tue(2), { BASS: 1 }),
+    ];
+    const limit = { kind: "LIMIT", userId: "b1", max: 1, period: "MONTH" } as const;
+    // Team-scoped: the other team's set doesn't use up this team's one.
+    expect(run(sets, [b1], [scoped(TEAM, limit, "REQUIRED")]).map((a) => a.setId)).toEqual([
+      "other",
+      "mine-1",
+    ]);
+    // Every team: one set a month, wherever.
+    expect(run(sets, [b1], [scoped(null, limit, "REQUIRED")]).map((a) => a.setId)).toEqual([
+      "other",
+    ]);
+  });
+
+  it("a team's limit counts that team's bookings fed in, and not the others'", () => {
+    const b1: SchedulerUser = { id: "b1", rolesByTeam: { [TEAM]: ["BASS"] } };
+    const limit = { ...rule({ kind: "LIMIT", userId: "b1", max: 1, period: "MONTH" }), teamId: TEAM };
+    const fill = (teamId: string) =>
+      buildSchedule([set("s", tue(1), { BASS: 1 })], [b1], [], new Map(), [], new Map(), {
+        schedulingRules: [limit],
+        periodBookings: [{ userId: "b1", startsAt: tue(2), teamId }],
+        timeZone: TZ,
+      });
+    expect(fill(TEAM)).toEqual([]);
+    expect(fill(OTHER).map((a) => a.userId)).toEqual(["b1"]);
+  });
+});
+
+describe("MD_ORDER", () => {
+  // keys and electric are both MDs; rotation alone would seat neither first.
+  const users: SchedulerUser[] = [
+    { id: "eg", isMD: true, rolesByTeam: { [TEAM]: ["ELECTRIC_GUITAR"] } },
+    { id: "k", isMD: true, rolesByTeam: { [TEAM]: ["KEYS"] } },
+    { id: "dr", isMD: true, rolesByTeam: { [TEAM]: ["DRUMS"] } },
+  ];
+  // Only one slot at all, so the MD seat is the whole roster.
+  const mdSet = (shape: Record<string, number>) =>
+    set("s", tue(0), { MD: 1, ...shape }, { requiresMD: true });
+  const order = (roles: string[], teamId: string | null = null) => ({
+    ...rule({ kind: "MD_ORDER", roles }),
+    teamId,
+  });
+
+  it("an MD can lead from a role only the order names", () => {
+    // Drums alone: with the built-in order nobody can lead, so the fill seats
+    // whoever rotation picks; naming drums lets the drummer lead.
+    const result = run([mdSet({ DRUMS: 1 })], users, [order(["DRUMS"])]);
+    expect(seated(result, "s")).toEqual(["dr"]);
+  });
+
+  it("the reserved MD takes the first open role in the order", () => {
+    // Rotation seats the two plain players first ("a-…" sorts ahead), leaving
+    // nobody who can lead — so the set is refilled with a seat held for the MD,
+    // in the most preferred role they play.
+    const pool: SchedulerUser[] = [
+      { id: "a-eg", rolesByTeam: { [TEAM]: ["ELECTRIC_GUITAR"] } },
+      { id: "a-k", rolesByTeam: { [TEAM]: ["KEYS"] } },
+      { id: "z-md", isMD: true, rolesByTeam: { [TEAM]: ["ELECTRIC_GUITAR", "KEYS"] } },
+    ];
+    const both = mdSet({ ELECTRIC_GUITAR: 1, KEYS: 1 });
+    expect(seated(run([both], pool, []), "s", "ELECTRIC_GUITAR")).toEqual(["z-md"]);
+    expect(seated(run([both], pool, [order(["KEYS", "ELECTRIC_GUITAR"])]), "s", "KEYS")).toEqual([
+      "z-md",
+    ]);
+  });
+
+  it("a team's own order replaces the every-team one", () => {
+    const result = run([mdSet({ DRUMS: 1 })], users, [
+      order(["KEYS"]),
+      order(["DRUMS"], TEAM),
+    ]);
+    expect(seated(result, "s")).toEqual(["dr"]);
+  });
+
+  it("a switched-off order falls back to the built-in one", () => {
+    const off = { ...order(["DRUMS"]), enabled: false };
+    const result = run(
+      [mdSet({ DRUMS: 1, KEYS: 1 })],
+      [
+        { id: "a-drums", rolesByTeam: { [TEAM]: ["DRUMS"] } },
+        { id: "b-keys", rolesByTeam: { [TEAM]: ["KEYS"] } },
+        { id: "z-md", isMD: true, rolesByTeam: { [TEAM]: ["KEYS"] } },
+      ],
+      [off]
+    );
+    // Built-in order: keys can lead, so the MD is reserved the keys seat.
+    expect(seated(result, "s", "KEYS")).toEqual(["z-md"]);
+  });
+});
+
+describe("SHARE_ROLES", () => {
+  const shape = { WORSHIP_LEADER: 1, ACOUSTIC_GUITAR: 1 };
+  const wlAcoustic = user("wl", ["WORSHIP_LEADER", "ACOUSTIC_GUITAR"]);
+  const acousticOnly = user("ag", ["ACOUSTIC_GUITAR"]);
+  const share = (tier: RuleTier, withRoles = ["WORSHIP_LEADER"], role = "ACOUSTIC_GUITAR") =>
+    rule({ kind: "SHARE_ROLES", role, withRoles }, tier);
+
+  it("with no rules nobody plays two roles, and the role is an ordinary seat", () => {
+    const result = run([set("s", tue(0), shape)], [wlAcoustic, acousticOnly], []);
+    expect(seated(result, "s", "WORSHIP_LEADER")).toEqual(["wl"]);
+    expect(seated(result, "s", "ACOUSTIC_GUITAR")).toEqual(["ag"]);
+  });
+
+  it("required: only the seated worship leader may take it", () => {
+    const result = run([set("s", tue(0), shape)], [wlAcoustic, acousticOnly], [share("REQUIRED")]);
+    expect(seated(result, "s", "ACOUSTIC_GUITAR")).toEqual(["wl"]);
+  });
+
+  it("required: left open rather than given to a dedicated player", () => {
+    const wlOnly = user("wl2", ["WORSHIP_LEADER"]);
+    const result = run([set("s", tue(0), shape)], [wlOnly, acousticOnly], [share("REQUIRED")]);
+    expect(seated(result, "s", "ACOUSTIC_GUITAR")).toEqual([]);
+  });
+
+  it("preference: the worship leader first, anyone as a fallback", () => {
+    expect(
+      seated(run([set("s", tue(0), shape)], [wlAcoustic, acousticOnly], [share("PREFERENCE")]), "s", "ACOUSTIC_GUITAR")
+    ).toEqual(["wl"]);
+    const wlOnly = user("wl2", ["WORSHIP_LEADER"]);
+    expect(
+      seated(run([set("s", tue(0), shape)], [wlOnly, acousticOnly], [share("PREFERENCE")]), "s", "ACOUSTIC_GUITAR")
+    ).toEqual(["ag"]);
+  });
+
+  it("works for any pair of roles, not just acoustic", () => {
+    const singer = user("v", ["VOCALS", "KEYS"]);
+    const keys = user("k", ["KEYS"]);
+    const result = run(
+      [set("s", tue(0), { VOCALS: 1, KEYS: 1 })],
+      [singer, keys],
+      [share("REQUIRED", ["VOCALS"], "KEYS")]
+    );
+    expect(seated(result, "s", "KEYS")).toEqual(["v"]);
+  });
+
+  it("two allowed pairs don't add up to a third", () => {
+    // WL+acoustic and acoustic+vox are allowed; WL+vox is not.
+    const all = user("p", ["WORSHIP_LEADER", "VOCALS", "ACOUSTIC_GUITAR"]);
+    const result = run(
+      [set("s", tue(0), { WORSHIP_LEADER: 1, VOCALS: 1, ACOUSTIC_GUITAR: 1 })],
+      [all],
+      [share("REQUIRED", ["WORSHIP_LEADER", "VOCALS"])]
+    );
+    expect(result.map((a) => a.role).sort()).toEqual(["ACOUSTIC_GUITAR", "WORSHIP_LEADER"]);
+  });
+
+  it("a team's rule doesn't let another team's set double up", () => {
+    const result = run(
+      [set("s", tue(0), shape)],
+      [wlAcoustic, acousticOnly],
+      [{ ...share("REQUIRED"), teamId: "team-2" }]
+    );
+    expect(seated(result, "s", "ACOUSTIC_GUITAR")).toEqual(["ag"]);
+  });
+});
+
+describe("no list given", () => {
+  it("follows the defaults every org starts with (the acoustic doubles as the leader)", () => {
+    const users = [
+      user("wl", ["WORSHIP_LEADER", "ACOUSTIC_GUITAR"]),
+      user("ag", ["ACOUSTIC_GUITAR"]),
+    ];
+    const result = buildSchedule(
+      [set("s", tue(0), { WORSHIP_LEADER: 1, ACOUSTIC_GUITAR: 1 })],
+      users,
+      []
+    );
+    expect(seated(result, "s", "ACOUSTIC_GUITAR")).toEqual(["wl"]);
+  });
+});
+
+describe("required ALWAYS chains", () => {
+  it("seats the whole chain or none of it", () => {
+    // a–b and b–c must always serve together, so a also needs c. c can't make
+    // it, so none of the three is seated and the slots go to the others.
+    const users = [
+      user("a", ["DRUMS"]),
+      user("b", ["BASS"]),
+      user("c", ["KEYS"]),
+      user("x-drums", ["DRUMS"]),
+      user("x-bass", ["BASS"]),
+    ];
+    const result = run(
+      [set("s", tue(0), { DRUMS: 1, BASS: 1, KEYS: 1 })],
+      users,
+      [
+        rule({ kind: "TOGETHER", userIds: ["a", "b"], mode: "ALWAYS" }),
+        rule({ kind: "TOGETHER", userIds: ["b", "c"], mode: "ALWAYS" }),
+      ],
+      { unavailable: [busyOn("c", tue(0))] }
+    );
+    expect(seated(result, "s")).toEqual(["x-bass", "x-drums"]);
+  });
+
+  it("and seats all three when they can come", () => {
+    const users = [user("a", ["DRUMS"]), user("b", ["BASS"]), user("c", ["KEYS"])];
+    const result = run([set("s", tue(0), { DRUMS: 1, BASS: 1, KEYS: 1 })], users, [
+      rule({ kind: "TOGETHER", userIds: ["a", "b"], mode: "ALWAYS" }),
+      rule({ kind: "TOGETHER", userIds: ["b", "c"], mode: "ALWAYS" }),
+    ]);
+    expect(seated(result, "s")).toEqual(["a", "b", "c"]);
+  });
+});
