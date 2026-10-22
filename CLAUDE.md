@@ -115,7 +115,9 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   (startDate/endDate, legacy). Times = minutes from midnight, day 0=Sun.
   Every reader of a recurring rule honours BOTH bounds: `lib/availability.ts`
   (`dayBlockLevel`/`dayIsRepeating`), `lib/scheduler.ts isUserAvailable`,
-  `AvailabilityCalendar`, and `api/availability{,/block-days}`.
+  `AvailabilityCalendar`, `lib/weekView.ts`, and `api/availability{,/block-days}`.
+  `fromGoogle` marks a SPECIFIC block written by Import from Google Calendar;
+  re-importing replaces exactly those rows for that request.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
@@ -163,7 +165,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
-- Google Calendar: `google-calendar/connect` (GET → consent, DELETE →
+- Google Calendar: `google-calendar/import` (GET ?requestId= → a MEMBER's
+  one-shot read of their own calendar into blocks; comes back through the same
+  callback and lands on `/schedule?gcalImport=<n>|denied|error`),
+  `google-calendar/connect` (GET → consent, DELETE →
   disconnect; org admin), `/callback`, `/status` (admin: connected account,
   chosen calendar's NAME, who connected; members with no email get an
   add-your-email Banner on /profile instead), `/calendars`
@@ -370,6 +375,19 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   (`format.ts` only, so far). Integration-specific UI — icons and the like —
   belongs here too. A new integration = a new folder + one branch in
   `orgIntegration.ts`.
+- `googleBusy.ts` — Import from Google Calendar's rules, pure: a person's
+  events → merged per-day busy windows in the app's zone (`busyWindows`).
+  EVERY event blocks (not just set times — the blocks are the admin's record),
+  timed ones unless Free, ALL-DAY ones always as the whole day; cancelled and
+  declined skipped; worship sets deliberately NOT skipped (a request never
+  covers already-scheduled sets). `importNotice` = /schedule's banner on
+  return. ✅tested. Its Google + db side is `googleAvailability.ts`: one-shot
+  `calendar.events.readonly` consent (no stored token, login_hint = their
+  email), sharing `/api/google-calendar/callback` via its own signed state
+  (`signImportState`/`verifyImportState` in `googleCalendar.ts`). ✅tested
+- `weekView.ts` — the availability WEEK view's layout: `weekStart` (Sunday),
+  `dayBlocks` (each block's kind google|specific|recurring + side-by-side
+  lanes for overlaps). ✅tested
 - `googleCalendar.ts` — the per-org Google Calendar integration (README
   "Google Calendar"): one connected account per org, an app-made calendar by
   default or one the connecting admin picks (`listCalendarsFor`/`selectCalendar`
@@ -410,7 +428,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 ## Components
 
-Feature: `CalendarMonth`, `CreateSetModal`, `SetDetailModal` (edits are STAGED:
+Feature: `CalendarMonth`, `AvailabilityWeekView` (/schedule's Month · Week
+toggle: hours down, days across, a box per block coloured by where it came
+from — sky Google, rose by hand, amber weekly; read-only), `CreateSetModal`, `SetDetailModal` (edits are STAGED:
 everything writes to a local copy, a sticky footer has Delete · Close · Save,
 Save COMMITS AND CLOSES (a failed save keeps the modal + edits up), and any
 exit with changes hits a confirm that lists them — Delete-set, Slack messaging

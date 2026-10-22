@@ -9,6 +9,7 @@ import { targetsUser } from "@/lib/availabilityTargets";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { toYmd } from "@/lib/dates";
+import { isGoogleCalendarAppConfigured } from "@/lib/googleCalendar";
 
 // Parse "YYYY-MM-DD" (from <input type=date>) as LOCAL midnight.
 // `new Date("2026-08-05")` would be UTC midnight, which displays as the
@@ -113,7 +114,14 @@ export async function GET() {
     }),
   ]);
 
-  return NextResponse.json({ entries, requests, responses });
+  // `googleImport`: whether this deployment can offer "Import from Google
+  // Calendar" (the OAuth client is set) — lib/googleAvailability.ts.
+  return NextResponse.json({
+    entries,
+    requests,
+    responses,
+    googleImport: isGoogleCalendarAppConfigured(),
+  });
 }
 
 export async function POST(req: NextRequest) {

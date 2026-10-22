@@ -19,9 +19,11 @@
 // person — they apply to every org and every request.
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
+import AvailabilityWeekView from "@/components/AvailabilityWeekView";
 import WeekStrip from "@/components/WeekStrip";
 import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
@@ -50,6 +52,7 @@ import {
   shortDateLabel,
   timeStringToMinutes,
 } from "@/lib/dates";
+import { importNotice } from "@/lib/googleBusy";
 import type { ApiAvailabilityRequest, ApiUnavailability } from "@/lib/types";
 
 // My completion status for one request. The row persists once touched:
@@ -291,6 +294,31 @@ export default function SchedulePage() {
   const [blockStart, setBlockStart] = useState(""); // specific range start
   const [blockEnd, setBlockEnd] = useState(""); // "" = single day
 
+  // Month (which days) or week (which hours) — the week view is where an
+  // import from Google Calendar is checked against the real calendar.
+  const [view, setView] = useState<"month" | "week">("month");
+  // Whether this deployment offers "Import from Google Calendar" at all.
+  const [googleImport, setGoogleImport] = useState(false);
+  // What the last import did, shown once on coming back from Google.
+  const [notice, setNotice] = useState<ReturnType<typeof importNotice>>(null);
+
+  // Coming back from Google (lib/googleAvailability.ts): say how it went,
+  // focus the request it was for, and open the week view to check it. The
+  // params are then dropped so a reload doesn't announce it twice.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = importNotice(params.get("gcalImport"));
+    if (!result) return;
+    setNotice(result);
+    const requestId = params.get("request");
+    if (requestId) setSelectedRequestId(requestId);
+    setView("week");
+    params.delete("gcalImport");
+    params.delete("request");
+    const rest = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+  }, []);
+
   const reload = useCallback(async () => {
     // On any error, fall back to empty state so the page renders instead of
     // hanging on the loader forever.
@@ -302,6 +330,7 @@ export default function SchedulePage() {
       setRequests(reqs);
       const resps: AvailabilityResponse[] = data.responses ?? [];
       setResponses(resps);
+      setGoogleImport(!!data.googleImport);
       // Open on the first request that still owes an answer — that's what
       // someone came here to do. Everything already sent (or nothing asked)
       // means no filter at all: the calendar shows the whole picture.
@@ -886,6 +915,24 @@ export default function SchedulePage() {
                           )}
                         </Button>
                       ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                        {/* Reads THEIR Google Calendar across this request's
+                            window and blocks every busy time, all-day events
+                            as whole days (lib/googleAvailability.ts). A full
+                            navigation: Google's consent screen, then back. */}
+                        {googleImport && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            data-testid="import-google"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.location.href = `/api/google-calendar/import?requestId=${encodeURIComponent(r.id)}`;
+                            }}
+                          >
+                            Import from Google Calendar
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           onClick={(e) => {
@@ -906,6 +953,7 @@ export default function SchedulePage() {
                             "Submit response"
                           )}
                         </Button>
+                        </div>
                       ))}
                   </div>
                 </Card>
@@ -924,7 +972,37 @@ export default function SchedulePage() {
         <div className="flex items-center gap-1.5">
           <h2 className="text-lg font-bold">My availability</h2>
           <InfoTooltip text="Blocks here apply to every org and every request. Click or drag the calendar to block whole days; use the form for a repeating block or a specific time window." />
+          {/* Month = which days; Week = which hours, drawn like a calendar
+              app's week. Same blocks either way. */}
+          <div
+            role="group"
+            aria-label="Calendar view"
+            className="ml-auto inline-flex rounded-lg border border-gray-200 p-0.5 text-sm dark:border-gray-700"
+          >
+            {(["month", "week"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
+                className={`min-h-9 rounded-md px-3 font-medium transition-colors ${
+                  view === v
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                }`}
+              >
+                {v === "month" ? "Month" : "Week"}
+              </button>
+            ))}
+          </div>
         </div>
+        {notice && (
+          <div data-testid="import-notice">
+            <Banner inset tone={notice.tone} onDismiss={() => setNotice(null)}>
+              {notice.text}
+            </Banner>
+          </div>
+        )}
 
         <div className="flex flex-col gap-6">
           <div className="min-w-0 space-y-3">
@@ -981,7 +1059,12 @@ export default function SchedulePage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
             {/* Phone: a week of tappable days, standing above the form the way
                 the calendar stands beside it. */}
-            <div className="lg:hidden">
+            {view === "week" && (
+              <div className="min-w-0 lg:flex-[2]">
+                <AvailabilityWeekView entries={entries} highlightRange={lensRange} />
+              </div>
+            )}
+            <div className={view === "week" ? "hidden" : "lg:hidden"}>
               <WeekStrip
                 entries={entries}
                 onEditDays={editDays}
@@ -991,7 +1074,7 @@ export default function SchedulePage() {
             </div>
             <div
               data-tour="avail-calendar"
-              className="hidden min-w-0 lg:block lg:flex-[2]"
+              className={`hidden min-w-0 lg:flex-[2] ${view === "week" ? "" : "lg:block"}`}
             >
               <AvailabilityCalendar
                 entries={entries}
@@ -1249,6 +1332,7 @@ export default function SchedulePage() {
                         <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
                           {entry.type === "RECURRING" ? "Recurring" : "Specific"}
                         </Badge>
+                        {entry.fromGoogle && <Badge tone="indigo">Google</Badge>}
                         <span>
                           {entryText(entry)}
                           {req && (

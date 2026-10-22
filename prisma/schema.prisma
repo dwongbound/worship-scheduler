@@ -740,6 +740,11 @@ model Unavailability {
 
   note String?
 
+  // True for a block written by "Import from Google Calendar" on /schedule
+  // (lib/googleAvailability.ts). Re-importing replaces exactly these rows for
+  // that request, so a hand-made block is never touched by an import.
+  fromGoogle Boolean @default(false)
+
   createdAt DateTime @default(now())
 
   @@map("unavailability")

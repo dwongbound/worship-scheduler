@@ -4,9 +4,42 @@
 // every upcoming set as an event once the admin has been sent back.
 //
 // Every outcome lands on /orgs with ?gcal=<status>, as Spotify's does.
+//
+// A member's "Import from Google Calendar" comes back here too, told apart by
+// its state (lib/googleAvailability.ts); it lands on /schedule instead.
 import { after, NextRequest, NextResponse } from "next/server";
+import { getSessionUser } from "@/lib/auth";
 import { requireOrgAdminFor } from "@/lib/org";
-import { connectOrgFromCode, syncUpcomingSets, verifyState } from "@/lib/googleCalendar";
+import {
+  connectOrgFromCode,
+  syncUpcomingSets,
+  verifyImportState,
+  verifyState,
+} from "@/lib/googleCalendar";
+import { importFromCode } from "@/lib/googleAvailability";
+
+// ?gcalImport=<blocks written> on success, or the reason it didn't happen.
+async function importCallback(
+  base: string,
+  params: URLSearchParams,
+  imported: { userId: string; requestId: string }
+): Promise<NextResponse> {
+  const back = (status: string, detail?: string) => {
+    if (detail) console.error(`[gimport] ${status} — ${detail}`);
+    const q = new URLSearchParams({ gcalImport: status, request: imported.requestId });
+    return NextResponse.redirect(`${base}/schedule?${q.toString()}`);
+  };
+  const refused = params.get("error");
+  if (refused) return back("denied", refused);
+  const code = params.get("code");
+  if (!code) return back("error", "no code on the callback");
+  // The state names who started it; whoever finishes it must be them.
+  const user = await getSessionUser();
+  if (!user || user.id !== imported.userId) return back("error", "signed-in user changed mid-import");
+  const result = await importFromCode(imported.userId, imported.requestId, code);
+  if (!result.ok) return back("error", result.error);
+  return back(String(result.blocks));
+}
 
 // The backfill makes one Google call per upcoming set.
 export const maxDuration = 300;
@@ -21,10 +54,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(`${base}/orgs?gcal=${status}`);
   };
 
+  const state = params.get("state");
+  const imported = state ? verifyImportState(state) : null;
+  if (imported) return importCallback(base, params, imported);
+
   const refused = params.get("error");
   if (refused) return back("denied", refused);
 
-  const state = params.get("state");
   const code = params.get("code");
   if (!state || !code) return back("expired", "no state/code on the callback");
 

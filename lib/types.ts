@@ -230,6 +230,9 @@ export interface ApiUnavailability {
   // Set for SPECIFIC blocks (the request/TimeRange they belong to).
   requestId: string | null;
   note: string | null;
+  // Written by "Import from Google Calendar" (lib/googleAvailability.ts).
+  // Optional so hand-built test fixtures needn't carry it.
+  fromGoogle?: boolean;
 }
 
 export interface ApiSetTemplate {

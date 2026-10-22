@@ -601,3 +601,18 @@ test("phone My Sets: a pending card's buttons share one height", async ({ page }
   );
   expect(new Set(heights).size).toBe(1);
 });
+
+test("phone availability: the week view fits the screen", async ({ page }) => {
+  await login(page, "carol");
+  await page.goto("/schedule");
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  const week = page.getByTestId("availability-week-view");
+  await expect(week).toBeVisible();
+  // Seven day columns and no sideways scroll on a phone.
+  const box = (await week.boundingBox())!;
+  const viewport = page.viewportSize()!;
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    viewport.width
+  );
+});
