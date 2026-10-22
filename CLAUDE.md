@@ -188,7 +188,8 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   can't hold comes back in `mdRejected`. Both share `lib/rosterDiff.ts`
   `prepareRosterDiff`/`rosterAftermath`; DMs go out ONCE per person across the
   whole batch via `lib/slack.ts notifyRosterChanges`/`rosterDmText`, so a month
-  of one role is one message, not one per set), `admin/templates(+/[id])`,
+  of one role is one message, not one per set; a multi-set DM lists sets as
+  plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`,
   `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
   their plan payloads, `[id]` GET is what carries one back).

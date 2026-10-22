@@ -151,31 +151,36 @@ describe("rosterDmText", () => {
     expect(lines).toHaveLength(7);
   });
 
-  it("links each date to its set and asks to confirm only when something was added", () => {
+  it("links nothing per set, and ends with ONE My Sets link", () => {
     const old = process.env.NEXTAUTH_URL;
     process.env.NEXTAUTH_URL = "https://app.test";
     try {
+      const url = "https://app.test/set-manager";
       const added = rosterDmText(
         [change("added", "s1", 1), change("added", "s2", 8)],
         fmt,
-        "https://app.test/calendar"
+        url
       );
-      expect(added).toContain("<https://app.test/calendar?set=s1|11/1/26 10AM>");
-      expect(added.endsWith("Confirm <https://app.test/calendar|here>.")).toBe(true);
+      expect(added).not.toContain("?set=");
+      expect(added.match(/<https?:/g)).toHaveLength(1);
+      expect(added.endsWith("Confirm in <https://app.test/set-manager|My Sets>.")).toBe(true);
       const removed = rosterDmText(
         [change("removed", "s1", 1), change("removed", "s2", 8)],
         fmt,
-        "https://app.test/calendar"
+        url
       );
       expect(removed).not.toContain("Confirm");
-      // Mixed: "Confirm" closes the sets they picked up, not the ones they left.
+      expect(removed.endsWith("See <https://app.test/set-manager|My Sets>.")).toBe(true);
+      // Mixed: the one link closes the whole message, after the removals.
       const mixed = rosterDmText(
         [change("added", "s1", 1), change("removed", "s2", 8)],
         fmt,
-        "https://app.test/calendar"
-      ).split("\n\n");
-      expect(mixed[0].endsWith("Confirm <https://app.test/calendar|here>.")).toBe(true);
-      expect(mixed[1]).not.toContain("Confirm");
+        url
+      );
+      expect(mixed.match(/<https?:/g)).toHaveLength(1);
+      expect(mixed.endsWith("Confirm in <https://app.test/set-manager|My Sets>.")).toBe(true);
+      // No app URL configured: no footer at all.
+      expect(rosterDmText([change("added", "s1", 1), change("added", "s2", 8)], fmt, "")).not.toContain("My Sets");
     } finally {
       process.env.NEXTAUTH_URL = old;
     }
