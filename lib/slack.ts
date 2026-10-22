@@ -788,69 +788,6 @@ export async function notifyAdminsPendingApproval(
 }
 
 /**
- * Tell ONE person their own place on a set changed — they were put on it, taken
- * off it, or handed someone else's slot. This is the personal counterpart to
- * notifySetChange: that one talks to the set's group chat (and only once the
- * chat exists and its lead window has opened), which means the person who most
- * needs to know can hear nothing at all. A DM always reaches them.
- *
- * Quiet in the cases where a message would be noise:
- *
- *   • the set has already happened → nothing they can do about it now.
- *   • they haven't linked Slack in this org → postDm no-ops.
- *
- * Note there's deliberately NO group-chat-style lead window here: being added
- * to a set two months out is exactly when you want to hear about it.
- *
- * Best-effort and non-throwing, like every notifier here — a Slack outage must
- * never fail the roster edit that triggered it.
- */
-export async function notifyAssignmentChange(
-  setId: string,
-  userId: string,
-  change: {
-    kind: "added" | "removed";
-    role: Instrument;
-    // The team catalog the role key belongs to, so it reads in that team's own
-    // words. Omit and roleLabel falls back to the built-in/humanized name.
-    catalog?: TeamRoleDef[];
-  }
-): Promise<void> {
-  try {
-    const set = await prisma.set.findUnique({
-      where: { id: setId },
-      select: { label: true, startsAt: true, orgId: true },
-    });
-    if (!set || set.startsAt < new Date()) return;
-    const dm = await orgMessagingContext(set.orgId, "ROSTER_CHANGE");
-    if (!dm) return;
-
-    const member = await prisma.orgMembership.findUnique({
-      where: { userId_orgId: { userId, orgId: set.orgId } },
-      select: DM_FIELDS,
-    });
-    if (!member?.slackUserId) return;
-
-    const fmt = dm.messaging.fmt;
-    const role = roleLabel(change.role, change.catalog);
-    // Deliberately says nothing about who else was involved. An admin swapping
-    // one person for another is NOT a cover — the person who asked for cover is
-    // the one who started it — so naming a counterpart here read as if someone
-    // had requested something they never did.
-    const text =
-      change.kind === "added"
-        ? `${lead(EMOJI.setAdded, "New Set", fmt)} ${role} for ` +
-          `${setName(set, fmt)} on ${setWhen(set)}.`
-        : `${lead(EMOJI.setRemoved, "Set Update", fmt)} No longer on ` +
-          `${setName(set, fmt)} on ${setWhen(set)}.`;
-
-    await dm.messaging.postDm(member, text);
-  } catch (err) {
-    console.error("[slack] assignment-change DM failed", err);
-  }
-}
-
-/**
  * One person's newly-created seat, for the batched notice below.
  */
 export type NewSeat = {
@@ -865,7 +802,7 @@ export type NewSeat = {
 
 /**
  * Applying a generated plan seats a lot of people across a lot of sets at once.
- * DMing per seat (what notifyAssignmentChange would do) turns one admin click
+ * DMing per seat turns one admin click
  * into a dozen pings for the same person, so this batches instead: ONE message
  * each, listing every set they just picked up, oldest first.
  *
@@ -935,6 +872,117 @@ export async function notifyAssignmentsAdded(
     );
   } catch (err) {
     console.error("[slack] batched assignment DMs failed", err);
+  }
+}
+
+/**
+ * One seat someone gained or lost in a roster save, for the batched notice
+ * below.
+ */
+export type SeatChange = {
+  userId: string;
+  kind: "added" | "removed";
+  role: Instrument;
+  setId: string;
+  catalog?: TeamRoleDef[];
+};
+
+/**
+ * The text of one person's roster DM. A lone change reads exactly like the
+ * per-seat DM always did; several become ONE message — the sets they picked up,
+ * then the ones they came off, each oldest first, each date a link to its set.
+ * Pure, so the wording is testable without a transport.
+ *
+ * Deliberately says nothing about who else was involved. An admin swapping one
+ * person for another is NOT a cover (the person who asked for cover is the one
+ * who started it), so naming a counterpart read as if someone had requested
+ * something they never did.
+ */
+export function rosterDmText(
+  changes: (Omit<SeatChange, "userId"> & { set: SetLike })[],
+  fmt: MessageFormat,
+  calendarUrl: string
+): string {
+  if (changes.length === 1) {
+    const [c] = changes;
+    return c.kind === "added"
+      ? `${lead(EMOJI.setAdded, "New Set", fmt)} ${roleLabel(c.role, c.catalog)} for ` +
+          `${setName(c.set, fmt)} on ${setWhen(c.set)}.`
+      : `${lead(EMOJI.setRemoved, "Set Update", fmt)} No longer on ` +
+          `${setName(c.set, fmt)} on ${setWhen(c.set)}.`;
+  }
+  const byDate = (a: { set: SetLike }, b: { set: SetLike }) =>
+    a.set.startsAt.getTime() - b.set.startsAt.getTime();
+  const line = (c: (typeof changes)[number]) =>
+    `${BULLET} ${roleLabel(c.role, c.catalog)} for ${setName(c.set, fmt)} on ` +
+    `${linkOr(appUrl(setLinkPath(c.setId)), setWhen(c.set), fmt)}.`;
+  const added = changes.filter((c) => c.kind === "added").sort(byDate);
+  const removed = changes.filter((c) => c.kind === "removed").sort(byDate);
+  const blocks: string[] = [];
+  if (added.length > 0) {
+    // "Confirm" belongs to the sets they picked up, so it closes that block.
+    blocks.push(
+      `${lead(EMOJI.setAdded, `New Sets ${added.length}`, fmt)}\n` +
+        added.map(line).join("\n") +
+        (calendarUrl ? `\nConfirm ${fmt.link(calendarUrl, "here")}.` : "")
+    );
+  }
+  if (removed.length > 0) {
+    blocks.push(
+      `${lead(EMOJI.setRemoved, `No Longer On ${removed.length}`, fmt)}\n` +
+        removed.map(line).join("\n")
+    );
+  }
+  return blocks.join("\n\n");
+}
+
+/**
+ * A roster save's DMs, ONE per person however many sets it touched. Saving a
+ * whole plan from the calendar's Preview Mode used to DM per seat, so an admin
+ * filling a month of one role sent each person a dozen pings; this is the
+ * grouped version both roster routes now use.
+ *
+ * Same quiet rules as the per-seat DM: past sets are dropped, and anyone
+ * without linked Slack in this org is skipped. Best-effort and non-throwing —
+ * the save has already landed.
+ */
+export async function notifyRosterChanges(
+  orgId: string,
+  changes: SeatChange[]
+): Promise<void> {
+  try {
+    if (changes.length === 0) return;
+    const sets = await prisma.set.findMany({
+      where: { id: { in: [...new Set(changes.map((c) => c.setId))] } },
+      select: { id: true, label: true, startsAt: true },
+    });
+    const now = new Date();
+    const setById = new Map(sets.filter((s) => s.startsAt >= now).map((s) => [s.id, s]));
+    const byUser = new Map<string, (SeatChange & { set: SetLike })[]>();
+    for (const c of changes) {
+      const set = setById.get(c.setId);
+      if (!set) continue;
+      byUser.set(c.userId, [...(byUser.get(c.userId) ?? []), { ...c, set }]);
+    }
+    if (byUser.size === 0) return;
+    const dm = await orgMessagingContext(orgId, "ROSTER_CHANGE");
+    if (!dm) return;
+
+    const members = await prisma.orgMembership.findMany({
+      where: { orgId, userId: { in: [...byUser.keys()] }, slackUserId: { not: null } },
+      select: { ...DM_FIELDS, userId: true },
+    });
+    const calendarUrl = appUrl("/calendar");
+    await Promise.all(
+      members.map((m) =>
+        dm.messaging.postDm(
+          m,
+          rosterDmText(byUser.get(m.userId) ?? [], dm.messaging.fmt, calendarUrl)
+        )
+      )
+    );
+  } catch (err) {
+    console.error("[slack] roster-change DMs failed", err);
   }
 }
 

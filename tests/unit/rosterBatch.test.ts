@@ -30,7 +30,7 @@ vi.mock("@/lib/setMd", () => ({
 }));
 vi.mock("@/lib/slack", () => ({
   notifySetChange: vi.fn(),
-  notifyAssignmentChange: vi.fn(),
+  notifyRosterChanges: vi.fn(),
 }));
 vi.mock("@/lib/teamRoleStore", () => ({
   getTeamCatalog: vi.fn(async () => [
@@ -45,7 +45,7 @@ import { PUT } from "@/app/api/admin/sets/roster/route";
 import { prisma } from "@/lib/prisma";
 import { requireOrgAdminFor } from "@/lib/org";
 import { loadForMD } from "@/lib/setMd";
-import { notifySetChange } from "@/lib/slack";
+import { notifyRosterChanges, notifySetChange } from "@/lib/slack";
 import { isEmptyOps, parseRosterOps } from "@/lib/rosterDiff";
 
 type Mock = ReturnType<typeof vi.fn>;
@@ -104,6 +104,16 @@ describe("PUT /api/admin/sets/roster", () => {
     expect(await res.json()).toMatchObject({ ok: true, applied: 2, sets: 2 });
     // One grouped notice per set.
     expect(notifySetChange).toHaveBeenCalledTimes(2);
+    // ...but ONE DM batch for the whole save, holding every set's changes.
+    expect(notifyRosterChanges).toHaveBeenCalledTimes(1);
+    expect(m(notifyRosterChanges).mock.calls[0]).toEqual([
+      "org1",
+      [
+        { userId: "u1", kind: "removed", role: "KEYS", setId: "s1", catalog: expect.any(Array) },
+        { userId: "u2", kind: "removed", role: "DRUMS", setId: "s2", catalog: expect.any(Array) },
+        { userId: "u9", kind: "added", role: "DRUMS", setId: "s2", catalog: expect.any(Array) },
+      ],
+    ]);
   });
 
   it("writes nothing when any set in the batch is stale", async () => {
