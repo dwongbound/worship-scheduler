@@ -1,12 +1,18 @@
-// GET /api/google-calendar/import?requestId= — a member starts "Import from
-// Google Calendar" for one availability request. Redirects to Google's consent
-// screen (or straight through, once granted); the shared callback reads their
-// calendar and writes the blocks. See lib/googleAvailability.ts.
+// GET /api/google-calendar/import?requestId= — a member runs "Import from
+// Google Calendar" for one availability request. Once they've granted access
+// it imports right here and lands back on /schedule; the first time (or after
+// they revoke it) it redirects to Google's consent screen, and the shared
+// callback finishes the import. See lib/googleAvailability.ts.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isGoogleCalendarAppConfigured } from "@/lib/googleCalendar";
-import { importAuthorizeUrl, importableRequest } from "@/lib/googleAvailability";
+import {
+  hasRememberedAccess,
+  importAuthorizeUrl,
+  importWithRememberedAccess,
+  importableRequest,
+} from "@/lib/googleAvailability";
 
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
@@ -21,6 +27,19 @@ export async function GET(req: NextRequest) {
   }
   if (!(await importableRequest(user.id, requestId))) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (await hasRememberedAccess(user.id)) {
+    const result = await importWithRememberedAccess(user.id, requestId);
+    if (result.ok || !result.needsConsent) {
+      const q = new URLSearchParams({
+        gcalImport: result.ok ? String(result.blocks) : "error",
+        request: requestId,
+      });
+      if (!result.ok) console.error(`[gimport] error — ${result.error}`);
+      return NextResponse.redirect(new URL(`/schedule?${q.toString()}`, req.url));
+    }
+    // Revoked since: fall through and ask again.
   }
 
   const { email } = (await prisma.user.findUnique({

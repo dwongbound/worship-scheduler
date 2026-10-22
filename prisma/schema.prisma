@@ -349,6 +349,12 @@ model User {
   name         String
   email        String? @unique
 
+  // Read-only access to this person's OWN Google Calendar, granted the first
+  // time they use "Import from Google Calendar" on /schedule and remembered so
+  // later imports need no click (lib/googleAvailability.ts). An encrypted
+  // refresh token (lib/crypto.ts); null = never granted, or revoked.
+  googleImportRefreshToken String?
+
   // True for an account created by an admin IMPORT (the availability form
   // roster) rather than by the person themselves — a stand-in that holds their
   // org membership and availability until they first sign in. Email is the

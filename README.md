@@ -371,9 +371,12 @@ as the whole day** (Free or not), cancelled and declined events skipped,
 overlaps merged per day. Re-importing replaces only the blocks an earlier
 import wrote for that request (`Unavailability.fromGoogle`); hand-made blocks
 are never touched, and imported ones can be edited or deleted like any other.
-Nothing is stored: the consent returns a one-hour token that's used once and
-dropped, so there's no per-member connection to manage, and once someone has
-granted access Google bounces them straight back. It shares
+The permission is asked for once: the first import shows Google's consent
+screen, and its refresh token is kept encrypted on the person's row
+(`User.googleImportRefreshToken`), so every later import runs with no Google
+screen. A token they revoke in their Google account is forgotten and the next
+import asks again. Google sign-in itself never asks for calendar access, so the
+unverified-app warning a sensitive scope brings can't land on the login. It shares
 `/api/google-calendar/callback` (told apart by its signed state), so there's no
 extra redirect URI and no new env var; it does need the `calendar.events.readonly`
 scope above and migration `20261022120000_unavailability_from_google`. The page

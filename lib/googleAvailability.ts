@@ -3,11 +3,13 @@
 // request's window becomes a block on it. The rules for what counts as busy
 // are lib/googleBusy.ts; this is the Google + db side.
 //
-// Deliberately nothing is kept: no refresh token, no per-person connection.
-// The consent hands back a one-hour access token, we read the request's range
-// with it there and then, and drop it. Running it again is the same round
-// trip — and once someone has granted the permission, Google bounces them
-// straight back without a screen (login_hint picks their account).
+// The permission is asked for ONCE: the first import goes through Google's
+// consent screen, and the refresh token it returns is kept (encrypted) on the
+// person's row, so every later import runs server-side with no Google screen
+// at all. Sign-in itself never asks for calendar access — that's a scope
+// Google must verify, and until it does it would put an "unverified app"
+// warning in front of every Google login. A revoked token is forgotten and
+// the next import simply asks again.
 //
 // It shares the org connection's callback (/api/google-calendar/callback,
 // told apart by its signed state), so there's no second redirect URI to
@@ -15,6 +17,7 @@
 //
 // Server-only (imports prisma).
 import { prisma } from "./prisma";
+import { decryptSecret, encryptSecret } from "./crypto";
 import { targetsUser } from "./availabilityTargets";
 import { getMyOrgIds } from "./org";
 import { parseLocalDate, toYmd } from "./dates";
@@ -59,8 +62,10 @@ export function importAuthorizeUrl(
     redirect_uri: redirectUri(),
     response_type: "code",
     scope: SCOPES,
-    // Online: we read once and forget, so there's no refresh token to keep.
-    access_type: "online",
+    // Offline + consent: Google only returns a refresh token on a consent
+    // screen, and that token is what lets every later import skip this one.
+    access_type: "offline",
+    prompt: "consent",
     include_granted_scopes: "true",
     state: signImportState(userId, requestId),
   });
@@ -69,7 +74,10 @@ export function importAuthorizeUrl(
   return `${ACCOUNTS}?${params.toString()}`;
 }
 
-export type ImportResult = { ok: true; blocks: number } | { ok: false; error: string };
+export type ImportResult =
+  | { ok: true; blocks: number }
+  // needsConsent: there's no usable remembered permission — send them to Google.
+  | { ok: false; error: string; needsConsent?: boolean };
 
 async function fetchEvents(
   token: string,
@@ -103,10 +111,60 @@ async function fetchEvents(
   return events;
 }
 
+/** Read the request's window with `accessToken` and replace the imported blocks. */
+async function runImport(
+  userId: string,
+  request: { id: string; startDate: Date; endDate: Date },
+  accessToken: string
+): Promise<ImportResult> {
+  // Request dates are server-local midnights (the server runs on APP_TZ),
+  // and endDate is the LAST day asked about, so read through the end of it.
+  const timeMax = new Date(request.endDate);
+  timeMax.setDate(timeMax.getDate() + 1);
+  const events = await fetchEvents(accessToken, request.startDate, timeMax);
+  if (!events) return { ok: false, error: "couldn't read the calendar" };
+
+  const windows = busyWindows(events, toYmd(request.startDate), toYmd(request.endDate));
+  await prisma.$transaction([
+    prisma.unavailability.deleteMany({
+      where: { userId, requestId: request.id, fromGoogle: true },
+    }),
+    prisma.unavailability.createMany({
+      data: windows.map((w) => ({
+        userId,
+        type: "SPECIFIC" as const,
+        startDate: parseLocalDate(w.ymd)!,
+        endDate: null,
+        startMinute: w.startMinute,
+        endMinute: w.endMinute,
+        requestId: request.id,
+        fromGoogle: true,
+      })),
+    }),
+  ]);
+  return { ok: true, blocks: windows.length };
+}
+
+/** Has this person granted (and not since revoked) calendar access? */
+export async function hasRememberedAccess(userId: string): Promise<boolean> {
+  const row = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { googleImportRefreshToken: true },
+  });
+  return !!row?.googleImportRefreshToken;
+}
+
+/** Forget the remembered permission (a revoked token, or the person asking). */
+export async function forgetAccess(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { googleImportRefreshToken: null },
+  });
+}
+
 /**
- * Swap the callback's code for a token, read the person's events across the
- * request's window, and replace their previously imported blocks for that
- * request with the new ones. Blocks they made by hand are never touched.
+ * The first import: swap the callback's code for tokens, remember the refresh
+ * token, then import. Blocks made by hand are never touched.
  */
 export async function importFromCode(
   userId: string,
@@ -129,35 +187,68 @@ export async function importFromCode(
       }),
     });
     if (!res.ok) return { ok: false, error: `token exchange ${res.status}: ${await res.text()}` };
-    const tokens = (await res.json()) as { access_token: string; scope?: string };
+    const tokens = (await res.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      scope?: string;
+    };
     if (!tokens.scope?.includes(READ_SCOPE)) {
       return { ok: false, error: "calendar access wasn't granted on the consent screen" };
     }
+    if (tokens.refresh_token) {
+      await prisma.user.update({
+        where: { id: userId },
+        data: { googleImportRefreshToken: encryptSecret(tokens.refresh_token) },
+      });
+    }
+    return await runImport(userId, request, tokens.access_token);
+  } catch (err) {
+    console.error("[gimport] import failed", err);
+    return { ok: false, error: String(err) };
+  }
+}
 
-    // Request dates are server-local midnights (the server runs on APP_TZ),
-    // and endDate is the LAST day asked about, so read through the end of it.
-    const timeMax = new Date(request.endDate);
-    timeMax.setDate(timeMax.getDate() + 1);
-    const events = await fetchEvents(tokens.access_token, request.startDate, timeMax);
-    if (!events) return { ok: false, error: "couldn't read the calendar" };
-
-    const windows = busyWindows(events, toYmd(request.startDate), toYmd(request.endDate));
-    await prisma.$transaction([
-      prisma.unavailability.deleteMany({ where: { userId, requestId, fromGoogle: true } }),
-      prisma.unavailability.createMany({
-        data: windows.map((w) => ({
-          userId,
-          type: "SPECIFIC" as const,
-          startDate: parseLocalDate(w.ymd)!,
-          endDate: null,
-          startMinute: w.startMinute,
-          endMinute: w.endMinute,
-          requestId,
-          fromGoogle: true,
-        })),
+/**
+ * Every import after the first: no Google screen, just the remembered
+ * permission. A refused refresh (revoked in their Google account, or expired)
+ * forgets it and answers needsConsent, so the caller sends them to Google.
+ */
+export async function importWithRememberedAccess(
+  userId: string,
+  requestId: string
+): Promise<ImportResult> {
+  try {
+    const request = await importableRequest(userId, requestId);
+    if (!request) return { ok: false, error: "request not found for this person" };
+    const row = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { googleImportRefreshToken: true },
+    });
+    if (!row?.googleImportRefreshToken) return { ok: false, error: "no access", needsConsent: true };
+    let refresh: string;
+    try {
+      refresh = decryptSecret(row.googleImportRefreshToken);
+    } catch {
+      await forgetAccess(userId);
+      return { ok: false, error: "unreadable token", needsConsent: true };
+    }
+    const res = await fetch(TOKEN, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: clientId() ?? "",
+        client_secret: clientSecret() ?? "",
+        refresh_token: refresh,
+        grant_type: "refresh_token",
       }),
-    ]);
-    return { ok: true, blocks: windows.length };
+    });
+    if (!res.ok) {
+      console.error(`[gimport] refresh failed for ${userId}: ${res.status} ${await res.text()}`);
+      await forgetAccess(userId);
+      return { ok: false, error: "access revoked", needsConsent: true };
+    }
+    const { access_token } = (await res.json()) as { access_token: string };
+    return await runImport(userId, request, access_token);
   } catch (err) {
     console.error("[gimport] import failed", err);
     return { ok: false, error: String(err) };

@@ -382,8 +382,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   declined skipped; worship sets deliberately NOT skipped (a request never
   covers already-scheduled sets). `importNotice` = /schedule's banner on
   return. ✅tested. Its Google + db side is `googleAvailability.ts`: one-shot
-  `calendar.events.readonly` consent (no stored token, login_hint = their
-  email), sharing `/api/google-calendar/callback` via its own signed state
+  `calendar.events.readonly` consent asked ONCE, at the first import (never at
+  sign-in — a sensitive scope there would put Google's unverified-app warning
+  on the login); its refresh token is kept encrypted in
+  `User.googleImportRefreshToken`, so later imports run with no screen, and a
+  revoked one is forgotten and re-asked, sharing `/api/google-calendar/callback` via its own signed state
   (`signImportState`/`verifyImportState` in `googleCalendar.ts`). ✅tested
 - `weekView.ts` — the availability WEEK view's layout: `weekStart` (Sunday),
   `dayBlocks` (each block's kind google|specific|recurring + side-by-side

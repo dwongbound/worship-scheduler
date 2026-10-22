@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/prisma", () => ({
   prisma: {
     availabilityRequest: { findFirst: vi.fn() },
+    user: { findUnique: vi.fn(), update: vi.fn() },
     unavailability: { deleteMany: vi.fn((a) => ({ op: "delete", ...a })), createMany: vi.fn((a) => ({ op: "create", ...a })) },
     $transaction: vi.fn(async (ops: unknown[]) => ops),
   },
@@ -14,7 +15,12 @@ vi.mock("@/lib/prisma", () => ({
 vi.mock("@/lib/org", () => ({ getMyOrgIds: vi.fn(async () => ["org1"]) }));
 
 import { prisma } from "@/lib/prisma";
-import { importAuthorizeUrl, importFromCode } from "@/lib/googleAvailability";
+import { encryptSecret, decryptSecret } from "@/lib/crypto";
+import {
+  importAuthorizeUrl,
+  importFromCode,
+  importWithRememberedAccess,
+} from "@/lib/googleAvailability";
 import { verifyImportState, verifyState } from "@/lib/googleCalendar";
 
 type Mock = ReturnType<typeof vi.fn>;
@@ -27,20 +33,32 @@ const REQUEST = {
 };
 
 let eventUrls: string[];
+let tokenBodies: string[];
+let refreshStatus: number;
 
 beforeEach(() => {
   process.env.GOOGLE_CLIENT_ID = "cid";
   process.env.GOOGLE_CLIENT_SECRET = "secret";
   process.env.NEXTAUTH_SECRET = "s";
   eventUrls = [];
+  tokenBodies = [];
+  refreshStatus = 200;
   m(prisma.availabilityRequest.findFirst).mockResolvedValue(REQUEST);
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith("https://oauth2.googleapis.com/token")) {
+        const body = String(init?.body ?? "");
+        tokenBodies.push(body);
+        if (body.includes("grant_type=refresh_token")) {
+          return refreshStatus === 200
+            ? new Response(JSON.stringify({ access_token: "at2" }))
+            : new Response('{"error":"invalid_grant"}', { status: refreshStatus });
+        }
         return new Response(
           JSON.stringify({
             access_token: "at",
+            refresh_token: "rt",
             scope: "openid email https://www.googleapis.com/auth/calendar.events.readonly",
           })
         );
@@ -74,14 +92,13 @@ afterEach(() => {
 });
 
 describe("importAuthorizeUrl", () => {
-  it("asks for read-only events, online, for the person's own account", () => {
+  it("asks once for read-only events, with a refresh token to remember", () => {
     const url = new URL(importAuthorizeUrl("u1", "req1", "me@example.com"));
     expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
-    expect(url.searchParams.get("access_type")).toBe("online");
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
     expect(url.searchParams.get("login_hint")).toBe("me@example.com");
     expect(url.searchParams.get("redirect_uri")).toMatch(/\/api\/google-calendar\/callback$/);
-    // No forced prompt: once granted, Google bounces straight back.
-    expect(url.searchParams.get("prompt")).toBeNull();
   });
   it("signs a state only the import flow accepts", () => {
     const state = new URL(importAuthorizeUrl("u1", "req1", null)).searchParams.get("state")!;
@@ -108,6 +125,13 @@ describe("importFromCode", () => {
     ]);
   });
 
+  it("remembers the permission so later imports skip Google's screen", async () => {
+    await importFromCode("u1", "req1", "code");
+    const saved = m(prisma.user.update).mock.calls[0][0];
+    expect(saved.where).toEqual({ id: "u1" });
+    expect(decryptSecret(saved.data.googleImportRefreshToken)).toBe("rt");
+  });
+
   it("refuses a request the person isn't asked", async () => {
     m(prisma.availabilityRequest.findFirst).mockResolvedValue(null);
     const result = await importFromCode("u1", "req1", "code");
@@ -123,5 +147,35 @@ describe("importFromCode", () => {
     const result = await importFromCode("u1", "req1", "code");
     expect(result).toEqual({ ok: false, error: expect.stringMatching(/wasn't granted/) });
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe("importWithRememberedAccess", () => {
+  it("imports with the remembered permission, no consent", async () => {
+    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: encryptSecret("rt") });
+    const result = await importWithRememberedAccess("u1", "req1");
+    expect(result).toEqual({ ok: true, blocks: 2 });
+    expect(tokenBodies[0]).toContain("refresh_token=rt");
+    expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it("forgets a revoked permission and asks for consent again", async () => {
+    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: encryptSecret("rt") });
+    refreshStatus = 400;
+    const result = await importWithRememberedAccess("u1", "req1");
+    expect(result).toMatchObject({ ok: false, needsConsent: true });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { googleImportRefreshToken: null },
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("asks for consent when nothing was ever granted", async () => {
+    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: null });
+    expect(await importWithRememberedAccess("u1", "req1")).toMatchObject({
+      ok: false,
+      needsConsent: true,
+    });
   });
 });
