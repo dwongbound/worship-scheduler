@@ -842,37 +842,42 @@ export async function notifyAssignmentsAdded(
       select: { ...DM_FIELDS, userId: true },
     });
 
-    const calendarUrl = appUrl("/calendar");
+    const mySetsUrl = appUrl(MY_SETS_PATH);
     await Promise.all(
       members.map((m) => {
         const list = byUser.get(m.userId) ?? [];
-        // Each line's set links to its own detail modal, so a five-set message
-        // is five ways in rather than one trip to the calendar and a hunt for
-        // the right day. A provider without inline links (Discord) renders the
-        // label and the URL side by side instead — see MessageFormat.link.
         const fmt = dm.messaging.fmt;
-        // The DATE carries each line's link, not the set name: a set name is
-        // code (see setName) and no provider renders markup inside a link
-        // label, so linking the name would strip the very formatting that
-        // makes a roster line scannable.
-        const lines = list.map((seat) => {
-          const link = appUrl(setLinkPath(seat.setId));
-          const when = setWhen(seat.set);
-          return (
+        // No per-set links: a list of them is a wall of URLs on any provider
+        // without inline links, and My Sets already shows every one of them
+        // with its Confirm button — so the message ends with that one link.
+        const lines = list.map(
+          (seat) =>
             `${BULLET} ${roleLabel(seat.role, seat.catalog)} for ` +
-            `${setName(seat.set, fmt)} on ${linkOr(link, when, fmt)}.`
-          );
-        });
+            `${setName(seat.set, fmt)} on ${setWhen(seat.set)}.`
+        );
         const text =
           `${lead(EMOJI.setAdded, `New Sets ${list.length}`, fmt)}\n` +
           `${lines.join("\n")}` +
-          (calendarUrl ? `\nConfirm ${fmt.link(calendarUrl, "here")}.` : "");
+          mySetsFooter(mySetsUrl, true, fmt);
         return dm.messaging.postDm(m, text);
       })
     );
   } catch (err) {
     console.error("[slack] batched assignment DMs failed", err);
   }
+}
+
+/** The My Sets tab — where a batched DM points instead of linking each set. */
+const MY_SETS_PATH = "/set-manager";
+
+/**
+ * The one link closing a multi-set DM. "Confirm" only when they picked
+ * something up; a removal-only message just points at the tab. Empty when
+ * there's no app URL to link to.
+ */
+function mySetsFooter(url: string, hasAdded: boolean, fmt: MessageFormat): string {
+  if (!url) return "";
+  return `\n${hasAdded ? "Confirm in" : "See"} ${fmt.link(url, "My Sets")}.`;
 }
 
 /**
@@ -890,7 +895,8 @@ export type SeatChange = {
 /**
  * The text of one person's roster DM. A lone change reads exactly like the
  * per-seat DM always did; several become ONE message — the sets they picked up,
- * then the ones they came off, each oldest first, each date a link to its set.
+ * then the ones they came off, each oldest first, closed by ONE link to the
+ * My Sets tab (no per-set links — see notifyAssignmentsAdded).
  * Pure, so the wording is testable without a transport.
  *
  * Deliberately says nothing about who else was involved. An admin swapping one
@@ -901,7 +907,7 @@ export type SeatChange = {
 export function rosterDmText(
   changes: (Omit<SeatChange, "userId"> & { set: SetLike })[],
   fmt: MessageFormat,
-  calendarUrl: string
+  mySetsUrl: string
 ): string {
   if (changes.length === 1) {
     const [c] = changes;
@@ -915,16 +921,14 @@ export function rosterDmText(
     a.set.startsAt.getTime() - b.set.startsAt.getTime();
   const line = (c: (typeof changes)[number]) =>
     `${BULLET} ${roleLabel(c.role, c.catalog)} for ${setName(c.set, fmt)} on ` +
-    `${linkOr(appUrl(setLinkPath(c.setId)), setWhen(c.set), fmt)}.`;
+    `${setWhen(c.set)}.`;
   const added = changes.filter((c) => c.kind === "added").sort(byDate);
   const removed = changes.filter((c) => c.kind === "removed").sort(byDate);
   const blocks: string[] = [];
   if (added.length > 0) {
-    // "Confirm" belongs to the sets they picked up, so it closes that block.
     blocks.push(
       `${lead(EMOJI.setAdded, `New Sets ${added.length}`, fmt)}\n` +
-        added.map(line).join("\n") +
-        (calendarUrl ? `\nConfirm ${fmt.link(calendarUrl, "here")}.` : "")
+        added.map(line).join("\n")
     );
   }
   if (removed.length > 0) {
@@ -933,7 +937,7 @@ export function rosterDmText(
         removed.map(line).join("\n")
     );
   }
-  return blocks.join("\n\n");
+  return blocks.join("\n\n") + mySetsFooter(mySetsUrl, added.length > 0, fmt);
 }
 
 /**
@@ -972,12 +976,12 @@ export async function notifyRosterChanges(
       where: { orgId, userId: { in: [...byUser.keys()] }, slackUserId: { not: null } },
       select: { ...DM_FIELDS, userId: true },
     });
-    const calendarUrl = appUrl("/calendar");
+    const mySetsUrl = appUrl(MY_SETS_PATH);
     await Promise.all(
       members.map((m) =>
         dm.messaging.postDm(
           m,
-          rosterDmText(byUser.get(m.userId) ?? [], dm.messaging.fmt, calendarUrl)
+          rosterDmText(byUser.get(m.userId) ?? [], dm.messaging.fmt, mySetsUrl)
         )
       )
     );
