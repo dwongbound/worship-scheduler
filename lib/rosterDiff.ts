@@ -18,7 +18,7 @@ import type { Prisma } from "./generated/prisma/client";
 import { prisma } from "./prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "./setMd";
 import { describeRosterChanges, type RosterChange } from "./rosterChanges";
-import { notifyAssignmentChange, notifySetChange } from "./slack";
+import { notifyRosterChanges, notifySetChange, type SeatChange } from "./slack";
 import { syncSetsAfterResponse } from "./googleCalendar";
 import { roleLabel, type TeamRoleDef } from "./teamRoles";
 import { getTeamCatalog, getTeamCatalogs } from "./teamRoleStore";
@@ -28,6 +28,7 @@ export type RosterError = { error: string; status: number };
 
 export interface PreparedRoster {
   setId: string;
+  orgId: string;
   // Unexecuted prisma writes, for the caller's $transaction.
   writes: Prisma.PrismaPromise<unknown>[];
   changes: RosterChange[];
@@ -162,6 +163,7 @@ export async function prepareRosterDiff(
   // with the roster.
   const out: PreparedRoster = {
     setId,
+    orgId: set.orgId,
     writes: [],
     changes: [],
     dms: [],
@@ -276,7 +278,10 @@ export async function prepareRosterDiff(
   return out;
 }
 
-export async function rosterAftermath(p: PreparedRoster): Promise<void> {
+export async function rosterAftermath(
+  p: PreparedRoster,
+  opts: { sendDms?: boolean } = {}
+): Promise<void> {
   // The MD fixups run ONCE over the finished roster rather than per seat: the
   // old per-request flow re-evaluated them after every single change, which
   // could promote someone only to clear them again on the next call.
@@ -293,16 +298,15 @@ export async function rosterAftermath(p: PreparedRoster): Promise<void> {
   if (notice) await notifySetChange(p.setId, notice);
   syncSetsAfterResponse(p.setId);
 
-  // DMs stay per person: each is about one seat, and only the people affected
-  // get one. The group chat may not exist (or may not be in its lead window),
-  // so this is the notice they're actually guaranteed to see.
-  for (const dm of p.dms) {
-    await notifyAssignmentChange(p.setId, dm.userId, {
-      kind: dm.kind,
-      role: dm.role,
-      catalog: dm.catalog,
-    });
-  }
+  // DMs: one per person for this set. A caller saving MANY sets passes
+  // `sendDms: false` and sends rosterDms() across the whole batch itself, so
+  // someone touched on ten sets gets one message, not ten.
+  if (opts.sendDms !== false) await notifyRosterChanges(p.orgId, rosterDms([p]));
+}
+
+/** Every DM a batch of prepared rosters owes, for one notifyRosterChanges. */
+export function rosterDms(prepared: PreparedRoster[]): SeatChange[] {
+  return prepared.flatMap((p) => p.dms.map((d) => ({ ...d, setId: p.setId })));
 }
 
 export function isRosterError(

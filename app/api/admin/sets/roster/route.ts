@@ -9,8 +9,8 @@
 // (each item's ops are the per-set PATCH's body — lib/setDraft.ts
 // diffAssignments). Every set is validated first, then ALL the roster writes
 // land in ONE transaction, so the batch is all-or-nothing. The aftermath — MD
-// fixups, one group-chat notice per set, the per-person DMs — runs per set once
-// it's in.
+// fixups and one group-chat notice per set — runs per set once it's in, and
+// then ONE DM per person summarising every set the batch touched for them.
 //
 // `mdUserId` (string, or null to clear) is applied last, against the finished
 // roster, exactly as PATCH /api/sets/[id] { mdUserId } checks it. An MD that
@@ -28,8 +28,10 @@ import {
   parseRosterOps,
   prepareRosterDiff,
   rosterAftermath,
+  rosterDms,
   type PreparedRoster,
 } from "@/lib/rosterDiff";
+import { notifyRosterChanges } from "@/lib/slack";
 import { loadForMD } from "@/lib/setMd";
 
 // A generate window is a few months of weekly sets; this is well past that and
@@ -110,7 +112,10 @@ export async function PUT(req: NextRequest) {
     } catch {
       return NextResponse.json(DUPLICATE_SEAT, { status: DUPLICATE_SEAT.status });
     }
-    for (const p of prepared) await rosterAftermath(p);
+    for (const p of prepared) await rosterAftermath(p, { sendDms: false });
+    // ONE DM per person across the whole batch: filling a month of one role
+    // used to send each person a message per set.
+    await notifyRosterChanges(sets[0].orgId, rosterDms(prepared));
   }
 
   // ── MD picks, against the finished rosters ─────────────────────────────

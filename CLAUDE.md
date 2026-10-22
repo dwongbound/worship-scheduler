@@ -186,7 +186,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   sets' diffs + optional `mdUserId` each, one org, every set validated before
   ONE transaction — the calendar Preview Mode's Save; an MD the new roster
   can't hold comes back in `mdRejected`. Both share `lib/rosterDiff.ts`
-  `prepareRosterDiff`/`rosterAftermath`), `admin/templates(+/[id])`,
+  `prepareRosterDiff`/`rosterAftermath`; DMs go out ONCE per person across the
+  whole batch via `lib/slack.ts notifyRosterChanges`/`rosterDmText`, so a month
+  of one role is one message, not one per set), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`,
   `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
   their plan payloads, `[id]` GET is what carries one back).
