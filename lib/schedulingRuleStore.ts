@@ -20,7 +20,7 @@ const PICKABLE_SET_DAYS = 180;
 
 /** Everything a rule in this org may point at. */
 export async function orgRuleRefs(orgId: string): Promise<RuleRefs> {
-  const [users, roles, templates, sets] = await Promise.all([
+  const [users, roles, templates, sets, teams] = await Promise.all([
     prisma.user.findMany({
       where: { memberships: { some: { orgId } } },
       select: { id: true },
@@ -31,8 +31,10 @@ export async function orgRuleRefs(orgId: string): Promise<RuleRefs> {
     }),
     prisma.setTemplate.findMany({ where: { orgId }, select: { id: true } }),
     prisma.set.findMany({ where: { orgId }, select: { id: true } }),
+    prisma.team.findMany({ where: { orgId }, select: { id: true } }),
   ]);
   return {
+    teamIds: new Set(teams.map((t) => t.id)),
     userIds: new Set(users.map((u) => u.id)),
     roleKeys: new Set(roles.map((r) => r.key)),
     templateIds: new Set(templates.map((t) => t.id)),
@@ -61,7 +63,7 @@ export async function loadOrgRules(orgId: string, refs?: RuleRefs): Promise<Sche
     prisma.schedulingRule.findMany({
       where: { orgId },
       orderBy: { position: "asc" },
-      select: { id: true, tier: true, enabled: true, params: true },
+      select: { id: true, tier: true, enabled: true, params: true, teamId: true },
     }),
     refs ? Promise.resolve(refs) : orgRuleRefs(orgId),
   ]);
@@ -82,6 +84,7 @@ export async function saveOrgRules(
         tier: r.tier,
         enabled: r.enabled,
         params: r.params,
+        teamId: r.teamId ?? null,
       })),
     }),
   ]);
@@ -90,7 +93,7 @@ export async function saveOrgRules(
 /** The names and choices the rules editor draws its dropdowns from. */
 export async function ruleEditorOptions(orgId: string) {
   const now = Date.now();
-  const [people, roles, templates, sets] = await Promise.all([
+  const [people, roles, templates, sets, teams] = await Promise.all([
     prisma.user.findMany({
       where: { memberships: { some: { orgId } } },
       select: { id: true, name: true },
@@ -123,12 +126,18 @@ export async function ruleEditorOptions(orgId: string) {
       select: { id: true, label: true, startsAt: true, team: { select: { name: true } } },
       orderBy: { startsAt: "asc" },
     }),
+    prisma.team.findMany({
+      where: { orgId },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
   ]);
   // One entry per role KEY across every team — a rule's role applies wherever
   // a team has it. The first team's label (catalog order) names it.
   const roleByKey = new Map<string, { key: string; label: string }>();
   for (const r of roles) if (!roleByKey.has(r.key)) roleByKey.set(r.key, { key: r.key, label: r.label });
   return {
+    teams,
     people,
     roles: [...roleByKey.values()],
     templates: templates.map((t) => ({

@@ -81,6 +81,32 @@ export interface SchedulingRule {
   tier: RuleTier;
   enabled: boolean;
   params: RuleParams;
+  // Which sets this rule governs: null = the whole org, otherwise only sets
+  // belonging to this team. A team-scoped rule is simply not consulted when
+  // filling another team's set (lib/scheduler.ts filters per set), so two
+  // teams can hold opposite rules without either bending.
+  //
+  // NOTE on LIMIT: the scope decides WHEN the cap applies, not what it counts.
+  // "On Youth, Amy plays at most 2 a month" stops Amy being seated on a Youth
+  // set once she already has 2 sets — all her sets, not just Youth ones. Load
+  // is load, and the alternative needs a team on every booking fed in.
+  teamId?: string | null;
+}
+
+/** Whether a rule of `ruleTeam` scope governs a set belonging to `setTeam`. */
+export function scopeCovers(
+  ruleTeam: string | null | undefined,
+  setTeam: string | null | undefined
+): boolean {
+  return !ruleTeam || ruleTeam === setTeam;
+}
+
+/** Whether two scopes can ever apply to the same set — see findContradiction. */
+export function scopesOverlap(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  return !a || !b || a === b;
 }
 
 export const RULE_KINDS: {
@@ -222,14 +248,26 @@ export function parseRuleParams(raw: unknown): RuleParams | string {
  * from a future version) is skipped rather than breaking the whole list.
  */
 export function parseStoredRules(
-  rows: { id: string; tier: string; enabled: boolean; params: unknown }[]
+  rows: {
+    id: string;
+    tier: string;
+    enabled: boolean;
+    params: unknown;
+    teamId?: string | null;
+  }[]
 ): SchedulingRule[] {
   const out: SchedulingRule[] = [];
   for (const row of rows) {
     const params = parseRuleParams(row.params);
     if (typeof params === "string") continue;
     const tier: RuleTier = row.tier === "REQUIRED" ? "REQUIRED" : "PREFERENCE";
-    out.push({ id: row.id, tier: forcedTier(params.kind) ?? tier, enabled: row.enabled, params });
+    out.push({
+      id: row.id,
+      tier: forcedTier(params.kind) ?? tier,
+      enabled: row.enabled,
+      params,
+      teamId: row.teamId ?? null,
+    });
   }
   return out;
 }
@@ -242,6 +280,7 @@ function forcedTier(kind: RuleKind): RuleTier | null {
 
 // What a rule may point at — the ids that exist in this org.
 export interface RuleRefs {
+  teamIds: Set<string>;
   userIds: Set<string>;
   roleKeys: Set<string>;
   templateIds: Set<string>;
@@ -313,11 +352,16 @@ export function validateRules(
       return { ok: false, error: "That set doesn't exist any more.", index: i };
     }
     const asked: RuleTier = item?.tier === "REQUIRED" ? "REQUIRED" : "PREFERENCE";
+    const teamId = item?.teamId == null ? null : String(item.teamId);
+    if (teamId && !refs.teamIds.has(teamId)) {
+      return { ok: false, error: "That team doesn't exist any more.", index: i };
+    }
     rules.push({
       id: String(i),
       tier: forcedTier(params.kind) ?? asked,
       enabled: item?.enabled !== false,
       params,
+      teamId,
     });
   }
   const clash = findContradiction(rules);
@@ -347,6 +391,31 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
 export function findContradiction(
   rules: SchedulingRule[]
 ): { index: number; otherIndex: number | null; message: string } | null {
+  // Checked once per SCOPE, because only rules that can apply to the same set
+  // can contradict each other: each team's rules together with the org-wide
+  // ones. So "always together" on one team and "never" on another both stand,
+  // while either against an org-wide opposite is still caught.
+  const teams = [
+    ...new Set(
+      rules
+        .filter((r) => r.enabled && r.tier === "REQUIRED" && r.teamId)
+        .map((r) => r.teamId as string)
+    ),
+  ];
+  const scopes: (string | null)[] = teams.length ? teams : [null];
+  for (const scope of scopes) {
+    const entries = rules
+      .map((rule, idx) => ({ rule, idx }))
+      .filter(({ rule }) => scopesOverlap(rule.teamId, scope));
+    const clash = findContradictionIn(entries);
+    if (clash) return clash;
+  }
+  return null;
+}
+
+function findContradictionIn(
+  entries: { rule: SchedulingRule; idx: number }[]
+): { index: number; otherIndex: number | null; message: string } | null {
   const seen = new Map<string, number>();
   // TOGETHER: union-find over ALWAYS links; NEVER pairs are checked against it.
   const parent = new Map<string, string>();
@@ -362,11 +431,13 @@ export function findContradiction(
   // LIMIT: user|period → { max, index }; "*" is the everyone-limit.
   const limits = new Map<string, { max: number; i: number }>();
 
-  for (let i = 0; i < rules.length; i++) {
-    const rule = rules[i];
+  for (const { rule, idx: i } of entries) {
     if (!rule.enabled || rule.tier !== "REQUIRED") continue;
     const p = rule.params;
-    const key = canonicalKey(p);
+    // Scope is part of the key, so two rules that can never apply to the same
+    // set are never a contradiction — one team may say "always together" while
+    // another says "never", and both hold.
+    const key = `${rule.teamId ?? "*"}|${canonicalKey(p)}`;
     const dup = seen.get(key);
     if (dup !== undefined) {
       return { index: i, otherIndex: dup, message: "This required rule is already on the list." };
@@ -500,6 +571,7 @@ export interface RulePart {
 }
 
 export interface RuleNames {
+  team: (id: string) => string;
   user: (id: string) => string;
   role: (key: string) => string;
   template: (id: string) => string;

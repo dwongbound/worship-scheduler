@@ -242,9 +242,17 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   is the safety net: no rule governing a thing → the lib/constants.ts default,
   so an unseeded org schedules exactly as it did before rules existed; a rule
   present but switched OFF → the behaviour is off, never a fallback. They have
-  no builder form (`CREATABLE_KINDS`), so rows are toggled or deleted, not
-  edited. A required SAME_PLAYER picks only from people free for BOTH sets —
-  it never seats someone on one and strands the other. ✅tested `parseRuleParams` /
+  real builder forms (an ordered role-chip picker, since MD order IS the
+  preference). A required SAME_PLAYER picks only from people free for BOTH
+  sets — it never seats someone on one and strands the other.
+  **Every rule carries a `teamId` scope**: null = the whole org, otherwise only
+  that team's sets (`scopeCovers`). `buildSchedule` derives its rule context
+  PER TEAM (`rulesFor`, memoized — a plan is a couple of teams over many sets),
+  so two teams can hold opposite rules and both are honoured;
+  `findContradiction` likewise runs once per scope (each team's rules plus the
+  org-wide ones), so "always together" on one team and "never" on another is
+  not a clash. The scope decides WHEN a LIMIT applies, not what it counts — a
+  team-scoped cap still counts all of that person's sets. ✅tested `parseRuleParams` /
   `validateRules` (ids checked against the org), `findContradiction` (between
   REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
   `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and

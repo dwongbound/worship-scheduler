@@ -251,6 +251,7 @@ model Team {
   // Team names only need to be unique within their org.
   @@unique([orgId, name])
   @@map("teams")
+  schedulingRules SchedulingRule[]
 }
 
 // One role in a team's catalog. Teams define their own — the built-ins below
@@ -911,6 +912,13 @@ model SchedulingRule {
 
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
+
+  // Which sets this rule governs: null = every set in the org, otherwise only
+  // this team's. Deleting the team deletes its rules — a rule scoped to
+  // nothing would silently become org-wide, which is the opposite of what it
+  // said. See lib/schedulingRules.ts (scopeCovers).
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

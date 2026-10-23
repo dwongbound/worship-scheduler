@@ -65,6 +65,7 @@ interface RuleOptions {
     teamName: string | null;
   }[];
   sets: { id: string; label: string | null; startsAt: string; teamName: string | null }[];
+  teams: { id: string; name: string }[];
 }
 
 // The builder's form: every blank of every kind, so switching kinds mid-way
@@ -87,6 +88,8 @@ interface Draft {
   // preference, so the chips below record the sequence they were clicked in.
   roles: string[];
   otherRole: string;
+  // Which sets this rule governs: "" = the whole org, else a team id.
+  teamId: string;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -107,6 +110,7 @@ const EMPTY_DRAFT: Draft = {
   // hosted role may sit alongside) and the second half of a pair.
   roles: [],
   otherRole: "",
+  teamId: "",
 };
 
 // The Draft's stand-in for "no one person" on a Limit rule — a real id is a
@@ -114,7 +118,12 @@ const EMPTY_DRAFT: Draft = {
 const ALL_PEOPLE = "__ALL__";
 
 function draftFromRule(rule: SchedulingRule): Draft {
-  const d: Draft = { ...EMPTY_DRAFT, kind: rule.params.kind, tier: rule.tier };
+  const d: Draft = {
+    ...EMPTY_DRAFT,
+    kind: rule.params.kind,
+    tier: rule.tier,
+    teamId: rule.teamId ?? "",
+  };
   const p = rule.params;
   switch (p.kind) {
     case "ONLY_IF_NEEDED":
@@ -215,7 +224,9 @@ export default function OrgRules({ orgId }: { orgId: string }) {
     const roles = new Map(options?.roles.map((r) => [r.key, r.label]));
     const templates = new Map(options?.templates.map((t) => [t.id, templateLabel(t)]));
     const sets = new Map(options?.sets.map((s) => [s.id, setLabel(s)]));
+    const teams = new Map(options?.teams.map((t) => [t.id, t.name]));
     return {
+      team: (id) => teams.get(id) ?? "a team",
       user: (id) => people.get(id) ?? "someone",
       role: (key) => roles.get(key) ?? key,
       template: (id) => templates.get(id) ?? "a recurring set",
@@ -231,7 +242,12 @@ export default function OrgRules({ orgId }: { orgId: string }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          rules: next.map((r) => ({ tier: r.tier, enabled: r.enabled, params: r.params })),
+          rules: next.map((r) => ({
+            tier: r.tier,
+            enabled: r.enabled,
+            params: r.params,
+            teamId: r.teamId ?? null,
+          })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -290,11 +306,21 @@ export default function OrgRules({ orgId }: { orgId: string }) {
   // The list as it would be with the builder's rule saved: an edit stays where
   // it was unless its tier changed, which moves it to the end of the other
   // section (the bottom of the preference ranking, if it became one).
-  function withDraft(params: RuleParams, tier: RuleTier): SchedulingRule[] {
+  function withDraft(
+    params: RuleParams,
+    tier: RuleTier,
+    teamId: string | null = null
+  ): SchedulingRule[] {
     const list = rules ?? [];
     const id = builder?.editingId ?? "new";
     const current = list.find((r) => r.id === id);
-    const rule: SchedulingRule = { id, tier, enabled: current?.enabled ?? true, params };
+    const rule: SchedulingRule = {
+      id,
+      tier,
+      enabled: current?.enabled ?? true,
+      params,
+      teamId,
+    };
     if (current && current.tier === tier) {
       return list.map((r) => (r.id === id ? rule : r));
     }
@@ -304,9 +330,13 @@ export default function OrgRules({ orgId }: { orgId: string }) {
       : [...required, ...preferences, rule];
   }
 
-  async function saveBuilder(params: RuleParams, tier: RuleTier) {
+  async function saveBuilder(
+    params: RuleParams,
+    tier: RuleTier,
+    teamId: string | null
+  ) {
     setBuilderError("");
-    const err = await persist(withDraft(params, tier));
+    const err = await persist(withDraft(params, tier, teamId));
     if (err) {
       setBuilderError(err);
       return;
@@ -503,6 +533,13 @@ function RuleRowBody({
         }`}
       >
         <Sentence params={rule.params} names={names} />
+        {rule.teamId && (
+          // Only a SCOPED rule is badged: org-wide is the default, and badging
+          // every row would make the exception harder to spot, not easier.
+          <span className="ml-2 whitespace-nowrap rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+            {names.team(rule.teamId)} only
+          </span>
+        )}
       </p>
       <div className="flex items-center gap-1 sm:contents">
         <span className="mr-auto flex sm:order-1 sm:mr-0">
@@ -716,10 +753,14 @@ function RuleBuilder({
   names: RuleNames;
   busy: boolean;
   error: string;
-  prospective: (params: RuleParams, tier: RuleTier) => SchedulingRule[];
+  prospective: (
+    params: RuleParams,
+    tier: RuleTier,
+    teamId: string | null
+  ) => SchedulingRule[];
   onChange: (draft: Draft) => void;
   onClose: () => void;
-  onSave: (params: RuleParams, tier: RuleTier) => void;
+  onSave: (params: RuleParams, tier: RuleTier, teamId: string | null) => void;
 }) {
   const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
   const info = kindInfo(draft.kind);
@@ -727,7 +768,9 @@ function RuleBuilder({
   const tier: RuleTier = info.tiers.includes(draft.tier) ? draft.tier : info.tiers[0];
   const params = paramsFromDraft(draft);
   const ready = typeof params !== "string";
-  const clash = ready ? findContradiction(prospective(params, tier)) : null;
+  const clash = ready
+    ? findContradiction(prospective(params, tier, draft.teamId || null))
+    : null;
 
   // `everyone` adds the org-wide option a Limit rule can take (userId null).
   const person = (
@@ -825,6 +868,21 @@ function RuleBuilder({
       </Select>
     </Blank>
   );
+  // One line of the form: the glue word, then its control, with every word
+  // column the same width so stacked rows line their controls up. This is what
+  // makes a two-person rule read as a balanced pair.
+  const line = (word: string, control: React.ReactNode, after?: string) => (
+    <div className="flex w-full items-center gap-2">
+      <span className="w-14 shrink-0 text-right text-sm text-gray-500 dark:text-gray-400">
+        {word}
+      </span>
+      {control}
+      {after && (
+        <span className="text-sm text-gray-500 dark:text-gray-400">{after}</span>
+      )}
+    </div>
+  );
+
   let sentence: React.ReactNode;
   switch (draft.kind) {
     case "ONLY_IF_NEEDED":
@@ -840,12 +898,20 @@ function RuleBuilder({
     case "PREFER":
       sentence = (
         <>
-          <T>Pick</T>
-          {person(draft.userId, (userId) => set({ userId }), "First choice", draft.otherUserId)}
-          <T>over</T>
-          {person(draft.otherUserId, (otherUserId) => set({ otherUserId }), "Second choice", draft.userId)}
-          <T>on</T>
-          {role()}
+          {line(
+            "Pick",
+            person(draft.userId, (userId) => set({ userId }), "First choice", draft.otherUserId)
+          )}
+          {line(
+            "over",
+            person(
+              draft.otherUserId,
+              (otherUserId) => set({ otherUserId }),
+              "Second choice",
+              draft.userId
+            )
+          )}
+          {line("on", role())}
         </>
       );
       break;
@@ -911,21 +977,34 @@ function RuleBuilder({
     case "TOGETHER":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "First person", draft.otherUserId)}
-          <T>and</T>
-          {person(draft.otherUserId, (otherUserId) => set({ otherUserId }), "Second person", draft.userId)}
-          <Blank>
-            <Select
-              label="Always or never"
-              hideLabel
-              value={draft.mode}
-              onChange={(e) => set({ mode: e.target.value as Draft["mode"] })}
-            >
-              <option value="NEVER">never</option>
-              <option value="ALWAYS">always</option>
-            </Select>
-          </Blank>
-          <T>serve on the same set</T>
+          {line(
+            "",
+            person(draft.userId, (userId) => set({ userId }), "First person", draft.otherUserId)
+          )}
+          {line(
+            "and",
+            person(
+              draft.otherUserId,
+              (otherUserId) => set({ otherUserId }),
+              "Second person",
+              draft.userId
+            )
+          )}
+          {line(
+            "",
+            <Blank>
+              <Select
+                label="Always or never"
+                hideLabel
+                value={draft.mode}
+                onChange={(e) => set({ mode: e.target.value as Draft["mode"] })}
+              >
+                <option value="NEVER">never</option>
+                <option value="ALWAYS">always</option>
+              </Select>
+            </Blank>,
+            "serve on the same set"
+          )}
         </>
       );
       break;
@@ -1007,7 +1086,7 @@ function RuleBuilder({
           <Button
             loading={busy}
             disabled={!ready || !!clash}
-            onClick={() => ready && onSave(params, tier)}
+            onClick={() => ready && onSave(params, tier, draft.teamId || null)}
           >
             {editing ? "Save rule" : "Add rule"}
           </Button>
@@ -1048,8 +1127,10 @@ function RuleBuilder({
                     : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
                 }`}
               >
-                <p className="text-sm font-medium">{k.title}</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{k.description}</p>
+                <span className="flex items-center justify-between gap-1.5">
+                  <span className="text-sm font-medium">{k.title}</span>
+                  <InfoTooltip text={k.description} />
+                </span>
               </button>
             ))}
           </div>
@@ -1058,9 +1139,38 @@ function RuleBuilder({
         <div className="min-w-0">
 
       <p className="mb-2 text-sm font-medium">Fill in the blanks</p>
-      <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-2">{sentence}</div>
+      {/* `items-baseline` keeps the glue words sitting on the controls' text
+          rather than floating mid-box, and the blanks share one width (see
+          Blank) so two people read as a balanced pair instead of a ragged
+          sentence that rewraps as you pick. */}
+      <div className="mb-5 flex flex-wrap items-baseline gap-x-2 gap-y-3">
+        {sentence}
+      </div>
 
-      <p className="mb-2 text-sm font-medium">How strict?</p>
+      <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+        Applies to
+        <InfoTooltip text="Which sets this rule governs. A team's rule is simply not consulted when filling another team's set — so two teams can hold opposite rules and both are honoured." />
+      </p>
+      <div className="mb-5 w-full sm:w-64">
+        <Select
+          label="Applies to"
+          hideLabel
+          value={draft.teamId}
+          onChange={(e) => set({ teamId: e.target.value })}
+        >
+          <option value="">Every team in this org</option>
+          {options.teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name} only
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+        How strict?
+        <InfoTooltip text="Required rules are never broken — if one can't be met the slot is left open for you to fill by hand. Preferences bend: they're ranked, the higher one wins when two disagree, and all of them outrank plain rotation." />
+      </p>
       <div className="mb-5">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <TierCard

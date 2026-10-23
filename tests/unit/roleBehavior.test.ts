@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultRoleRules,
+  parseStoredRules,
   resolveRoleBehavior,
   type RuleParams,
   type SchedulingRule,
@@ -117,5 +118,36 @@ describe("defaultRoleRules", () => {
       bare.hostRolesFor("ACOUSTIC_GUITAR")
     );
     expect(seeded.mayDouble("WORSHIP_LEADER", "ACOUSTIC_GUITAR")).toBe(true);
+  });
+});
+
+// A stored row must survive the round trip, or the next save silently drops it:
+// loadOrgRules skips anything that won't parse, and saveOrgRules then writes
+// the list without it. These are the exact shapes defaultRoleRules writes.
+describe("stored role rules round-trip", () => {
+  it("parses back out of the database shape", () => {
+    const rows = defaultRoleRules(BUILT_IN).map((r, i) => ({
+      id: `row${i}`,
+      tier: r.tier as string,
+      enabled: r.enabled,
+      params: JSON.parse(JSON.stringify(r.params)) as unknown,
+      teamId: null,
+    }));
+    const parsed = parseStoredRules(rows);
+    expect(parsed.map((r) => r.params.kind)).toEqual([
+      "LEADS_FROM",
+      "ROLE_HOST",
+      "MAY_DOUBLE",
+      "MAY_DOUBLE",
+    ]);
+    expect(parsed.every((r) => r.tier === "REQUIRED")).toBe(true);
+  });
+
+  it("keeps a team scope through the round trip", () => {
+    const [first] = defaultRoleRules(BUILT_IN);
+    const [parsed] = parseStoredRules([
+      { id: "r", tier: "REQUIRED", enabled: true, params: first.params, teamId: "t1" },
+    ]);
+    expect(parsed.teamId).toBe("t1");
   });
 });

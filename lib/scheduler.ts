@@ -85,6 +85,7 @@ import { zonedParts } from "./dates";
 import {
   periodKey,
   resolveRoleBehavior,
+  scopeCovers,
   weekKey,
   type RuleParams,
   type RulePeriod,
@@ -323,42 +324,67 @@ export function buildSchedule(
 
   // ── Scheduling rules — see SCHEDULING RULES above ──────────────────────
   const tz = options.timeZone ?? APP_TZ;
-  const activeRules = (options.schedulingRules ?? []).filter((r) => r.enabled);
-  const required = activeRules.filter((r) => r.tier === "REQUIRED");
-  const preferences = activeRules.filter((r) => r.tier === "PREFERENCE");
-  // userId → the people a TOGETHER rule of this tier and mode pairs them with.
-  const togetherMap = (list: SchedulingRule[], mode: "ALWAYS" | "NEVER") => {
-    const map = new Map<string, string[]>();
-    for (const { params: p } of list) {
-      if (p.kind !== "TOGETHER" || p.mode !== mode) continue;
-      const [a, b] = p.userIds;
-      map.set(a, [...(map.get(a) ?? []), b]);
-      map.set(b, [...(map.get(b) ?? []), a]);
-    }
-    return map;
-  };
-  // What the role-shaped rules say, with lib/constants.ts as the default for
-  // anything no rule governs — so an org with none of them (every org before
-  // these rules existed) behaves exactly as it always did.
-  const behavior = resolveRoleBehavior(options.schedulingRules, {
-    mdRoles: MD_ROLES,
-    hostRoles: { [ACOUSTIC_GUITAR]: ACOUSTIC_HOST_ROLES },
-    doublePairs: OVERLAP_ALLOWED_PAIRS,
-  });
-  // Roles that may only be held alongside another (acoustic guitar, by
-  // default). Filled in their own pass after everything else, since their host
-  // must already be seated.
-  const isHostedRole = (role: string) => behavior.hostRolesFor(role) !== null;
 
-  const neverRequired = togetherMap(required, "NEVER");
-  const alwaysRequired = togetherMap(required, "ALWAYS");
-  const alwaysPreferred = togetherMap(preferences, "ALWAYS");
-  const requiredLimits = required.flatMap((r) =>
-    r.params.kind === "LIMIT" ? [r.params] : []
-  );
-  const requiredPrefers = required.flatMap((r) =>
-    r.params.kind === "PREFER" ? [r.params] : []
-  );
+  // Rules are resolved PER TEAM: a rule scoped to a team governs only that
+  // team's sets, so one run can fill two teams that hold opposite rules
+  // without either bending. Memoized by team — a plan is usually one or two
+  // teams over many sets, so this is a couple of derivations, not one per set.
+  const ruleCache = new Map<string, ReturnType<typeof deriveRules>>();
+  const rulesFor = (teamId: string | null | undefined) => {
+    const key = teamId ?? "";
+    let v = ruleCache.get(key);
+    if (!v) {
+      v = deriveRules(teamId);
+      ruleCache.set(key, v);
+    }
+    return v;
+  };
+
+  function deriveRules(teamId: string | null | undefined) {
+    const activeRules = (options.schedulingRules ?? []).filter(
+      (r) => r.enabled && scopeCovers(r.teamId, teamId)
+    );
+    const required = activeRules.filter((r) => r.tier === "REQUIRED");
+    const preferences = activeRules.filter((r) => r.tier === "PREFERENCE");
+    // userId → the people a TOGETHER rule of this tier and mode pairs them with.
+    const togetherMap = (list: SchedulingRule[], mode: "ALWAYS" | "NEVER") => {
+      const map = new Map<string, string[]>();
+      for (const { params: p } of list) {
+        if (p.kind !== "TOGETHER" || p.mode !== mode) continue;
+        const [a, b] = p.userIds;
+        map.set(a, [...(map.get(a) ?? []), b]);
+        map.set(b, [...(map.get(b) ?? []), a]);
+      }
+      return map;
+    };
+    // What the role-shaped rules say, with lib/constants.ts as the default for
+    // anything no rule governs — so an org with none of them (every org before
+    // these rules existed) behaves exactly as it always did.
+    const behavior = resolveRoleBehavior(activeRules, {
+      mdRoles: MD_ROLES,
+      hostRoles: { [ACOUSTIC_GUITAR]: ACOUSTIC_HOST_ROLES },
+      doublePairs: OVERLAP_ALLOWED_PAIRS,
+    });
+    return {
+      activeRules,
+      required,
+      preferences,
+      behavior,
+      // Roles that may only be held alongside another (acoustic guitar, by
+      // default). Filled in their own pass after everything else, since their
+      // host must already be seated.
+      isHostedRole: (role: string) => behavior.hostRolesFor(role) !== null,
+      neverRequired: togetherMap(required, "NEVER"),
+      alwaysRequired: togetherMap(required, "ALWAYS"),
+      alwaysPreferred: togetherMap(preferences, "ALWAYS"),
+      requiredLimits: required.flatMap((r) =>
+        r.params.kind === "LIMIT" ? [r.params] : []
+      ),
+      requiredPrefers: required.flatMap((r) =>
+        r.params.kind === "PREFER" ? [r.params] : []
+      ),
+    };
+  }
 
   // LIMIT counting: distinct set times someone is booked on within a week or
   // month — this run's picks and DB bookings (bookedTimes), plus whatever the
@@ -472,6 +498,19 @@ export function buildSchedule(
   );
 
   for (const set of chronological) {
+    // Same names as before, now scoped to THIS set's team (see rulesFor).
+    const {
+      activeRules,
+      required,
+      preferences,
+      behavior,
+      isHostedRole,
+      neverRequired,
+      alwaysRequired,
+      alwaysPreferred,
+      requiredLimits,
+      requiredPrefers,
+    } = rulesFor(set.teamId);
     const setTime = set.startsAt.getTime();
     // Every pre-assigned seat is a fill constraint, choir included. (Choir was
     // dropped here while it was an unbounded list — seating every available

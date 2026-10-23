@@ -384,3 +384,52 @@ describe("LIMIT for everyone", () => {
     expect(result.filter((a) => a.userId === "d1")).toHaveLength(1);
   });
 });
+
+describe("per-team rule scope", () => {
+  const TEAM_B = "team-2";
+  const both = (id: string) =>
+    ({ id, rolesByTeam: { [TEAM]: ["DRUMS"], [TEAM_B]: ["DRUMS"] } }) as SchedulerUser;
+  const drummers = [both("d1"), both("d2")];
+  const scoped = (teamId: string | null, params: RuleParams): SchedulingRule => ({
+    ...rule(params),
+    teamId,
+  });
+  const teamSet = (id: string, at: Date, teamId: string) =>
+    set(id, at, { DRUMS: 1 }, { teamId });
+
+  it("a team-scoped rule governs only that team's sets", () => {
+    // d1 is barred from team A's set, but is still the first pick on team B's.
+    const rules = [scoped(TEAM, { kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" })];
+    const result = run(
+      [teamSet("a", sat, TEAM), teamSet("b", new Date(2026, 0, 13, 19, 0), TEAM_B)],
+      drummers,
+      rules
+    );
+    expect(result.find((r) => r.setId === "a")?.userId).toBe("d2");
+    expect(result.find((r) => r.setId === "b")?.userId).toBe("d1");
+  });
+
+  it("an org-wide rule (no team) still governs every team", () => {
+    const rules = [scoped(null, { kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" })];
+    const result = run(
+      [teamSet("a", sat, TEAM), teamSet("b", new Date(2026, 0, 13, 19, 0), TEAM_B)],
+      drummers,
+      rules
+    );
+    expect(result.every((r) => r.userId === "d2")).toBe(true);
+  });
+
+  it("two teams can hold opposite rules without either bending", () => {
+    const rules = [
+      scoped(TEAM, { kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" }),
+      scoped(TEAM_B, { kind: "LIMIT", userId: "d2", max: 0, period: "WEEK" }),
+    ];
+    const result = run(
+      [teamSet("a", sat, TEAM), teamSet("b", new Date(2026, 0, 13, 19, 0), TEAM_B)],
+      drummers,
+      rules
+    );
+    expect(result.find((r) => r.setId === "a")?.userId).toBe("d2");
+    expect(result.find((r) => r.setId === "b")?.userId).toBe("d1");
+  });
+});
