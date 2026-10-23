@@ -14,15 +14,13 @@
 // and note, so a request-tied morning block stays a request-tied morning block
 // on the days it still covers.
 //
-// Weekly RECURRING rules are CLIPPED rather than left standing — a day isn't
-// free while a repeat still covers it. There's no per-date exception in the
-// schema, so the rule is cut into the piece before the erased run and the piece
-// after it (`lib/availability.ts clipRecurringAroundDays`), and a piece with no
-// occurrence left to come is dropped. The response says how many rules were
-// clipped (`recurringClipped`) so the caller can mention that the repeat
-// changed shape.
+// Weekly RECURRING rules can't be left standing either — a day isn't free
+// while a repeat still covers it — so each one covering an erased day records
+// that date in `exceptDates`: the rule stays ONE row with a hole in it. That's
+// what keeps overlapping repeats sane — three Tuesday rules over one day are
+// three exceptions, not six half-rules.
 import { NextRequest, NextResponse } from "next/server";
-import { clipRecurringAroundDays } from "@/lib/availability";
+import { mergeExceptions, recurringExceptionsFor } from "@/lib/availability";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -167,47 +165,30 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // A weekly rule has no per-date exception, so free a day it covers by
-  // clipping the span it repeats over: the rule comes back as the piece before
-  // the erased run and/or the piece after it, keeping its weekday, window and
-  // note. A rule with nothing left to come goes entirely.
+  // A weekly rule is a pattern, so freeing a day it covers is an EXCEPTION to
+  // it — the row survives, minus that date. Every rule covering the day gets
+  // one, which is how overlapping repeats come out free together.
   const recurring = await prisma.unavailability.findMany({
     where: { userId: user.id, type: "RECURRING" },
   });
-  let recurringClipped = 0;
   for (const rule of recurring) {
-    const spans = clipRecurringAroundDays(
-      {
-        dayOfWeek: rule.dayOfWeek,
-        startDate: rule.startDate ? ymd(rule.startDate) : null,
-        endDate: rule.endDate ? ymd(rule.endDate) : null,
-      },
-      ymd(start),
-      ymd(end)
-    );
-    if (!spans) continue; // doesn't cover any of these days
-    recurringClipped++;
+    const bounds = {
+      dayOfWeek: rule.dayOfWeek,
+      startDate: rule.startDate ? ymd(rule.startDate) : null,
+      endDate: rule.endDate ? ymd(rule.endDate) : null,
+      exceptDates: rule.exceptDates,
+    };
+    const added = recurringExceptionsFor(bounds, targetDays);
+    if (added.length === 0) continue; // doesn't block any of these days
     ops.push(
-      prisma.unavailability.delete({ where: { id: rule.id } }),
-      ...spans.map((span) =>
-        prisma.unavailability.create({
-          data: {
-            userId: user.id,
-            type: "RECURRING",
-            dayOfWeek: rule.dayOfWeek,
-            startMinute: rule.startMinute,
-            endMinute: rule.endMinute,
-            startDate: span.startDate ? parseLocalDate(span.startDate) : null,
-            endDate: span.endDate ? parseLocalDate(span.endDate) : null,
-            requestId: rule.requestId,
-            note: rule.note,
-          },
-        })
-      )
+      prisma.unavailability.update({
+        where: { id: rule.id },
+        data: { exceptDates: mergeExceptions(bounds, added) },
+      })
     );
   }
 
   if (ops.length > 0) await prisma.$transaction(ops);
 
-  return NextResponse.json({ ok: true, recurringClipped });
+  return NextResponse.json({ ok: true });
 }

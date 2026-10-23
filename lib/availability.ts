@@ -14,15 +14,17 @@ function startOfLocalDay(value: string | Date): Date {
 }
 
 /**
- * Is `date` inside the window a weekly rule repeats over? A recurring block may
- * carry a startDate (the first day it repeats) and/or an endDate (the last);
- * either being null means it's open-ended on that side, so a block with neither
- * repeats forever. Weekday matching is the caller's job.
+ * Does a weekly rule apply on `date`, bounds and exceptions considered? A
+ * recurring block may carry a startDate (the first day it repeats) and/or an
+ * endDate (the last); either being null means it's open-ended on that side, so
+ * a block with neither repeats forever. `exceptDates` then punches individual
+ * days back out. Weekday matching is the caller's job.
  */
 function withinRecurringWindow(e: ApiUnavailability, date: Date): boolean {
   if (e.startDate && date < startOfLocalDay(e.startDate)) return false;
   if (e.endDate && date > startOfLocalDay(e.endDate)) return false;
-  return true;
+  // A date freed from the calendar is a hole in the pattern, not the end of it.
+  return !recurringSkips(e, toYmd(date));
 }
 
 /**
@@ -167,6 +169,34 @@ export function blockedDaysInRange(
   return out;
 }
 
+/**
+ * Does weekly rule `outer` say everything `inner` does — same weekday, a time
+ * window at least as wide, and a span at least as long? Two weekly rules where
+ * one covers the other are an overlap worth collapsing: the narrower row adds
+ * nothing to the list but noise ("every Tuesday 6a–5p" under "every Tuesday,
+ * all day"). Exceptions are deliberately not weighed: a hole in `outer` is a
+ * hole in what it says, and the caller decides what to do about it.
+ */
+export function recurringCovers(
+  outer: RecurringRuleish & { startMinute?: number | null; endMinute?: number | null },
+  inner: RecurringRuleish & { startMinute?: number | null; endMinute?: number | null }
+): boolean {
+  if (outer.dayOfWeek == null || outer.dayOfWeek !== inner.dayOfWeek) return false;
+  // Window: outer starts no later and ends no earlier.
+  if ((outer.startMinute ?? 0) > (inner.startMinute ?? 0)) return false;
+  if ((outer.endMinute ?? FULL_DAY_MIN) < (inner.endMinute ?? FULL_DAY_MIN)) {
+    return false;
+  }
+  // Span: a null bound is open-ended, so it covers any date on that side.
+  if (outer.startDate && (!inner.startDate || inner.startDate < outer.startDate)) {
+    return false;
+  }
+  if (outer.endDate && (!inner.endDate || inner.endDate > outer.endDate)) {
+    return false;
+  }
+  return true;
+}
+
 // ── Optimistic calendar edits ──────────────────────────────────────────────
 // Mirrors the /api/availability/block-days server logic on the client so the
 // calendar can reflect a click/drag INSTANTLY, before the request round-trips.
@@ -228,79 +258,86 @@ function isDated(e: ApiUnavailability): boolean {
 }
 
 // ── Freeing a day a WEEKLY rule covers ─────────────────────────────────────
-// A recurring rule has no per-date exception in the schema, so "this day is
-// free" is said by CLIPPING the span it repeats over: the rule becomes the
-// piece before the freed run plus the piece after it (usually just one of the
-// two). Shared by the calendar's optimistic edit below and by
-// /api/availability/block-days, so a hold on a day does the same thing in both.
+// A weekly rule is a pattern, so freeing one date is an EXCEPTION to it:
+// `exceptDates` (YYYY-MM-DD) on the row, one per freed day. Splitting the span
+// instead would turn one "every Tuesday" into two rows per freed date, and
+// freeing a day covered by three overlapping Tuesday rules would leave six —
+// which is the state this replaced. An exception also makes overlaps behave:
+// each rule covering the day gets the same date, so the day really is free,
+// and the rules stay recognisable (and so stay DUPLICATES of a re-added
+// identical rule, rather than new distinct spans).
 
-/** The span a weekly rule repeats over, as YYYY-MM-DD bounds (null = open). */
-export interface RecurringSpan {
-  startDate: string | null;
+/** A weekly rule, as little of one as any of this needs to know. */
+export interface RecurringRuleish {
+  dayOfWeek: number | null;
+  startDate: string | null; // YYYY-MM-DD, null = open-ended that way
   endDate: string | null;
+  exceptDates?: string[] | null;
 }
 
-// "YYYY-MM-DD" n days away. Lexicographic order on these strings IS date order,
-// which is what every comparison below leans on.
-function shiftYmd(value: string, days: number): string {
-  const d = parseYmd(value);
-  d.setDate(d.getDate() + days);
-  return toYmd(d);
-}
-
-// Does `dayOfWeek` land inside [from, to]? A null `to` is open-ended that way,
-// so the next occurrence always counts.
-function weekdayFalls(dayOfWeek: number, from: string, to: string | null): boolean {
-  const d = parseYmd(from);
-  d.setDate(d.getDate() + ((dayOfWeek - d.getDay() + 7) % 7)); // first one
-  return to === null || toYmd(d) <= to;
+/** Is `ymd` one of the dates this rule has been told to skip? */
+export function recurringSkips(
+  rule: { exceptDates?: string[] | null },
+  ymd: string
+): boolean {
+  return !!rule.exceptDates?.includes(ymd);
 }
 
 /**
- * Clip a weekly rule so [startYmd, endYmd] comes out FREE, returning the spans
- * that survive — 0, 1 or 2 of them — or null when the rule never touched those
- * days, meaning there's nothing to do.
- *
- * A surviving piece whose last occurrence is already in the past is dropped
- * rather than kept as a spent row: freeing next Monday on an open-ended "every
- * Monday" leaves "Mondays from the week after", not that plus a dead "Mondays
- * until last week".
+ * Which of `days` (YYYY-MM-DD) this weekly rule actually blocks — the dates
+ * that have to become exceptions for those days to come out free. Empty when
+ * the rule has nothing to do with them (wrong weekday, outside its span, or
+ * already skipped), which is the signal to leave the row alone.
  */
-export function clipRecurringAroundDays(
-  rule: {
-    dayOfWeek: number | null;
-    startDate: string | null;
-    endDate: string | null;
-  },
-  startYmd: string,
-  endYmd: string,
-  today = new Date()
-): RecurringSpan[] | null {
+export function recurringExceptionsFor(
+  rule: RecurringRuleish,
+  days: Iterable<string>
+): string[] {
   const dow = rule.dayOfWeek;
-  if (dow == null) return null;
-  // Where the freed run and the rule's own span overlap — if the weekday never
-  // lands in there, this rule isn't what's blocking those days.
-  const lo = rule.startDate && rule.startDate > startYmd ? rule.startDate : startYmd;
-  const hi = rule.endDate && rule.endDate < endYmd ? rule.endDate : endYmd;
-  if (lo > hi || !weekdayFalls(dow, lo, hi)) return null;
+  if (dow == null) return [];
+  const out: string[] = [];
+  for (const ymd of days) {
+    if (parseYmd(ymd).getDay() !== dow) continue;
+    if (rule.startDate && ymd < rule.startDate) continue;
+    if (rule.endDate && ymd > rule.endDate) continue;
+    if (recurringSkips(rule, ymd)) continue; // already free
+    out.push(ymd);
+  }
+  return out;
+}
 
-  const spans: RecurringSpan[] = [];
-  const before = shiftYmd(startYmd, -1);
-  if (!rule.startDate || rule.startDate <= before) {
-    spans.push({ startDate: rule.startDate, endDate: before });
-  }
-  const after = shiftYmd(endYmd, 1);
-  if (!rule.endDate || rule.endDate >= after) {
-    spans.push({ startDate: after, endDate: rule.endDate });
-  }
+/**
+ * The exceptions a rule should carry after freeing `added`: the ones it has
+ * plus the new ones, sorted, with dates it can never fire on again dropped —
+ * anything before `today`, or outside the span it repeats over. Without that
+ * prune the list would only ever grow, and a rule bounded to one month would
+ * carry exceptions for days it stopped covering long ago.
+ */
+export function mergeExceptions(
+  rule: RecurringRuleish,
+  added: string[],
+  today = new Date()
+): string[] {
   const todayYmd = toYmd(today);
-  return spans.filter((span) => {
-    // Measure from today, never from a start date that's already gone by.
-    const from =
-      span.startDate && span.startDate > todayYmd ? span.startDate : todayYmd;
-    if (span.endDate && from > span.endDate) return false;
-    return weekdayFalls(dow, from, span.endDate);
-  });
+  const keep = new Set<string>();
+  for (const ymd of [...(rule.exceptDates ?? []), ...added]) {
+    if (ymd < todayYmd) continue; // spent
+    if (rule.startDate && ymd < rule.startDate) continue;
+    if (rule.endDate && ymd > rule.endDate) continue;
+    keep.add(ymd);
+  }
+  return [...keep].sort();
+}
+
+// The YYYY-MM-DD bounds of a stored rule, for the helpers above (they compare
+// day strings; the row keeps ISO instants).
+export function ruleBounds(e: ApiUnavailability): RecurringRuleish {
+  return {
+    dayOfWeek: e.dayOfWeek,
+    startDate: e.startDate ? toYmd(new Date(e.startDate)) : null,
+    endDate: e.endDate ? toYmd(new Date(e.endDate)) : null,
+    exceptDates: e.exceptDates ?? null,
+  };
 }
 
 // Optimistic (not-yet-saved) entries carry a throwaway id with this prefix so
@@ -348,26 +385,6 @@ function synthBlock(
   };
 }
 
-// Build a synthetic weekly rule: `like`'s weekday, time window and note over a
-// new span — what a clipped recurring rule looks like before the reload brings
-// back the real rows.
-function synthRecurring(
-  like: ApiUnavailability,
-  span: RecurringSpan
-): ApiUnavailability {
-  return {
-    id: `${OPTIMISTIC_ID_PREFIX}${optimisticCounter++}`,
-    type: "RECURRING",
-    dayOfWeek: like.dayOfWeek,
-    startMinute: like.startMinute,
-    endMinute: like.endMinute,
-    startDate: span.startDate ? parseYmd(span.startDate).toISOString() : null,
-    endDate: span.endDate ? parseYmd(span.endDate).toISOString() : null,
-    requestId: like.requestId,
-    note: like.note,
-  };
-}
-
 /**
  * Apply a whole-day block (`blocked`) or a full clear (`!blocked`) of
  * [startYmd, endYmd] to `entries`, returning a NEW array — the same merge/split
@@ -378,7 +395,7 @@ function synthRecurring(
  * Blocking only ever creates all-day blocks; clearing removes every dated block
  * on those days, whatever its time window, AND clips any weekly rule covering
  * them so the days really do come out free. `today` is injectable only so the
- * clipping is testable (it decides which clipped piece is already spent).
+ * exception prune is testable (it drops dates that can never fire again).
  */
 export function applyDayEdit(
   entries: ApiUnavailability[],
@@ -416,8 +433,8 @@ export function applyDayEdit(
   // Clear: sweep EVERY dated block off the target days — partial-day ones
   // included — splitting each around the days it still covers and preserving
   // its window, requestId and note. A weekly rule can't be left standing or the
-  // day wouldn't be free, so it's CLIPPED around the run instead (see
-  // clipRecurringAroundDays).
+  // day wouldn't be free either, so every rule covering one of these days takes
+  // the date as an EXCEPTION — the row stays, with a hole in it.
   const dated = entries.filter(isDated);
   const untouchable = entries.filter(
     (e) => !isDated(e) && e.type !== "RECURRING"
@@ -425,18 +442,10 @@ export function applyDayEdit(
   const survivors: ApiUnavailability[] = [];
   for (const r of entries) {
     if (r.type !== "RECURRING") continue;
-    const spans = clipRecurringAroundDays(
-      {
-        dayOfWeek: r.dayOfWeek,
-        startDate: r.startDate ? toYmd(new Date(r.startDate)) : null,
-        endDate: r.endDate ? toYmd(new Date(r.endDate)) : null,
-      },
-      startYmd,
-      endYmd,
-      today
-    );
-    if (spans === null) survivors.push(r); // doesn't touch these days
-    else for (const span of spans) survivors.push(synthRecurring(r, span));
+    const bounds = ruleBounds(r);
+    const added = recurringExceptionsFor(bounds, targetDays);
+    if (added.length === 0) survivors.push(r); // doesn't block these days
+    else survivors.push({ ...r, exceptDates: mergeExceptions(bounds, added, today) });
   }
   for (const b of dated) {
     const days = daysOfEntry(b);

@@ -13,7 +13,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toYmd } from "@/components/common/DateSelect";
 import InfoTooltip from "@/components/common/InfoTooltip";
-import { allDayBlockedDays } from "@/lib/availability";
+import { allDayBlockedDays, recurringSkips } from "@/lib/availability";
 import type { ApiUnavailability } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -65,14 +65,16 @@ interface DayBlocks {
 
 // Does `rule` block `day`? RECURRING matches by weekday, inside its optional
 // [startDate, endDate] span (the first and last days it repeats; null on either
-// end = open-ended that way); SPECIFIC and DATE_RANGE match when the day falls
+// end = open-ended that way) and minus the dates it skips (`exceptDates`); SPECIFIC and DATE_RANGE match when the day falls
 // within [startDate, endDate] (endDate defaults to startDate for a single-day
 // specific block).
 function ruleAppliesOn(rule: ApiUnavailability, day: Date): boolean {
   if (rule.type === "RECURRING") {
     if (day.getDay() !== rule.dayOfWeek) return false;
     if (rule.startDate && day < startOfDay(new Date(rule.startDate))) return false;
-    return !rule.endDate || day <= startOfDay(new Date(rule.endDate));
+    if (rule.endDate && day > startOfDay(new Date(rule.endDate))) return false;
+    // A day freed on this calendar is a hole in the pattern (exceptDates).
+    return !recurringSkips(rule, toYmd(day));
   }
   if (!rule.startDate) return false;
   const start = startOfDay(new Date(rule.startDate));

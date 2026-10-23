@@ -420,6 +420,7 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
               endMinute: true,
               startDate: true,
               endDate: true,
+              exceptDates: true, // days freed out of a weekly rule
             },
           },
         },

@@ -267,9 +267,9 @@ export default function SchedulePage() {
 
   // Inline error for the "Block out times" form (e.g. duplicate recurring).
   const [blockError, setBlockError] = useState<string | null>(null);
-  // Explains a right-click "clear these days" that couldn't fully free them
-  // because a weekly repeat still covers some (see editDays).
-  const [clearNote, setClearNote] = useState<string | null>(null);
+  // The form's good news (as opposed to blockError): what an add actually did
+  // when it wasn't simply a new block — today, re-booking days you'd freed.
+  const [blockNote, setBlockNote] = useState<string | null>(null);
 
   // Unified "Block out times" form: a one-off specific date/range OR a weekly
   // recurring block. Both share the time-of-day picker.
@@ -372,6 +372,7 @@ export default function SchedulePage() {
   async function addBlock(e: FormEvent) {
     e.preventDefault();
     setBlockError(null);
+    setBlockNote(null);
 
     if (blockKind === "recurring") {
       // Every selected weekday × every selected time window, with touching
@@ -429,37 +430,46 @@ export default function SchedulePage() {
         startDate,
         endDate,
       });
-      // Drop the ones already stored (the server skips them too) so the
-      // message is accurate when everything picked is a repeat.
-      const fresh = blocks.filter(
-        (block) =>
-          !(entries ?? []).some(
-            (entry) =>
-              entry.type === "RECURRING" &&
-              entry.dayOfWeek === block.dayOfWeek &&
-              entry.startMinute === block.startMinute &&
-              entry.endMinute === block.endMinute &&
-              (entry.startDate ? toYmd(new Date(entry.startDate)) : null) ===
-                (block.startDate ?? null) &&
-              (entry.endDate ? toYmd(new Date(entry.endDate)) : null) ===
-                (block.endDate ?? null)
-          )
-      );
-      if (fresh.length === 0) {
-        setBlockError(
-          blocks.length === 1
-            ? "That block already exists."
-            : "Those blocks already exist."
-        );
-        return;
-      }
+      // Everything goes to the server, repeats included: a block you already
+      // have isn't necessarily a no-op — if days were freed out of it, saying
+      // it again RE-BOOKS them. Only the response knows which happened, so the
+      // message comes from there rather than from a guess made here.
       setBusyAction("block");
       try {
-        await fetch("/api/availability", {
+        const res = await fetch("/api/availability", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "RECURRING", blocks: fresh }),
+          body: JSON.stringify({ type: "RECURRING", blocks }),
         });
+        const data = await res.json().catch(() => ({}));
+        const rebooked: string[] = Array.isArray(data.rebooked)
+          ? data.rebooked
+          : [];
+        if (data.created === 0 && rebooked.length === 0) {
+          if (data.absorbed > 0) {
+            // Nothing new, but the list is shorter: narrower repeats this one
+            // already covered were folded into it.
+            setBlockNote(
+              `Already blocked. Tidied up ${data.absorbed} overlapping ${
+                data.absorbed === 1 ? "repeat" : "repeats"
+              } it already covered.`
+            );
+          } else {
+            setBlockError(
+              blocks.length === 1
+                ? "That block already exists."
+                : "Those blocks already exist."
+            );
+          }
+        } else if (rebooked.length > 0) {
+          // Name the dates: they're exactly the ones that LOOKED free a second
+          // ago, so "blocked again" without saying which would be a riddle.
+          setBlockNote(
+            `Blocked again, including ${rebooked.length === 1 ? "the day" : "the days"} you'd cleared (${rebooked
+              .map(exceptionLabel)
+              .join(", ")}).`
+          );
+        }
         await reload();
         window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
       } finally {
@@ -523,29 +533,16 @@ export default function SchedulePage() {
     setEntries((cur) =>
       cur ? applyDayEdit(cur, startYmd, endYmd, blocked) : cur
     );
-    setClearNote(null);
     try {
+      // The calendar already shows the answer (the day goes green, and a repeat
+      // it punched a hole in says "except …" in the list), so there's nothing
+      // to narrate here.
       const res = await fetch("/api/availability/block-days", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start: startYmd, end: endYmd, blocked }),
       });
       if (!res.ok) throw new Error("block-days failed");
-      // Freeing a day a weekly repeat covers TRIMS that repeat's span around
-      // the day (there's no per-date exception to store). The day really is
-      // free either way, but the rule below now reads differently, so say so.
-      const data = await res.json().catch(() => ({}));
-      if (!blocked && data.recurringClipped > 0) {
-        setClearNote(
-          `${startYmd === endYmd ? "That day is" : "Those days are"} free. ${
-            data.recurringClipped === 1
-              ? "A weekly repeat was"
-              : `${data.recurringClipped} weekly repeats were`
-          } trimmed to skip ${
-            startYmd === endYmd ? "it" : "them"
-          } — see the list below.`
-        );
-      }
       await reload();
       window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
     } catch {
@@ -593,6 +590,25 @@ export default function SchedulePage() {
     return `${minutesToTimeLabel(startMinute)} – ${minutesToTimeLabel(endMinute)}`;
   }
 
+  // The exceptions worth NAMING on a rule's row: days still to come that are
+  // genuinely free. A date the rule skips but something else blocks anyway — a
+  // day you blocked by hand, or another repeat covering it — is a hole nobody
+  // can see, and saying "except Nov 11" about a day that reads as blocked is
+  // just wrong. Past ones go too: they're pruned on the rule's next edit, and
+  // they say nothing about the weeks ahead.
+  function liveExceptions(entry: ApiUnavailability): string[] {
+    const todayYmd = toYmd(new Date());
+    return [...(entry.exceptDates ?? [])]
+      .filter((d) => d >= todayYmd && dayBlockLevel(entries ?? [], d) === null)
+      .sort();
+  }
+  // "11/17/26" from a "YYYY-MM-DD" exception — parsed as LOCAL midnight, since
+  // new Date("2026-11-17") is UTC and renders as the day before out west.
+  function exceptionLabel(ymd: string): string {
+    const [y, m, d] = ymd.split("-").map(Number);
+    return shortDateLabel(new Date(y, m - 1, d));
+  }
+
   // The read-only text for one block (used by both the resulting-union list and
   // the per-section lists).
   function entryText(entry: ApiUnavailability) {
@@ -615,6 +631,18 @@ export default function SchedulePage() {
           )}
           {!entry.startDate && entry.endDate && (
             <> · until {shortDateLabel(entry.endDate)}</>
+          )}
+          {/* Days freed on the calendar: the pattern still repeats, minus
+              these. Two are named outright; more would crowd the row, so they
+              collapse to a count with the dates on hover. */}
+          {liveExceptions(entry).length > 0 && (
+            <span title={liveExceptions(entry).map(exceptionLabel).join(", ")}>
+              {" "}
+              · except{" "}
+              {liveExceptions(entry).length <= 2
+                ? liveExceptions(entry).map(exceptionLabel).join(" & ")
+                : `${liveExceptions(entry).length} dates`}
+            </span>
           )}
         </>
       );
@@ -1232,6 +1260,11 @@ export default function SchedulePage() {
                         {blockError}
                       </p>
                     )}
+                    {blockNote && (
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">
+                        {blockNote}
+                      </p>
+                    )}
                     <Button
                       type="submit"
                       disabled={
@@ -1283,6 +1316,11 @@ export default function SchedulePage() {
                         {blockError}
                       </p>
                     )}
+                    {blockNote && (
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">
+                        {blockNote}
+                      </p>
+                    )}
                     <Button
                       type="submit"
                       disabled={
@@ -1305,11 +1343,6 @@ export default function SchedulePage() {
           </section>
           </div>
             </div>
-            {clearNote && (
-              <p className="rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
-                {clearNote}
-              </p>
-            )}
           </div>
 
 

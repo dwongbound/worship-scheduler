@@ -3,7 +3,8 @@
 // block drawn as a box spanning its time. It's the view for checking an
 // "Import from Google Calendar" landed where it should, so each block keeps
 // where it came from. Unit-tested in tests/unit/weekView.test.ts.
-import { FULL_DAY_MIN } from "./availability";
+import { FULL_DAY_MIN, recurringSkips } from "./availability";
+import { toYmd } from "./dates";
 import type { ApiUnavailability } from "./types";
 
 /** Where a block came from — each draws in its own colour. */
@@ -48,13 +49,15 @@ export function shiftWeek(start: Date, weeks: number): Date {
 }
 
 // Same matching as the month calendar: RECURRING by weekday inside its optional
-// [startDate, endDate] span; SPECIFIC / DATE_RANGE when the day falls within
+// [startDate, endDate] span and minus the dates it skips (`exceptDates`, a day
+// freed on the calendar); SPECIFIC / DATE_RANGE when the day falls within
 // [startDate, endDate] (endDate defaulting to startDate).
 function appliesOn(rule: ApiUnavailability, day: Date): boolean {
   if (rule.type === "RECURRING") {
     if (day.getDay() !== rule.dayOfWeek) return false;
     if (rule.startDate && day < startOfDay(new Date(rule.startDate))) return false;
-    return !rule.endDate || day <= startOfDay(new Date(rule.endDate));
+    if (rule.endDate && day > startOfDay(new Date(rule.endDate))) return false;
+    return !recurringSkips(rule, toYmd(day));
   }
   if (!rule.startDate) return false;
   const start = startOfDay(new Date(rule.startDate));

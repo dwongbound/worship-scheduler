@@ -741,6 +741,15 @@ model Unavailability {
   startDate DateTime?
   endDate   DateTime?
 
+  // Dates a RECURRING rule SKIPS, as "YYYY-MM-DD" — one per day freed from the
+  // calendar (right-click / long press, or clicking a day already blocked all
+  // day). It's what keeps "every Tuesday" ONE row with a hole in it instead of
+  // two rows either side of the freed date, which is what splitting its span
+  // would mean — and why freeing a day works the same whether one weekly rule
+  // covers it or three overlapping ones. Every reader of a recurring rule
+  // honours it (lib/availability.ts recurringSkips).
+  exceptDates String[] @default([])
+
   // Set for SPECIFIC blocks (the TimeRange they belong to); null otherwise.
   request   AvailabilityRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
   requestId String?

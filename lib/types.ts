@@ -227,6 +227,10 @@ export interface ApiUnavailability {
   endMinute: number | null;
   startDate: string | null;
   endDate: string | null;
+  // RECURRING only: dates ("YYYY-MM-DD") this weekly rule skips, one per day
+  // freed on the calendar. Optional so hand-built test fixtures needn't carry
+  // it; every reader goes through lib/availability.ts recurringSkips.
+  exceptDates?: string[];
   // Set for SPECIFIC blocks (the request/TimeRange they belong to).
   requestId: string | null;
   note: string | null;
