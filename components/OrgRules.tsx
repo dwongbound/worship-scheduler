@@ -35,6 +35,7 @@ import Button from "@/components/common/Button";
 import InfoTooltip from "@/components/common/InfoTooltip";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
+import PersonPicker from "@/components/common/PersonPicker";
 import Select from "@/components/common/Select";
 import Toggle from "@/components/common/Toggle";
 import { DAY_ABBRS } from "@/lib/constants";
@@ -55,7 +56,11 @@ import {
 } from "@/lib/schedulingRules";
 
 interface RuleOptions {
-  people: { id: string; name: string }[];
+  people: {
+    id: string;
+    name: string;
+    teams: { teamId: string; roles: string[] }[];
+  }[];
   roles: { key: string; label: string }[];
   templates: {
     id: string;
@@ -65,7 +70,7 @@ interface RuleOptions {
     teamName: string | null;
   }[];
   sets: { id: string; label: string | null; startsAt: string; teamName: string | null }[];
-  teams: { id: string; name: string }[];
+  teams: { id: string; name: string; roles: { key: string; label: string }[] }[];
 }
 
 // The builder's form: every blank of every kind, so switching kinds mid-way
@@ -762,7 +767,29 @@ function RuleBuilder({
   onClose: () => void;
   onSave: (params: RuleParams, tier: RuleTier, teamId: string | null) => void;
 }) {
-  const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
+  const set = (patch: Partial<Draft>) => {
+    const next = { ...draft, ...patch };
+    // Narrowing the scope has to narrow what's already picked: a team change
+    // can orphan a role that team doesn't have, and a role change can orphan a
+    // person who doesn't play it. Clearing is right — leaving a stale name in
+    // the sentence means saving a rule the picker would never have offered.
+    if (patch.teamId !== undefined && patch.teamId !== draft.teamId) {
+      const team = options.teams.find((t) => t.id === patch.teamId);
+      const allowed = team ? new Set(team.roles.map((r) => r.key)) : null;
+      if (allowed) {
+        if (next.role && !allowed.has(next.role)) next.role = "";
+        if (next.otherRole && !allowed.has(next.otherRole)) next.otherRole = "";
+        next.roles = next.roles.filter((k) => allowed.has(k));
+      }
+      next.userId = "";
+      next.otherUserId = "";
+    } else if (patch.role !== undefined && patch.role !== draft.role) {
+      // The people lists below are drawn from whoever plays the chosen role.
+      next.userId = "";
+      next.otherUserId = "";
+    }
+    onChange(next);
+  };
   const info = kindInfo(draft.kind);
   // ONLY_IF_NEEDED can only be a preference.
   const tier: RuleTier = info.tiers.includes(draft.tier) ? draft.tier : info.tiers[0];
@@ -772,33 +799,52 @@ function RuleBuilder({
     ? findContradiction(prospective(params, tier, draft.teamId || null))
     : null;
 
+  // The blanks narrow as you go: a team limits the roles to that team's
+  // catalog, and a role limits the people to whoever actually plays it there.
+  // Picking the team FIRST is what makes the rest of the form short.
+  const scopedTeam = options.teams.find((t) => t.id === draft.teamId) ?? null;
+  const roleChoices = scopedTeam ? scopedTeam.roles : options.roles;
+  // People who could satisfy this rule: on the chosen team (if any), playing
+  // the chosen role (if the rule names one). With neither chosen it's the
+  // whole org, which is what it always was.
+  const peopleFor = (forRole?: string) =>
+    options.people.filter((p) => {
+      if (!draft.teamId && !forRole) return true;
+      return p.teams.some(
+        (t) =>
+          (!draft.teamId || t.teamId === draft.teamId) &&
+          (!forRole || t.roles.includes(forRole))
+      );
+    });
+
+  // Type-to-filter rather than a long <select>: a roster runs to dozens of
+  // names, and picking one is "type three letters and press Enter".
   // `everyone` adds the org-wide option a Limit rule can take (userId null).
   const person = (
     value: string,
     onPick: (id: string) => void,
     label: string,
     exclude?: string,
-    everyone = false
+    everyone = false,
+    forRole?: string
   ) => (
     <Blank>
-      <Select label={label} hideLabel value={value} onChange={(e) => onPick(e.target.value)}>
-        <option value="">Pick a person…</option>
-        {everyone && <option value={ALL_PEOPLE}>Everyone</option>}
-        {options.people
-          .filter((p) => p.id !== exclude)
-          .map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-      </Select>
+      <PersonPicker
+        label={label}
+        value={value}
+        onChange={onPick}
+        options={[
+          ...(everyone ? [{ id: ALL_PEOPLE, name: "Everyone" }] : []),
+          ...peopleFor(forRole).filter((p) => p.id !== exclude),
+        ]}
+      />
     </Blank>
   );
   const role = (allowAny = false) => (
     <Blank>
       <Select label="Role" hideLabel value={draft.role} onChange={(e) => set({ role: e.target.value })}>
         <option value="">{allowAny ? "any role" : "Pick a role…"}</option>
-        {options.roles.map((r) => (
+        {roleChoices.map((r) => (
           <option key={r.key} value={r.key}>
             {r.label}
           </option>
@@ -819,7 +865,7 @@ function RuleBuilder({
   // MD preference — so each chosen role shows its position.
   const roleList = (label: string) => (
     <span className="inline-flex flex-wrap items-center gap-1 align-middle">
-      {options.roles.map((r) => {
+      {roleChoices.map((r) => {
         const at = draft.roles.indexOf(r.key);
         const picked = at >= 0;
         return (
@@ -858,7 +904,7 @@ function RuleBuilder({
         onChange={(e) => set({ otherRole: e.target.value })}
       >
         <option value="">Pick a role…</option>
-        {options.roles
+        {roleChoices
           .filter((r) => r.key !== draft.role)
           .map((r) => (
             <option key={r.key} value={r.key}>
@@ -888,19 +934,29 @@ function RuleBuilder({
     case "ONLY_IF_NEEDED":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "Person", undefined, true)}
-          <T>is seated on</T>
-          {role(true)}
-          <T>only if nobody else is free</T>
+          {line("On", role(true))}
+          {line(
+            "seat",
+            person(draft.userId, (userId) => set({ userId }), "Person", undefined, true, draft.role || undefined),
+            "only if nobody else is free"
+          )}
         </>
       );
       break;
     case "PREFER":
       sentence = (
         <>
+          {line("On", role())}
           {line(
-            "Pick",
-            person(draft.userId, (userId) => set({ userId }), "First choice", draft.otherUserId)
+            "pick",
+            person(
+              draft.userId,
+              (userId) => set({ userId }),
+              "First choice",
+              draft.otherUserId,
+              false,
+              draft.role || undefined
+            )
           )}
           {line(
             "over",
@@ -908,10 +964,11 @@ function RuleBuilder({
               draft.otherUserId,
               (otherUserId) => set({ otherUserId }),
               "Second choice",
-              draft.userId
+              draft.userId,
+              false,
+              draft.role || undefined
             )
           )}
-          {line("on", role())}
         </>
       );
       break;
@@ -955,16 +1012,20 @@ function RuleBuilder({
               Specific dates
             </Choice>
           </div>
-          {weekly
-            ? pick(draft.templateA, "templateA", draft.templateB)
-            : pick(draft.setA, "setA", draft.setB)}
-          <T>and</T>
-          {weekly
-            ? pick(draft.templateB, "templateB", draft.templateA)
-            : pick(draft.setB, "setB", draft.setA)}
-          <T>{weekly ? "in the same week share their" : "share their"}</T>
-          {role()}
-          <T>player</T>
+          {line("On", role())}
+          {line(
+            "",
+            weekly
+              ? pick(draft.templateA, "templateA", draft.templateB)
+              : pick(draft.setA, "setA", draft.setB)
+          )}
+          {line(
+            "and",
+            weekly
+              ? pick(draft.templateB, "templateB", draft.templateA)
+              : pick(draft.setB, "setB", draft.setA),
+            weekly ? "share a player each week" : "share a player"
+          )}
           {weekly && options.templates.length < 2 && (
             <p className="w-full text-xs text-amber-600 dark:text-amber-400">
               This needs two recurring sets. Add them on the Create tab first.
@@ -1143,15 +1204,6 @@ function RuleBuilder({
 
         <div className="min-w-0">
 
-      <p className="mb-2 text-sm font-medium">Fill in the blanks</p>
-      {/* `items-baseline` keeps the glue words sitting on the controls' text
-          rather than floating mid-box, and the blanks share one width (see
-          Blank) so two people read as a balanced pair instead of a ragged
-          sentence that rewraps as you pick. */}
-      <div className="mb-5 flex flex-wrap items-baseline gap-x-2 gap-y-3">
-        {sentence}
-      </div>
-
       <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
         Applies to
         <InfoTooltip text="Which sets this rule governs. A team's rule is simply not consulted when filling another team's set — so two teams can hold opposite rules and both are honoured." />
@@ -1172,10 +1224,16 @@ function RuleBuilder({
         </Select>
       </div>
 
-      <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
-        How strict?
-        <InfoTooltip text="Required rules are never broken — if one can't be met the slot is left open for you to fill by hand. Preferences bend: they're ranked, the higher one wins when two disagree, and all of them outrank plain rotation." />
-      </p>
+      <p className="mb-2 text-sm font-medium">Fill in the blanks</p>
+      {/* `items-baseline` keeps the glue words sitting on the controls' text
+          rather than floating mid-box, and the blanks share one width (see
+          Blank) so two people read as a balanced pair instead of a ragged
+          sentence that rewraps as you pick. */}
+      <div className="mb-5 flex flex-wrap items-baseline gap-x-2 gap-y-3">
+        {sentence}
+      </div>
+
+      <p className="mb-2 text-sm font-medium">How strict?</p>
       <div className="mb-5">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <TierCard
@@ -1183,9 +1241,9 @@ function RuleBuilder({
             disabled={!info.tiers.includes("REQUIRED")}
             onClick={() => set({ tier: "REQUIRED" })}
             title="Required"
-            body={
+            hint={
               info.tiers.includes("REQUIRED")
-                ? "Never broken. If it can't be met, the slot stays open."
+                ? "Never broken. If it can't be met, the slot is left open for you to fill by hand."
                 : "Not for this kind: a required last resort would just mean never. Mark them inactive instead."
             }
           />
@@ -1194,12 +1252,12 @@ function RuleBuilder({
             disabled={!info.tiers.includes("PREFERENCE")}
             onClick={() => set({ tier: "PREFERENCE" })}
             title="Preference"
-            body={
+            hint={
               !info.tiers.includes("PREFERENCE")
                 ? "Not for this kind: it describes what a role IS, so there's nothing for \u201cwhen possible\u201d to mean."
                 : editing
-                  ? "Followed when possible. Keeps its place in the ranking."
-                  : "Followed when possible. Added at the bottom of the ranking; drag it up to give it more weight."
+                  ? "Followed when possible, and ranked — the higher of two that disagree wins. Keeps its place in the ranking."
+                  : "Followed when possible, and ranked — the higher of two that disagree wins. Added at the bottom; drag it up to give it more weight."
             }
           />
         </div>
@@ -1274,29 +1332,40 @@ function TierCard({
   disabled = false,
   onClick,
   title,
-  body,
+  hint,
 }: {
   selected: boolean;
   disabled?: boolean;
   onClick: () => void;
   title: string;
-  body: string;
+  hint: string;
 }) {
+  // The explanation lives in the (i), not under the title: two paragraphs of
+  // body text here made the strictness choice the loudest thing on the panel
+  // when it's the smallest decision on it. The tooltip sits OUTSIDE the button
+  // so hovering it doesn't read as pressing the option.
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      disabled={disabled}
-      onClick={onClick}
-      className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+    <div
+      className={`flex items-center justify-between gap-1 rounded-lg border px-3 py-2 transition-colors ${
+        disabled ? "opacity-50" : ""
+      } ${
         selected
           ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
-          : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+          : "border-gray-200 dark:border-gray-700"
       }`}
     >
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-gray-500 dark:text-gray-400">{body}</p>
-    </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        aria-label={`${title}: ${hint}`}
+        disabled={disabled}
+        onClick={onClick}
+        className="min-w-0 flex-1 text-left text-sm font-medium disabled:cursor-not-allowed"
+      >
+        {title}
+      </button>
+      <InfoTooltip text={hint} />
+    </div>
   );
 }

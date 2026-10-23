@@ -93,7 +93,7 @@ export async function saveOrgRules(
 /** The names and choices the rules editor draws its dropdowns from. */
 export async function ruleEditorOptions(orgId: string) {
   const now = Date.now();
-  const [people, roles, templates, sets, teams] = await Promise.all([
+  const [people, roles, templates, sets, teams, memberships] = await Promise.all([
     prisma.user.findMany({
       where: { memberships: { some: { orgId } } },
       select: { id: true, name: true },
@@ -126,10 +126,21 @@ export async function ruleEditorOptions(orgId: string) {
       select: { id: true, label: true, startsAt: true, team: { select: { name: true } } },
       orderBy: { startsAt: "asc" },
     }),
+    // Each team WITH its roles, and every membership's roles: the editor
+    // narrows as you go — team first, then that team's roles, then the people
+    // who actually play the picked role there.
     prisma.team.findMany({
       where: { orgId },
-      select: { id: true, name: true },
+      select: {
+        id: true,
+        name: true,
+        roles: { select: { key: true, label: true }, orderBy: { order: "asc" } },
+      },
       orderBy: { name: "asc" },
+    }),
+    prisma.teamMember.findMany({
+      where: { team: { orgId } },
+      select: { userId: true, teamId: true, roles: true },
     }),
   ]);
   // One entry per role KEY across every team — a rule's role applies wherever
@@ -138,7 +149,14 @@ export async function ruleEditorOptions(orgId: string) {
   for (const r of roles) if (!roleByKey.has(r.key)) roleByKey.set(r.key, { key: r.key, label: r.label });
   return {
     teams,
-    people,
+    // Each person's team memberships, so the people list can be narrowed to
+    // whoever plays the chosen role on the chosen team.
+    people: people.map((p) => ({
+      ...p,
+      teams: memberships
+        .filter((m) => m.userId === p.id)
+        .map((m) => ({ teamId: m.teamId, roles: m.roles })),
+    })),
     roles: [...roleByKey.values()],
     templates: templates.map((t) => ({
       id: t.id,
