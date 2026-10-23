@@ -387,8 +387,12 @@ test("week view draws a block over the hours it covers", async ({ page }) => {
   await expect(block).toHaveCount(1);
   await expect(block).toHaveAttribute("title", "Blocked by you: 9a–11a");
   await expect(block).toHaveAttribute("data-kind", "specific");
-  // Two hours tall at 40px an hour.
-  expect(Math.round((await block.boundingBox())!.height)).toBe(80);
+  // Two hours tall at 28px an hour.
+  expect(Math.round((await block.boundingBox())!.height)).toBe(56);
+  // 6 AM to 10 PM at a fixed height: nothing to scroll inside the view.
+  const hours = week.getByTestId("week-hours");
+  expect(Math.round((await hours.boundingBox())!.height)).toBe(16 * 28);
+  expect(await hours.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
 
   // And back: the month calendar returns.
   await page.getByRole("button", { name: "Month", exact: true }).click();
@@ -432,4 +436,25 @@ test("Import from Google Calendar starts from the request being answered", async
   await expect(button).toBeVisible();
   await button.click();
   await expect.poll(() => started).toMatch(/\/api\/google-calendar\/import\?requestId=\w+/);
+});
+
+test("the week view's legend names Google Calendar only where it's set up", async ({ page }) => {
+  await login(page, "carol");
+  await page.goto("/schedule");
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  const week = page.getByTestId("availability-week-view");
+  await expect(week).toContainText("Blocked by you");
+  await expect(week).toContainText("Weekly repeat");
+  await expect(week).not.toContainText("From Google Calendar");
+
+  // Configured (the test environment isn't, so say it is): the entry is back.
+  await page.route("**/api/availability", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, googleImport: true } });
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  await expect(week).toContainText("From Google Calendar");
 });

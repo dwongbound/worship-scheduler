@@ -513,7 +513,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 Feature: `CalendarMonth`, `AvailabilityWeekView` (/schedule's Month · Week
 toggle: hours down, days across, a box per block coloured by where it came
-from — sky Google, rose by hand, amber weekly; read-only), `CreateSetModal`, `SetDetailModal` (edits are STAGED:
+from — sky Google, rose by hand, amber weekly; read-only; 6 AM–10 PM only
+(`lib/weekView.ts clipToView`) at a FIXED height with no scroll box; the legend
+leaves out Google unless the import is configured or Google blocks exist), `CreateSetModal`, `SetDetailModal` (edits are STAGED:
 everything writes to a local copy, a sticky footer has Delete · Close · Save,
 Save COMMITS AND CLOSES (a failed save keeps the modal + edits up), and any
 exit with changes hits a confirm that lists them — Delete-set, Slack messaging

@@ -5,11 +5,15 @@
 // "which days"; this answers "which hours", which is what you need to check an
 // "Import from Google Calendar" against your own calendar. Read-only: blocks
 // are made with the form and deleted from the list, as in the month view.
+// It draws 6 AM to 10 PM at a fixed height, with no scroll box of its own.
 // Layout maths: lib/weekView.ts.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { toYmd } from "@/components/common/DateSelect";
 import { FULL_DAY_MIN } from "@/lib/availability";
 import {
+  VIEW_END_MIN,
+  VIEW_START_MIN,
+  clipToView,
   compactTime,
   dayBlocks,
   shiftWeek,
@@ -19,9 +23,11 @@ import {
 } from "@/lib/weekView";
 import type { ApiUnavailability } from "@/lib/types";
 
-// One hour's height. 24 of them scroll inside the box, which opens at 7 AM.
-const HOUR_PX = 40;
-const OPEN_AT_HOUR = 7;
+// One hour's height. The sixteen hours from 6 AM to 10 PM make the whole box.
+const HOUR_PX = 28;
+const FIRST_HOUR = VIEW_START_MIN / 60;
+const HOURS = (VIEW_END_MIN - VIEW_START_MIN) / 60;
+const minuteY = (m: number) => ((m - VIEW_START_MIN) / 60) * HOUR_PX;
 
 const KIND_CLASSES: Record<BlockKind, string> = {
   google: "bg-sky-500/20 border-sky-500 text-sky-900 dark:text-sky-100",
@@ -56,11 +62,15 @@ function weekTitle(start: Date): string {
 export default function AvailabilityWeekView({
   entries,
   highlightRange,
+  googleImport = false,
 }: {
   entries: ApiUnavailability[];
   // A request's window (YYYY-MM-DD, inclusive): days outside it are dimmed,
   // and the view jumps to the week it starts in — as the month view does.
   highlightRange?: { start: string; end: string } | null;
+  // Is Import from Google Calendar set up? Without it the legend has no
+  // Google entry — unless blocks from an earlier import are still here.
+  googleImport?: boolean;
 }) {
   const [start, setStart] = useState(() => {
     if (highlightRange) {
@@ -75,14 +85,11 @@ export default function AvailabilityWeekView({
     if (y && m && d) setStart(weekStart(new Date(y, m - 1, d)));
   }, [highlightRange?.start]);
 
-  // Open on the working day rather than at midnight.
-  const scroller = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (scroller.current) scroller.current.scrollTop = OPEN_AT_HOUR * HOUR_PX;
-  }, []);
-
   const todayYmd = toYmd(new Date());
   const days = weekDays(start);
+  const legend = (Object.keys(KIND_LABELS) as BlockKind[]).filter(
+    (k) => k !== "google" || googleImport || entries.some((e) => e.fromGoogle),
+  );
 
   return (
     <div
@@ -144,26 +151,22 @@ export default function AvailabilityWeekView({
         })}
       </div>
 
-      {/* The hours. Its own scroll box, so a phone pull here scrolls the day
-          rather than refreshing the page. */}
-      <div
-        ref={scroller}
-        data-no-pull
-        className="max-h-[28rem] overflow-y-auto overscroll-contain"
-      >
+      {/* The hours, 6 AM to 10 PM, all on screen at once. */}
+      <div data-testid="week-hours" className="overflow-hidden">
         <div
           className="relative grid grid-cols-[2.25rem_repeat(7,minmax(0,1fr))]"
-          style={{ height: 24 * HOUR_PX }}
+          style={{ height: HOURS * HOUR_PX }}
         >
           {/* Hour labels + the horizontal rule for each hour. */}
           <div className="relative">
-            {Array.from({ length: 24 }, (_, h) => (
+            {Array.from({ length: HOURS }, (_, i) => (
               <div
-                key={h}
+                key={i}
                 className="absolute right-1 -translate-y-1/2 text-[10px] text-gray-400"
-                style={{ top: h * HOUR_PX }}
+                style={{ top: i * HOUR_PX }}
               >
-                {h === 0 ? "" : compactTime(h * 60)}
+                {/* The top line's label would hang off the box; 7a onward. */}
+                {i === 0 ? "" : compactTime((FIRST_HOUR + i) * 60)}
               </div>
             ))}
           </div>
@@ -179,14 +182,14 @@ export default function AvailabilityWeekView({
                   outside ? "bg-gray-50 dark:bg-gray-900/40" : ""
                 }`}
               >
-                {Array.from({ length: 24 }, (_, h) => (
+                {Array.from({ length: HOURS }, (_, i) => (
                   <div
-                    key={h}
+                    key={i}
                     className="absolute inset-x-0 border-t border-gray-100 dark:border-gray-700/60"
-                    style={{ top: h * HOUR_PX }}
+                    style={{ top: i * HOUR_PX }}
                   />
                 ))}
-                {dayBlocks(entries, d).map((b) => {
+                {clipToView(dayBlocks(entries, d)).map((b) => {
                   const label =
                     b.startMinute === 0 && b.endMinute >= FULL_DAY_MIN
                       ? "All day"
@@ -199,8 +202,8 @@ export default function AvailabilityWeekView({
                       title={`${KIND_LABELS[b.kind]}: ${label}`}
                       className={`absolute overflow-hidden rounded border-l-2 px-0.5 text-[10px] leading-tight ${KIND_CLASSES[b.kind]}`}
                       style={{
-                        top: (b.startMinute / 60) * HOUR_PX,
-                        height: Math.max(((b.endMinute - b.startMinute) / 60) * HOUR_PX, 6),
+                        top: minuteY(b.top),
+                        height: Math.max(minuteY(b.bottom) - minuteY(b.top), 6),
                         left: `calc(${(b.lane / b.lanes) * 100}% + 1px)`,
                         width: `calc(${100 / b.lanes}% - 2px)`,
                       }}
@@ -218,7 +221,7 @@ export default function AvailabilityWeekView({
       </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-gray-200 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:text-gray-300">
-        {(Object.keys(KIND_LABELS) as BlockKind[]).map((k) => (
+        {legend.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5">
             <span className={`h-2.5 w-2.5 rounded-full ${LEGEND_DOT[k]}`} />
             {KIND_LABELS[k]}
