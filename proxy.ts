@@ -18,7 +18,11 @@ export const config = {
   // paths in code, the favicon just quietly stops loading when signed out.
   // manifest.webmanifest is excluded because phones fetch it without auth
   // cookies when installing the app to the home screen.
+  //
+  // `privacy` and `terms` are the two PUBLIC pages (app/privacy, app/terms):
+  // Google's OAuth verification fetches them with no account, so behind the
+  // login they'd be a redirect to /login as far as it's concerned.
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|icon|manifest.webmanifest|apple-icon|login).*)",
+    "/((?!api|_next/static|_next/image|favicon.ico|icon|manifest.webmanifest|apple-icon|login|privacy|terms).*)",
   ],
 };
