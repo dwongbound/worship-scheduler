@@ -111,6 +111,32 @@ export function dayBlocks(entries: ApiUnavailability[], day: Date): WeekBlock[] 
   return out;
 }
 
+// The hours the week view draws: 6 AM to 10 PM. Sets and the blocks around
+// them live there, and sixteen hours fit one screen without a scroll box.
+export const VIEW_START_MIN = 6 * 60;
+export const VIEW_END_MIN = 22 * 60;
+
+/**
+ * Trim each block to the view's hours, dropping any that lie wholly outside
+ * them (a 1–3 AM block). Lanes are kept from `dayBlocks`, so two blocks that
+ * overlap only before 6 AM still sit side by side — narrower, never hidden.
+ * The block's real times stay on `startMinute`/`endMinute`; the clipped span
+ * is `top`/`bottom`, in minutes from midnight.
+ */
+export function clipToView(
+  blocks: WeekBlock[],
+  from = VIEW_START_MIN,
+  to = VIEW_END_MIN,
+): (WeekBlock & { top: number; bottom: number })[] {
+  return blocks
+    .filter((b) => b.endMinute > from && b.startMinute < to)
+    .map((b) => ({
+      ...b,
+      top: Math.max(b.startMinute, from),
+      bottom: Math.min(b.endMinute, to),
+    }));
+}
+
 /** "6a", "9:30a", "12p" — the month calendar's compact time. */
 export function compactTime(minutes: number): string {
   const h = Math.floor(minutes / 60);
