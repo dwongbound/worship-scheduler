@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { renderDigestText, type DigestItem } from "@/lib/digest";
 import {
+  DIGEST_SEND_MINUTE,
   DIGEST_WINDOW_END_MINUTE,
   DIGEST_WINDOW_START_MINUTE,
   windowPhrase,
@@ -12,9 +13,9 @@ import {
 const BASE = "https://tapworship.com";
 
 const items: DigestItem[] = [
-  { text: "Fill out the availability request “Fall 2026” for Grace", path: "/schedule" },
-  { text: "You have 1 set today, at 2:00 PM Sunday Morning", path: "/calendar" },
-  { text: "3 swap requests waiting on your approval", path: "/approvals" },
+  { label: "Sets Today", text: "Sunday Morning at 2:00 PM", path: "/calendar" },
+  { label: "Availability Request", text: "Fill out Fall 2026 for Grace", path: "/schedule" },
+  { label: "Swap Requests", text: "3 pending approval", path: "/approvals" },
 ];
 
 describe("renderDigestText", () => {
@@ -31,15 +32,23 @@ describe("renderDigestText", () => {
   it("renders one linked bullet per item, in order", () => {
     const lines = renderDigestText("Carol", items, BASE).split("\n").slice(1);
     expect(lines).toEqual([
-      `• <${BASE}/schedule|Fill out the availability request “Fall 2026” for Grace>`,
-      `• <${BASE}/calendar|You have 1 set today, at 2:00 PM Sunday Morning>`,
-      `• <${BASE}/approvals|3 swap requests waiting on your approval>`,
+      `• *Sets Today:* <${BASE}/calendar|Sunday Morning at 2:00 PM>`,
+      `• *Availability Request:* <${BASE}/schedule|Fill out Fall 2026 for Grace>`,
+      `• *Swap Requests:* <${BASE}/approvals|3 pending approval>`,
     ]);
+  });
+
+  // The label is bold and OUTSIDE the link on purpose: no provider renders
+  // markup inside a link label, so folding it in would emit literal asterisks.
+  it("keeps the bold label outside the hyperlink", () => {
+    const line = renderDigestText("Carol", items, BASE).split("\n")[1];
+    expect(line.indexOf("*Sets Today:*")).toBeLessThan(line.indexOf("<"));
+    expect(line).not.toContain("|*");
   });
 
   it("degrades to plain bullets when the app url is unknown", () => {
     const text = renderDigestText("Carol", items, "");
-    expect(text).toContain("• Fill out the availability request");
+    expect(text).toContain("• *Availability Request:* Fill out Fall 2026");
     // No half-built links: an empty base must not emit "<|...>".
     expect(text).not.toContain("<");
   });
@@ -52,16 +61,16 @@ describe("renderDigestText", () => {
 
 // The send gate in sendDailyDigests compares the server's LOCAL clock against
 // the window, but Vercel schedules the cron in UTC — so the local hour moves an
-// hour across DST. A hard 8 AM check used to skip every winter run. This pins
+// hour across DST. A hard 6:30 AM check would skip every winter run. This pins
 // both DST offsets against the window so changing either side trips a test.
 describe("the cron slot lands inside the digest window", () => {
-  const CRON_UTC_HOUR = 16; // vercel.json: "0 16 * * *"
+  const CRON_UTC = "13:30"; // vercel.json: "30 13 * * *"
   const APP_TZ = "America/Los_Angeles";
 
   // Local minutes-from-midnight in APP_TZ for the cron firing on `isoDate`,
   // read via Intl so the result doesn't depend on the test runner's own TZ.
   function localMinutes(isoDate: string): number {
-    const at = new Date(`${isoDate}T${String(CRON_UTC_HOUR).padStart(2, "0")}:00:00Z`);
+    const at = new Date(`${isoDate}T${CRON_UTC}:00Z`);
     const [h, m] = new Intl.DateTimeFormat("en-US", {
       timeZone: APP_TZ,
       hour: "2-digit",
@@ -75,13 +84,19 @@ describe("the cron slot lands inside the digest window", () => {
   }
 
   it.each([
-    ["PST (winter)", "2026-01-15", 8 * 60],
-    ["PDT (summer)", "2026-07-15", 9 * 60],
+    // Standard time runs an hour early — which is the whole reason the window
+    // floor is 5 AM and not 6.
+    ["PST (winter)", "2026-01-15", 5 * 60 + 30],
+    ["PDT (summer)", "2026-07-15", 6 * 60 + 30],
   ])("%s fires at %s local, inside the window", (_label, isoDate, expected) => {
     const minutes = localMinutes(isoDate as string);
     expect(minutes).toBe(expected);
     expect(minutes).toBeGreaterThanOrEqual(DIGEST_WINDOW_START_MINUTE);
     expect(minutes).toBeLessThan(DIGEST_WINDOW_END_MINUTE);
+  });
+
+  it("hits the 6:30 AM target exactly through daylight saving", () => {
+    expect(localMinutes("2026-07-15")).toBe(DIGEST_SEND_MINUTE);
   });
 });
 
@@ -104,11 +119,7 @@ describe("windowPhrase", () => {
   it("reads as a sentence in the lines that use it", () => {
     // How buildOrgDigest assembles them — guards against a phrase that only
     // works standalone (e.g. one starting with a capital).
-    expect(`Confirm your spot on 2 sets ${windowPhrase(14)}`).toBe(
-      "Confirm your spot on 2 sets in the next two weeks"
-    );
-    expect(`3 sets ${windowPhrase(7)} have people who haven’t confirmed`).toBe(
-      "3 sets in the next week have people who haven’t confirmed"
-    );
+    expect(`2 sets ${windowPhrase(14)}`).toBe("2 sets in the next two weeks");
+    expect(`3 sets ${windowPhrase(7)}`).toBe("3 sets in the next week");
   });
 });

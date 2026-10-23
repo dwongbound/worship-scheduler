@@ -17,6 +17,7 @@ import {
   MAX_SONG_TITLE_LENGTH,
   normalizeSongKey,
 } from "@/lib/constants";
+import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 export async function PUT(
   req: NextRequest,
@@ -103,6 +104,7 @@ export async function PUT(
     // session.name is optional — never let the chat read "null added ...".
     const who = user.name ?? "Someone";
     await notifySetChange(id, `\u{1F3B5} Setlist update — ${who} ${change}.`);
+    syncSetsAfterResponse(id);
   }
 
   const songs = await prisma.song.findMany({

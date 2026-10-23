@@ -276,6 +276,9 @@ function LoginForm() {
           <form onSubmit={onSignIn} className="space-y-4">
             <Input
               label="Username / Email"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={usernameOrEmail}
               onChange={(e) => setUsernameOrEmail(e.target.value)}
               autoComplete="username"
@@ -287,6 +290,7 @@ function LoginForm() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete="current-password"
+              enterKeyHint="go"
               required
             />
             {error && <p className="text-sm text-red-600">{error}</p>}
@@ -339,6 +343,9 @@ function LoginForm() {
             {needsOrgKey && (
               <Input
                 label="Organization key"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={orgKey}
                 onChange={(e) => setOrgKey(e.target.value)}
                 autoComplete="off"
@@ -407,7 +414,7 @@ function LoginForm() {
                 variant="secondary"
                 onClick={() => setConflicts(null)}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={continueAnyway} disabled={submitting}>
                 {submitting ? "Continuing…" : "This is someone else — continue"}

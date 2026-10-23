@@ -1,8 +1,10 @@
-// POST /api/swaps/proposals/:id/respond  { action: "accept" | "reject" }
+// POST /api/swaps/proposals/:id/respond
+//   { action: "accept" | "reject", note?: string }
 // The RECIPIENT (owner of the proposal's toAssignment) accepts or rejects a
 // targeted trade.
 //   accept — exchange the two slots' users; both become CONFIRMED.
-//   reject — restore each slot to the status it had before the proposal.
+//   reject — restore each slot to the status it had before the proposal, and
+//            keep the optional note they typed, which leads the proposer's DM.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
@@ -18,14 +20,28 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { action } = await req.json();
+  const { action, note } = await req.json();
   if (action !== "accept" && action !== "reject") {
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   }
+  // Optional, and capped so one person can't post a wall of text into someone
+  // else's DMs.
+  if (note !== undefined && typeof note !== "string") {
+    return NextResponse.json({ error: "Bad note" }, { status: 400 });
+  }
+  const trimmedNote =
+    typeof note === "string" ? note.trim().slice(0, 500) : "";
+  // NULL, not "": a blank or whitespace-only box means "no reason given", and
+  // the DM omits the sentence entirely rather than opening with a gap.
+  const declineNote = trimmedNote === "" ? null : trimmedNote;
 
   const proposal = await prisma.swapProposal.findUnique({
     where: { id },
     include: {
+      // The proposer's name, for the admin approval DM below. Pulled in here
+      // rather than looked up afterwards: this query already has to run, and
+      // the accepter's own name is on the session.
+      requestedBy: { select: { name: true } },
       fromAssignment: {
         include: { set: { select: { orgId: true, label: true, startsAt: true } } },
       },
@@ -58,7 +74,11 @@ export async function POST(
       }),
       prisma.swapProposal.update({
         where: { id: proposal.id },
-        data: { status: "REJECTED", respondedAt: new Date() },
+        data: {
+          status: "REJECTED",
+          respondedAt: new Date(),
+          declineNote,
+        },
       }),
     ]);
     await notifySwapResolved(proposal.id, false);
@@ -131,10 +151,14 @@ export async function POST(
   // Tell the requester it was accepted, and ping the org's admins that the
   // trade now needs approval. Both no-op without Slack.
   await notifySwapResolved(proposal.id, true);
+  // Who ended up in the seat the admin is being asked about: `from` is the
+  // requester's old slot, which the accepter (that's us) has just moved into.
   await notifyAdminsPendingApproval(from.set.orgId, {
     kind: "swap",
     role: from.role,
     set: { label: from.set.label, startsAt: from.set.startsAt },
+    taker: user.name ?? "Someone",
+    previousOwner: proposal.requestedBy.name,
   });
   return NextResponse.json({ ok: true, status: "PENDING_APPROVAL" });
 }

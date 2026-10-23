@@ -26,6 +26,7 @@ import { prisma } from "@/lib/prisma";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import { buildSchedule, teamKey } from "@/lib/scheduler";
 import { getTeamCatalogs } from "@/lib/teamRoleStore";
+import { loadOrgRules, ruleContext } from "@/lib/schedulingRuleStore";
 import { defaultMDId } from "@/lib/md";
 import type { SlotCapacityMap } from "@/lib/constants";
 import { occurrencesInRange, parseLocalDate, upcomingOccurrences } from "@/lib/dates";
@@ -138,6 +139,7 @@ export async function POST(req: NextRequest) {
     prisma.set.findMany({
       where: { orgId: admin.orgId, startsAt: { gte: windowStart, lte: windowEnd } },
       select: {
+        id: true,
         startsAt: true,
         label: true,
         _count: { select: { assignments: true } },
@@ -172,7 +174,7 @@ export async function POST(req: NextRequest) {
     // also cross-org, so the spacing rule sees ALL of a person's bookings.
     prisma.assignment.findMany({
       where: { set: { startsAt: { gte: spacingStart, lte: spacingEnd } } },
-      select: { userId: true, set: { select: { startsAt: true } } },
+      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
     }),
   ]);
 
@@ -182,6 +184,10 @@ export async function POST(req: NextRequest) {
     `${startsAt.getTime()}|${label ?? ""}`;
   const existingByKey = new Map(
     existingSets.map((s) => [existingKey(s.startsAt, s.label), s._count.assignments])
+  );
+  // The same match → the row's id, for rules that name a specific set.
+  const existingIdByKey = new Map(
+    existingSets.map((s) => [existingKey(s.startsAt, s.label), s.id])
   );
   const existingCounts = new Map<string, number>();
   const existingTeamCounts = new Map<string, number>();
@@ -205,6 +211,7 @@ export async function POST(req: NextRequest) {
       teamId: string | null;
       templateId: string;
       existing: boolean;
+      setId: string | null;
     }
   >();
   let skipped = 0;
@@ -247,6 +254,7 @@ export async function POST(req: NextRequest) {
         // occurrences of one set type together.
         templateId: template.id,
         existing: existingByKey.has(matchKey),
+        setId: existingIdByKey.get(matchKey) ?? null,
       });
     }
   }
@@ -258,6 +266,13 @@ export async function POST(req: NextRequest) {
   // Each staged set is filled against ITS team's role catalog — one plan can
   // span teams whose rosters look nothing alike.
   const catalogs = await getTeamCatalogs(stagedList.map((s) => s.teamId));
+  // The org's scheduling rules, and what they need from outside the plan: the
+  // real sets around it (a Saturday already staffed is Sunday's SAME_PLAYER
+  // partner) and a month either side of bookings for the LIMIT counts.
+  const schedulingRules = await loadOrgRules(admin.orgId);
+  const { fixedSets, periodBookings } = schedulingRules.some((r) => r.enabled)
+    ? await ruleContext(admin.orgId, schedulingRules, windowStart, windowEnd)
+    : { fixedSets: [], periodBookings: [] };
   const proposals = buildSchedule(
     stagedList.map((s) => ({
       id: s.startsAt.toISOString(),
@@ -267,6 +282,8 @@ export async function POST(req: NextRequest) {
       capacities: s.capacities,
       requiresMD: s.requiresMD,
       teamId: s.teamId,
+      templateId: s.templateId,
+      setId: s.setId,
     })),
     users.map((u) => ({
       id: u.id,
@@ -275,8 +292,13 @@ export async function POST(req: NextRequest) {
     })),
     rules,
     existingCounts,
-    booked.map((b) => ({ userId: b.userId, startsAt: b.set.startsAt })),
-    existingTeamCounts
+    booked.map((b) => ({
+      userId: b.userId,
+      startsAt: b.set.startsAt,
+      teamId: b.set.teamId,
+    })),
+    existingTeamCounts,
+    { schedulingRules, fixedSets, periodBookings }
   );
 
   const rosters = new Map<string, StagedSet["assignments"]>();
@@ -307,6 +329,7 @@ export async function POST(req: NextRequest) {
         teamId: s.teamId,
         templateId: s.templateId,
         existing: s.existing,
+        setId: s.setId,
         assignments,
       };
     })
@@ -358,9 +381,18 @@ export async function POST(req: NextRequest) {
       booked: booked.map((b) => ({
         userId: b.userId,
         startsAt: b.set.startsAt.toISOString(),
+        teamId: b.set.teamId,
       })),
       // Seed for the MD rotation, so the modal's re-run starts where this did.
       previousMDByTeam: Object.fromEntries(previousMDSeed),
+      // What the scheduling rules read from outside the plan, so the modal's
+      // re-run obeys them the same way.
+      fixedSets: fixedSets.map((f) => ({ ...f, startsAt: f.startsAt.toISOString() })),
+      periodBookings: periodBookings.map((b) => ({
+        userId: b.userId,
+        startsAt: b.startsAt.toISOString(),
+        teamId: b.teamId ?? null,
+      })),
     },
   };
   return NextResponse.json(plan);

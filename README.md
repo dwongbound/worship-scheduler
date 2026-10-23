@@ -150,7 +150,9 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `TZ` | `America/Los_Angeles` | same | same (Vercel defaults to UTC — set it!) |
 | `SEED_ADMIN_USERNAME` / `_PASSWORD` | used by `npm run db:seed` | — (don't seed) | — (**never** seed prod) |
 | `SLACK_DRY_RUN` | `1` (log, never send) | `1` (optional) | unset (send for real) |
-| `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² |
+| `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² (also offers Google Calendar⁷) |
+| `GOOGLE_CALENDAR_REDIRECT_URI` | only if not `<NEXTAUTH_URL>/api/google-calendar/callback`⁷ | unset | unset |
+| `GOOGLE_CALENDAR_WEBHOOK_URL` | your HTTPS tunnel's `…/api/google-calendar/webhook`⁷ | unset | unset |
 | `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
 | `SPOTIFY_CLIENT_ID` / `_SECRET` | optional⁵ | optional⁵ | set to enable playlists⁵ |
 | `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
@@ -175,6 +177,15 @@ menu → `/platform`). Env-only (bootstrap); everything else is managed in-app.
 account, whose refresh token is stored encrypted on the `Org` row. Redirect URI:
 `…/api/spotify/callback` (override with `SPOTIFY_REDIRECT_URI`). `SPOTIFY_DRY_RUN=1`
 stamps placeholder playlists instead of calling the API.
+⁷ Google Calendar is a **per-org integration** riding on the same Google OAuth
+client as "Continue with Google" — see [Google Calendar](#google-calendar).
+With that client set, org admins see a *Connect Google Calendar* button in Org
+settings; nothing changes for an org until one of them connects.
+Each org connects one Google account (Org settings → *Connect Google
+Calendar*); its refresh token is stored encrypted on the `Org` row. Redirect
+URI: `…/api/google-calendar/callback`. RSVPs come back through Google's push
+channel at `…/api/google-calendar/webhook`, which must be public HTTPS, so on
+`localhost` set `GOOGLE_CALENDAR_WEBHOOK_URL` to a tunnel (or skip write-back).
 
 ### Deploying (Vercel + Neon, free tier)
 
@@ -252,10 +263,126 @@ directly. Changing it takes effect on the next deploy.
 - **Theme** — three modes (light / dark / system) cycled by the Navbar
   button; logic in `lib/theme.ts`, applied flash-free by the inline script
   in `app/layout.tsx`. `system` follows the OS preference live.
-- **Branding** — `components/Logo.tsx` (the "tw" monogram in the Navbar)
-  and `app/icon.svg` (favicon) are hand-drawn SVGs, no image assets.
+- **Branding** — the "tw" mark. `assets/tw-logo-master.png` is the 3000px
+  master (never served); `public/tw-logo.png` is what `components/Logo.tsx`
+  draws in the Navbar, and `app/icon.png` / `app/apple-icon.png` are the
+  favicon and home-screen icon.
 - **Auth** — `lib/auth.ts` (NextAuth credentials + bcrypt). Pages are
   gated by `proxy.ts`; API routes return JSON 401s.
+
+## Google Calendar
+
+Every upcoming set becomes an **event on a calendar in the Google account an
+org admin connects** (ideally a shared church account), with everyone on its
+roster invited by email. The
+event's description carries what the Slack messages do — the roster by role,
+the setlist, a link back to the set. **Accepting the invite confirms that seat
+in the app**; declining (or "maybe") changes nothing, so the person still asks
+for cover in the app. Code: `lib/googleCalendar.ts` (Google + db side),
+`lib/calendarEvent.ts` (the pure rules, unit-tested), routes under
+`app/api/google-calendar/**`.
+
+**1. Google Cloud project** — use the project that already holds the
+"Continue with Google" OAuth client (`GOOGLE_CLIENT_ID` / `_SECRET`):
+
+- *APIs & Services → Library*: enable the **Google Calendar API**.
+- *OAuth consent screen → Data access*: add the scopes
+  `https://www.googleapis.com/auth/calendar.app.created` (create the app's own
+  calendar), `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
+  (list the account's calendars for the picker below) and
+  `https://www.googleapis.com/auth/calendar.events` (put the sets' events on
+  whichever calendar is picked, and watch it for RSVPs). For **Import from
+  Google Calendar** (below) also add
+  `https://www.googleapis.com/auth/calendar.events.readonly`. Both events
+  scopes are *sensitive*: while the app is in *Testing*, add each connecting
+  account (including every member who imports) as a test user; publishing it
+  for real use needs Google's verification.
+- *Credentials → the OAuth client → Authorized redirect URIs*: add
+  `https://<your-host>/api/google-calendar/callback` for each of staging and
+  prod (and `http://localhost:3000/api/google-calendar/callback` for dev).
+
+**2. Env vars** — no new ones on staging/prod: Google Calendar is offered
+wherever `GOOGLE_CLIENT_ID` / `_SECRET` (and `NEXTAUTH_URL`) are set, as an
+admin-only *Connect Google Calendar* button in Org settings. Until an admin of
+an org connects, that org makes no Google calls and nothing about it changes.
+Without the id/secret there's no button at all, and every sync, the cron step
+and the webhook return before touching the db. Locally, Google can't push to
+`localhost`, so for RSVP write-back point a tunnel (e.g. `cloudflared`,
+`ngrok`) at the app and set:
+
+```
+GOOGLE_CALENDAR_WEBHOOK_URL=https://<tunnel>/api/google-calendar/webhook
+GOOGLE_CALENDAR_REDIRECT_URI=…   # only if it isn't <NEXTAUTH_URL>/api/google-calendar/callback
+```
+
+**3. Migration** — `prisma/migrations/20261021120000_google_calendar` adds the
+`Org.googleCal*` columns (plus `googleCalendarName` and
+`googleCalConnectedById`) and `Set.googleEventId`. Run
+`prisma migrate deploy` on each database (staging, then prod) before the code
+that reads them goes live.
+
+**4. Connect an org** — as an org admin, **Org settings** (`/orgs`) → *Connect
+Google Calendar*, sign in as the account to use, approve calendar access. The
+app creates a calendar named "<Org> worship sets", opens a push channel on it,
+and adds every upcoming set. Only admins see the row. It lists members with no
+email on file (they get no invites until they add one on their Profile, which
+sends their invites). *Disconnect* stops syncing; the calendar and its events
+stay in the account.
+
+**Choosing a calendar** — the admin who connected (and only them) gets a
+*Calendar for sets* dropdown of the account's calendars they can write to.
+Picking another moves every upcoming set there: the old events are cancelled
+(guests are emailed) and re-created on the new calendar with fresh invites.
+Other admins never see that list — `/api/google-calendar/calendars` refuses
+them — only the chosen calendar's name and who connected it. A different admin
+who reconnects becomes the one who can choose. An org connected before the
+picker existed reconnects once to grant the list scope.
+
+**How it stays in sync** — every route that changes a set calls
+`syncSetsAfterResponse` (after the response, so Google's latency never sits on
+a save): creating a set or applying a generated schedule, editing its time or
+name, roster saves, removing a slot or a member, approved (or rejected) covers
+and swaps, and setlist edits. A seat awaiting approval stays on the original
+owner's invite until an admin approves the handoff. Deleting a set cancels its
+event. Guests are emailed only when they're added or removed or the time moves;
+a setlist edit updates the event quietly.
+
+**How RSVPs come back** — Google pings `/api/google-calendar/webhook` whenever
+the calendar changes; the app reads what changed (using the stored sync token)
+and confirms each PENDING seat whose holder accepted, logging "Accepted the
+Google Calendar invite" on the set's history. A ping carries no data and is
+checked against a per-org HMAC token, so a forged one does nothing. Channels
+last a week at most, so the **daily cron renews them** and reads changes once
+in case a ping went missing.
+
+Gotchas: invites go to `User.email`, matched case-insensitively — someone whose
+calendar uses a different address than their profile won't be confirmed.
+Deleting the invite instead of answering it sends nothing back. Like Spotify,
+the refresh token is encrypted with a key derived from `NEXTAUTH_SECRET`, so
+rotating that secret means every org must reconnect.
+
+### Import from Google Calendar (members)
+
+On /schedule, the selected request's card has **Import from Google Calendar**
+whenever the OAuth client is configured. It reads the member's OWN calendar
+(read-only, never event titles) across that request's window and writes a
+block for every busy time: timed events unless marked *Free*, **all-day events
+as the whole day** (Free or not), cancelled and declined events skipped,
+overlaps merged per day. Re-importing replaces only the blocks an earlier
+import wrote for that request (`Unavailability.fromGoogle`); hand-made blocks
+are never touched, and imported ones can be edited or deleted like any other.
+The permission is asked for once: the first import shows Google's consent
+screen, and its refresh token is kept encrypted on the person's row
+(`User.googleImportRefreshToken`), so every later import runs with no Google
+screen. A token they revoke in their Google account is forgotten and the next
+import asks again. Google sign-in itself never asks for calendar access, so the
+unverified-app warning a sensitive scope brings can't land on the login. It shares
+`/api/google-calendar/callback` (told apart by its signed state), so there's no
+extra redirect URI and no new env var; it does need the `calendar.events.readonly`
+scope above and migration `20261022120000_unavailability_from_google`. The page
+then opens the **Week** view (hours down, days across) to check the result.
+Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`,
+`app/api/google-calendar/import`.
 
 ## Slack (future)
 

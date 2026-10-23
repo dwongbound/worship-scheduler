@@ -65,8 +65,15 @@ Playwright (e2e) · Docker.
   `LoadingScreen` (full-screen pulsing-name + equalizer splash). Custom
   keyframes (`jump`, `equalize`, `pulse-name`, `radiate`) live in
   `tailwind.config.ts`.
-- **Branding:** `Logo.tsx` and `app/icon.svg` are hand-drawn SVGs (no raster
-  assets); the favicon is auto-served by Next.js from `app/icon.svg`.
+- **Branding:** the mark is the real artwork, not a drawing of it. The 3000px
+  master lives at `assets/tw-logo-master.png` (source only, never served);
+  everything shipped is derived from it — `public/tw-logo.png` (256px, what
+  `Logo.tsx` renders), `app/icon.png` (512px favicon) and `app/apple-icon.png`
+  (180px). Next serves the last two by filename, and `app/manifest.ts` points
+  at them. The apple icon is the ONE that's flattened onto the disc's own
+  `#121212`: iOS composites transparency onto black, so a transparent one
+  would lose the disc entirely. Regenerate with `sips -z <n> <n>` from the
+  master.
 - Prefer extending `components/common/` over one-off styling. API routes
   check the session; admin routes re-check `isAdmin` against the db.
 - **Commit messages:** a succinct one-line subject, then a blank line, then a

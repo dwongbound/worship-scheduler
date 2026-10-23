@@ -145,7 +145,7 @@ export default function CreateSetModal({
             onClick={onClose}
             disabled={busy}
           >
-            Cancel
+            Close
           </Button>
           {/* Blocked until the teams list loads — every set needs a team. */}
           <Button type="submit" disabled={busy || !form.teamId}>

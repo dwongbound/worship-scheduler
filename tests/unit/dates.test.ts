@@ -6,6 +6,7 @@ import {
   minutesToShortTimeLabel,
   minutesToTimeInput,
   occurrencesInRange,
+  shortDateTimeCompact,
   shortDateTimeLabel,
   shortRangeLabel,
   startOfWeekMonday,
@@ -111,6 +112,24 @@ describe("shortDateTimeLabel", () => {
     expect(shortDateTimeLabel(new Date(2026, 11, 25, 9, 5))).toBe(
       "12/25/2026 9:05 AM"
     );
+  });
+});
+
+// The stamp every chat message names a set by, so its exact shape is part of
+// the message copy — "8/20/26 10PM", not "08/20/2026 10:00 PM".
+describe("shortDateTimeCompact", () => {
+  it("is a two-digit-year date next to a compact time", () => {
+    expect(shortDateTimeCompact(new Date(2026, 7, 20, 22, 0))).toBe(
+      "8/20/26 10PM"
+    );
+    expect(shortDateTimeCompact(new Date(2026, 9, 11, 10, 30))).toBe(
+      "10/11/26 10:30AM"
+    );
+  });
+
+  it("reads noon and midnight as 12, not 0", () => {
+    expect(shortDateTimeCompact(new Date(2026, 0, 1, 0, 0))).toBe("1/1/26 12AM");
+    expect(shortDateTimeCompact(new Date(2026, 0, 1, 12, 0))).toBe("1/1/26 12PM");
   });
 });
 

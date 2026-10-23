@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { THEME_COLORS } from "@/lib/theme";
 
 // Web app manifest — lets phones install the site as a home-screen app
 // (iOS "Add to Home Screen", Android "Install app"). Next.js serves this
@@ -14,12 +15,22 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     // Splash/background while the app loads (matches bg-gray-50).
     background_color: "#F9FAFB",
-    theme_color: "#F9FAFB",
+    // The installed app's title bar. A manifest takes ONE colour, so this is
+    // the light nav's; the per-scheme <meta name="theme-color"> tags
+    // (app/layout.tsx) override it wherever the browser reads those.
+    theme_color: THEME_COLORS.light,
     icons: [
       // Android/Chrome read icons from here; iOS uses the apple-touch-icon
-      // link that app/apple-icon.tsx generates.
-      { src: "/icon.svg", type: "image/svg+xml", sizes: "any" },
-      { src: "/apple-icon", type: "image/png", sizes: "512x512" },
+      // link Next emits for app/apple-icon.tsx. Both are GENERATED routes
+      // (no extension), not files in public/.
+      //
+      // "maskable" tells Android it may crop this to whatever shape the
+      // launcher uses. The mark is a centred disc on transparency, so there's
+      // nothing in the corners to lose — without the hint Android shrinks the
+      // icon inside a white badge instead of using it edge to edge.
+      { src: "/icon", type: "image/png", sizes: "512x512", purpose: "any" },
+      { src: "/icon", type: "image/png", sizes: "512x512", purpose: "maskable" },
+      { src: "/apple-icon", type: "image/png", sizes: "180x180" },
     ],
   };
 }

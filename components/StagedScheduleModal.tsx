@@ -13,11 +13,22 @@
 // season a different way is the main thing you came to do):
 //   • By set type — one horizontally-scrolling row per recurring set, so you
 //     read one set type's rotation across the weeks.
-//   • Chronological — one row per WEEK, weeks running down the page, so you
-//     read the calendar as it actually happens: everything in that week side
-//     by side (Tuesday morning, Tuesday evening, Thursday…), then the next
-//     week below. The date axis pivots from "across the weeks" to "down the
-//     weeks".
+//   • Chronological (week) — one row per WEEK, weeks running down the page, so
+//     you read the calendar as it actually happens: everything in that week
+//     side by side (Tuesday morning, Tuesday evening, Thursday…), then the
+//     next week below. The date axis pivots from "across the weeks" to "down
+//     the weeks".
+//   • Chronological (linear) — the same date order with the week breaks taken
+//     out: ONE row holding every set in the plan, scrolled end to end. The
+//     view for sweeping across a season without a heading every seven days.
+//
+// FILTERING BY PERSON: clicking names in the Team load panel narrows the
+// cards below to the sets those people are on (click a name again to drop it,
+// or the banner's Clear to drop them all). Several names are a UNION — every
+// set at least one of them is on — so two people picked together read as one
+// combined calendar rather than only the sets they share. Grouping is
+// untouched, which is how "what does December look like for Steven and John?"
+// gets answered without reading every card.
 // Every roster dropdown is availability-aware — people who can't serve at a
 // set's time are flagged and sorted last (same PlayerSelect the calendar's
 // SetDetailModal uses).
@@ -37,14 +48,17 @@
 // opens this same workspace over the sets that ALREADY exist, so a whole
 // season's rosters read and edit as one screen. Same layout, same cards, same
 // load panel, same staged-until-you-commit rule — the differences are:
-//   • the footer is Cancel / Save Changes, and Save hands the edited sets back
-//     for the caller to diff and PATCH (lib/calendarPreview.previewSaves);
+//   • the footer is Close / Save Changes, and Save first CONFIRMS the batch
+//     (how many seat and MD changes across how many sets), then hands the
+//     edited sets back for the caller to diff (lib/calendarPreview.previewSaves)
+//     and save in one PUT /api/admin/sets/roster;
 //   • a preview opens as an exact mirror of the calendar, so it only asks
 //     before you leave once something has actually changed;
-//   • "Already exists" on every card would be noise, so that badge and the
-//     plan-wide Auto schedule / Clear all buttons sit this one out — a card's
-//     own ⟳ is the fill affordance here, and there's no scheduler baseline
-//     behind a real calendar for a whole-plan re-roll to balance against.
+//   • every real seat opens LOCKED (toStagedSet), so the plan-wide Auto
+//     schedule fills only the gaps until the admin unlocks seats — one at a
+//     time with a card's 🔒, or all at once with Unlock all (Lock all puts
+//     them back);
+//   • "Already exists" on every card would be noise, so that badge sits out.
 import {
   useCallback,
   useEffect,
@@ -55,6 +69,12 @@ import {
   type ReactNode,
 } from "react";
 import Modal from "./common/Modal";
+import InfoTooltip from "./common/InfoTooltip";
+import OrgRules, {
+  setLabel,
+  templateLabel,
+  type RuleOptions,
+} from "./OrgRules";
 import ScheduleHelpModal from "./ScheduleHelpModal";
 import Button from "./common/Button";
 import Input from "./common/Input";
@@ -81,8 +101,15 @@ import { schedulableRolesByTeam } from "@/lib/roster";
 import {
   buildSchedule,
   teamKey,
+  type FixedSet,
+  type ScheduleOptions,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
+import {
+  ruleSentence,
+  type RuleNames,
+  type SchedulingRule,
+} from "@/lib/schedulingRules";
 import {
   conflictedUserIds,
   countAssignments,
@@ -100,8 +127,11 @@ import {
   type SetClipboard,
   totalConflicts,
   totalLocked,
+  planFixedSets,
+  totalRuleHeld,
   totalUnfillable,
   unfillableRoles,
+  ruleHeldRoles,
 } from "@/lib/stagedPlan";
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -120,6 +150,7 @@ import {
 } from "@/lib/loadMetrics";
 import {
   DEFAULT_TEAM_ROLES,
+  roleLabel,
   slottedRoles,
   resolveTeamCapacities,
   teamSupportsMD,
@@ -172,6 +203,9 @@ interface StagedScheduleModalProps {
   // preview (where the caller diffs the returned sets against what it opened
   // the preview with).
   onApply: (sets: StagedSet[]) => void;
+  // Preview only: why the last Save was refused. Shown in the batch confirm,
+  // which stays open so the admin can retry or back out.
+  applyError?: string;
   onClose: () => void; // discard the staged plan
 }
 
@@ -186,6 +220,23 @@ function weekLabel(startsAt: string): string {
     month: "short",
     day: "numeric",
   })}`;
+}
+
+/**
+ * The heading over the one group the linear view makes. It still gets a band
+ * — the band is what carries the set count and the "filtered to X" pill — but
+ * there is only ever one of them, so nothing is being divided up.
+ */
+const LINEAR_GROUP = "In date order";
+
+/**
+ * The picked names as one phrase: "Ada", "Ada or Bo", "Ada, Bo or Cy". "or"
+ * rather than "and" because the filter is a union — a shown set has at least
+ * one of these people on it, not all of them.
+ */
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
 }
 
 /**
@@ -215,6 +266,16 @@ function draftStamp(d: Date): string {
   return `${date} ${time}`;
 }
 
+// Shared "nothing held" answer, so a plan with no required rules doesn't
+// allocate an empty Map per card per render.
+const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
+// The rules holding a seat open, in the exact words the rules editor shows —
+// nothing added. The mark beside it already says it's held; what the reader
+// needs from the (i) is WHICH rule to go and change.
+function heldReason(held: SchedulingRule[], names: RuleNames): string {
+  return held.map((r) => ruleSentence(r.params, names)).join("; ");
+}
+
 export default function StagedScheduleModal({
   plan,
   users,
@@ -224,6 +285,7 @@ export default function StagedScheduleModal({
   mode = "generate",
   orgId: orgIdProp,
   onApply,
+  applyError = "",
   onSaveDraft,
   openedDraft,
   loading = false,
@@ -302,12 +364,43 @@ export default function StagedScheduleModal({
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   // How the cards are grouped (see the header comment). Per-session, not
   // persisted — it's a reading preference for this one review.
-  const [view, setView] = useState<"type" | "chrono">("type");
+  const [view, setView] = useState<"type" | "chrono" | "linear">("type");
+  // Narrow the cards to these people's sets; empty = the whole plan. Set by
+  // clicking rows in the Team load panel — that list is already "who is
+  // carrying how much", so it's the natural place to ask "carrying what?".
+  //
+  // Several names are a UNION, not an intersection: picking two people shows
+  // every set either of them is on. The question being asked here is "what do
+  // these two have coming up", and sets they happen to share are the rare
+  // case — an intersection would usually come back empty.
+  const [filterUserIds, setFilterUserIds] = useState<string[]>([]);
+  const toggleFilterUser = useCallback(
+    (userId: string) =>
+      setFilterUserIds((current) =>
+        current.includes(userId)
+          ? current.filter((id) => id !== userId)
+          : [...current, userId]
+      ),
+    []
+  );
+  // A card the filter has hidden must not stay selected, or ⌘/Ctrl+V would
+  // paste onto something that isn't on screen. Written as an effect because
+  // the selection can go out of view two ways: changing who is picked, and
+  // editing the last filtered person off the card that was selected.
+  useEffect(() => {
+    if (filterUserIds.length === 0 || selectedIdx === null) return;
+    const set = sets[selectedIdx];
+    if (!set?.assignments.some((a) => filterUserIds.includes(a.userId))) {
+      setSelectedIdx(null);
+    }
+  }, [filterUserIds, selectedIdx, sets]);
   // Guard on the way out: the plan only exists in this component, so closing
   // is the one action here that destroys work. Asked for both exits (Discard
   // and the ✕/backdrop), which is why it wraps onClose rather than sitting on
   // the button.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Preview only: the "you're about to save N changes across K sets" step.
+  const [confirmSave, setConfirmSave] = useState(false);
 
   // Adopt a new plan DURING RENDER, not in an effect.
   //
@@ -323,6 +416,8 @@ export default function StagedScheduleModal({
     setAdoptedPlan(plan);
     setSets(plan?.sets ?? []);
     setConfirmDiscard(false);
+    // A filter naming people from the last plan would hide most of this one.
+    setFilterUserIds([]);
   }
 
   const nameOf = useMemo(() => {
@@ -432,6 +527,10 @@ export default function StagedScheduleModal({
   const catalogFor = (set: StagedSet): TeamRoleDef[] =>
     (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
 
+  // How a rule's ids read as words, for the "held by a rule" tooltips. The
+  // plan has people, teams and role catalogs; a rule naming a recurring set or
+  // a specific one falls back to the generic wording RuleNames allows, which
+  // still leaves the sentence readable.
 
   // Copy a selected set's shape + roster with ⌘/Ctrl+C, stamp it onto another
   // with ⌘/Ctrl+V, and take back the last paste with ⌘/Ctrl+Z. Works in both
@@ -546,6 +645,104 @@ export default function StagedScheduleModal({
   // boolean so a failure on one window doesn't mislabel the next one you pick.
   const [loadErrorKey, setLoadErrorKey] = useState<string | null>(null);
 
+  // The org's scheduling rules (Org settings → Scheduling rules), so a re-run
+  // here obeys them the way the server's fill did. Empty until they land, or if
+  // they can't be read — the re-run then falls back to plain rotation.
+  const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  const [ruleLabels, setRuleLabels] = useState<RuleOptions | null>(null);
+
+  const ruleNames = useMemo<RuleNames>(() => {
+    const people = new Map(users.map((u) => [u.id, u.name]));
+    const teamNames = new Map(teams.map((t) => [t.id, t.name]));
+    const roleLabels = new Map<string, string>();
+    for (const cat of catalogs?.values() ?? []) {
+      for (const r of cat) roleLabels.set(r.key, r.label);
+    }
+    const templates = new Map(
+      (ruleLabels?.templates ?? []).map((t) => [t.id, templateLabel(t)])
+    );
+    const sets = new Map((ruleLabels?.sets ?? []).map((x) => [x.id, setLabel(x)]));
+    return {
+      team: (id) => teamNames.get(id) ?? "a team",
+      user: (id) => people.get(id) ?? "someone",
+      role: (key) => roleLabels.get(key) ?? roleLabel(key),
+      template: (id) => templates.get(id) ?? "a recurring set",
+      set: (id) => sets.get(id) ?? "a set",
+    };
+  }, [users, teams, catalogs, ruleLabels]);
+
+  // The rules editor, opened from the action row below. `rulesSeq` bumps when
+  // it closes, re-running the fetch — the editor saves through its own PUT, so
+  // this is how an edit reaches the plan's next Auto schedule.
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [rulesSeq, setRulesSeq] = useState(0);
+  const closeRules = useCallback(() => {
+    setRulesOpen(false);
+    setRulesSeq((n) => n + 1);
+  }, []);
+  // Escape belongs to the TOP modal — the same problem ScheduleHelpModal
+  // solves, for the same reason: every Modal closes on a document-level
+  // keydown, so without this, dismissing the rules would also back out of the
+  // plan behind them (and on a dirty one, into the discard prompt). Caught in
+  // the CAPTURE phase, which runs before both bubble-phase listeners.
+  //
+  // Only while the rules editor's OWN builder is closed — that dialog is a
+  // third layer and Escape is rightly its own.
+  useEffect(() => {
+    if (!rulesOpen) return;
+    const swallowEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector("[data-rule-builder]")) return;
+      e.stopPropagation();
+      closeRules();
+    };
+    document.addEventListener("keydown", swallowEscape, true);
+    return () => document.removeEventListener("keydown", swallowEscape, true);
+  }, [rulesOpen, closeRules]);
+  useEffect(() => {
+    if (!orgId) return;
+    let cancelled = false;
+    fetch(`/api/orgs/${orgId}/rules`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setSchedulingRules(d.rules ?? []);
+        // The same payload carries the editor's names, which is what lets a
+        // "held by a rule" tooltip say "Sat Rehearsal" instead of "a recurring
+        // set". Free — we were already asking for it and throwing it away.
+        setRuleLabels(d.options ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, rulesSeq]);
+
+  // A staged set's database id, when it has one: an existing set the plan
+  // fills (generate), or the real set itself (Preview Mode).
+  const setIdOf = (s: StagedSet) => s.setId ?? s.stagingId ?? null;
+
+  // Everything the rules read from outside the set(s) being filled: the real
+  // sets around the plan, merged with the plan's OWN sets as they now stand —
+  // see lib/stagedPlan.ts planFixedSets for why the merge matters.
+  const ruleOptions = (exceptIdx?: number): ScheduleOptions => {
+    return {
+      schedulingRules,
+      fixedSets: planFixedSets(
+        (plan?.baseline?.fixedSets ?? []).map((f) => ({
+          ...f,
+          startsAt: new Date(f.startsAt),
+        })),
+        sets,
+        exceptIdx
+      ),
+      periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
+        userId: b.userId,
+        startsAt: new Date(b.startsAt),
+      })),
+    };
+  };
+
   // Fetch the selected window's tally, unless it's the plan (counted locally)
   // or we already have it. A wide window is a big read, which is exactly why
   // it's on demand instead of riding along with every generated plan.
@@ -597,6 +794,27 @@ export default function StagedScheduleModal({
     () => totalUnfillable(sets, users, rules, catalogs),
     [sets, users, rules, catalogs]
   );
+  // Open slots a REQUIRED scheduling rule is what's holding empty — a seat
+  // reserved for a SAME_PLAYER partner who can't take it, or a role every
+  // candidate is refused for. Distinct from `unfillable`: somebody COULD play
+  // here, the org's own rules say they mustn't. Both fills it runs per set are
+  // over one set and a pooled roster, and it short-circuits when the org has no
+  // required rules at all — which is the common case.
+  // Built once per render and shared by the tally and every card below —
+  // ruleOptions() rebuilds its arrays on each call, and the cards would
+  // otherwise each pay for their own copy.
+  const heldOptions = ruleOptions();
+  const hasRequiredRules = schedulingRules.some(
+    (r) => r.enabled && r.tier === "REQUIRED"
+  );
+  const ruleHeld = useMemo(
+    () =>
+      hasRequiredRules
+        ? totalRuleHeld(sets, schedulerUsers, rules, catalogs, heldOptions)
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sets, schedulerUsers, rules, catalogs, hasRequiredRules, heldOptions]
+  );
 
   // Nothing to show yet. While a run is in flight that's the skeleton; the rest
   // of the time this modal simply isn't open.
@@ -629,22 +847,35 @@ export default function StagedScheduleModal({
     );
   }
 
-  // Group the staged sets for the card layout — by set type, or by the day
-  // they fall on. Either way sets are already in date order, so insertion
-  // order gives chronological groups for free. Entries keep their index into
-  // `sets` so the edit callbacks still address the master list.
+  // Who the cards are narrowed to, if anyone, in the order they were picked.
+  const filterNames = filterUserIds.map(nameOf);
+  const filtering = filterUserIds.length > 0;
+  const isOnSet = (set: StagedSet) =>
+    !filtering || set.assignments.some((a) => filterUserIds.includes(a.userId));
+
+  // Group the staged sets for the card layout — by set type, by the week they
+  // fall in, or not at all (linear: every set in one row). Either way sets are
+  // already in date order, so insertion order gives chronological groups for
+  // free. Entries keep their index into `sets` so the edit callbacks still
+  // address the master list — which is also why the person filter drops sets
+  // HERE rather than earlier: every index downstream still means what it did.
   const groupedSets: [string, { set: StagedSet; idx: number }[]][] = [];
   {
     const groups = new Map<string, { set: StagedSet; idx: number }[]>();
     sets.forEach((set, idx) => {
-      const key =
-        view === "chrono" ? weekLabel(set.startsAt) : set.label ?? "Worship Set";
+      if (!isOnSet(set)) return;
+      let key: string;
+      if (view === "chrono") key = weekLabel(set.startsAt);
+      else if (view === "linear") key = LINEAR_GROUP;
+      else key = set.label ?? "Worship Set";
       const group = groups.get(key) ?? [];
       group.push({ set, idx });
       groups.set(key, group);
     });
     groupedSets.push(...groups.entries());
   }
+  // How many sets the filter is hiding — the banner's "3 of 71" half.
+  const shownCount = groupedSets.reduce((n, [, g]) => n + g.length, 0);
 
   // What the Team load bars are measuring, spelled out under the panel. Built
   // here as a plain if-chain: three states nested as ternaries inside the JSX
@@ -747,6 +978,30 @@ export default function StagedScheduleModal({
       ),
     }));
 
+  // The same, for ONE card. Locking a whole set is how you say "this one is
+  // settled" and then let Auto schedule work on everything else — without it
+  // the only options were seat-by-seat or the entire plan.
+  const setSetLocked = (idx: number, locked: boolean) =>
+    updateSet(idx, (s) => ({
+      ...s,
+      assignments: s.assignments.map(({ locked: _was, ...a }) =>
+        locked ? { ...a, locked: true } : a
+      ),
+    }));
+
+  // Lock or unlock EVERY filled seat in the plan. Locked seats survive Auto
+  // schedule; unlocked ones are re-proposed. A preview opens all-locked, so
+  // Unlock all is how the admin hands the whole plan back to the scheduler.
+  const setAllLocked = (locked: boolean) =>
+    setSets((prev) =>
+      prev.map((s) => ({
+        ...s,
+        assignments: s.assignments.map(({ locked: _was, ...a }) =>
+          locked ? { ...a, locked: true } : a
+        ),
+      }))
+    );
+
   // Remove ONE slot of a role from ONE set (capacity − 1). For a filled slot
   // pass the person in it — they come out of the seat with it. Exactly the edit
   // SetDetailModal.deleteSlot makes, so the ✕ means the same thing in both
@@ -837,6 +1092,8 @@ export default function StagedScheduleModal({
         capacities: s.slotCapacities,
         requiresMD: s.requiresMD,
         teamId: s.teamId,
+        templateId: s.templateId ?? null,
+        setId: setIdOf(s),
         preAssigned: (keptBySet.get(stagingKey(s)) ?? []).map((a) => ({
           userId: a.userId,
           role: a.role,
@@ -849,8 +1106,10 @@ export default function StagedScheduleModal({
       (plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId ?? null,
       })),
-      new Map(Object.entries(plan?.baseline?.teamCounts ?? {}))
+      new Map(Object.entries(plan?.baseline?.teamCounts ?? {})),
+      ruleOptions()
     );
 
     const bySet = new Map<string, StagedSet["assignments"]>();
@@ -913,6 +1172,7 @@ export default function StagedScheduleModal({
       ...(plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId ?? null,
       })),
       ...sets.flatMap((s, i) =>
         i === idx
@@ -920,6 +1180,7 @@ export default function StagedScheduleModal({
           : s.assignments.map((a) => ({
               userId: a.userId,
               startsAt: new Date(s.startsAt),
+              teamId: s.teamId ?? null,
             }))
       ),
     ];
@@ -934,6 +1195,8 @@ export default function StagedScheduleModal({
           capacities: set.slotCapacities,
           requiresMD: set.requiresMD,
           teamId: set.teamId,
+          templateId: set.templateId ?? null,
+          setId: setIdOf(set),
           preAssigned: set.assignments.map((a) => ({
             userId: a.userId,
             role: a.role,
@@ -945,7 +1208,8 @@ export default function StagedScheduleModal({
       rules,
       counts,
       booked,
-      teamCounts
+      teamCounts,
+      ruleOptions(idx)
     );
 
     updateSet(idx, (s) => {
@@ -1069,7 +1333,8 @@ export default function StagedScheduleModal({
           {(
             [
               ["type", "By set type"],
-              ["chrono", "Chronological"],
+              ["chrono", "Chronological (week)"],
+              ["linear", "Chronological (linear)"],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -1081,7 +1346,7 @@ export default function StagedScheduleModal({
                 // Preview mode is the read-the-season view, where switching how
                 // the calendar is laid out is the main thing you do here — so
                 // its toggle is a size up.
-                preview ? "px-3.5 py-1.5 text-sm" : "px-2.5 py-1 text-xs"
+                preview ? "px-3 py-1.5 text-sm" : "px-2.5 py-1 text-xs"
               } ${
                 view === value
                   ? "bg-indigo-600 text-white"
@@ -1106,11 +1371,11 @@ export default function StagedScheduleModal({
               // opened just to read can't write anything.
               <>
                 <Button variant="secondary" onClick={requestClose} disabled={busy}>
-                  Cancel
+                  Close
                 </Button>
                 <HelpButton onClick={() => setHelpOpen(true)} />
                 <Button
-                  onClick={() => onApply(sets)}
+                  onClick={() => setConfirmSave(true)}
                   disabled={busy || !dirty}
                   title={dirty ? undefined : "Nothing has been changed yet"}
                 >
@@ -1188,6 +1453,18 @@ export default function StagedScheduleModal({
         </p>
       )}
 
+      {/* Rule-held chip: somebody could play the slot, but a REQUIRED
+          scheduling rule says they mustn't, so the fill left it open rather
+          than break the rule. Indigo, matching the rules' own surfaces — it's
+          the plan obeying an instruction, not a problem with the roster. */}
+      {ruleHeld > 0 && (
+        <p className="mt-3 rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+          ! {ruleHeld} slot{ruleHeld === 1 ? "" : "s"} left open by a required
+          scheduling rule — look for the “!” marks below. Edit the rules in Org
+          settings → Scheduling, or fill {ruleHeld === 1 ? "it" : "them"} by hand.
+        </p>
+      )}
+
       {/* Conflict chip: a manual edit put someone on a set they're not free
           for. Non-blocking — surfaced so it's a deliberate choice. */}
       {conflicts > 0 && (
@@ -1205,8 +1482,18 @@ export default function StagedScheduleModal({
           weighing the plan against. */}
       <div className="mt-4 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-            Team load
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            <span className="font-semibold uppercase tracking-wide">
+              Team load
+            </span>
+            {/* The rows don't look clickable on their own, and a filter nobody
+                finds may as well not exist. Dropped once it's been used — by
+                then the banner below is saying the same thing. */}
+            {!filtering && rows.length > 0 && (
+              <span className="ml-2 text-gray-400 dark:text-gray-500">
+                click names to see only their sets
+              </span>
+            )}
           </p>
           <div className="w-52">
             <Select
@@ -1250,6 +1537,11 @@ export default function StagedScheduleModal({
                   count={r.count}
                   peak={peak}
                   isMD={isMdOf(r.userId)}
+                  selected={filterUserIds.includes(r.userId)}
+                  // Clicking a name adds that person's sets to what's shown;
+                  // clicking them again takes them back out. Pick nobody and
+                  // the whole plan is back.
+                  onClick={() => toggleFilterUser(r.userId)}
                 />
               ))}
             </ul>
@@ -1267,61 +1559,128 @@ export default function StagedScheduleModal({
         </p>
       </div>
 
-      {/* Plan-wide controls: re-run the fill, or empty the plan. They sit
-          between the stats and the cards because that's what they act on — the
-          load panel is what tells you whether to clear and start over.
-          (The grouping toggle used to share this row; it lives in the modal
-          header now, where scrolling can't take it away.)
+      {/* Plan-wide controls: re-run the fill, empty the plan, or lock/unlock
+          every seat. They sit between the stats and the cards because that's
+          what they act on — the load panel is what tells you whether to clear
+          and start over. (The grouping toggle used to share this row; it lives
+          in the modal header now, where scrolling can't take it away.)
 
-          Preview mode has no proposal to re-roll: there's no scheduler
-          baseline behind a real calendar, so a re-run would rebalance from
-          zero and read as advice it isn't — and "Clear all people" would look
-          like it emptied the real rosters. The whole row sits out there. */}
-      {!preview && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+          Preview mode has them too. Its seats open locked, so Auto schedule
+          there fills only the open seats until something is unlocked; and
+          nothing here touches the calendar until Save Changes, which confirms
+          the batch first. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={autoScheduleAll}
+          disabled={busy}
+          title={
+            lockedTotal > 0
+              ? `Run the scheduler — your ${lockedTotal} locked pick${
+                  lockedTotal === 1 ? "" : "s"
+                } stay put, everyone else is re-proposed`
+              : "Run the scheduler over every set again"
+          }
+        >
+          {preview
+            ? "Auto schedule"
+            : totalAssignments === 0
+              ? "Auto schedule all"
+              : "Re-run auto schedule"}
+        </Button>
+        {totalAssignments > 0 && (
           <Button
             size="sm"
             variant="secondary"
-            onClick={autoScheduleAll}
+            onClick={clearAllPeople}
             disabled={busy}
+            // Placeholder sets: the dates and shapes are what's wanted now,
+            // the people can come later. Nobody is notified about a set with
+            // an empty roster, so applying these is silent.
             title={
-              lockedTotal > 0
-                ? `Re-run the scheduler — your ${lockedTotal} locked pick${
-                    lockedTotal === 1 ? "" : "s"
-                  } stay put, everyone else is re-proposed`
-                : "Run the scheduler over every set again"
+              preview
+                ? "Empty every roster here — the calendar doesn't change until you Save Changes"
+                : "Empty every roster — the sets are still created, just with nobody on them"
             }
           >
-            {totalAssignments === 0 ? "Auto schedule all" : "Re-run auto schedule"}
+            Clear all people
           </Button>
-          {totalAssignments > 0 && (
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={clearAllPeople}
-              disabled={busy}
-              // Placeholder sets: the dates and shapes are what's wanted now,
-              // the people can come later. Nobody is notified about a set with
-              // an empty roster, so applying these is silent.
-              title="Empty every roster — the sets are still created, just with nobody on them"
-            >
-              Clear all people
-            </Button>
-          )}
-          {lockedTotal > 0 && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
-              a re-run
-            </span>
-          )}
+        )}
+        {totalAssignments > 0 && (
+          // One toggle rather than two buttons: it always offers the move
+          // that changes something. All locked → Unlock all, else Lock all.
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setAllLocked(lockedTotal < totalAssignments)}
+            disabled={busy}
+            title={
+              lockedTotal < totalAssignments
+                ? "Lock every seat, so Auto schedule only fills the open ones"
+                : "Unlock every seat, so Auto schedule may re-propose anyone"
+            }
+          >
+            {lockedTotal < totalAssignments ? "🔒 Lock all" : "🔓 Unlock all"}
+          </Button>
+        )}
+        {orgId && (
+          // The rules are what the fill above OBEYS, so the place you notice a
+          // wrong one is here, looking at the plan it produced — not two pages
+          // away in Org settings. Editing them reloads the list this modal
+          // hands the scheduler, so the next Auto schedule run uses them.
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setRulesOpen(true)}
+            disabled={busy}
+            title="View and edit the scheduling rules Auto schedule follows"
+          >
+            Scheduling rules
+          </Button>
+        )}
+        {lockedTotal > 0 && (
+          <span className="text-xs text-gray-500 dark:text-gray-400">
+            🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
+            a re-run
+          </span>
+        )}
+      </div>
+
+      {/* The person filter, said in words right where it takes effect. A
+          partial view of a plan that anyone could mistake for the whole plan
+          is the one thing worth shouting about here, so this is a full-width
+          bar rather than a chip — and its Clear is the same toggle the load
+          row is, so there are two ways out of it. (The group bands below
+          repeat the name, because this bar scrolls away and they don't.) */}
+      {filtering && (
+        <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-sm dark:border-indigo-500/50 dark:bg-indigo-500/10">
+          <span className="font-semibold text-indigo-800 dark:text-indigo-200">
+            {filterNames.length === 1
+              ? `Showing only ${filterNames[0]}’s sets`
+              : `Showing only sets with ${joinNames(filterNames)}`}
+          </span>
+          <span className="text-xs text-indigo-700/80 dark:text-indigo-300/80">
+            {shownCount} of {sets.length} set{sets.length === 1 ? "" : "s"} —
+            everything else in the plan is hidden
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilterUserIds([])}
+            className="ml-auto rounded-md border border-indigo-300 bg-white px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/50 dark:bg-transparent dark:text-indigo-200 dark:hover:bg-indigo-500/20"
+          >
+            Clear filter
+          </button>
         </div>
       )}
 
       {/* ── The cards. By set type: one sideways-scrolling row per label,
-          reading a rotation across the weeks. Chronological: one section per
-          day, days stacked down the page, each day's sets wrapping in a grid
-          — so a Tuesday with a morning, noon and evening set reads together
-          and the next day follows below. ─────────────────────────────────── */}
+          reading a rotation across the weeks. Chronological (week): one
+          section per week, weeks stacked down the page, each week's sets
+          reading side by side — so a Tuesday with a morning, noon and evening
+          set reads together and the next week follows below. Chronological
+          (linear): no sections at all, just one row of every set in date
+          order. ─────────────────────────────────────────────────────────── */}
       <div className="mt-4 space-y-6">
         {groupedSets.map(([groupLabel, entries]) => (
           <section key={groupLabel}>
@@ -1347,6 +1706,18 @@ export default function StagedScheduleModal({
               <span className="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">
                 {entries.length} set{entries.length === 1 ? "" : "s"}
               </span>
+              {/* The band is the only thing pinned to the top of a long scroll,
+                  so it's the only place that can keep saying "you are not
+                  looking at the whole plan" all the way down it. */}
+              {filtering && (
+                <span className="ml-2 rounded-full bg-indigo-600 px-2 py-0.5 text-[11px] font-medium text-white">
+                  {/* Two names still fit in a band; past that it's a count,
+                      since the banner above carries the full list. */}
+                  {filterNames.length <= 2
+                    ? `${filterNames.join(" · ")} only`
+                    : `${filterNames.length} people only`}
+                </span>
+              )}
             </p>
             {/* A row scrolls sideways through the weeks, and the fact that it
                 DOES is easy to miss — macOS fades its scrollbar out the moment
@@ -1377,8 +1748,16 @@ export default function StagedScheduleModal({
                 ),
               0
             );
+            // How much of THIS card is pinned, for its lock toggle.
+            const lockedHere = set.assignments.filter((a) => a.locked).length;
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
+            // Roles whose open slot a required rule is holding — flagged "!".
+            // Skipped outright when the org has no required rules, which spares
+            // every card two fills in the common case.
+            const heldByRule = hasRequiredRules
+              ? ruleHeldRoles(set, schedulerUsers, rules, catalog, heldOptions)
+              : EMPTY_HELD;
             // Roles the team offers that this set doesn't want (zero slots and
             // nobody in them) — exactly the ones the card hides below, offered
             // back as "+ role" chips.
@@ -1483,6 +1862,12 @@ export default function StagedScheduleModal({
                     {/* Fill just this card's holes. Pinned to the card's top
                         right corner (after the badges) so it's in the same
                         place on every card, badges or not. */}
+                    <LockSetButton
+                      seats={set.assignments.length}
+                      locked={lockedHere}
+                      disabled={busy}
+                      onClick={() => setSetLocked(idx, lockedHere < set.assignments.length)}
+                    />
                     <FillSetButton
                       openSlots={openTotal}
                       disabled={busy}
@@ -1511,13 +1896,20 @@ export default function StagedScheduleModal({
                     if (capacity === 0 && filled.length === 0) return null;
 
                     const noneAvailable = cantFill.has(role);
+                    // Somebody could play it; a required rule says they can't.
+                    // Checked after noneAvailable so a role that's both reads as
+                    // the harder fact — though the two can't actually overlap
+                    // (see ruleHeldRoles).
+                    const ruleHolds = !noneAvailable && heldByRule.has(role);
                     return (
                       <li key={role}>
                         <span
                           className={`text-xs font-medium ${
                             noneAvailable
                               ? "text-red-600 dark:text-red-400"
-                              : "text-gray-600 dark:text-gray-400"
+                              : ruleHolds
+                                ? "text-indigo-600 dark:text-indigo-400"
+                                : "text-gray-600 dark:text-gray-400"
                           }`}
                         >
                           {roleName}
@@ -1530,6 +1922,21 @@ export default function StagedScheduleModal({
                             <span className="ml-1 font-semibold">
                               · no one available
                             </span>
+                          )}
+                          {ruleHolds && (
+                            <>
+                              <span className="ml-1 font-semibold">
+                                · ! held by a rule
+                              </span>
+                              {/* WHICH rule, in its own words — "held by a
+                                  rule" is only actionable once you know which
+                                  one to go and change. */}
+                              <span className="ml-1 align-middle">
+                                <InfoTooltip
+                                  text={heldReason(heldByRule.get(role) ?? [], ruleNames)}
+                                />
+                              </span>
+                            </>
                           )}
                         </span>
                         <div className="mt-1 space-y-1">
@@ -1699,6 +2106,16 @@ export default function StagedScheduleModal({
             </ScrollRow>
           </section>
         ))}
+        {/* Only reachable by taking the picked people off their last sets
+            while the filter is still on them — but the alternative is a blank
+            space below a banner that says sets are being shown. */}
+        {groupedSets.length === 0 && filtering && (
+          <p className="rounded-lg border border-dashed border-gray-300 px-3 py-6 text-center text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
+            {filterNames.length === 1
+              ? `${filterNames[0]} isn’t on any set in this plan.`
+              : `Nobody you’ve picked is on a set in this plan.`}
+          </p>
+        )}
       </div>
     </Modal>
 
@@ -1710,6 +2127,20 @@ export default function StagedScheduleModal({
     {/* The guided tour. Opened by Help, and once on its own the first time this
         browser reaches this workspace. */}
     <ScheduleHelpModal open={helpOpen} preview={preview} onClose={closeHelp} />
+
+    {/* The org's scheduling rules, over the plan they govern. The editor owns
+        its own loading and saving, so this is just a frame; closing it bumps
+        rulesSeq so the plan picks up whatever changed. */}
+    {rulesOpen && orgId && (
+      <Modal
+        open
+        size="xl"
+        title="Scheduling rules"
+        onClose={closeRules}
+      >
+        <OrgRules key={orgId} orgId={orgId} />
+      </Modal>
+    )}
 
     {/* Save Draft: the confirm doubles as the name prompt, since naming is the
         only decision being made. Prefilled when this preview came from a draft,
@@ -1725,7 +2156,7 @@ export default function StagedScheduleModal({
             onClick={() => setSavingDraft(false)}
             disabled={draftBusy}
           >
-            Cancel
+            Close
           </Button>
           <Button
             onClick={async () => {
@@ -1851,6 +2282,44 @@ export default function StagedScheduleModal({
         )}
       </div>
     </Modal>
+
+    {preview && (
+      <Modal
+        open={confirmSave}
+        onClose={() => !busy && setConfirmSave(false)}
+        title="Save these changes?"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmSave(false)}
+              disabled={busy}
+            >
+              Close
+            </Button>
+            <Button onClick={() => onApply(sets)} loading={busy}>
+              Save Changes
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 text-sm text-gray-600 dark:text-gray-400">
+          {/* A preview save is a BATCH: everything edited lands at once, and
+              everyone whose seat changed is notified. Saying how much before
+              it happens is the whole point of this step. */}
+          <p>
+            You&rsquo;re about to save {describePreviewSaves(pendingSaves)}{" "}
+            in one batch. Everyone whose seat changes is notified, and
+            it all lands together or not at all.
+          </p>
+          {applyError && (
+            <p role="alert" className="text-red-600 dark:text-red-400">
+              {applyError}
+            </p>
+          )}
+        </div>
+      </Modal>
+    )}
 
     <Modal
       open={confirmDiscard}
@@ -2040,16 +2509,25 @@ function UndoIcon() {
 // One row of the Team load panel: name, a bar scaled to the busiest person, and
 // ONE number — how many slots that person holds in whatever window the picker
 // is showing. The busiest people get an amber bar so over-use is easy to spot.
+//
+// The whole row is a button: pressing it adds that person's sets to what the
+// cards below are narrowed to. `selected` is this person being one of the
+// picked — drawn as a tinted, outlined row so the names the plan is being read
+// through are obvious even with the banner scrolled off.
 function LoadBar({
   name,
   count,
   peak,
   isMD,
+  selected,
+  onClick,
 }: {
   name: string;
   count: number;
   peak: number;
   isMD: boolean;
+  selected: boolean;
+  onClick: () => void;
 }) {
   const pct = peak > 0 ? Math.round((count / peak) * 100) : 0;
   // Flag the heaviest tier (≥80% of the peak, and more than one set) so a long
@@ -2057,33 +2535,52 @@ function LoadBar({
   const heavy = peak > 1 && count >= peak * 0.8;
   return (
     <li className="text-sm">
-      <div className="mb-0.5 flex items-baseline justify-between gap-2">
-        <span className="truncate text-gray-800 dark:text-gray-100">
-          {name}
-          {isMD && (
-            <span className="ml-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
-              MD
-            </span>
-          )}
-        </span>
-        <span
-          className={`shrink-0 text-xs font-semibold tabular-nums ${
-            heavy
-              ? "text-amber-600 dark:text-amber-400"
-              : "text-gray-500 dark:text-gray-400"
-          }`}
-        >
-          {count}
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-        <div
-          className={`h-full rounded-full ${
-            heavy ? "bg-amber-500" : "bg-indigo-500"
-          }`}
-          style={{ width: `${pct}%` }}
-        />
-      </div>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={selected}
+        title={
+          selected
+            ? `${name}'s sets are being shown — click to take them back out`
+            : `Also show the sets ${name} is on`
+        }
+        // The row keeps its old geometry when unselected: a 1px transparent
+        // border and the same padding as the tint, so picking a name recolours
+        // the row in place instead of nudging the four-column grid around it.
+        className={`w-full rounded-md border px-1.5 py-1 text-left transition-colors ${
+          selected
+            ? "border-indigo-500 bg-indigo-50 dark:border-indigo-400 dark:bg-indigo-500/15"
+            : "border-transparent hover:bg-gray-100 dark:hover:bg-gray-700/50"
+        }`}
+      >
+        <div className="mb-0.5 flex items-baseline justify-between gap-2">
+          <span className="truncate text-gray-800 dark:text-gray-100">
+            {name}
+            {isMD && (
+              <span className="ml-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+                MD
+              </span>
+            )}
+          </span>
+          <span
+            className={`shrink-0 text-xs font-semibold tabular-nums ${
+              heavy
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-gray-500 dark:text-gray-400"
+            }`}
+          >
+            {count}
+          </span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-100 dark:bg-gray-600">
+          <div
+            className={`h-full rounded-full ${
+              heavy ? "bg-amber-500" : "bg-indigo-500"
+            }`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      </button>
     </li>
   );
 }
@@ -2092,6 +2589,48 @@ function LoadBar({
 // empty slots, leaving everyone already on it exactly where they are. Greyed
 // out (and saying so) when the roster is already full, so the button always
 // tells you whether there's a hole to fill.
+// Lock or unlock every seat on one card. Like the plan-wide toggle, it always
+// offers the move that changes something: anything unlocked → Lock, all locked
+// → Unlock. Dead on an empty card, where there are no seats to pin.
+function LockSetButton({
+  seats,
+  locked,
+  disabled,
+  onClick,
+}: {
+  seats: number;
+  locked: number;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const allLocked = seats > 0 && locked === seats;
+  const label =
+    seats === 0
+      ? "Nobody on this set to lock"
+      : allLocked
+        ? "Unlock this set, so Auto schedule may re-propose anyone on it"
+        : `Lock this set's ${seats} seat${seats === 1 ? "" : "s"}, so Auto schedule leaves it alone`;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || seats === 0}
+      title={label}
+      aria-label={label}
+      aria-pressed={allLocked}
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs
+        transition-colors disabled:cursor-not-allowed disabled:opacity-40
+        disabled:hover:bg-transparent ${
+          allLocked
+            ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300"
+            : "text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+        }`}
+    >
+      {allLocked ? "🔒" : "🔓"}
+    </button>
+  );
+}
+
 function FillSetButton({
   openSlots,
   disabled,

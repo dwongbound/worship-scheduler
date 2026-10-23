@@ -7,7 +7,19 @@
 // both deleted in its favour. So "does it open" is a real coverage question,
 // not a cosmetic one.
 import { expect, test } from "@playwright/test";
+import { tourSteps } from "../../lib/scheduleTour";
 import { allowScheduleTours, login } from "./helpers";
+
+// How many steps the tour HAS, read from the tour itself.
+//
+// These assertions used to spell the number out ("Step 1 of nine"), which made
+// all three tests fail the moment a step was added — a false alarm about the
+// stepper, from a test that had simply gone stale. The count is still checked
+// (the stepper must agree with the data it renders); it just isn't duplicated
+// here, where nothing would ever update it.
+const STEPS = tourSteps({ preview: true }).length;
+// Clicks needed to walk from the first step to the last.
+const TO_LAST = STEPS - 1;
 
 // Open the calendar's Preview Mode and return the review dialog behind it.
 async function openPreviewMode(page: import("@playwright/test").Page) {
@@ -16,6 +28,12 @@ async function openPreviewMode(page: import("@playwright/test").Page) {
   await page.getByRole("dialog").getByRole("button", { name: "See preview" }).click();
   return page.getByRole("dialog").filter({ hasText: "Schedule preview" });
 }
+
+test("both modes have the same number of steps", () => {
+  // TO_LAST and every "of N" below assume this; the modes differ only in what
+  // their LAST step says.
+  expect(tourSteps({ preview: false }).length).toBe(STEPS);
+});
 
 // The tour modal itself, told apart from the workspace it sits over.
 const tourOf = (page: import("@playwright/test").Page) =>
@@ -32,25 +50,25 @@ test("the tour opens itself the first time, then leaves you alone", async ({
   // Unasked, on arrival — this browser has never seen this workspace.
   const tour = tourOf(page);
   await expect(tour).toBeVisible();
-  await expect(tour.getByText("Step 1 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step 1 of ${STEPS}`)).toBeVisible();
 
   // Back is dead on the first step; Next walks forward.
   await expect(tour.getByRole("button", { name: "Back" })).toBeDisabled();
   await tour.getByRole("button", { name: "Next" }).click();
-  await expect(tour.getByText("Step 2 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step 2 of ${STEPS}`)).toBeVisible();
   await tour.getByRole("button", { name: "Back" }).click();
-  await expect(tour.getByText("Step 1 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step 1 of ${STEPS}`)).toBeVisible();
 
   // Walk to the end. The last step commits rather than advancing.
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < TO_LAST; i++) {
     await tour.getByRole("button", { name: "Next" }).click();
   }
-  await expect(tour.getByText("Step 9 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step ${STEPS} of ${STEPS}`)).toBeVisible();
   await tour.getByRole("button", { name: "Done" }).click();
   await expect(tour).toBeHidden();
 
   // Closing it is what records "seen" — reopening the workspace is quiet now.
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await openPreviewMode(page);
   await expect(tourOf(page)).toBeHidden();
 });
@@ -63,12 +81,12 @@ test("Help brings the tour back, from the top", async ({ page }) => {
   await review.getByRole("button", { name: "Help" }).click();
   const tour = tourOf(page);
   await expect(tour).toBeVisible();
-  await expect(tour.getByText("Step 1 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step 1 of ${STEPS}`)).toBeVisible();
 
   // Move off step one, close, reopen — a tour you asked for starts at the
   // start, not where you abandoned it.
   await tour.getByRole("button", { name: "Next" }).click();
-  await expect(tour.getByText("Step 2 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step 2 of ${STEPS}`)).toBeVisible();
   // Mid-tour there is no Done — you leave with Escape or the ✕. Escape must
   // take the tour ONLY: the workspace behind it listens for Escape too, and
   // losing the plan because you dismissed its help would be unforgivable.
@@ -76,7 +94,7 @@ test("Help brings the tour back, from the top", async ({ page }) => {
   await expect(tour).toBeHidden();
   await expect(review).toBeVisible();
   await review.getByRole("button", { name: "Help" }).click();
-  await expect(tour.getByText("Step 1 of 9")).toBeVisible();
+  await expect(tour.getByText(`Step 1 of ${STEPS}`)).toBeVisible();
 });
 
 test("the tour describes the mode it was opened in", async ({ page }) => {
@@ -86,7 +104,7 @@ test("the tour describes the mode it was opened in", async ({ page }) => {
   const review = await openPreviewMode(page);
   await review.getByRole("button", { name: "Help" }).click();
   const tour = tourOf(page);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < TO_LAST; i++) {
     await tour.getByRole("button", { name: "Next" }).click();
   }
   await expect(tour.getByRole("heading", { name: "Saving your changes" })).toBeVisible();
@@ -98,15 +116,18 @@ test("the tour describes the mode it was opened in", async ({ page }) => {
   // action bar, which has to be the bar this mode actually shows.
   await expect(tour.getByText(/Save Draft/)).toHaveCount(0);
   await tour.getByRole("button", { name: "Done" }).click();
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
 
   // The generate flow does have drafts, and applies rather than saves.
   await page.goto("/create");
   await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
+  // The seeded month-long "Fall 2026" request, not just the newest one: an
+  // earlier spec sends a ONE-day request for today, and on a weekday no
+  // template falls on that window generates an empty plan.
   const reqValue = await scope
-    .locator('option[value^="req:"]')
+    .locator('option[value^="req:"]', { hasText: /^Fall 2026 \(/ })
     .first()
     .getAttribute("value");
   await scope.selectOption(reqValue!);
@@ -118,7 +139,7 @@ test("the tour describes the mode it was opened in", async ({ page }) => {
 
   await staged.getByRole("button", { name: "Help" }).click();
   const genTour = tourOf(page);
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < TO_LAST; i++) {
     await genTour.getByRole("button", { name: "Next" }).click();
   }
   await expect(

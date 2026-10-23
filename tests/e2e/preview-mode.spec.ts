@@ -21,7 +21,7 @@ test("admin previews the real calendar in the review workspace", async ({
 
   await options.getByRole("button", { name: "See preview" }).click();
 
-  // Step 2 is the Create tab's workspace over the real schedule: Cancel /
+  // Step 2 is the Create tab's workspace over the real schedule: Close /
   // Save Changes instead of Discard / Apply, and Save is dead until an edit.
   const review = page.getByRole("dialog");
   await expect(
@@ -45,12 +45,21 @@ test("admin previews the real calendar in the review workspace", async ({
   await expect(card.getByText("Bob Baker")).toBeVisible();
   await expect(card.getByText("Carol Chen")).toBeVisible();
 
-  // Both groupings work, same as the generate flow.
-  await review.getByRole("button", { name: "Chronological" }).click();
+  // All three groupings work, same as the generate flow: week headings appear
+  // in the weekly view and are gone again in the linear one, which files every
+  // set under a single band.
+  await review
+    .getByRole("button", { name: "Chronological (week)", exact: true })
+    .click();
   await expect(review.getByText(/^Week of /).first()).toBeVisible();
+  await review
+    .getByRole("button", { name: "Chronological (linear)", exact: true })
+    .click();
+  await expect(review.getByText(/^Week of /)).toHaveCount(0);
+  await expect(review.getByText("In date order")).toBeVisible();
 
   // Nothing was edited, so Cancel just closes — no confirmation to answer.
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await expect(review).not.toBeVisible();
   await expect(page.getByLabel("Show sets for")).toBeVisible();
 });
@@ -97,7 +106,7 @@ test("a card's refresh fills only that set's empty slots", async ({ page }) => {
 
   // The fill is an edit, so Save wakes up and leaving now asks first.
   await expect(review.getByRole("button", { name: "Save Changes" })).toBeEnabled();
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   const confirm = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" });
@@ -106,13 +115,84 @@ test("a card's refresh fills only that set's empty slots", async ({ page }) => {
   await confirm.getByRole("button", { name: "Keep editing" }).click();
   await expect(review.getByRole("button", { name: "Save Changes" })).toBeEnabled();
   // Now really discard — nothing was written, so the calendar is untouched.
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
   await page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
     .getByRole("button", { name: "Discard" })
     .click();
   await expect(page.getByLabel("Show sets for")).toBeVisible();
+});
+
+test("auto schedule keeps the locked calendar and saves as one confirmed batch", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/calendar");
+  await page.getByRole("button", { name: "Preview Mode" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "See preview" }).click();
+  const review = page.getByRole("dialog").filter({ hasText: "Schedule preview" });
+  await expect(
+    review.getByRole("heading", { name: "Schedule preview" })
+  ).toBeVisible();
+
+  // Everything already on the calendar opens locked, so the toggle offers to
+  // undo that — and flips back and forth.
+  const unlockAll = review.getByRole("button", { name: /Unlock all/ });
+  await expect(unlockAll).toBeVisible();
+  await unlockAll.click();
+  await review.getByRole("button", { name: /Lock all/ }).click();
+  await expect(unlockAll).toBeVisible();
+
+  const staffed = review
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Sunday Morning" })
+    .filter({ hasText: "Carol Chen" })
+    .first();
+  const empty = review
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Private Rehearsal" })
+    .first();
+  await empty.scrollIntoViewIfNeeded();
+  const emptyBefore = await empty.getByText("None", { exact: true }).count();
+
+  // The plan-wide fill: open seats close, locked people stay exactly put.
+  await review.getByRole("button", { name: "Auto schedule", exact: true }).click();
+  await expect(async () => {
+    expect(await empty.getByText("None", { exact: true }).count()).toBeLessThan(
+      emptyBefore
+    );
+  }).toPass();
+  await expect(staffed.getByText("Carol Chen")).toBeVisible();
+  await expect(staffed.getByText("Bob Baker")).toBeVisible();
+
+  // Saving goes through ONE batch request — intercepted here so the shared
+  // seed stays as the other specs expect it.
+  let sent: { sets: { setId: string; added?: unknown[] }[] } | null = null;
+  await page.route("**/api/admin/sets/roster", async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({ json: { ok: true, applied: 1 } });
+  });
+
+  // Save asks first, and says how much it's about to change.
+  await review.getByRole("button", { name: "Save Changes" }).click();
+  const confirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Save these changes?" });
+  await expect(confirm).toBeVisible();
+  await expect(confirm.getByText(/across \d+ sets? in one batch/)).toBeVisible();
+  // Close backs out of the confirm without saving or leaving the preview.
+  await confirm.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(confirm).not.toBeVisible();
+  expect(sent).toBeNull();
+
+  await review.getByRole("button", { name: "Save Changes" }).click();
+  await confirm.getByRole("button", { name: "Save Changes" }).click();
+  await expect(review).not.toBeVisible();
+  expect(sent).not.toBeNull();
+  // Only edited sets travel, and the locked Sunday crew wasn't one of them.
+  expect(sent!.sets.length).toBeGreaterThan(0);
+  expect(sent!.sets.every((s) => s.setId)).toBe(true);
 });
 
 test("preview mode draws only the set types you tick", async ({ page }) => {

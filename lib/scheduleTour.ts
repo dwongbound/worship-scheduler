@@ -16,6 +16,7 @@ export type TourArt =
   | "overview"
   | "views"
   | "load"
+  | "filter"
   | "hover"
   | "lock"
   | "card"
@@ -53,10 +54,11 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
     {
       id: "views",
       art: "views",
-      title: "Two ways to read the plan",
+      title: "Three ways to read the plan",
       body: [
         "By set type groups every Thursday Rehearsal together, then every Sunday Morning — the view for comparing the same service week over week.",
-        "Chronological lays the plan out in date order instead, which is how a stretch where one person is on everything becomes obvious.",
+        "Chronological (week) lays the plan out in date order with a heading per week, so everything happening in one week sits side by side and the next week follows below.",
+        "Chronological (linear) is the same date order with the week breaks taken out: one long row holding every set, for sweeping across a whole season in one go.",
       ],
     },
     {
@@ -66,6 +68,16 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       body: [
         "In Team load, each bar is one person and the number is how many slots they hold. Bars are scaled against the busiest person on the list, and the heaviest few turn amber.",
         "The picker above the list changes what is being counted: this plan on its own, everything already booked ahead, or the past month, three, six or twelve. Only this plan is worked out here — the other windows are fetched when you choose them, so the plan never has to carry a year of history around.",
+      ],
+    },
+    {
+      id: "filter",
+      art: "filter",
+      title: "See only certain people's sets",
+      body: [
+        "Click a name in Team load and the cards below narrow to the sets that person is on. The row you picked turns blue, and a banner over the cards says whose plan you are looking at and how many sets are hidden.",
+        "Click more names to add them. You get every set at least one of them is on — two people read as one combined calendar, not only the sets they share.",
+        "Grouping still works the way you left it, so you can read a season by set type or in date order. Click a name again to drop that person, or Clear filter to bring the whole plan back.",
       ],
     },
     {
@@ -82,8 +94,11 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       art: "lock",
       title: "Locking keeps your picks",
       body: [
-        "Anyone you choose by hand is locked. Re-run auto schedule and they stay exactly where you put them — only empty and auto-filled slots get reshuffled.",
-        "To release one, set its slot back to “None” or click the padlock.",
+        preview
+          ? "Everyone already on the calendar opens locked, and so does anyone you choose by hand. Auto schedule leaves locked seats exactly where they are and fills only the rest."
+          : "Anyone you choose by hand is locked. Re-run auto schedule and they stay exactly where you put them — only empty and auto-filled slots get reshuffled.",
+        "To release one, set its slot back to “None” or click the padlock. Lock all and Unlock all do the whole plan at once.",
+        "A card's own padlock, top right, locks or unlocks that whole set — how you settle one and let Auto schedule keep working on the others.",
       ],
     },
     {
@@ -112,6 +127,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       body: [
         "A red “no one available” role has a seat nobody can fill — either nobody plays it, or everyone who does is busy at that time.",
         "An amber “unavailable” mark is someone placed on a set they are not free for. It never blocks you; it is flagged so that it stays a deliberate choice.",
+        "An indigo “! held by a rule” role has a seat somebody could fill, but one of your org's required scheduling rules says they must not — so the fill left it open rather than break the rule. Fill it by hand, or change the rule in Org settings → Scheduling.",
       ],
     },
     preview
@@ -120,8 +136,8 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
           art: "commit",
           title: "Saving your changes",
           body: [
-            "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone.",
-            "Cancel backs out. If you have made changes it asks first, and lists what it is about to throw away.",
+            "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone. It shows how many changes you are about to save first, then saves them all together.",
+            "Close backs out. If you have made changes it asks first, and lists what it is about to throw away.",
           ],
         }
       : {

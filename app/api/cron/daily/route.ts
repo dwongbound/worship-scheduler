@@ -1,6 +1,6 @@
 // GET /api/cron/daily — the app's single Vercel Cron, and the only scheduled
 // work in the app: the free tier allows one cron a day, so everything on a
-// timer lives here. It does four jobs:
+// timer lives here. It does these jobs:
 //   1. Weekly reminders: send every scheduled reminder whose dayOfWeek is today
 //      and that hasn't gone out yet today (lastSentAt guard), posting each
 //      team's "this week's sets" to Slack.
@@ -11,21 +11,27 @@
 //   4. Daily digests: DM each person their morning "here's your day" summary,
 //      one per org they belong to (sendDailyDigests) — skipped for anyone with
 //      nothing to do in that org.
-//   5. Data retention: delete history past each workspace's own cutoff
+//   5. Google Calendar upkeep: renew each connected org's push channel before
+//      it lapses (Google caps them at a week) and read its changes once, in
+//      case an RSVP ping went missing (maintainCalendarWatches).
+//   6. Data retention: delete history past each workspace's own cutoff
 //      (runDuePrunes). Weekly per org, not daily — see lib/retention
 //      PRUNE_INTERVAL_DAYS — so a bulk delete doesn't run every night for
 //      workspaces that generate a handful of rows a week.
 //
 // Vercel's free tier only runs crons once per day, so the per-reminder `minute`
 // is best-effort (stored for display; the daily run fires them all at once).
-// The slot is 16:00 UTC because Vercel schedules in UTC while this app runs in
-// APP_TZ: 16:00 UTC is 8 AM PST / 9 AM PDT, inside the digest's morning window
-// year-round. Moving it means re-checking DIGEST_WINDOW_* in lib/constants.ts.
+// The slot is 13:30 UTC because Vercel schedules in UTC while this app runs in
+// APP_TZ, and a fixed UTC slot therefore drifts an hour across DST: 13:30 UTC
+// is 6:30 AM PDT (the target) and 5:30 AM PST. Both sit inside the digest's
+// morning window, which starts at 5 AM for exactly that reason. Moving this
+// slot means re-checking DIGEST_WINDOW_* in lib/constants.ts.
 // Auth: if CRON_SECRET is set, require `Authorization: Bearer <CRON_SECRET>`
 // (Vercel sends this automatically); otherwise the route is open (dev/local).
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { runDuePrunes } from "@/lib/retentionStore";
+import { maintainCalendarWatches } from "@/lib/googleCalendar";
 import {
   runDueGroupChats,
   archiveDueGroupChats,
@@ -89,6 +95,8 @@ export async function GET(req: NextRequest) {
   // group chats, and independently of everything above.
   const digests = await sendDailyDigests(now);
 
+  const calendars = await maintainCalendarWatches();
+
   // Retention last: it's the only destructive job here, and running it after
   // the messaging work means a slow Slack pass can't leave a sweep half done
   // if the platform cuts the invocation short. Whatever misses its turn is
@@ -102,6 +110,7 @@ export async function GET(req: NextRequest) {
     groupChats,
     archived,
     digests,
+    calendars,
     pruned,
   });
 }

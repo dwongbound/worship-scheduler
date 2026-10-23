@@ -4,6 +4,9 @@
 //   2. canViewSet         — who may see a private set.
 //   3. coverEligibility   — who may take a swap-requested slot as a cover.
 //   4. resolveSetsWindow  — the date range GET /api/sets reads.
+//   5. seatIndex/rolesHeldOn — who already holds which roles on which set,
+//      which is how the swap picker spots a trade that would double-book
+//      someone.
 import {
   SETS_WINDOW_DEFAULT_DAYS,
   SETS_WINDOW_MAX_DAYS,
@@ -136,6 +139,62 @@ export function coverEligibility(i: CoverEligibilityInput): CoverEligibility {
     };
   }
   return { ok: true };
+}
+
+// ── 5. Who already sits where ────────────────────────────────────────────
+// A person can legitimately hold several roles on one set (worship leader +
+// acoustic guitar), so a seat they already have never BLOCKS a trade — but it
+// does change what the trade means, and the swap picker has to be able to say
+// so. Two cases, both invisible without this:
+//   • the counterparty is already on MY set in another role — accepting would
+//     leave them playing two roles that morning;
+//   • I'm already on THEIR set in another role — same, for me.
+// (The same ROLE on both sides is impossible: GET /api/swaps/candidates drops
+// those sets outright, since the trade would collide with the
+// setId+userId+role unique key.)
+
+/** One person's seat on one set — the three columns the lookups below need. */
+export interface Seat {
+  setId: string;
+  userId: string;
+  role: string;
+}
+
+/**
+ * Seats indexed for "which roles does this person hold on this set?".
+ *
+ * Built once per request rather than scanning the list per candidate: the
+ * picker asks the same question for every row on the page, against the same
+ * two seat lists.
+ */
+export type SeatIndex = Map<string, string[]>;
+
+const seatKey = (setId: string, userId: string) => `${setId}|${userId}`;
+
+export function seatIndex(seats: Seat[]): SeatIndex {
+  const index: SeatIndex = new Map();
+  for (const seat of seats) {
+    const key = seatKey(seat.setId, seat.userId);
+    const roles = index.get(key);
+    if (roles) roles.push(seat.role);
+    else index.set(key, [seat.role]);
+  }
+  return index;
+}
+
+/**
+ * The roles `userId` already holds on `setId` — empty when they hold none.
+ * `except` drops the role being traded, so a seat is never reported as a
+ * conflict with itself.
+ */
+export function rolesHeldOn(
+  index: SeatIndex,
+  setId: string,
+  userId: string,
+  except?: string
+): string[] {
+  const roles = index.get(seatKey(setId, userId)) ?? [];
+  return except === undefined ? [...roles] : roles.filter((r) => r !== except);
 }
 
 // ── 4. The GET /api/sets date window ─────────────────────────────────────

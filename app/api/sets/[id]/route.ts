@@ -22,7 +22,7 @@
 // history event — the one thing the set detail modal's History section shows.
 // DELETE /api/sets/:id — an org admin removes a set entirely (its assignments
 // cascade). Used by the "Delete set" button in the set detail modal.
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { getSessionUser, isSuperAdmin } from "@/lib/auth";
 import { requireOrgAdminFor, resolveOrgScope } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -39,6 +39,11 @@ import {
   validateGuestRoles,
   type GuestRoleSpec,
 } from "@/lib/guestTeams";
+import {
+  calendarEventOf,
+  deleteSetCalendarEvent,
+  syncSetsAfterResponse,
+} from "@/lib/googleCalendar";
 
 export async function GET(
   _req: NextRequest,
@@ -242,6 +247,8 @@ export async function PATCH(
       where: { setId: id },
       select: { id: true, teamId: true, roles: true },
     });
+    // Dropping a guest team can take its people off the set.
+    syncSetsAfterResponse(id);
     return NextResponse.json(updated);
   }
 
@@ -361,6 +368,8 @@ export async function PATCH(
     }
   }
 
+  // Time, length or name may have moved; the event follows.
+  syncSetsAfterResponse(id);
   return NextResponse.json(updated);
 }
 
@@ -381,7 +390,11 @@ export async function DELETE(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  // The event id goes with the row, so read it first; the cancellation (and
+  // Google's email to the guests) goes out after the response.
+  const event = await calendarEventOf(id);
   // Assignments cascade on Set delete (see schema onDelete: Cascade).
   await prisma.set.delete({ where: { id } });
+  after(() => deleteSetCalendarEvent(event));
   return NextResponse.json({ ok: true });
 }

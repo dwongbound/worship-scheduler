@@ -119,6 +119,8 @@ function CalendarView() {
   const [previewColors, setPreviewColors] = useState<SetTypeColors>({});
   // A "Save Changes" from the preview is in flight.
   const [previewSaving, setPreviewSaving] = useState(false);
+  // Why the last preview save was refused, shown in its confirm dialog.
+  const [previewError, setPreviewError] = useState("");
   // Sidebar width; defaults to ~30% of the screen once mounted.
   const [panelWidth, setPanelWidth] = useState(420);
   // Per-org admin user lists (assignment dropdowns are scoped to the open
@@ -506,50 +508,78 @@ function CalendarView() {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  // "Save Changes" in the preview: push each EDITED set's roster diff through
-  // the same endpoint the set detail modal saves with — one request per set,
-  // each applied as one transaction with one grouped Slack notice. Sets the
-  // admin didn't touch produce no diff and so aren't touched here either.
-  //
-  // The MD goes in a second request per set, and only where it changed: the
-  // roster endpoint re-derives the MD as a side effect of applying a roster,
-  // so an explicit choice has to land after it.
+  // "Save Changes" in the preview (after its batch confirm): every EDITED set's
+  // roster diff, plus any MD it changed, goes to PUT /api/admin/sets/roster in
+  // ONE request, applied as one transaction — so a failure leaves the calendar
+  // exactly as it was and the preview open to retry. Sets the admin didn't
+  // touch produce no diff and aren't sent. The server applies each MD after
+  // its roster, which re-derives the MD as a side effect.
   const savePreview = async (edited: StagedSet[]) => {
     if (!previewPlan) return;
+    const saves = previewSaves(previewPlan.sets, edited);
+    if (saves.length === 0) return;
     setPreviewSaving(true);
+    setPreviewError("");
     try {
-      // One set at a time WITHIN a set (the MD has to land after the roster,
-      // which re-derives it), but all the sets at once: they're independent
-      // rows, and a week's plan used to be a dozen round trips in single file.
-      await Promise.all(
-        previewSaves(previewPlan.sets, edited).map(async (save) => {
-          await fetch(`/api/admin/sets/${save.setId}/roster`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(save.ops),
-          });
-          if ("mdUserId" in save) {
-            await fetch(`/api/sets/${save.setId}`, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ mdUserId: save.mdUserId }),
-            });
-          }
-        })
-      );
+      const res = await fetch("/api/admin/sets/roster", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sets: saves.map(({ setId, ops, ...md }) => ({ setId, ...ops, ...md })),
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        setPreviewError(data?.error ?? "Couldn't save these changes.");
+        return;
+      }
       setPreviewPlan(null);
       await refetchSets();
+    } catch {
+      setPreviewError("Couldn't save these changes.");
     } finally {
       setPreviewSaving(false);
     }
   };
 
   // Step 1 → step 2: turn the picked types into the staged plan the review
-  // workspace reads. Purely local — nothing is fetched, nothing is saved.
-  const startPreview = (typeIds: string[], colors: SetTypeColors) => {
-    setPreviewPlan(
-      buildPreviewPlan(previewSets, previewRefs?.templates ?? [], typeIds)
+  // workspace reads. The staging itself is local, but the plan also needs the
+  // BASELINE its "Auto schedule" fills against — the load tallies, who's booked
+  // near the window, and what the scheduling rules read from outside it (a
+  // LIMIT rule's other bookings, a SAME_PLAYER rule's partner set). The
+  // generate flow ships that inside its plan; nothing is generated here, so we
+  // fetch it.
+  //
+  // Fetched BEFORE the workspace opens, not folded in after: it resets its
+  // staged edits whenever the `plan` prop changes identity, so a late arrival
+  // would throw away whatever the admin had already done. Step 1 shows its own
+  // "still loading" state meanwhile. A failed fetch opens the preview anyway —
+  // a from-zero fill is worse than this one, but it beats not opening.
+  const startPreview = async (typeIds: string[], colors: SetTypeColors) => {
+    const staged = buildPreviewPlan(
+      previewSets,
+      previewRefs?.templates ?? [],
+      typeIds
     );
+    let baseline: StagedPlan["baseline"] | undefined;
+    if (staged.sets.length > 0 && previewOrgId) {
+      const times = staged.sets.map((s) => new Date(s.startsAt).getTime());
+      const from = new Date(Math.min(...times)).toISOString();
+      const to = new Date(Math.max(...times)).toISOString();
+      setPreviewLoading(true);
+      try {
+        const res = await fetch(
+          `/api/admin/schedule-baseline?from=${from}&to=${to}`,
+          { headers: orgHeaders(previewOrgId) }
+        );
+        if (res.ok) baseline = (await res.json())?.baseline ?? undefined;
+      } catch {
+        // Leave it undefined — see above.
+      } finally {
+        setPreviewLoading(false);
+      }
+    }
+    setPreviewPlan(baseline ? { ...staged, baseline } : staged);
     setPreviewColors(colors);
     setPreviewOpen(false);
   };
@@ -759,7 +789,11 @@ function CalendarView() {
         colors={previewColors}
         busy={previewSaving}
         onApply={savePreview}
-        onClose={() => setPreviewPlan(null)}
+        applyError={previewError}
+        onClose={() => {
+          setPreviewPlan(null);
+          setPreviewError("");
+        }}
       />
     </>
   );

@@ -383,7 +383,7 @@ test("removing a filled slot asks for confirmation first", async ({ page }) => {
     .filter({ hasText: "Remove Drums slot?" })
     .last();
   await expect(confirm.getByText(/Bob Baker is assigned/)).toBeVisible();
-  await confirm.getByRole("button", { name: "Cancel" }).click();
+  await confirm.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByText("Remove Drums slot?")).toHaveCount(0);
   await expect(
     // Exact match: the slot's ✕ button ("Remove … (Bob Baker)") would also
@@ -423,7 +423,7 @@ test("leaving the set modal with staged edits asks first and lists them", async 
   await expect(modal.getByText("1 unsaved change")).toBeVisible();
 
   // Cancel now warns, naming the change rather than just saying "unsaved".
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   const warning = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -436,7 +436,7 @@ test("leaving the set modal with staged edits asks first and lists them", async 
   await expect(modal.getByText("1 unsaved change")).toBeVisible();
 
   // Discarding closes the modal and never touches the server.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   await page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -560,12 +560,14 @@ test("a sent note lands in the set's Notes history, and nothing else does", asyn
   ).toHaveValue("");
 });
 
-test("the calendar grid steps a week at a time on the wheel", async ({ page }) => {
+test("the calendar grid stays put under the wheel; a day's chips scroll", async ({
+  page,
+}) => {
   await login(page, "admin");
   await page.goto("/calendar");
 
   // The grid is a window of week rows, so the row under the weekday labels is
-  // what moves. Read the first cell's date, wheel once, read it again.
+  // what would move. Read the first cell's date, wheel, read it again.
   const grid = page.locator("[data-no-pull]").first();
   await expect(grid).toBeVisible();
   const firstCellDate = () =>
@@ -574,28 +576,24 @@ test("the calendar grid steps a week at a time on the wheel", async ({ page }) =
   const before = await firstCellDate();
   expect(before).toBeTruthy();
 
+  // It used to step a week per notch, which meant the grid swallowed every
+  // scroll that passed over it — and the pointer is over the grid nearly all
+  // the time, so a busy day's own list was almost impossible to scroll. The
+  // weeks move by button now, and the grid takes no gestures at all.
   await grid.hover();
-  await page.mouse.wheel(0, 200);
-  await expect.poll(firstCellDate).not.toBe(before);
+  await page.mouse.wheel(0, 300);
+  await page.waitForTimeout(400);
+  expect(await firstCellDate()).toBe(before);
 
-  const after = await firstCellDate();
-  // Exactly one week later — not a pixel-scroll, and not a whole month.
-  const days =
-    (new Date(after!).getTime() - new Date(before!).getTime()) / 86_400_000;
-  expect(days).toBe(7);
-
-  // And back again: the window is an index, so a step is reversible exactly.
-  //
-  // Wait out the step cooldown first (lib/calendarScroll STEP_COOLDOWN_MS, 150ms).
-  // A trackpad sends a stream of wheel events and the limiter drops the ones
-  // that come too fast, which is invisible in use — but page.mouse.wheel sends
-  // exactly ONE, so a dropped event here is a step that simply never happens.
-  await page.waitForTimeout(250);
-  await page.mouse.wheel(0, -200);
-  await expect.poll(firstCellDate).toBe(before);
+  // What a wheel over a cell DOES reach: that day's chip list, which scrolls
+  // inside the cell when the day has more sets than fit.
+  await expect(grid.locator("[data-chips]").first()).toHaveCSS(
+    "overflow-y",
+    "auto"
+  );
 });
 
-test("the month heading follows the majority of the visible weeks", async ({
+test("the month buttons move the window and the heading follows", async ({
   page,
 }) => {
   await login(page, "admin");
@@ -604,14 +602,8 @@ test("the month heading follows the majority of the visible weeks", async ({
   const heading = page.getByRole("heading", { level: 2 }).first();
   const startedOn = await heading.textContent();
 
-  // One week does not move the heading: it names whichever month owns most of
-  // the six rows, so it changes only when the view genuinely has.
-  const grid = page.locator("[data-no-pull]").first();
-  await grid.hover();
-  await page.mouse.wheel(0, 200);
-  await expect(heading).toHaveText(startedOn!);
-
-  // "Next month" jumps a whole month, and the heading follows immediately.
+  // The heading names whichever month owns most of the visible rows; the
+  // buttons land the window on a month, so it changes with every press.
   await page.getByRole("button", { name: "Next month" }).click();
   await expect(heading).not.toHaveText(startedOn!);
 

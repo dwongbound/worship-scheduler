@@ -237,6 +237,19 @@ export function shortDateTimeLabel(value: Date | string): string {
 }
 
 /**
+ * "8/20/26 10PM" — the compact stamp every chat message names a set by.
+ * Short enough to sit inline in a sentence twice (a swap names two sets), and
+ * unambiguous about the year, which "Thursday at 10PM" is not when a request
+ * spans a new year.
+ */
+export function shortDateTimeCompact(value: Date | string): string {
+  const d = new Date(value);
+  return `${shortDateLabel(d)} ${minutesToShortTimeLabel(
+    d.getHours() * 60 + d.getMinutes()
+  )}`;
+}
+
+/**
  * 1140 → "7PM", 1170 → "7:30PM". The compact form for tight rows: on-the-hour
  * times drop ":00" and there's no space before the AM/PM.
  */

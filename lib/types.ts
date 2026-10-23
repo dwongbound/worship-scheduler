@@ -162,9 +162,14 @@ export interface ApiSwapCandidate {
     team: { id: string; name: string } | null;
   };
   youAvailable: boolean; // I'm free for their set's date
-  theyAvailable: boolean; // they're free for my set's date
-  theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
+  theyAvailable: boolean; // they're free for my set's date (any kind of block)
   theyInactive: boolean; // they're marked inactive on this set's team
+  // Roles each side ALREADY holds on the other's set — empty when neither is
+  // doubling up. Never a blocker (two roles on one set is legitimate), but the
+  // picker says so in RED: an availability block is an intention, a seat they
+  // already hold is a fact. See lib/sets.ts §5.
+  theyAlsoOnYourSet: Instrument[];
+  youAlsoOnTheirSet: Instrument[];
 }
 
 // A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).
@@ -222,9 +227,16 @@ export interface ApiUnavailability {
   endMinute: number | null;
   startDate: string | null;
   endDate: string | null;
+  // RECURRING only: dates ("YYYY-MM-DD") this weekly rule skips, one per day
+  // freed on the calendar. Optional so hand-built test fixtures needn't carry
+  // it; every reader goes through lib/availability.ts recurringSkips.
+  exceptDates?: string[];
   // Set for SPECIFIC blocks (the request/TimeRange they belong to).
   requestId: string | null;
   note: string | null;
+  // Written by "Import from Google Calendar" (lib/googleAvailability.ts).
+  // Optional so hand-built test fixtures needn't carry it.
+  fromGoogle?: boolean;
 }
 
 export interface ApiSetTemplate {
@@ -413,6 +425,10 @@ export interface StagedSet {
   // True if an (empty) Set row already exists at this time — apply fills it
   // rather than creating a new one. False = apply creates the set.
   existing: boolean;
+  // That existing row's id, so a scheduling rule naming a specific set can
+  // find it. Apply ignores it (it matches by startsAt/label). Preview Mode's
+  // sets carry their id as `stagingId` instead.
+  setId?: string | null;
   assignments: StagedAssignment[];
 }
 
@@ -431,13 +447,24 @@ export interface StagedPlan {
     counts: Record<string, number>;
     // teamKey(userId, teamId) → the same, split by team.
     teamCounts: Record<string, number>;
-    // Dates people are already booked on, for the spacing rule.
-    booked: { userId: string; startsAt: string }[];
+    // Dates people are already booked on, for the spacing rule. `teamId` is
+    // which team's set it was — only a team-scoped LIMIT reads it.
+    booked: { userId: string; startsAt: string; teamId?: string | null }[];
     // teamId ("" for a team-less set) → who MD'd that team's last set BEFORE
     // this window. Seeds the "don't lead two running" rotation so the modal's
     // re-run starts where the server's did, rather than handing set one back to
     // last week's director.
     previousMDByTeam?: Record<string, string | null>;
+    // Real sets around the window, for SAME_PLAYER rules (lib/schedulingRules)
+    // whose partner set isn't in the plan.
+    fixedSets?: {
+      setId?: string | null;
+      templateId?: string | null;
+      startsAt: string;
+      assignments: { userId: string; role: string }[];
+    }[];
+    // A month either side of bookings, counted only by LIMIT rules.
+    periodBookings?: { userId: string; startsAt: string }[];
   };
 }
 
@@ -459,6 +486,9 @@ export interface ApiMeMembership {
   // The connected account's Spotify user id — the label's fallback when the
   // account has no display_name set.
   spotifyUserId: string | null;
+  // Whether the ORG has connected Google Calendar (set events + invites). The
+  // account itself is admin-only, on /api/google-calendar/status.
+  orgGoogleCalendarConnected: boolean;
 }
 
 // The current user's own profile — GET /api/me. Fetched once by AuthGate and
@@ -469,7 +499,7 @@ export interface ApiMe {
   email: string | null;
   // Whether a usable password hash exists (OAuth-only accounts have none).
   hasPassword: boolean;
-  // Opt-in (default on) to the daily 8 AM Slack digest — see lib/digest.ts.
+  // Opt-in (default on) to the daily 6:30 AM Slack digest — see lib/digest.ts.
   dailyDigest: boolean;
   memberships: ApiMeMembership[];
   // Teams this person serves on, each with the roles they've picked there and

@@ -107,16 +107,19 @@ export async function isOrgMessagingInstalled(orgId: string): Promise<boolean> {
 export async function orgMessagingContext(
   orgId: string,
   type: NotificationType
-): Promise<{ messaging: MessagingTransport } | null> {
+): Promise<{ messaging: MessagingTransport; orgName: string } | null> {
   const org = await prisma.org.findUnique({
     where: { id: orgId },
-    select: { slackBotToken: true, notificationPrefs: true },
+    // The name rides along because this row is already being read: a DM that
+    // wants to say which org it's about (the availability request does — one
+    // person can be in several) would otherwise re-query for one string.
+    select: { name: true, slackBotToken: true, notificationPrefs: true },
   });
   const prefs = parseNotificationPrefs(org?.notificationPrefs);
   if (!notificationEnabled(prefs, type)) return null;
 
   const messaging = transportForCredential(org?.slackBotToken);
-  return messaging ? { messaging } : null;
+  return messaging ? { messaging, orgName: org?.name ?? "your org" } : null;
 }
 
 /**

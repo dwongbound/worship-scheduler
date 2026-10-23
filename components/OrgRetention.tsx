@@ -185,7 +185,7 @@ export default function OrgRetention({ orgId }: { orgId: string }) {
                 }}
                 disabled={busy}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 variant={atRisk ? "danger" : "primary"}

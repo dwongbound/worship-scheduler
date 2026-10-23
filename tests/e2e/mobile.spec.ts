@@ -10,6 +10,7 @@
 import { expect, test } from "@playwright/test";
 import {
   clearBusyBlocks,
+  gotoReady,
   login,
   pickSingleDay,
   requestAvailability,
@@ -24,6 +25,14 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   const setsTab = page.getByRole("link", { name: "My Sets", exact: true });
   await expect(setsTab).toHaveCount(1);
   await expect(setsTab).toBeVisible();
+
+  // The pill floats just 0.5rem (8px) above the bottom edge plus the safe
+  // area, which device emulation reports as 0.
+  const bar = page.locator("nav", { has: setsTab });
+  const box = await bar.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box && viewport && Math.round(viewport.height - (box.y + box.height))).toBe(8);
+
   await setsTab.click();
 
   await expect(page).toHaveURL(/\/set-manager/);
@@ -114,7 +123,7 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
 test("phone: the set modal's staged edits and sticky footer work on a phone", async ({
   page,
 }) => {
-  // The detail modal stages every edit behind a sticky Delete · Cancel · Save
+  // The detail modal stages every edit behind a sticky Delete · Close · Save
   // row. On a phone that row is the only way to commit or back out — there's no
   // room for it to scroll away — so it's worth proving it's reachable and that
   // the discard guard still names what would be lost.
@@ -142,7 +151,7 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
   await expect(save).toBeEnabled();
 
   // Backing out warns, and names the change.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   const warning = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -177,11 +186,14 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
   // left a block behind, and this test's own "it's gone again" assertion would
   // then fail on the leftover rather than on anything it did.
   await clearBusyBlocks(page);
-  await page.goto("/schedule");
+  await gotoReady(page, "/schedule");
 
   // The month calendar is desktop-only (hidden below lg); the phone gets the
   // week strip instead, and the form below it still works either way. Neither
   // needs an availability request, unlike the request cards above them.
+  // NB this assertion is worth nothing as a WAIT — a locator that doesn't
+  // exist yet is "hidden", so before gotoReady it passed on a blank page and
+  // let the clicks below start mid-render. gotoReady is the sync point.
   await expect(page.locator("[data-tour='avail-calendar']")).toBeHidden();
 
   const blockOutTimes = sectionByHeading(page, "Block out times");
@@ -203,7 +215,12 @@ test("phone Availabilities blocks a day without the desktop calendar", async ({
 
 test("phone week strip blocks a day with one tap", async ({ page }) => {
   await login(page, "carol");
-  await page.goto("/schedule");
+  // Carol's blocks are this file's shared mutable state — five tests add and
+  // remove them. Clearing here (rather than trusting the previous test to have
+  // tidied up) is what stops one failure from cascading into the rest: the
+  // "it's gone again" assertion at the end counts ALL her blocks.
+  await clearBusyBlocks(page);
+  await gotoReady(page, "/schedule");
 
   // The strip replaces the desktop calendar below lg: today is always in the
   // week it opens on, and tapping a free day blocks it all day.
@@ -223,16 +240,20 @@ test("phone week strip blocks a day with one tap", async ({ page }) => {
   await expect(blockEntry.first()).toBeVisible();
   await expect(todayCell).toHaveAttribute("aria-pressed", "true");
 
-  // Tapping it again clears it — the same toggle the calendar's click has.
+  // Tapping it again clears the day completely — the same toggle the calendar's
+  // click has. (A press-and-hold, or the right-click it stands in for, frees a
+  // day whatever is on it; this is the tap-twice path.)
   await todayCell.click();
   await expect(blockEntry).toHaveCount(0);
+  await expect(todayCell).toHaveAttribute("aria-pressed", "false");
 });
 
 test("phone: adds and deletes a recurring weekly block via the single-panel adder", async ({
   page,
 }) => {
   await login(page, "carol");
-  await page.goto("/schedule");
+  await clearBusyBlocks(page); // own state — see the note two tests above
+  await gotoReady(page, "/schedule");
 
   // The single "Block out times" panel does both block kinds behind a toggle;
   // it defaults to specific, so switch to the weekly mode. This is the same
@@ -267,7 +288,11 @@ test("phone: submits an availability response and re-opens it for changes", asyn
 }) => {
   await requestAvailability(page);
   await login(page, "carol");
-  await page.goto("/schedule");
+  // Not optional here: the modal below is asserted to say carol is "available
+  // the whole time", which is only true with no blocks on her. This test used
+  // to inherit that state from whichever test ran before it.
+  await clearBusyBlocks(page);
+  await gotoReady(page, "/schedule");
 
   // The submit-confirmation modal is viewport-independent; make sure the whole
   // "Submit response" → confirm → "Make changes" loop works on a phone too.
@@ -289,13 +314,55 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   ).toBeVisible();
 });
 
+test("phone: the selected request card keeps its text whole and its actions on one row", async ({
+  page,
+}) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  // Two buttons, the case that crushed the card: the import only shows where
+  // Google is configured, which the test environment isn't — so say it is.
+  await page.route("**/api/availability", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, googleImport: true } });
+  });
+  await gotoReady(page, "/schedule");
+
+  const actions = page.getByTestId("request-actions");
+  await expect(actions).toBeVisible();
+  const importBtn = actions.getByTestId("import-google");
+  const submit = actions.getByRole("button", { name: "Submit response" });
+  const card = actions.locator("xpath=../..");
+  const text = actions.locator("xpath=preceding-sibling::div[1]");
+  const [cardBox, textBox, rowBox, importBox, submitBox, eyeBox] = await Promise.all([
+    card.boundingBox(),
+    text.boundingBox(),
+    actions.boundingBox(),
+    importBtn.boundingBox(),
+    submit.boundingBox(),
+    card.getByText("Shown on the calendar below").boundingBox(),
+  ]);
+  // The text gets the card's full width rather than a sliver beside the
+  // buttons, its calendar note reads on one line, and the actions sit BELOW.
+  expect(textBox!.width).toBeGreaterThan(cardBox!.width * 0.8);
+  expect(eyeBox!.height).toBeLessThan(30);
+  expect(rowBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height - 1);
+  // One full-width row of 44px buttons, sharing a height, confirm on the right.
+  expect(rowBox!.width).toBeGreaterThan(cardBox!.width * 0.8);
+  expect(Math.round(importBox!.height)).toBe(Math.round(submitBox!.height));
+  expect(submitBox!.height).toBeGreaterThanOrEqual(44);
+  expect(Math.abs(importBox!.y - submitBox!.y)).toBeLessThan(1);
+  expect(submitBox!.x).toBeGreaterThan(importBox!.x);
+});
+
 test("phone: confirmation modal lists a blocked day, and the date picker marks it", async ({
   page,
 }) => {
   await requestAvailability(page);
   await login(page, "carol");
   await clearBusyBlocks(page); // see the note in the test above
-  await page.goto("/schedule");
+  await gotoReady(page, "/schedule");
 
   // No calendar on a phone, so the general "Block out times" form is the only
   // way to block a day inside the active request's window.
@@ -431,6 +498,16 @@ test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async 
   await expect(card).toBeVisible();
   await card.getByRole("button", { name: "Reject" }).tap();
 
+  // Reject now opens the decline modal (with an optional note) rather than
+  // declining on the spot — so the phone path has to get through the dialog
+  // too. Skipping the note is the common case and the one to keep covered
+  // here; the note itself is swap-decline.spec.ts's job.
+  const modal = page.getByRole("dialog");
+  await expect(
+    modal.getByRole("heading", { name: "Decline this swap" })
+  ).toBeVisible();
+  await modal.getByRole("button", { name: "Decline", exact: true }).tap();
+
   await expect(card).toHaveCount(0, { timeout: 15_000 });
   await expect(page).toHaveURL(/\/set-manager/);
 });
@@ -491,7 +568,7 @@ test("phone: sending a note posts it immediately and shows it in the log", async
 
   // It really reached the server — reopening the set (a fresh fetch) still
   // shows it, and the composer comes back empty rather than pre-filled.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   await expect(modal).not.toBeVisible();
   await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
   await expect(
@@ -512,4 +589,75 @@ test("phone calendar hides the desktop-only Preview Mode button", async ({
   // is desktop-only — the phone gets My Sets instead. It's in the DOM (the
   // wrapper is `hidden md:block`) but never shown.
   await expect(page.getByRole("button", { name: "Preview Mode" })).toBeHidden();
+});
+
+// Drag a finger straight down from the top of the page and report whether the
+// pull-to-refresh spinner came out, checked BEFORE letting go. CDP touch input,
+// so Chromium only — the WebKit project skips the tests that use it.
+async function pullDownShowsSpinner(page: import("@playwright/test").Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const x = 200;
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", y: number) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+    });
+  await touch("touchStart", 260);
+  for (let y = 270; y <= 460; y += 15) await touch("touchMove", y);
+  const shown = await page.getByTestId("pull-indicator").count();
+  await touch("touchEnd", 460);
+  return shown > 0;
+}
+
+test("phone: pull-to-refresh only on pages with live data", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "CDP touch input is Chromium-only");
+  await login(page, "bob");
+
+  // The calendar's sets come straight from the db: pulling refreshes them.
+  await gotoReady(page, "/calendar");
+  expect(await pullDownShowsSpinner(page)).toBe(true);
+
+  // A profile has nothing a pull would update, so the gesture doesn't engage —
+  // and in particular doesn't full-reload the page through the splash screen.
+  await gotoReady(page, "/profile");
+  await page.evaluate(() => ((window as unknown as { __kept: boolean }).__kept = true));
+  expect(await pullDownShowsSpinner(page)).toBe(false);
+  await page.waitForTimeout(800);
+  expect(
+    await page.evaluate(() => (window as unknown as { __kept?: boolean }).__kept)
+  ).toBe(true);
+});
+
+test("phone My Sets: a pending card's buttons share one height", async ({ page }) => {
+  // On a narrow phone "Request cover" wraps to two lines; Swap and Confirm
+  // must grow with it rather than sit shorter, centred beside it.
+  await login(page, "henry");
+  await page.goto("/set-manager");
+  const cover = page.getByRole("button", { name: "Request cover" }).first();
+  await expect(cover).toBeVisible();
+  const row = cover.locator("xpath=..");
+  const heights = await Promise.all(
+    ["Request cover", "Swap", "Confirm"].map(async (name) =>
+      Math.round((await row.getByRole("button", { name, exact: true }).boundingBox())!.height)
+    )
+  );
+  expect(new Set(heights).size).toBe(1);
+});
+
+test("phone availability: the week view fits the screen", async ({ page }) => {
+  await login(page, "carol");
+  await page.goto("/schedule");
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  const week = page.getByTestId("availability-week-view");
+  await expect(week).toBeVisible();
+  // Seven day columns and no sideways scroll on a phone.
+  const box = (await week.boundingBox())!;
+  const viewport = page.viewportSize()!;
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    viewport.width
+  );
 });

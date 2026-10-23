@@ -4,16 +4,29 @@
 // there's nothing to park. The Drafts button is hidden until one exists, which
 // is the first thing this checks.
 import { expect, test } from "@playwright/test";
-import { login } from "./helpers";
+import { login, seedOwnSetTime } from "./helpers";
 
 // Open the Create tab and stage a preview from the seeded availability request.
+//
+// Seeds its own weekly set time first: generate skips occurrences that already
+// have a set, so after any spec that APPLIES a schedule the same window comes
+// back empty — and an empty plan has no footer to press Save Draft on. These
+// tests passed alone and failed after create.spec for exactly that reason.
 async function openPreview(page: import("@playwright/test").Page) {
+  await seedOwnSetTime(page, {
+    label: "Draft Probe",
+    dayOfWeek: 5, // Friday 15:00 — nothing else schedules here
+    startMinute: 15 * 60,
+  });
   await page.goto("/create");
   await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
+  // The seeded month-long "Fall 2026" request, not just the newest one: an
+  // earlier spec sends a ONE-day request for today, and on a weekday no
+  // template falls on that window generates an empty plan.
   const reqValue = await scope
-    .locator('option[value^="req:"]')
+    .locator('option[value^="req:"]', { hasText: /^Fall 2026 \(/ })
     .first()
     .getAttribute("value");
   await scope.selectOption(reqValue!);
@@ -87,7 +100,7 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
   await expect(reSave.getByText(/This replaces the draft you opened/)).toBeVisible();
   // Replacing one you already have is free — the cap only bites on new ones.
   await expect(reSave.getByText(/doesn’t use another/)).toBeVisible();
-  await reSave.getByRole("button", { name: "Cancel" }).click();
+  await reSave.getByRole("button", { name: "Close", exact: true }).click();
 
   // Back out of the preview again, then delete the draft from the list.
   await page.getByRole("button", { name: "Discard" }).click();

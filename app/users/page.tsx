@@ -644,9 +644,9 @@ function UsersPageInner() {
                 heading containing "Team" would collide with it. */}
             <p className="font-semibold">Teams</p>
             <InfoTooltip
-              text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page (desktop only)."
+              text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page, under Teams (desktop only)."
             />
-            {/* Creating a team lives on the Org settings page
+            {/* Creating a team lives on the Org settings page's Teams tab
                 (OrgTeamsManager); this panel only manages teams that already
                 exist, so link out rather than duplicating that form here. */}
             <Link
@@ -710,7 +710,7 @@ function UsersPageInner() {
             >
               Org settings
             </Link>{" "}
-            page.
+            page, under Teams.
           </p>
         ) : (
           <ul className="divide-y divide-gray-100 dark:divide-gray-700/50">
@@ -760,7 +760,7 @@ function UsersPageInner() {
                       title={
                         team.slackChannelId
                           ? undefined
-                          : "Add a Slack channel ID on the Org settings page first."
+                          : "Add a Slack channel ID on the Org settings page (Teams tab) first."
                       }
                     >
                       {sendingTeamId === team.id ? (
@@ -812,7 +812,7 @@ function UsersPageInner() {
                           onClick={() => setEditingSlackFor(null)}
                           className="text-xs text-gray-500 hover:underline dark:text-gray-400"
                         >
-                          Cancel
+                          Close
                         </button>
                         {slackError && (
                           <span className="text-xs text-red-600">{slackError}</span>
@@ -1178,7 +1178,7 @@ function UsersPageInner() {
                 onClick={() => setDetailsFor(null)}
                 disabled={savingDetails}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={saveDetails} disabled={savingDetails}>
                 {savingDetails ? <LoadingDots size="sm" /> : "Save"}
@@ -1226,7 +1226,7 @@ function UsersPageInner() {
                 variant="secondary"
                 onClick={() => setAdminConfirm(null)}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"
@@ -1274,7 +1274,7 @@ function UsersPageInner() {
                 onClick={() => setRemoveConfirm(null)}
                 disabled={removing}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"

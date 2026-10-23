@@ -38,6 +38,7 @@ describe("tourSteps", () => {
       "overview",
       "views",
       "load",
+      "filter",
       "hover",
       "lock",
       "card",
@@ -47,6 +48,29 @@ describe("tourSteps", () => {
     ];
     expect(generate.map((s) => s.id)).toEqual(expected);
     expect(preview.map((s) => s.id)).toEqual(expected);
+  });
+
+  it("names all three groupings, in both modes", () => {
+    // The header toggle has three buttons; a view the tour never mentions is
+    // one nobody finds.
+    for (const steps of [generate, preview]) {
+      const views = steps.find((s) => s.id === "views")!.body.join(" ");
+      expect(views).toMatch(/By set type/);
+      expect(views).toMatch(/Chronological \(week\)/);
+      expect(views).toMatch(/Chronological \(linear\)/);
+    }
+  });
+
+  it("explains the Team load person filter, in both modes", () => {
+    for (const steps of [generate, preview]) {
+      const filter = steps.find((s) => s.id === "filter")!.body.join(" ");
+      expect(filter).toMatch(/Team load/);
+      expect(filter).toMatch(/Clear filter/);
+      // Several names at once is the half nobody would guess at, so the step
+      // has to say it — and say that they add up rather than narrow down.
+      expect(filter).toMatch(/more names/);
+      expect(filter).toMatch(/at least one of them/);
+    }
   });
 
   it("talks about drafts only where drafts exist", () => {

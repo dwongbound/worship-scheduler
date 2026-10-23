@@ -21,11 +21,15 @@ import {
 import { useSearchParams } from "next/navigation";
 import { roleLabel } from "@/lib/teamRoles";
 import { useSession } from "next-auth/react";
+import Badge from "@/components/common/Badge";
 import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import LoadingDots from "@/components/common/LoadingDots";
 import ExportIcsButton from "@/components/ExportIcsButton";
+import DeclineSwapModal, {
+  type DeclineKind,
+} from "@/components/DeclineSwapModal";
 import RequestCoverModal from "@/components/RequestCoverModal";
 import SetDetailModal from "@/components/SetDetailModal";
 import SwapModal from "@/components/SwapModal";
@@ -128,6 +132,16 @@ function SetManagerView() {
   // collapse into a lone spinner (and back) on every click.
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [confirmingAll, setConfirmingAll] = useState(false);
+  // The handoff whose decline modal is open (null = none): a targeted swap
+  // proposal or an open cover request, with who's waiting on the answer so the
+  // note box can name its reader. `kind` picks both the modal's words and
+  // which endpoint the confirm posts to — the two declines mean different
+  // things (a swap is settled by it, a cover stays open to everyone else).
+  const [declining, setDeclining] = useState<{
+    id: string;
+    kind: DeclineKind;
+    proposer: string;
+  } | null>(null);
   // Navbar org switcher: "all" or one org — filters both sections. Rows show
   // an org chip while several orgs are mixed together.
   const { orgs, viewOrgId, isAdminOf } = useOrgs();
@@ -167,21 +181,59 @@ function SetManagerView() {
     window.dispatchEvent(new Event(SWAPS_CHANGED_EVENT));
   }, [orgs, viewOrgId, horizonEnd]);
 
-  // Accept or reject a targeted swap proposed to me.
-  async function respondSwap(proposalId: string, action: "accept" | "reject") {
+  // Accept or reject a targeted swap proposed to me. `note` is the optional
+  // reason typed into the decline modal; it only ever rides along with a
+  // reject, and ends up leading the proposer's "swap declined" DM.
+  async function respondSwap(
+    proposalId: string,
+    action: "accept" | "reject",
+    note?: string
+  ) {
     setBusyId(proposalId);
     setBusyAction(action);
     try {
       await fetch(`/api/swaps/proposals/${proposalId}/respond`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, note }),
       });
       await reload();
     } finally {
       setBusyId(null);
       setBusyAction(null);
     }
+  }
+
+  // Say "not me" to an OPEN cover request. Nothing about the slot changes —
+  // it stays the owner's, and open to everyone else who plays the role — but
+  // the card leaves my list and the owner gets my note.
+  async function declineCover(assignmentId: string, note: string) {
+    setBusyId(assignmentId);
+    setBusyAction("decline");
+    try {
+      await fetch(`/api/swaps/${assignmentId}/decline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note }),
+      });
+      await reload();
+    } finally {
+      setBusyId(null);
+      setBusyAction(null);
+    }
+  }
+
+  // Both declines go through a modal so the note can be offered; accepting or
+  // taking doesn't, because there's nothing to explain about saying yes.
+  async function confirmDecline(note: string) {
+    const target = declining;
+    if (!target) return;
+    if (target.kind === "cover") {
+      await declineCover(target.id, note);
+    } else {
+      await respondSwap(target.id, "reject", note);
+    }
+    setDeclining(null);
   }
 
   // Withdraw a swap I proposed (restores both slots to their prior status).
@@ -479,7 +531,8 @@ function SetManagerView() {
                 <Card className="flex flex-wrap items-center justify-between gap-3 border-indigo-200 dark:border-indigo-800">
                   <div>
                     <p className="flex flex-wrap items-center gap-2 font-semibold">
-                      Swap: take {s.receive.label ?? "Worship Set"} —{" "}
+                      <KindChip kind="swap" />
+                      Take {s.receive.label ?? "Worship Set"} —{" "}
                       {roleLabel(s.role)}
                       {showOrgChips && <OrgChip name={s.receive.org.name} />}
                     </p>
@@ -509,7 +562,13 @@ function SetManagerView() {
                         <Button
                           size="sm"
                           variant="secondary"
-                          onClick={() => respondSwap(s.id, "reject")}
+                          onClick={() =>
+                            setDeclining({
+                              id: s.id,
+                              kind: "swap",
+                              proposer: s.requestedBy.name,
+                            })
+                          }
                         >
                           Reject
                         </Button>
@@ -531,6 +590,7 @@ function SetManagerView() {
                 <Card className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="flex flex-wrap items-center gap-2 font-semibold">
+                      <KindChip kind="cover" />
                       {swap.set.label ?? "Worship Set"} — {roleLabel(swap.role)}
                       {showOrgChips && swap.set.org && (
                         <OrgChip name={swap.set.org.name} />
@@ -558,9 +618,28 @@ function SetManagerView() {
                     {busyId === swap.id ? (
                       <LoadingDots className="text-indigo-600 dark:text-indigo-400" />
                     ) : (
-                      <Button size="sm" onClick={() => takeSwap(swap.id)}>
-                        Take this set
-                      </Button>
+                      <>
+                        {/* "Not me" — the request stays open to everyone
+                            else, so this only clears MY list and tells the
+                            person who asked. Sits left of Take so the
+                            affirmative action keeps the end of the row. */}
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            setDeclining({
+                              id: swap.id,
+                              kind: "cover",
+                              proposer: swap.user.name,
+                            })
+                          }
+                        >
+                          Decline
+                        </Button>
+                        <Button size="sm" onClick={() => takeSwap(swap.id)}>
+                          Take this set
+                        </Button>
+                      </>
                     )}
                   </div>
                 </Card>
@@ -702,6 +781,18 @@ function SetManagerView() {
           setCoverForId(null);
         }}
       />
+
+      {/* Decline prompt, shared by both kinds of handoff: the note is optional
+          and rides along to whoever was waiting on the answer. Closes only
+          once the POST is through, same as above. */}
+      <DeclineSwapModal
+        open={declining !== null}
+        onClose={() => setDeclining(null)}
+        busy={busyId === declining?.id}
+        kind={declining?.kind}
+        proposer={declining?.proposer}
+        onConfirm={confirmDecline}
+      />
     </div>
   );
 }
@@ -819,9 +910,13 @@ function AssignmentRow({
         </p>
       </div>
       {/* The actions keep their own jobs: a click here must not also open the
-          details modal behind them. */}
+          details modal behind them. On a phone they span the card in equal
+          widths at a 44px touch height, so none is a small target tucked in
+          a corner; from `sm` up they sit at their own size. Stretched, not
+          centred, on phones: when "Request cover" wraps to two lines its
+          neighbours grow to the same height instead of floating mid-row. */}
       <div
-        className="flex items-center gap-2"
+        className="flex w-full items-stretch gap-2 sm:w-auto sm:items-center [&>button]:min-h-11 [&>button]:flex-1 [&>button]:text-sm sm:[&>button]:min-h-0 sm:[&>button]:flex-none sm:[&>button]:text-xs"
         onClick={(e) => e.stopPropagation()}
       >
         {a.status === "PENDING_APPROVAL" ? (
@@ -905,6 +1000,18 @@ function AssignmentRow({
         )}
       </div>
     </Card>
+  );
+}
+
+// "Cover" or "Swap", leading every card in the Covers / Swaps section. The two
+// ask for different answers — a cover is first-come to anyone who plays the
+// role, a swap is a trade aimed at you alone — and the section mixes them, so
+// which one you're looking at can't be left to the sentence that follows.
+function KindChip({ kind }: { kind: DeclineKind }) {
+  return kind === "swap" ? (
+    <Badge tone="indigo">Swap</Badge>
+  ) : (
+    <Badge tone="blue">Cover</Badge>
   );
 }
 
