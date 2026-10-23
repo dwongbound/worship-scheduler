@@ -1,7 +1,8 @@
 "use client";
 // Full-page org settings. A left rail lists every org I belong to (the current
-// one selected); the right pane holds that org's settings — right now just the
-// per-org Slack workspace connection, which only an org admin can change.
+// one selected); the right pane holds that org's settings, grouped behind a
+// sub-nav (see ORG_TABS) because one stack of nine sections had grown into a
+// long scroll. Everything but the integration status lines is admin-only.
 // Reached from the navbar org switcher's "Org settings" item. This replaces the
 // old cramped per-org settings modal that used to live in OrgSwitcher.
 import { useEffect, useState } from "react";
@@ -73,6 +74,19 @@ const GCAL_NOTICES: Record<string, { tone: "indigo" | "amber"; text: string }> =
   },
 };
 
+// The settings card's sub-nav. Each tab owns one group of related settings;
+// everything used to be one long stack in this order. `adminOnly` tabs don't
+// exist for a plain member, who can only read the integration status lines.
+const ORG_TABS = [
+  { key: "integrations", label: "Integrations", adminOnly: false },
+  { key: "teams", label: "Teams", adminOnly: true },
+  { key: "scheduling", label: "Scheduling", adminOnly: true },
+  { key: "notifications", label: "Notifications", adminOnly: true },
+  { key: "general", label: "General", adminOnly: true },
+] as const;
+
+type OrgTabKey = (typeof ORG_TABS)[number]["key"];
+
 export default function OrgSettingsPage() {
   const { orgs, viewOrgId, adminOrgId } = useOrgs();
   const { update } = useSession();
@@ -82,6 +96,9 @@ export default function OrgSettingsPage() {
   const { me, refreshMe } = useMe();
   const memberships = me?.memberships ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Which group of settings the card is showing. Integrations is the default
+  // because that's where the Spotify/Google connect round-trips land back.
+  const [tab, setTab] = useState<OrgTabKey>("integrations");
   // Add-an-org modal (same join-by-key flow as the navbar switcher).
   // Outcome of a Spotify or Google Calendar connect round-trip, read once from
   // ?spotify= / ?gcal= on mount.
@@ -140,6 +157,13 @@ export default function OrgSettingsPage() {
       return orgs[0].id;
     });
   }, [orgs, viewOrgId, adminOrgId]);
+
+  // A member has only the Integrations tab, so a switch onto an org I don't
+  // administer must fall back — otherwise the card shows an empty pane.
+  useEffect(() => {
+    const org = orgs?.find((o) => o.id === selectedId);
+    if (org && !org.isAdmin) setTab("integrations");
+  }, [orgs, selectedId]);
 
   // Load the selected org's join key whenever the selection changes — but only
   // for orgs I administer (the endpoint 403s otherwise).
@@ -253,9 +277,12 @@ export default function OrgSettingsPage() {
 
   const selected = orgs.find((o) => o.id === selectedId) ?? null;
   const slack = memberships?.find((m) => m.orgId === selectedId) ?? null;
+  const visibleTabs = ORG_TABS.filter(
+    (t) => !t.adminOnly || selected?.isAdmin
+  );
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6">
+    <div className="space-y-6">
       <h1 className="text-2xl font-bold">Org settings</h1>
 
       {connectNotice && (
@@ -314,288 +341,342 @@ export default function OrgSettingsPage() {
           <section className="min-w-0 flex-1">
             {selected && (
               <Card>
-                <div className="mb-4 flex items-center gap-2">
+                <div className="mb-3 flex items-center gap-2">
                   <h2 className="text-lg font-semibold">{selected.name}</h2>
                   <span className="rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
                     {selected.isAdmin ? "Admin" : "Member"}
                   </span>
                 </div>
-
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium">Slack workspace</p>
-                    <InfoTooltip text="Connects this org to your church's Slack. The bot DMs people about swap requests and availability requests, sends each team its weekly set summary, and spins up a group chat for a set from its detail modal. Everything Slack-related is off until an admin connects it here." />
-                  </div>
-                  {/* The connection flags ride along on /api/me, which AuthGate
-                      resolves before this page renders — so anything that isn't
-                      a live connection is genuinely "not connected", never a
-                      pending check. */}
-                  <p className="text-sm text-gray-500">
-                    {slack?.orgSlackConnected
-                      ? `Connected to ${slack.slackTeamName ?? "Slack"} ✓`
-                      : "Not connected — the bot can't message this org yet."}
-                  </p>
-
-                  {selected.isAdmin ? (
-                    /* Connect and Sync sit together on the left as the two
-                       things you came here to do; Disconnect drifts to the far
-                       right, outlined in red, so the destructive one is never
-                       the button next to the one you meant to press. */
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      <Button
-                        onClick={() => {
-                          window.location.href = `/api/slack/install?orgId=${selected.id}`;
-                        }}
-                      >
-                        {slack?.orgSlackConnected
-                          ? "Reconnect Slack"
-                          : "Connect to Slack"}
-                      </Button>
-                      {slack?.orgSlackConnected && (
-                        <>
-                          <Button
-                            variant="secondary"
-                            onClick={() => setSyncOpen(true)}
-                          >
-                            Sync Team Members
-                          </Button>
-                          <Button
-                            variant="dangerOutline"
-                            className="ml-auto"
-                            onClick={async () => {
-                              await fetch(
-                                `/api/slack/install?orgId=${selected.id}`,
-                                { method: "DELETE" }
-                              );
-                              // Every page caches this answer per org — drop it
-                              // so the next reader asks again (connecting is a
-                              // full navigation, so it needs no equivalent).
-                              invalidateSlackStatus(selected.id);
-                              await refreshMe();
-                            }}
-                          >
-                            Disconnect
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  ) : (
-                    <p className="pt-1 text-xs text-gray-400">
-                      Only an admin of this org can change its Slack connection.
-                    </p>
-                  )}
-                </div>
-
-                {/* Spotify — the shared church account this org's set playlists
-                    are created under. Same connect/disconnect shape as Slack. */}
-                <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-medium">Spotify account</p>
-                    <InfoTooltip text="One shared church account that owns this org's set playlists. Once connected, a set's songs become a collaborative Spotify playlist when its Slack group chat is created — anyone with the link can add or fix songs. Connect the account the whole team should share, not your personal one." />
-                  </div>
-                  <p className="text-sm text-gray-500">
-                    {/* Name the account when we know it. The old fallback
-                        said "Connected as Spotify", which reads like the
-                        account is *named* Spotify — say nothing rather than
-                        something wrong. A blank name means the connect-time
-                        /me lookup came back empty; reconnecting refills it. */}
-                    {slack?.orgSpotifyConnected
-                      ? spotifyAccountLabel(slack)
-                      : "Not connected — set playlists can't be created yet."}
-                  </p>
-
-                  {selected.isAdmin ? (
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <Button
-                        onClick={() => {
-                          window.location.href = `/api/spotify/connect?orgId=${selected.id}`;
-                        }}
-                      >
-                        {slack?.orgSpotifyConnected
-                          ? "Reconnect Spotify"
-                          : "Connect to Spotify"}
-                      </Button>
-                      {slack?.orgSpotifyConnected && (
-                        <Button
-                          variant="secondary"
-                          onClick={async () => {
-                            await fetch(
-                              `/api/spotify/connect?orgId=${selected.id}`,
-                              { method: "DELETE" }
-                            );
-                            await refreshMe();
-                          }}
+                {/* Sub-nav. A plain member only ever has the Integrations tab,
+                    so the strip itself would be a single dead pill — hide it.
+                    The rule under it is bled past the card's padding (-mx-4 px-4
+                    cancels Card's p-4) so the name + tabs read as one header
+                    band, clearly above the panel rather than floating in it. */}
+                {visibleTabs.length > 1 && (
+                  <div className="-mx-4 mb-6 border-b border-gray-200 px-4 pb-3 dark:border-gray-700">
+                    {/* -mx-1 px-1 leaves the end pills room for their hover
+                        background inside the scroll clip.
+                        `overflow-x-auto` is for a phone, where five pills
+                        don't fit the card's width. */}
+                    <div className="-mx-1 flex gap-1 overflow-x-auto px-1">
+                      {visibleTabs.map((t) => (
+                        <button
+                          key={t.key}
+                          onClick={() => setTab(t.key)}
+                          className={`shrink-0 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none ${
+                            tab === t.key
+                              ? "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-300"
+                              : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                          }`}
                         >
-                          Disconnect
-                        </Button>
-                      )}
+                          {t.label}
+                        </button>
+                      ))}
                     </div>
-                  ) : (
-                    <p className="pt-1 text-xs text-gray-400">
-                      Only an admin of this org can change its Spotify connection.
-                    </p>
-                  )}
-                </div>
-
-                {/* Google Calendar — admins only, like the rest of the
-                    integrations' controls (components/OrgGoogleCalendar.tsx). */}
-                {selected.isAdmin && (
-                  <OrgGoogleCalendar orgId={selected.id} onChanged={refreshMe} />
+                  </div>
                 )}
 
-                {/* Daily digest window — how far ahead the morning Slack DM
-                    looks when it counts what still needs attention. The digest
-                    quotes this window in its own wording, so the number an
-                    admin picks here is the number people read. */}
-                {selected.isAdmin && (
-                  <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium">Daily digest window</p>
-                      <InfoTooltip text="How far ahead the morning Slack digest looks. It decides which unconfirmed spots people are nudged about, and (for admins) which upcoming sets are flagged as still having people who haven't confirmed. A shorter window means fewer, more urgent reminders; a longer one surfaces problems earlier but repeats them for longer." />
-                    </div>
-                    {digestDays === null ? (
-                      <p className="text-sm text-gray-400">Loading…</p>
-                    ) : (
-                      <>
-                        <p className="text-sm text-gray-500">
-                          The digest counts sets{" "}
-                          <span className="font-medium text-gray-700 dark:text-gray-300">
-                            {windowPhrase(digestDays)}
-                          </span>{" "}
-                          and says so in the message.
-                        </p>
-                        <div className="max-w-[16rem] pt-1">
-                          <Select
-                            label="Look ahead"
-                            hideLabel
-                            value={digestDays}
-                            disabled={digestBusy}
-                            onChange={(e) =>
-                              saveDigestDays(Number(e.target.value))
-                            }
-                          >
-                            {/* The presets, plus whatever this org already has
-                                if it was set to something custom via the API. */}
-                            {[
-                              ...new Set([
-                                ...DIGEST_UPCOMING_DAYS_PRESETS,
-                                digestDays,
-                              ]),
-                            ]
-                              .filter(
-                                (d) =>
-                                  d >= DIGEST_UPCOMING_DAYS_MIN &&
-                                  d <= DIGEST_UPCOMING_DAYS_MAX
-                              )
-                              .sort((a, b) => a - b)
-                              .map((d) => (
-                                <option key={d} value={d}>
-                                  {d} {d === 1 ? "day" : "days"}
-                                </option>
-                              ))}
-                          </Select>
+                {/* One group of settings at a time. Several sections — and some of
+                    the components they mount — carry their own `mt-6 border-t`
+                    divider, which is right between sections but wrong at the top of
+                    a panel, so whichever one lands first here has it stripped. */}
+                <div className="[&>*:first-child]:mt-0 [&>*:first-child]:border-t-0 [&>*:first-child]:pt-0">
+                  {tab === "integrations" && (
+                    <>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium">Slack workspace</p>
+                          <InfoTooltip text="Connects this org to your church's Slack. The bot DMs people about swap requests and availability requests, sends each team its weekly set summary, and spins up a group chat for a set from its detail modal. Everything Slack-related is off until an admin connects it here." />
                         </div>
-                        {digestSaved && !digestError && (
-                          <p className="text-sm text-green-600 dark:text-green-400">
-                            Saved ✓
+                        {/* The connection flags ride along on /api/me, which AuthGate
+                            resolves before this page renders — so anything that isn't
+                            a live connection is genuinely "not connected", never a
+                            pending check. */}
+                        <p className="text-sm text-gray-500">
+                          {slack?.orgSlackConnected
+                            ? `Connected to ${slack.slackTeamName ?? "Slack"} ✓`
+                            : "Not connected — the bot can't message this org yet."}
+                        </p>
+
+                        {selected.isAdmin ? (
+                          /* Connect and Sync sit together on the left as the two
+                             things you came here to do; Disconnect drifts to the far
+                             right, outlined in red, so the destructive one is never
+                             the button next to the one you meant to press. */
+                          <div className="flex flex-wrap items-center gap-2 pt-1">
+                            <Button
+                              onClick={() => {
+                                window.location.href = `/api/slack/install?orgId=${selected.id}`;
+                              }}
+                            >
+                              {slack?.orgSlackConnected
+                                ? "Reconnect Slack"
+                                : "Connect to Slack"}
+                            </Button>
+                            {slack?.orgSlackConnected && (
+                              <>
+                                <Button
+                                  variant="secondary"
+                                  onClick={() => setSyncOpen(true)}
+                                >
+                                  Sync Team Members
+                                </Button>
+                                <Button
+                                  variant="dangerOutline"
+                                  className="ml-auto"
+                                  onClick={async () => {
+                                    await fetch(
+                                      `/api/slack/install?orgId=${selected.id}`,
+                                      { method: "DELETE" }
+                                    );
+                                    // Every page caches this answer per org — drop it
+                                    // so the next reader asks again (connecting is a
+                                    // full navigation, so it needs no equivalent).
+                                    invalidateSlackStatus(selected.id);
+                                    await refreshMe();
+                                  }}
+                                >
+                                  Disconnect
+                                </Button>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="pt-1 text-xs text-gray-400">
+                            Only an admin of this org can change its Slack connection.
                           </p>
                         )}
-                        {digestError && (
-                          <p className="text-sm text-red-600">{digestError}</p>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
+                      </div>
 
-                {/* Join key — admins can copy it, set a custom one, or rotate
-                    to a fresh random key (invalidating the old one). */}
-                {selected.isAdmin && (
-                  <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
-                    <p className="text-sm font-medium">Join key</p>
-                    <p className="text-sm text-gray-500">
-                      People join this org by entering this key. Rotating it
-                      stops the old key from working.
-                    </p>
-                    {joinKey === null ? (
-                      <p className="text-sm text-gray-400">Loading…</p>
-                    ) : (
-                      <>
-                        <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <input
-                            value={keyDraft}
-                            onChange={(e) => {
-                              setKeyDraft(e.target.value);
-                              setKeyCopied(false);
-                            }}
-                            aria-label="Join key"
-                            className="w-56 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5
-                              font-mono text-sm dark:border-gray-600 dark:bg-gray-900"
-                          />
-                          <Button
-                            variant="secondary"
-                            onClick={() => {
-                              if (joinKey) {
-                                navigator.clipboard.writeText(joinKey);
-                                setKeyCopied(true);
-                              }
-                            }}
-                            disabled={!joinKey}
-                          >
-                            {keyCopied ? "Copied ✓" : "Copy"}
-                          </Button>
+                      {/* Spotify — the shared church account this org's set playlists
+                          are created under. Same connect/disconnect shape as Slack. */}
+                      <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                        <div className="flex items-center gap-2">
+                          <p className="text-sm font-medium">Spotify account</p>
+                          <InfoTooltip text="One shared church account that owns this org's set playlists. Once connected, a set's songs become a collaborative Spotify playlist when its Slack group chat is created — anyone with the link can add or fix songs. Connect the account the whole team should share, not your personal one." />
                         </div>
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          <Button
-                            onClick={() => saveKey(false)}
-                            disabled={
-                              keyBusy || !keyDraft.trim() || keyDraft === joinKey
-                            }
-                          >
-                            {keyBusy ? "Saving…" : "Save key"}
-                          </Button>
-                          <Button
-                            variant="secondary"
-                            onClick={() => saveKey(true)}
-                            disabled={keyBusy}
-                          >
-                            Rotate
-                          </Button>
-                        </div>
-                        {keyError && (
-                          <p className="text-sm text-red-600">{keyError}</p>
+                        <p className="text-sm text-gray-500">
+                          {/* Name the account when we know it. The old fallback
+                              said "Connected as Spotify", which reads like the
+                              account is *named* Spotify — say nothing rather than
+                              something wrong. A blank name means the connect-time
+                              /me lookup came back empty; reconnecting refills it. */}
+                          {slack?.orgSpotifyConnected
+                            ? spotifyAccountLabel(slack)
+                            : "Not connected — set playlists can't be created yet."}
+                        </p>
+
+                        {selected.isAdmin ? (
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            <Button
+                              onClick={() => {
+                                window.location.href = `/api/spotify/connect?orgId=${selected.id}`;
+                              }}
+                            >
+                              {slack?.orgSpotifyConnected
+                                ? "Reconnect Spotify"
+                                : "Connect to Spotify"}
+                            </Button>
+                            {slack?.orgSpotifyConnected && (
+                              <Button
+                                variant="secondary"
+                                onClick={async () => {
+                                  await fetch(
+                                    `/api/spotify/connect?orgId=${selected.id}`,
+                                    { method: "DELETE" }
+                                  );
+                                  await refreshMe();
+                                }}
+                              >
+                                Disconnect
+                              </Button>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="pt-1 text-xs text-gray-400">
+                            Only an admin of this org can change its Spotify connection.
+                          </p>
                         )}
-                      </>
-                    )}
-                  </div>
-                )}
+                      </div>
 
-                {/* Teams + scheduled weekly Slack reminders (admins only). */}
-                {selected.isAdmin && <OrgTeamsManager orgId={selected.id} />}
+                      {/* Google Calendar — admins only, like the rest of the
+                          integrations' controls (components/OrgGoogleCalendar.tsx). */}
+                      {selected.isAdmin && (
+                        <OrgGoogleCalendar orgId={selected.id} onChanged={refreshMe} />
+                      )}
+                    </>
+                  )}
 
-                {/* How Auto schedule picks people, org-wide (admins only).
-                    Keyed on the org so it reloads its list on a switch. */}
-                {selected.isAdmin && (
-                  <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
-                    <OrgRules key={selected.id} orgId={selected.id} />
-                  </div>
-                )}
+                  {tab === "teams" && (
+                    <>
+                      {/* Teams + scheduled weekly Slack reminders (admins only). */}
+                      {selected.isAdmin && <OrgTeamsManager orgId={selected.id} />}
+                    </>
+                  )}
 
-                {/* Which of the bot's personal DMs this org sends (admins only).
-                    Keyed on the org so it reloads its switches on a switch. */}
-                {selected.isAdmin && (
-                  <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
-                    <OrgNotifications key={selected.id} orgId={selected.id} />
-                  </div>
-                )}
+                  {tab === "scheduling" && (
+                    <>
+                      {/* How Auto schedule picks people, org-wide (admins only).
+                          Keyed on the org so it reloads its list on a switch. */}
+                      {selected.isAdmin && (
+                        <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                          <OrgRules key={selected.id} orgId={selected.id} />
+                        </div>
+                      )}
+                    </>
+                  )}
 
-                {/* How long this workspace keeps its history (admins only).
-                    Last, because it's the only setting here that deletes. */}
-                {selected.isAdmin && (
-                  <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
-                    <OrgRetention key={selected.id} orgId={selected.id} />
-                  </div>
-                )}
+                  {tab === "notifications" && (
+                    <>
+                      {/* Daily digest window — how far ahead the morning Slack DM
+                          looks when it counts what still needs attention. The digest
+                          quotes this window in its own wording, so the number an
+                          admin picks here is the number people read. */}
+                      {selected.isAdmin && (
+                        <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium">Daily digest window</p>
+                            <InfoTooltip text="How far ahead the morning Slack digest looks. It decides which unconfirmed spots people are nudged about, and (for admins) which upcoming sets are flagged as still having people who haven't confirmed. A shorter window means fewer, more urgent reminders; a longer one surfaces problems earlier but repeats them for longer." />
+                          </div>
+                          {digestDays === null ? (
+                            <p className="text-sm text-gray-400">Loading…</p>
+                          ) : (
+                            <>
+                              <p className="text-sm text-gray-500">
+                                The digest counts sets{" "}
+                                <span className="font-medium text-gray-700 dark:text-gray-300">
+                                  {windowPhrase(digestDays)}
+                                </span>{" "}
+                                and says so in the message.
+                              </p>
+                              <div className="max-w-[16rem] pt-1">
+                                <Select
+                                  label="Look ahead"
+                                  hideLabel
+                                  value={digestDays}
+                                  disabled={digestBusy}
+                                  onChange={(e) =>
+                                    saveDigestDays(Number(e.target.value))
+                                  }
+                                >
+                                  {/* The presets, plus whatever this org already has
+                                      if it was set to something custom via the API. */}
+                                  {[
+                                    ...new Set([
+                                      ...DIGEST_UPCOMING_DAYS_PRESETS,
+                                      digestDays,
+                                    ]),
+                                  ]
+                                    .filter(
+                                      (d) =>
+                                        d >= DIGEST_UPCOMING_DAYS_MIN &&
+                                        d <= DIGEST_UPCOMING_DAYS_MAX
+                                    )
+                                    .sort((a, b) => a - b)
+                                    .map((d) => (
+                                      <option key={d} value={d}>
+                                        {d} {d === 1 ? "day" : "days"}
+                                      </option>
+                                    ))}
+                                </Select>
+                              </div>
+                              {digestSaved && !digestError && (
+                                <p className="text-sm text-green-600 dark:text-green-400">
+                                  Saved ✓
+                                </p>
+                              )}
+                              {digestError && (
+                                <p className="text-sm text-red-600">{digestError}</p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Which of the bot's personal DMs this org sends (admins only).
+                          Keyed on the org so it reloads its switches on a switch. */}
+                      {selected.isAdmin && (
+                        <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                          <OrgNotifications key={selected.id} orgId={selected.id} />
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {tab === "general" && (
+                    <>
+                      {/* Join key — admins can copy it, set a custom one, or rotate
+                          to a fresh random key (invalidating the old one). */}
+                      {selected.isAdmin && (
+                        <div className="mt-6 space-y-2 border-t border-gray-200 pt-4 dark:border-gray-700">
+                          <p className="text-sm font-medium">Join key</p>
+                          <p className="text-sm text-gray-500">
+                            People join this org by entering this key. Rotating it
+                            stops the old key from working.
+                          </p>
+                          {joinKey === null ? (
+                            <p className="text-sm text-gray-400">Loading…</p>
+                          ) : (
+                            <>
+                              <div className="flex flex-wrap items-center gap-2 pt-1">
+                                <input
+                                  value={keyDraft}
+                                  onChange={(e) => {
+                                    setKeyDraft(e.target.value);
+                                    setKeyCopied(false);
+                                  }}
+                                  aria-label="Join key"
+                                  className="w-56 rounded-lg border border-gray-300 bg-white px-2.5 py-1.5
+                                    font-mono text-sm dark:border-gray-600 dark:bg-gray-900"
+                                />
+                                <Button
+                                  variant="secondary"
+                                  onClick={() => {
+                                    if (joinKey) {
+                                      navigator.clipboard.writeText(joinKey);
+                                      setKeyCopied(true);
+                                    }
+                                  }}
+                                  disabled={!joinKey}
+                                >
+                                  {keyCopied ? "Copied ✓" : "Copy"}
+                                </Button>
+                              </div>
+                              <div className="flex flex-wrap gap-2 pt-1">
+                                <Button
+                                  onClick={() => saveKey(false)}
+                                  disabled={
+                                    keyBusy || !keyDraft.trim() || keyDraft === joinKey
+                                  }
+                                >
+                                  {keyBusy ? "Saving…" : "Save key"}
+                                </Button>
+                                <Button
+                                  variant="secondary"
+                                  onClick={() => saveKey(true)}
+                                  disabled={keyBusy}
+                                >
+                                  Rotate
+                                </Button>
+                              </div>
+                              {keyError && (
+                                <p className="text-sm text-red-600">{keyError}</p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {/* How long this workspace keeps its history (admins only).
+                          Last, because it's the only setting here that deletes. */}
+                      {selected.isAdmin && (
+                        <div className="mt-6 border-t border-gray-200 pt-6 dark:border-gray-700">
+                          <OrgRetention key={selected.id} orgId={selected.id} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               </Card>
             )}
           </section>

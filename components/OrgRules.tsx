@@ -33,7 +33,9 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import Button from "@/components/common/Button";
 import InfoTooltip from "@/components/common/InfoTooltip";
+import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
+import PersonPicker from "@/components/common/PersonPicker";
 import Select from "@/components/common/Select";
 import Toggle from "@/components/common/Toggle";
 import { DAY_ABBRS } from "@/lib/constants";
@@ -53,8 +55,12 @@ import {
   type SchedulingRule,
 } from "@/lib/schedulingRules";
 
-interface RuleOptions {
-  people: { id: string; name: string }[];
+export interface RuleOptions {
+  people: {
+    id: string;
+    name: string;
+    teams: { teamId: string; roles: string[] }[];
+  }[];
   roles: { key: string; label: string }[];
   templates: {
     id: string;
@@ -64,6 +70,7 @@ interface RuleOptions {
     teamName: string | null;
   }[];
   sets: { id: string; label: string | null; startsAt: string; teamName: string | null }[];
+  teams: { id: string; name: string; roles: { key: string; label: string }[] }[];
 }
 
 // The builder's form: every blank of every kind, so switching kinds mid-way
@@ -82,6 +89,12 @@ interface Draft {
   mode: "ALWAYS" | "NEVER";
   max: number;
   period: "WEEK" | "MONTH";
+  // Role-shaped kinds. `roles` is ORDERED — for MD order that order IS the
+  // preference, so the chips below record the sequence they were clicked in.
+  roles: string[];
+  otherRole: string;
+  // Which sets this rule governs: "" = the whole org, else a team id.
+  teamId: string;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -98,10 +111,24 @@ const EMPTY_DRAFT: Draft = {
   mode: "NEVER",
   max: 2,
   period: "MONTH",
+  // Role-shaped kinds: an ORDERED list (MD preference order, or the roles a
+  // hosted role may sit alongside) and the second half of a pair.
+  roles: [],
+  otherRole: "",
+  teamId: "",
 };
 
+// The Draft's stand-in for "no one person" on a Limit rule — a real id is a
+// cuid, so this can't collide. Becomes `userId: null` on the way out.
+const ALL_PEOPLE = "__ALL__";
+
 function draftFromRule(rule: SchedulingRule): Draft {
-  const d: Draft = { ...EMPTY_DRAFT, kind: rule.params.kind, tier: rule.tier };
+  const d: Draft = {
+    ...EMPTY_DRAFT,
+    kind: rule.params.kind,
+    tier: rule.tier,
+    teamId: rule.teamId ?? "",
+  };
   const p = rule.params;
   switch (p.kind) {
     case "ONLY_IF_NEEDED":
@@ -115,7 +142,13 @@ function draftFromRule(rule: SchedulingRule): Draft {
     case "TOGETHER":
       return { ...d, userId: p.userIds[0], otherUserId: p.userIds[1], mode: p.mode };
     case "LIMIT":
-      return { ...d, userId: p.userId, max: p.max, period: p.period };
+      return { ...d, userId: p.userId ?? ALL_PEOPLE, max: p.max, period: p.period };
+    case "LEADS_FROM":
+      return { ...d, roles: [...p.roles] };
+    case "ROLE_HOST":
+      return { ...d, role: p.role, roles: [...p.hostRoles] };
+    case "MAY_DOUBLE":
+      return { ...d, role: p.roles[0], otherRole: p.roles[1] };
   }
 }
 
@@ -135,7 +168,18 @@ function paramsFromDraft(d: Draft): RuleParams | string {
     case "TOGETHER":
       return parseRuleParams({ kind: d.kind, userIds: [d.userId, d.otherUserId], mode: d.mode });
     case "LIMIT":
-      return parseRuleParams({ kind: d.kind, userId: d.userId, max: d.max, period: d.period });
+      return parseRuleParams({
+        kind: d.kind,
+        userId: d.userId === ALL_PEOPLE ? null : d.userId,
+        max: d.max,
+        period: d.period,
+      });
+    case "LEADS_FROM":
+      return parseRuleParams({ kind: d.kind, roles: d.roles });
+    case "ROLE_HOST":
+      return parseRuleParams({ kind: d.kind, role: d.role, hostRoles: d.roles });
+    case "MAY_DOUBLE":
+      return parseRuleParams({ kind: d.kind, roles: [d.role, d.otherRole] });
   }
 }
 
@@ -185,7 +229,9 @@ export default function OrgRules({ orgId }: { orgId: string }) {
     const roles = new Map(options?.roles.map((r) => [r.key, r.label]));
     const templates = new Map(options?.templates.map((t) => [t.id, templateLabel(t)]));
     const sets = new Map(options?.sets.map((s) => [s.id, setLabel(s)]));
+    const teams = new Map(options?.teams.map((t) => [t.id, t.name]));
     return {
+      team: (id) => teams.get(id) ?? "a team",
       user: (id) => people.get(id) ?? "someone",
       role: (key) => roles.get(key) ?? key,
       template: (id) => templates.get(id) ?? "a recurring set",
@@ -201,7 +247,12 @@ export default function OrgRules({ orgId }: { orgId: string }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          rules: next.map((r) => ({ tier: r.tier, enabled: r.enabled, params: r.params })),
+          rules: next.map((r) => ({
+            tier: r.tier,
+            enabled: r.enabled,
+            params: r.params,
+            teamId: r.teamId ?? null,
+          })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -260,11 +311,21 @@ export default function OrgRules({ orgId }: { orgId: string }) {
   // The list as it would be with the builder's rule saved: an edit stays where
   // it was unless its tier changed, which moves it to the end of the other
   // section (the bottom of the preference ranking, if it became one).
-  function withDraft(params: RuleParams, tier: RuleTier): SchedulingRule[] {
+  function withDraft(
+    params: RuleParams,
+    tier: RuleTier,
+    teamId: string | null = null
+  ): SchedulingRule[] {
     const list = rules ?? [];
     const id = builder?.editingId ?? "new";
     const current = list.find((r) => r.id === id);
-    const rule: SchedulingRule = { id, tier, enabled: current?.enabled ?? true, params };
+    const rule: SchedulingRule = {
+      id,
+      tier,
+      enabled: current?.enabled ?? true,
+      params,
+      teamId,
+    };
     if (current && current.tier === tier) {
       return list.map((r) => (r.id === id ? rule : r));
     }
@@ -274,9 +335,13 @@ export default function OrgRules({ orgId }: { orgId: string }) {
       : [...required, ...preferences, rule];
   }
 
-  async function saveBuilder(params: RuleParams, tier: RuleTier) {
+  async function saveBuilder(
+    params: RuleParams,
+    tier: RuleTier,
+    teamId: string | null
+  ) {
     setBuilderError("");
-    const err = await persist(withDraft(params, tier));
+    const err = await persist(withDraft(params, tier, teamId));
     if (err) {
       setBuilderError(err);
       return;
@@ -456,7 +521,9 @@ function RuleRowBody({
   names: RuleNames;
   busy: boolean;
   onToggle: (on: boolean) => void;
-  onEdit: () => void;
+  // Absent for a rule with no builder form (see CREATABLE_KINDS) — those are
+  // changed by switching them off or deleting them.
+  onEdit?: () => void;
   onDelete: () => void;
 }) {
   const sentence = ruleSentence(rule.params, names);
@@ -471,6 +538,13 @@ function RuleRowBody({
         }`}
       >
         <Sentence params={rule.params} names={names} />
+        {rule.teamId && (
+          // Only a SCOPED rule is badged: org-wide is the default, and badging
+          // every row would make the exception harder to spot, not easier.
+          <span className="ml-2 whitespace-nowrap rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+            {names.team(rule.teamId)} only
+          </span>
+        )}
       </p>
       <div className="flex items-center gap-1 sm:contents">
         <span className="mr-auto flex sm:order-1 sm:mr-0">
@@ -483,9 +557,11 @@ function RuleRowBody({
           />
         </span>
         <div className="flex shrink-0 gap-1 sm:order-3">
-          <Button variant="ghost" size="sm" onClick={onEdit} disabled={busy}>
-            Edit
-          </Button>
+          {onEdit && (
+            <Button variant="ghost" size="sm" onClick={onEdit} disabled={busy}>
+              Edit
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -654,10 +730,10 @@ function GripIcon() {
 
 // ── The builder ───────────────────────────────────────────────────────────
 
-const templateLabel = (t: RuleOptions["templates"][number]) =>
+export const templateLabel = (t: RuleOptions["templates"][number]) =>
   `${t.label} (${DAY_ABBRS[t.dayOfWeek]} ${minutesToShortTimeLabel(t.startMinute)})`;
 
-const setLabel = (s: RuleOptions["sets"][number]) =>
+export const setLabel = (s: RuleOptions["sets"][number]) =>
   `${s.label || s.teamName || "Set"} ${shortDateTimeCompact(s.startsAt)}`;
 
 // Three steps on one screen: 1 what kind, 2 the sentence (its blanks are the
@@ -682,38 +758,93 @@ function RuleBuilder({
   names: RuleNames;
   busy: boolean;
   error: string;
-  prospective: (params: RuleParams, tier: RuleTier) => SchedulingRule[];
+  prospective: (
+    params: RuleParams,
+    tier: RuleTier,
+    teamId: string | null
+  ) => SchedulingRule[];
   onChange: (draft: Draft) => void;
   onClose: () => void;
-  onSave: (params: RuleParams, tier: RuleTier) => void;
+  onSave: (params: RuleParams, tier: RuleTier, teamId: string | null) => void;
 }) {
-  const set = (patch: Partial<Draft>) => onChange({ ...draft, ...patch });
+  const set = (patch: Partial<Draft>) => {
+    const next = { ...draft, ...patch };
+    // Narrowing the scope has to narrow what's already picked: a team change
+    // can orphan a role that team doesn't have, and a role change can orphan a
+    // person who doesn't play it. Clearing is right — leaving a stale name in
+    // the sentence means saving a rule the picker would never have offered.
+    if (patch.teamId !== undefined && patch.teamId !== draft.teamId) {
+      const team = options.teams.find((t) => t.id === patch.teamId);
+      const allowed = team ? new Set(team.roles.map((r) => r.key)) : null;
+      if (allowed) {
+        if (next.role && !allowed.has(next.role)) next.role = "";
+        if (next.otherRole && !allowed.has(next.otherRole)) next.otherRole = "";
+        next.roles = next.roles.filter((k) => allowed.has(k));
+      }
+      next.userId = "";
+      next.otherUserId = "";
+    } else if (patch.role !== undefined && patch.role !== draft.role) {
+      // The people lists below are drawn from whoever plays the chosen role.
+      next.userId = "";
+      next.otherUserId = "";
+    }
+    onChange(next);
+  };
   const info = kindInfo(draft.kind);
   // ONLY_IF_NEEDED can only be a preference.
   const tier: RuleTier = info.tiers.includes(draft.tier) ? draft.tier : info.tiers[0];
   const params = paramsFromDraft(draft);
   const ready = typeof params !== "string";
-  const clash = ready ? findContradiction(prospective(params, tier)) : null;
+  const clash = ready
+    ? findContradiction(prospective(params, tier, draft.teamId || null))
+    : null;
 
-  const person = (value: string, onPick: (id: string) => void, label: string, exclude?: string) => (
+  // The blanks narrow as you go: a team limits the roles to that team's
+  // catalog, and a role limits the people to whoever actually plays it there.
+  // Picking the team FIRST is what makes the rest of the form short.
+  const scopedTeam = options.teams.find((t) => t.id === draft.teamId) ?? null;
+  const roleChoices = scopedTeam ? scopedTeam.roles : options.roles;
+  // People who could satisfy this rule: on the chosen team (if any), playing
+  // the chosen role (if the rule names one). With neither chosen it's the
+  // whole org, which is what it always was.
+  const peopleFor = (forRole?: string) =>
+    options.people.filter((p) => {
+      if (!draft.teamId && !forRole) return true;
+      return p.teams.some(
+        (t) =>
+          (!draft.teamId || t.teamId === draft.teamId) &&
+          (!forRole || t.roles.includes(forRole))
+      );
+    });
+
+  // Type-to-filter rather than a long <select>: a roster runs to dozens of
+  // names, and picking one is "type three letters and press Enter".
+  // `everyone` adds the org-wide option a Limit rule can take (userId null).
+  const person = (
+    value: string,
+    onPick: (id: string) => void,
+    label: string,
+    exclude?: string,
+    everyone = false,
+    forRole?: string
+  ) => (
     <Blank>
-      <Select label={label} hideLabel value={value} onChange={(e) => onPick(e.target.value)}>
-        <option value="">Pick a person…</option>
-        {options.people
-          .filter((p) => p.id !== exclude)
-          .map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-      </Select>
+      <PersonPicker
+        label={label}
+        value={value}
+        onChange={onPick}
+        options={[
+          ...(everyone ? [{ id: ALL_PEOPLE, name: "Everyone" }] : []),
+          ...peopleFor(forRole).filter((p) => p.id !== exclude),
+        ]}
+      />
     </Blank>
   );
   const role = (allowAny = false) => (
     <Blank>
       <Select label="Role" hideLabel value={draft.role} onChange={(e) => set({ role: e.target.value })}>
         <option value="">{allowAny ? "any role" : "Pick a role…"}</option>
-        {options.roles.map((r) => (
+        {roleChoices.map((r) => (
           <option key={r.key} value={r.key}>
             {r.label}
           </option>
@@ -721,27 +852,123 @@ function RuleBuilder({
       </Select>
     </Blank>
   );
+  // The left column's filter. Matches title and description, so "md" finds
+  // "Who can lead" by its wording rather than only by name.
+  const [kindQuery, setKindQuery] = useState("");
+  const matchingKinds = RULE_KINDS.filter((k) => {
+    const q = kindQuery.trim().toLowerCase();
+    return !q || `${k.title} ${k.description}`.toLowerCase().includes(q);
+  });
+
+  // An ORDERED multi-pick: click to add (appending), click again to drop.
+  // A plain multi-select can't express order, and order is the whole point of
+  // MD preference — so each chosen role shows its position.
+  const roleList = (label: string) => (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+      {roleChoices.map((r) => {
+        const at = draft.roles.indexOf(r.key);
+        const picked = at >= 0;
+        return (
+          <button
+            key={r.key}
+            type="button"
+            aria-pressed={picked}
+            aria-label={`${label}: ${r.label}`}
+            onClick={() =>
+              set({
+                roles: picked
+                  ? draft.roles.filter((k) => k !== r.key)
+                  : [...draft.roles, r.key],
+              })
+            }
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+              picked
+                ? "border-indigo-500 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200"
+                : "border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+            }`}
+          >
+            {picked && <span className="mr-1 opacity-60">{at + 1}.</span>}
+            {r.label}
+          </button>
+        );
+      })}
+    </span>
+  );
+  // The second role of a pair — `role` holds the first.
+  const otherRole = () => (
+    <Blank>
+      <Select
+        label="Other role"
+        hideLabel
+        value={draft.otherRole}
+        onChange={(e) => set({ otherRole: e.target.value })}
+      >
+        <option value="">Pick a role…</option>
+        {roleChoices
+          .filter((r) => r.key !== draft.role)
+          .map((r) => (
+            <option key={r.key} value={r.key}>
+              {r.label}
+            </option>
+          ))}
+      </Select>
+    </Blank>
+  );
+  // One line of the form: the glue word, then its control, with every word
+  // column the same width so stacked rows line their controls up. This is what
+  // makes a two-person rule read as a balanced pair.
+  const line = (word: string, control: React.ReactNode, after?: string) => (
+    <div className="flex w-full items-center gap-2">
+      <span className="w-14 shrink-0 text-right text-sm text-gray-500 dark:text-gray-400">
+        {word}
+      </span>
+      {control}
+      {after && (
+        <span className="text-sm text-gray-500 dark:text-gray-400">{after}</span>
+      )}
+    </div>
+  );
+
   let sentence: React.ReactNode;
   switch (draft.kind) {
     case "ONLY_IF_NEEDED":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "Person")}
-          <T>is seated on</T>
-          {role(true)}
-          <T>only if nobody else is free</T>
+          {line("On", role(true))}
+          {line(
+            "seat",
+            person(draft.userId, (userId) => set({ userId }), "Person", undefined, true, draft.role || undefined),
+            "only if nobody else is free"
+          )}
         </>
       );
       break;
     case "PREFER":
       sentence = (
         <>
-          <T>Pick</T>
-          {person(draft.userId, (userId) => set({ userId }), "First choice", draft.otherUserId)}
-          <T>over</T>
-          {person(draft.otherUserId, (otherUserId) => set({ otherUserId }), "Second choice", draft.userId)}
-          <T>on</T>
-          {role()}
+          {line("On", role())}
+          {line(
+            "pick",
+            person(
+              draft.userId,
+              (userId) => set({ userId }),
+              "First choice",
+              draft.otherUserId,
+              false,
+              draft.role || undefined
+            )
+          )}
+          {line(
+            "over",
+            person(
+              draft.otherUserId,
+              (otherUserId) => set({ otherUserId }),
+              "Second choice",
+              draft.userId,
+              false,
+              draft.role || undefined
+            )
+          )}
         </>
       );
       break;
@@ -785,16 +1012,20 @@ function RuleBuilder({
               Specific dates
             </Choice>
           </div>
-          {weekly
-            ? pick(draft.templateA, "templateA", draft.templateB)
-            : pick(draft.setA, "setA", draft.setB)}
-          <T>and</T>
-          {weekly
-            ? pick(draft.templateB, "templateB", draft.templateA)
-            : pick(draft.setB, "setB", draft.setA)}
-          <T>{weekly ? "in the same week share their" : "share their"}</T>
-          {role()}
-          <T>player</T>
+          {line("On", role())}
+          {line(
+            "",
+            weekly
+              ? pick(draft.templateA, "templateA", draft.templateB)
+              : pick(draft.setA, "setA", draft.setB)
+          )}
+          {line(
+            "and",
+            weekly
+              ? pick(draft.templateB, "templateB", draft.templateA)
+              : pick(draft.setB, "setB", draft.setA),
+            weekly ? "share a player each week" : "share a player"
+          )}
           {weekly && options.templates.length < 2 && (
             <p className="w-full text-xs text-amber-600 dark:text-amber-400">
               This needs two recurring sets. Add them on the Create tab first.
@@ -807,28 +1038,69 @@ function RuleBuilder({
     case "TOGETHER":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "First person", draft.otherUserId)}
+          {line(
+            "",
+            person(draft.userId, (userId) => set({ userId }), "First person", draft.otherUserId)
+          )}
+          {line(
+            "and",
+            person(
+              draft.otherUserId,
+              (otherUserId) => set({ otherUserId }),
+              "Second person",
+              draft.userId
+            )
+          )}
+          {line(
+            "",
+            <Blank>
+              <Select
+                label="Always or never"
+                hideLabel
+                value={draft.mode}
+                onChange={(e) => set({ mode: e.target.value as Draft["mode"] })}
+              >
+                <option value="NEVER">never</option>
+                <option value="ALWAYS">always</option>
+              </Select>
+            </Blank>,
+            "serve on the same set"
+          )}
+        </>
+      );
+      break;
+    case "LEADS_FROM":
+      sentence = (
+        <>
+          <T>A musical director leads from</T>
+          {roleList("Leads from")}
+          <T>— click them in order of preference</T>
+        </>
+      );
+      break;
+    case "ROLE_HOST":
+      sentence = (
+        <>
+          {role()}
+          <T>is only played by someone already on</T>
+          {roleList("Doubles up with")}
+        </>
+      );
+      break;
+    case "MAY_DOUBLE":
+      sentence = (
+        <>
+          {role()}
           <T>and</T>
-          {person(draft.otherUserId, (otherUserId) => set({ otherUserId }), "Second person", draft.userId)}
-          <Blank>
-            <Select
-              label="Always or never"
-              hideLabel
-              value={draft.mode}
-              onChange={(e) => set({ mode: e.target.value as Draft["mode"] })}
-            >
-              <option value="NEVER">never</option>
-              <option value="ALWAYS">always</option>
-            </Select>
-          </Blank>
-          <T>serve on the same set</T>
+          {otherRole()}
+          <T>can be played by the same person</T>
         </>
       );
       break;
     case "LIMIT":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "Person")}
+          {person(draft.userId, (userId) => set({ userId }), "Person", undefined, true)}
           <T>plays at most</T>
           <Blank narrow>
             <Select
@@ -865,7 +1137,7 @@ function RuleBuilder({
     <Modal
       open
       onClose={onClose}
-      size="wide"
+      size="xl"
       title={editing ? "Edit rule" : "Add a rule"}
       footer={
         <div className="flex w-full items-center justify-end gap-2">
@@ -875,63 +1147,129 @@ function RuleBuilder({
           <Button
             loading={busy}
             disabled={!ready || !!clash}
-            onClick={() => ready && onSave(params, tier)}
+            onClick={() => ready && onSave(params, tier, draft.teamId || null)}
           >
             {editing ? "Save rule" : "Add rule"}
           </Button>
         </div>
       }
     >
-      <Step n={1} title="What kind of rule?">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {RULE_KINDS.map((k) => (
-            <button
-              key={k.kind}
-              type="button"
-              onClick={() => set({ kind: k.kind })}
-              aria-pressed={draft.kind === k.kind}
-              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                draft.kind === k.kind
-                  ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
-                  : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
-              }`}
-            >
-              <p className="text-sm font-medium">{k.title}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{k.description}</p>
-            </button>
-          ))}
+      {/* Lets a host modal know this third layer is up, so it leaves Escape to
+          this dialog (see StagedScheduleModal's rules guard). A real node
+          because Modal only forwards the props it declares. */}
+      <span data-rule-builder hidden />
+
+      {/* Two columns: WHICH rule on the left, WHAT IT SAYS on the right. The
+          kinds are a fixed vocabulary you scan and filter, while everything to
+          the right only makes sense once one is picked — stacked, the blanks
+          you came to fill sat below a grid you'd already finished with. One
+          column on a phone, where side-by-side would squeeze both. */}
+      {/* FIXED HEIGHT, sized to the tallest rule we expect (the role-list and
+          same-player forms). Every kind otherwise resized the dialog as you
+          clicked between them — the footer jumping under the cursor as the
+          blanks changed — and a form that moves while you aim at it is worse
+          than one with some empty space. Each column scrolls inside it, so a
+          long roster or an unusually tall form still fits, and the height only
+          applies once the columns are side by side: stacked on a phone it has
+          to grow. The panel's own max-h still wins on a short screen. */}
+      <div className="grid gap-5 md:h-[34rem] md:grid-cols-[16rem_minmax(0,1fr)]">
+        <div className="flex min-h-0 min-w-0 flex-col">
+          <p className="mb-2 text-sm font-medium">What kind of rule?</p>
+          <Input
+            label="Search rule kinds"
+            hideLabel
+            value={kindQuery}
+            onChange={(e) => setKindQuery(e.target.value)}
+            placeholder="Search…"
+            autoComplete="off"
+          />
+          {/* Scrolls on its own so a long list never pushes the blanks on the
+              right out of view. */}
+          <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
+            {matchingKinds.length === 0 && (
+              <p className="px-1 py-2 text-xs text-gray-400">No rule kinds match.</p>
+            )}
+            {matchingKinds.map((k) => (
+              <button
+                key={k.kind}
+                type="button"
+                onClick={() => set({ kind: k.kind })}
+                aria-pressed={draft.kind === k.kind}
+                className={`block w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                  draft.kind === k.kind
+                    ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
+                    : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+                }`}
+              >
+                <span className="flex items-center justify-between gap-1.5">
+                  <span className="text-sm font-medium">{k.title}</span>
+                  <InfoTooltip text={k.description} />
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
-      </Step>
 
-      <Step n={2} title="Fill in the blanks">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">{sentence}</div>
-      </Step>
+        <div className="min-h-0 min-w-0 overflow-y-auto overscroll-contain pr-1">
 
-      <Step n={3} title="How strict?">
+      <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+        Applies to
+        <InfoTooltip text="Which sets this rule governs. A team's rule is simply not consulted when filling another team's set — so two teams can hold opposite rules and both are honoured." />
+      </p>
+      <div className="mb-5 w-full sm:w-64">
+        <Select
+          label="Applies to"
+          hideLabel
+          value={draft.teamId}
+          onChange={(e) => set({ teamId: e.target.value })}
+        >
+          <option value="">Every team in this org</option>
+          {options.teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name} only
+            </option>
+          ))}
+        </Select>
+      </div>
+
+      <p className="mb-2 text-sm font-medium">Fill in the blanks</p>
+      {/* `items-baseline` keeps the glue words sitting on the controls' text
+          rather than floating mid-box, and the blanks share one width (see
+          Blank) so two people read as a balanced pair instead of a ragged
+          sentence that rewraps as you pick. */}
+      <div className="mb-5 flex flex-wrap items-baseline gap-x-2 gap-y-3">
+        {sentence}
+      </div>
+
+      <p className="mb-2 text-sm font-medium">How strict?</p>
+      <div className="mb-5">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <TierCard
             selected={tier === "REQUIRED"}
             disabled={!info.tiers.includes("REQUIRED")}
             onClick={() => set({ tier: "REQUIRED" })}
             title="Required"
-            body={
+            hint={
               info.tiers.includes("REQUIRED")
-                ? "Never broken. If it can't be met, the slot stays open."
+                ? "Never broken. If it can't be met, the slot is left open for you to fill by hand."
                 : "Not for this kind: a required last resort would just mean never. Mark them inactive instead."
             }
           />
           <TierCard
             selected={tier === "PREFERENCE"}
+            disabled={!info.tiers.includes("PREFERENCE")}
             onClick={() => set({ tier: "PREFERENCE" })}
             title="Preference"
-            body={
-              editing
-                ? "Followed when possible. Keeps its place in the ranking."
-                : "Followed when possible. Added at the bottom of the ranking; drag it up to give it more weight."
+            hint={
+              !info.tiers.includes("PREFERENCE")
+                ? "Not for this kind: it describes what a role IS, so there's nothing for \u201cwhen possible\u201d to mean."
+                : editing
+                  ? "Followed when possible, and ranked — the higher of two that disagree wins. Keeps its place in the ranking."
+                  : "Followed when possible, and ranked — the higher of two that disagree wins. Added at the bottom; drag it up to give it more weight."
             }
           />
         </div>
-      </Step>
+      </div>
 
       {ready ? (
         <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-gray-900/40">
@@ -954,23 +1292,12 @@ function RuleBuilder({
           {error}
         </p>
       )}
+        </div>
+      </div>
     </Modal>
   );
 }
 
-function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-5">
-      <p className="mb-2 flex items-center gap-2 text-sm font-medium">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-xs text-white">
-          {n}
-        </span>
-        {title}
-      </p>
-      {children}
-    </div>
-  );
-}
 
 // The sentence's glue words between its blanks.
 function T({ children }: { children: React.ReactNode }) {
@@ -1013,29 +1340,40 @@ function TierCard({
   disabled = false,
   onClick,
   title,
-  body,
+  hint,
 }: {
   selected: boolean;
   disabled?: boolean;
   onClick: () => void;
   title: string;
-  body: string;
+  hint: string;
 }) {
+  // The explanation lives in the (i), not under the title: two paragraphs of
+  // body text here made the strictness choice the loudest thing on the panel
+  // when it's the smallest decision on it. The tooltip sits OUTSIDE the button
+  // so hovering it doesn't read as pressing the option.
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      disabled={disabled}
-      onClick={onClick}
-      className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+    <div
+      className={`flex items-center justify-between gap-1 rounded-lg border px-3 py-2 transition-colors ${
+        disabled ? "opacity-50" : ""
+      } ${
         selected
           ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
-          : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+          : "border-gray-200 dark:border-gray-700"
       }`}
     >
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-gray-500 dark:text-gray-400">{body}</p>
-    </button>
+      <button
+        type="button"
+        role="radio"
+        aria-checked={selected}
+        aria-label={`${title}: ${hint}`}
+        disabled={disabled}
+        onClick={onClick}
+        className="min-w-0 flex-1 text-left text-sm font-medium disabled:cursor-not-allowed"
+      >
+        {title}
+      </button>
+      <InfoTooltip text={hint} />
+    </div>
   );
 }

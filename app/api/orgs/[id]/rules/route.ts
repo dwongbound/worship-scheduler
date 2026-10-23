@@ -13,7 +13,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { validateRules } from "@/lib/schedulingRules";
+import {
+  defaultRoleRules,
+  validateRules,
+  type RuleKind,
+} from "@/lib/schedulingRules";
+import {
+  ACOUSTIC_GUITAR,
+  ACOUSTIC_HOST_ROLES,
+  MD_ROLES,
+  OVERLAP_ALLOWED_PAIRS,
+} from "@/lib/constants";
+
+// The kinds whose absence means "this org has never been given the defaults".
+const ROLE_RULE_KINDS: RuleKind[] = ["LEADS_FROM", "ROLE_HOST", "MAY_DOUBLE"];
 import {
   loadOrgRules,
   orgRuleRefs,
@@ -45,7 +58,43 @@ export async function GET(
     return NextResponse.json({ rules, ...context });
   }
 
-  return NextResponse.json({ rules, options: await ruleEditorOptions(id) });
+  // The role-shaped rules (LEADS_FROM / ROLE_HOST / MAY_DOUBLE) describe what
+  // used to be hardcoded. `resolveRoleBehavior` already falls back to those
+  // built-in values when an org has no rule for them, so this write changes no
+  // behaviour whatsoever — it materializes the defaults so an admin can SEE and
+  // edit them. Done here, on the first look at the editor, rather than as a
+  // migration: it covers new and existing orgs alike, and an org that never
+  // opens this page is no worse off. Deleting one is honoured (it means "no
+  // such rule"), so this only fires while NONE of the three kinds is present.
+  //
+  // APPEND-ONLY, deliberately: `saveOrgRules` replaces the whole list, and
+  // `loadOrgRules` drops rules naming something since deleted — so rewriting
+  // the list here would quietly PERSIST those drops, turning a read of this
+  // page into data loss. These rows are inserted after the last position and
+  // nothing already stored is touched.
+  let list = rules;
+  if (!list.some((r) => ROLE_RULE_KINDS.includes(r.params.kind))) {
+    const last = await prisma.schedulingRule.aggregate({
+      where: { orgId: id },
+      _max: { position: true },
+    });
+    let position = (last._max.position ?? -1) + 1;
+    await prisma.schedulingRule.createMany({
+      data: defaultRoleRules({
+        mdRoles: MD_ROLES,
+        hostRoles: { [ACOUSTIC_GUITAR]: ACOUSTIC_HOST_ROLES },
+        doublePairs: OVERLAP_ALLOWED_PAIRS,
+      }).map((r) => ({
+        orgId: id,
+        tier: r.tier,
+        enabled: r.enabled,
+        params: r.params,
+        position: position++,
+      })),
+    });
+    list = await loadOrgRules(id);
+  }
+  return NextResponse.json({ rules: list, options: await ruleEditorOptions(id) });
 }
 
 export async function PUT(

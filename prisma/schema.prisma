@@ -251,6 +251,7 @@ model Team {
   // Team names only need to be unique within their org.
   @@unique([orgId, name])
   @@map("teams")
+  schedulingRules SchedulingRule[]
 }
 
 // One role in a team's catalog. Teams define their own — the built-ins below
@@ -348,6 +349,12 @@ model User {
   passwordHash String
   name         String
   email        String? @unique
+
+  // Read-only access to this person's OWN Google Calendar, granted the first
+  // time they use "Import from Google Calendar" on /schedule and remembered so
+  // later imports need no click (lib/googleAvailability.ts). An encrypted
+  // refresh token (lib/crypto.ts); null = never granted, or revoked.
+  googleImportRefreshToken String?
 
   // True for an account created by an admin IMPORT (the availability form
   // roster) rather than by the person themselves — a stand-in that holds their
@@ -734,11 +741,25 @@ model Unavailability {
   startDate DateTime?
   endDate   DateTime?
 
+  // Dates a RECURRING rule SKIPS, as "YYYY-MM-DD" — one per day freed from the
+  // calendar (right-click / long press, or clicking a day already blocked all
+  // day). It's what keeps "every Tuesday" ONE row with a hole in it instead of
+  // two rows either side of the freed date, which is what splitting its span
+  // would mean — and why freeing a day works the same whether one weekly rule
+  // covers it or three overlapping ones. Every reader of a recurring rule
+  // honours it (lib/availability.ts recurringSkips).
+  exceptDates String[] @default([])
+
   // Set for SPECIFIC blocks (the TimeRange they belong to); null otherwise.
   request   AvailabilityRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
   requestId String?
 
   note String?
+
+  // True for a block written by "Import from Google Calendar" on /schedule
+  // (lib/googleAvailability.ts). Re-importing replaces exactly these rows for
+  // that request, so a hand-made block is never touched by an import.
+  fromGoogle Boolean @default(false)
 
   createdAt DateTime @default(now())
 
@@ -900,6 +921,13 @@ model SchedulingRule {
 
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
+
+  // Which sets this rule governs: null = every set in the org, otherwise only
+  // this team's. Deleting the team deletes its rules — a rule scoped to
+  // nothing would silently become org-wide, which is the opposite of what it
+  // said. See lib/schedulingRules.ts (scopeCovers).
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

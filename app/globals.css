@@ -54,6 +54,19 @@
     overscroll-behavior-x: none;
     overscroll-behavior-y: contain;
   }
+  /* Keep the scrollbar's space reserved whether or not there IS one. Opening a
+     modal sets `overflow: hidden` on <body> (common/Modal.tsx), and because
+     the viewport's scrollbar comes from body here (see the note below), that
+     makes the bar vanish — the viewport widens by its width, every `fixed`
+     element (the navbar most visibly) re-lays out, and the page behind the
+     overlay jumps sideways for a frame as it repaints.
+     Reserving the gutter permanently means nothing moves when the lock goes on
+     or comes off. A no-op where scrollbars are overlays (macOS default, and
+     every phone), so it costs those nothing. */
+  html,
+  body {
+    scrollbar-gutter: stable;
+  }
   body {
     overflow-x: clip;
     /* Kill DOUBLE-TAP-to-zoom, and only that. `manipulation` is `auto` minus

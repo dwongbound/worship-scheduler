@@ -19,9 +19,11 @@
 // person — they apply to every org and every request.
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import AvailabilityCalendar from "@/components/AvailabilityCalendar";
+import AvailabilityWeekView from "@/components/AvailabilityWeekView";
 import WeekStrip from "@/components/WeekStrip";
 import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
+import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Checkbox from "@/components/common/Checkbox";
@@ -50,6 +52,7 @@ import {
   shortDateLabel,
   timeStringToMinutes,
 } from "@/lib/dates";
+import { importNotice } from "@/lib/googleBusy";
 import type { ApiAvailabilityRequest, ApiUnavailability } from "@/lib/types";
 
 // My completion status for one request. The row persists once touched:
@@ -264,9 +267,9 @@ export default function SchedulePage() {
 
   // Inline error for the "Block out times" form (e.g. duplicate recurring).
   const [blockError, setBlockError] = useState<string | null>(null);
-  // Explains a right-click "clear these days" that couldn't fully free them
-  // because a weekly repeat still covers some (see editDays).
-  const [clearNote, setClearNote] = useState<string | null>(null);
+  // The form's good news (as opposed to blockError): what an add actually did
+  // when it wasn't simply a new block — today, re-booking days you'd freed.
+  const [blockNote, setBlockNote] = useState<string | null>(null);
 
   // Unified "Block out times" form: a one-off specific date/range OR a weekly
   // recurring block. Both share the time-of-day picker.
@@ -291,6 +294,31 @@ export default function SchedulePage() {
   const [blockStart, setBlockStart] = useState(""); // specific range start
   const [blockEnd, setBlockEnd] = useState(""); // "" = single day
 
+  // Month (which days) or week (which hours) — the week view is where an
+  // import from Google Calendar is checked against the real calendar.
+  const [view, setView] = useState<"month" | "week">("month");
+  // Whether this deployment offers "Import from Google Calendar" at all.
+  const [googleImport, setGoogleImport] = useState(false);
+  // What the last import did, shown once on coming back from Google.
+  const [notice, setNotice] = useState<ReturnType<typeof importNotice>>(null);
+
+  // Coming back from Google (lib/googleAvailability.ts): say how it went,
+  // focus the request it was for, and open the week view to check it. The
+  // params are then dropped so a reload doesn't announce it twice.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = importNotice(params.get("gcalImport"));
+    if (!result) return;
+    setNotice(result);
+    const requestId = params.get("request");
+    if (requestId) setSelectedRequestId(requestId);
+    setView("week");
+    params.delete("gcalImport");
+    params.delete("request");
+    const rest = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+  }, []);
+
   const reload = useCallback(async () => {
     // On any error, fall back to empty state so the page renders instead of
     // hanging on the loader forever.
@@ -302,6 +330,7 @@ export default function SchedulePage() {
       setRequests(reqs);
       const resps: AvailabilityResponse[] = data.responses ?? [];
       setResponses(resps);
+      setGoogleImport(!!data.googleImport);
       // Open on the first request that still owes an answer — that's what
       // someone came here to do. Everything already sent (or nothing asked)
       // means no filter at all: the calendar shows the whole picture.
@@ -343,6 +372,7 @@ export default function SchedulePage() {
   async function addBlock(e: FormEvent) {
     e.preventDefault();
     setBlockError(null);
+    setBlockNote(null);
 
     if (blockKind === "recurring") {
       // Every selected weekday × every selected time window, with touching
@@ -400,37 +430,46 @@ export default function SchedulePage() {
         startDate,
         endDate,
       });
-      // Drop the ones already stored (the server skips them too) so the
-      // message is accurate when everything picked is a repeat.
-      const fresh = blocks.filter(
-        (block) =>
-          !(entries ?? []).some(
-            (entry) =>
-              entry.type === "RECURRING" &&
-              entry.dayOfWeek === block.dayOfWeek &&
-              entry.startMinute === block.startMinute &&
-              entry.endMinute === block.endMinute &&
-              (entry.startDate ? toYmd(new Date(entry.startDate)) : null) ===
-                (block.startDate ?? null) &&
-              (entry.endDate ? toYmd(new Date(entry.endDate)) : null) ===
-                (block.endDate ?? null)
-          )
-      );
-      if (fresh.length === 0) {
-        setBlockError(
-          blocks.length === 1
-            ? "That block already exists."
-            : "Those blocks already exist."
-        );
-        return;
-      }
+      // Everything goes to the server, repeats included: a block you already
+      // have isn't necessarily a no-op — if days were freed out of it, saying
+      // it again RE-BOOKS them. Only the response knows which happened, so the
+      // message comes from there rather than from a guess made here.
       setBusyAction("block");
       try {
-        await fetch("/api/availability", {
+        const res = await fetch("/api/availability", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "RECURRING", blocks: fresh }),
+          body: JSON.stringify({ type: "RECURRING", blocks }),
         });
+        const data = await res.json().catch(() => ({}));
+        const rebooked: string[] = Array.isArray(data.rebooked)
+          ? data.rebooked
+          : [];
+        if (data.created === 0 && rebooked.length === 0) {
+          if (data.absorbed > 0) {
+            // Nothing new, but the list is shorter: narrower repeats this one
+            // already covered were folded into it.
+            setBlockNote(
+              `Already blocked. Tidied up ${data.absorbed} overlapping ${
+                data.absorbed === 1 ? "repeat" : "repeats"
+              } it already covered.`
+            );
+          } else {
+            setBlockError(
+              blocks.length === 1
+                ? "That block already exists."
+                : "Those blocks already exist."
+            );
+          }
+        } else if (rebooked.length > 0) {
+          // Name the dates: they're exactly the ones that LOOKED free a second
+          // ago, so "blocked again" without saying which would be a riddle.
+          setBlockNote(
+            `Blocked again, including ${rebooked.length === 1 ? "the day" : "the days"} you'd cleared (${rebooked
+              .map(exceptionLabel)
+              .join(", ")}).`
+          );
+        }
         await reload();
         window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
       } finally {
@@ -494,24 +533,16 @@ export default function SchedulePage() {
     setEntries((cur) =>
       cur ? applyDayEdit(cur, startYmd, endYmd, blocked) : cur
     );
-    setClearNote(null);
     try {
+      // The calendar already shows the answer (the day goes green, and a repeat
+      // it punched a hole in says "except …" in the list), so there's nothing
+      // to narrate here.
       const res = await fetch("/api/availability/block-days", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ start: startYmd, end: endYmd, blocked }),
       });
       if (!res.ok) throw new Error("block-days failed");
-      // Clearing days can't punch a hole in a weekly rule, so those days stay
-      // blocked. Say why, rather than letting the gesture look broken.
-      const data = await res.json().catch(() => ({}));
-      if (!blocked && data.recurringDays > 0) {
-        setClearNote(
-          `${data.recurringDays} of those ${
-            data.recurringDays === 1 ? "days is" : "days are"
-          } still blocked by a weekly repeat — remove it below to free them.`
-        );
-      }
       await reload();
       window.dispatchEvent(new Event(AVAILABILITY_CHANGED_EVENT));
     } catch {
@@ -559,6 +590,25 @@ export default function SchedulePage() {
     return `${minutesToTimeLabel(startMinute)} – ${minutesToTimeLabel(endMinute)}`;
   }
 
+  // The exceptions worth NAMING on a rule's row: days still to come that are
+  // genuinely free. A date the rule skips but something else blocks anyway — a
+  // day you blocked by hand, or another repeat covering it — is a hole nobody
+  // can see, and saying "except Nov 11" about a day that reads as blocked is
+  // just wrong. Past ones go too: they're pruned on the rule's next edit, and
+  // they say nothing about the weeks ahead.
+  function liveExceptions(entry: ApiUnavailability): string[] {
+    const todayYmd = toYmd(new Date());
+    return [...(entry.exceptDates ?? [])]
+      .filter((d) => d >= todayYmd && dayBlockLevel(entries ?? [], d) === null)
+      .sort();
+  }
+  // "11/17/26" from a "YYYY-MM-DD" exception — parsed as LOCAL midnight, since
+  // new Date("2026-11-17") is UTC and renders as the day before out west.
+  function exceptionLabel(ymd: string): string {
+    const [y, m, d] = ymd.split("-").map(Number);
+    return shortDateLabel(new Date(y, m - 1, d));
+  }
+
   // The read-only text for one block (used by both the resulting-union list and
   // the per-section lists).
   function entryText(entry: ApiUnavailability) {
@@ -581,6 +631,18 @@ export default function SchedulePage() {
           )}
           {!entry.startDate && entry.endDate && (
             <> · until {shortDateLabel(entry.endDate)}</>
+          )}
+          {/* Days freed on the calendar: the pattern still repeats, minus
+              these. Two are named outright; more would crowd the row, so they
+              collapse to a count with the dates on hover. */}
+          {liveExceptions(entry).length > 0 && (
+            <span title={liveExceptions(entry).map(exceptionLabel).join(", ")}>
+              {" "}
+              · except{" "}
+              {liveExceptions(entry).length <= 2
+                ? liveExceptions(entry).map(exceptionLabel).join(" & ")
+                : `${liveExceptions(entry).length} dates`}
+            </span>
           )}
         </>
       );
@@ -886,6 +948,24 @@ export default function SchedulePage() {
                           )}
                         </Button>
                       ) : (
+                        <div className="flex flex-wrap items-center gap-2">
+                        {/* Reads THEIR Google Calendar across this request's
+                            window and blocks every busy time, all-day events
+                            as whole days (lib/googleAvailability.ts). A full
+                            navigation: Google's consent screen, then back. */}
+                        {googleImport && (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            data-testid="import-google"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.location.href = `/api/google-calendar/import?requestId=${encodeURIComponent(r.id)}`;
+                            }}
+                          >
+                            Import from Google Calendar
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           onClick={(e) => {
@@ -906,6 +986,7 @@ export default function SchedulePage() {
                             "Submit response"
                           )}
                         </Button>
+                        </div>
                       ))}
                   </div>
                 </Card>
@@ -924,7 +1005,37 @@ export default function SchedulePage() {
         <div className="flex items-center gap-1.5">
           <h2 className="text-lg font-bold">My availability</h2>
           <InfoTooltip text="Blocks here apply to every org and every request. Click or drag the calendar to block whole days; use the form for a repeating block or a specific time window." />
+          {/* Month = which days; Week = which hours, drawn like a calendar
+              app's week. Same blocks either way. */}
+          <div
+            role="group"
+            aria-label="Calendar view"
+            className="ml-auto inline-flex rounded-lg border border-gray-200 p-0.5 text-sm dark:border-gray-700"
+          >
+            {(["month", "week"] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
+                className={`min-h-9 rounded-md px-3 font-medium transition-colors ${
+                  view === v
+                    ? "bg-indigo-600 text-white"
+                    : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700"
+                }`}
+              >
+                {v === "month" ? "Month" : "Week"}
+              </button>
+            ))}
+          </div>
         </div>
+        {notice && (
+          <div data-testid="import-notice">
+            <Banner inset tone={notice.tone} onDismiss={() => setNotice(null)}>
+              {notice.text}
+            </Banner>
+          </div>
+        )}
 
         <div className="flex flex-col gap-6">
           <div className="min-w-0 space-y-3">
@@ -981,7 +1092,12 @@ export default function SchedulePage() {
             <div className="flex flex-col gap-4 lg:flex-row lg:items-stretch">
             {/* Phone: a week of tappable days, standing above the form the way
                 the calendar stands beside it. */}
-            <div className="lg:hidden">
+            {view === "week" && (
+              <div className="min-w-0 lg:flex-[2]">
+                <AvailabilityWeekView entries={entries} highlightRange={lensRange} />
+              </div>
+            )}
+            <div className={view === "week" ? "hidden" : "lg:hidden"}>
               <WeekStrip
                 entries={entries}
                 onEditDays={editDays}
@@ -991,7 +1107,7 @@ export default function SchedulePage() {
             </div>
             <div
               data-tour="avail-calendar"
-              className="hidden min-w-0 lg:block lg:flex-[2]"
+              className={`hidden min-w-0 lg:flex-[2] ${view === "week" ? "" : "lg:block"}`}
             >
               <AvailabilityCalendar
                 entries={entries}
@@ -1144,6 +1260,11 @@ export default function SchedulePage() {
                         {blockError}
                       </p>
                     )}
+                    {blockNote && (
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">
+                        {blockNote}
+                      </p>
+                    )}
                     <Button
                       type="submit"
                       disabled={
@@ -1195,6 +1316,11 @@ export default function SchedulePage() {
                         {blockError}
                       </p>
                     )}
+                    {blockNote && (
+                      <p className="text-sm text-indigo-600 dark:text-indigo-400">
+                        {blockNote}
+                      </p>
+                    )}
                     <Button
                       type="submit"
                       disabled={
@@ -1217,11 +1343,6 @@ export default function SchedulePage() {
           </section>
           </div>
             </div>
-            {clearNote && (
-              <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                {clearNote}
-              </p>
-            )}
           </div>
 
 
@@ -1249,6 +1370,7 @@ export default function SchedulePage() {
                         <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
                           {entry.type === "RECURRING" ? "Recurring" : "Specific"}
                         </Badge>
+                        {entry.fromGoogle && <Badge tone="indigo">Google</Badge>}
                         <span>
                           {entryText(entry)}
                           {req && (

@@ -3,12 +3,18 @@
 import { describe, expect, it } from "vitest";
 import {
   FULL_DAY_MIN,
+  allDayBlockedDays,
   applyDayEdit,
   blockedDaysInRange,
   dayBlockLevel,
+  dayHasDatedBlock,
   dayIsRepeating,
   expandRecurringBlocks,
+  mergeExceptions,
   mergeWindows,
+  recurringCovers,
+  recurringExceptionsFor,
+  recurringSkips,
   weeksFromToday,
 } from "@/lib/availability";
 import type { ApiUnavailability } from "@/lib/types";
@@ -231,6 +237,131 @@ describe("blockedDaysInRange", () => {
   });
 });
 
+// What a click means on a given day: the toggle keys on whether an all-day
+// DATED block covers it, so a day that's only red from a weekly repeat still
+// takes a block on the first click.
+describe("allDayBlockedDays / dayHasDatedBlock", () => {
+  it("counts an all-day dated block, including every day of a range", () => {
+    const days = allDayBlockedDays([
+      specific(isoDay(2026, 7, 8), { endDate: isoDay(2026, 7, 10) }),
+    ]);
+    expect([...days].sort()).toEqual(["2026-07-08", "2026-07-09", "2026-07-10"]);
+  });
+
+  it("ignores timed blocks and weekly repeats", () => {
+    const entries = [
+      recurring(jul8Weekday), // all-day, but it's a repeat
+      specific(isoDay(2026, 7, 8), { startMinute: 9 * 60, endMinute: 12 * 60 }),
+    ];
+    expect(allDayBlockedDays(entries).size).toBe(0);
+    // ...though the timed one IS a dated block, which is what wins the cell
+    // (plain amber, no hatch) over the repeat underneath.
+    expect(dayHasDatedBlock(entries, JUL8)).toBe(true);
+  });
+
+  it("sees a legacy DATE_RANGE as an all-day block", () => {
+    const days = allDayBlockedDays([
+      dateRange(isoDay(2026, 7, 8), isoDay(2026, 7, 9)),
+    ]);
+    expect([...days].sort()).toEqual(["2026-07-08", "2026-07-09"]);
+  });
+
+  it("says a day with only a weekly repeat has no dated block", () => {
+    expect(dayHasDatedBlock([recurring(jul8Weekday)], JUL8)).toBe(false);
+  });
+});
+
+// Two weekly rules where one says everything the other does are an overlap the
+// list shouldn't carry twice (POST /api/availability absorbs the narrower one).
+describe("recurringCovers", () => {
+  const allDayTue = {
+    dayOfWeek: 2,
+    startMinute: 0,
+    endMinute: FULL_DAY_MIN,
+    startDate: null,
+    endDate: null,
+  };
+  const tueMorning = { ...allDayTue, startMinute: 6 * 60, endMinute: 12 * 60 };
+
+  it("covers a narrower window on the same weekday", () => {
+    expect(recurringCovers(allDayTue, tueMorning)).toBe(true);
+    expect(recurringCovers(tueMorning, allDayTue)).toBe(false);
+  });
+
+  it("doesn't cross weekdays", () => {
+    expect(recurringCovers(allDayTue, { ...tueMorning, dayOfWeek: 3 })).toBe(false);
+  });
+
+  it("covers a shorter span, and an open-ended one covers any", () => {
+    const bounded = { ...allDayTue, startDate: "2026-07-01", endDate: "2026-08-01" };
+    expect(recurringCovers(allDayTue, bounded)).toBe(true); // forever ⊇ a month
+    expect(recurringCovers(bounded, allDayTue)).toBe(false);
+    // A span that starts earlier but stops sooner covers neither way.
+    const earlier = { ...allDayTue, startDate: "2026-06-01", endDate: "2026-07-15" };
+    expect(recurringCovers(earlier, bounded)).toBe(false);
+  });
+});
+
+// Freeing a day a weekly rule covers is recorded as an EXCEPTION on the rule
+// (exceptDates) — the row stays whole, with a hole in it.
+describe("recurring exceptions", () => {
+  const openWed = {
+    dayOfWeek: jul8Weekday,
+    startDate: null,
+    endDate: null,
+    exceptDates: null,
+  };
+
+  it("takes the freed day when the rule blocks it", () => {
+    expect(recurringExceptionsFor(openWed, [JUL8])).toEqual([JUL8]);
+  });
+
+  it("ignores days the rule never blocked", () => {
+    // Wrong weekday, outside the span, and already skipped.
+    expect(recurringExceptionsFor(openWed, ["2026-07-09"])).toEqual([]);
+    expect(
+      recurringExceptionsFor({ ...openWed, startDate: "2026-07-15" }, [JUL8])
+    ).toEqual([]);
+    expect(
+      recurringExceptionsFor({ ...openWed, exceptDates: [JUL8] }, [JUL8])
+    ).toEqual([]);
+  });
+
+  it("takes every covered day of a multi-day run", () => {
+    const days = ["2026-07-06", "2026-07-07", JUL8, "2026-07-09"];
+    expect(recurringExceptionsFor(openWed, days)).toEqual([JUL8]);
+  });
+
+  it("merges, sorts and prunes what the rule stores", () => {
+    const rule = {
+      ...openWed,
+      exceptDates: ["2026-06-24", "2026-07-22"], // one spent, one to come
+    };
+    // Jul 1 — so the June date is history and drops out.
+    expect(mergeExceptions(rule, [JUL8], new Date(2026, 6, 1))).toEqual([
+      JUL8,
+      "2026-07-22",
+    ]);
+  });
+
+  it("drops an exception the rule can no longer fire on", () => {
+    const bounded = { ...openWed, endDate: "2026-07-10" };
+    expect(
+      mergeExceptions(bounded, [JUL8, "2026-07-22"], new Date(2026, 6, 1))
+    ).toEqual([JUL8]);
+  });
+
+  it("makes the day read as free everywhere the rule is read", () => {
+    const rule = recurring(jul8Weekday);
+    rule.exceptDates = [JUL8];
+    expect(recurringSkips(rule, JUL8)).toBe(true);
+    expect(dayBlockLevel([rule], JUL8)).toBeNull();
+    expect(dayIsRepeating([rule], JUL8)).toBe(false);
+    // ...and the Wednesday after is untouched.
+    expect(dayBlockLevel([rule], "2026-07-15")).toBe("full");
+  });
+});
+
 // applyDayEdit is the client-side mirror of /api/availability/block-days, so its
 // result is described the same way the calendar reads it: dayBlockLevel per day.
 describe("applyDayEdit", () => {
@@ -285,19 +416,32 @@ describe("applyDayEdit", () => {
     expect(next.every((e) => e.requestId === "req1")).toBe(true);
   });
 
-  it("clears timed blocks too, but leaves weekly rules alone", () => {
+  it("clears timed blocks AND punches the day out of a weekly repeat", () => {
     const entries = [
-      recurring(jul8Weekday), // all-day recurring
+      recurring(jul8Weekday), // every Wednesday, all day, forever
       specific(isoDay(2026, 7, 8), { startMinute: 9 * 60, endMinute: 12 * 60 }),
     ];
-    const next = applyDayEdit(entries, "2026-07-08", "2026-07-08", false);
+    const next = applyDayEdit(entries, JUL8, JUL8, false, new Date(2026, 6, 1));
     // Clearing a day means "I'm free all of it", so the timed block goes.
     expect(next).not.toContain(entries[1]);
-    // A weekly rule has no per-date exception in the schema, so it survives —
-    // and keeps the day blocked. The UI says so rather than leaving it a
-    // mystery (see the block-days route's recurringDays count).
-    expect(next).toContain(entries[0]);
-    expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+    // The repeat can't be left standing either, or the day wouldn't be free.
+    // It stays ONE row, skipping that date — later Wednesdays are untouched.
+    expect(next.filter((e) => e.type === "RECURRING")).toHaveLength(1);
+    expect(dayBlockLevel(next, JUL8)).toBeNull();
+    expect(dayBlockLevel(next, "2026-07-15")).toBe("full");
+  });
+
+  it("frees a day covered by SEVERAL overlapping repeats at once", () => {
+    // The case that used to fragment: three Wednesday rules over one day.
+    const entries = [
+      recurring(jul8Weekday),
+      recurring(jul8Weekday, { startDate: isoDay(2026, 7, 1) }),
+      recurring(jul8Weekday, { startMinute: 6 * 60, endMinute: 17 * 60 }),
+    ];
+    const next = applyDayEdit(entries, JUL8, JUL8, false, new Date(2026, 6, 1));
+    expect(next).toHaveLength(3); // still three rules, none split
+    expect(dayBlockLevel(next, JUL8)).toBeNull();
+    expect(dayBlockLevel(next, "2026-07-15")).toBe("full");
   });
 
   it("clearing a partly-overlapped timed block keeps its window on the rest", () => {

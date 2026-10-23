@@ -154,6 +154,7 @@ export async function GET(req: NextRequest) {
         endMinute: true,
         startDate: true,
         endDate: true,
+        exceptDates: true, // days freed out of a weekly rule
       },
     }),
     // Who on this page is still ACTIVE. Every candidate set shares my set's

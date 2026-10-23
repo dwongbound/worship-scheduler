@@ -57,6 +57,9 @@ export async function GET(req: NextRequest) {
           endMinute: true,
           startDate: true,
           endDate: true,
+          // The dates a weekly rule skips — without these a day someone freed
+          // would still read as blocked in the dropdowns.
+          exceptDates: true,
           requestId: true,
           note: true,
         },
