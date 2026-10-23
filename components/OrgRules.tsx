@@ -33,6 +33,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import Button from "@/components/common/Button";
 import InfoTooltip from "@/components/common/InfoTooltip";
+import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import Toggle from "@/components/common/Toggle";
@@ -82,6 +83,10 @@ interface Draft {
   mode: "ALWAYS" | "NEVER";
   max: number;
   period: "WEEK" | "MONTH";
+  // Role-shaped kinds. `roles` is ORDERED — for MD order that order IS the
+  // preference, so the chips below record the sequence they were clicked in.
+  roles: string[];
+  otherRole: string;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -98,6 +103,10 @@ const EMPTY_DRAFT: Draft = {
   mode: "NEVER",
   max: 2,
   period: "MONTH",
+  // Role-shaped kinds: an ORDERED list (MD preference order, or the roles a
+  // hosted role may sit alongside) and the second half of a pair.
+  roles: [],
+  otherRole: "",
 };
 
 // The Draft's stand-in for "no one person" on a Limit rule — a real id is a
@@ -120,25 +129,14 @@ function draftFromRule(rule: SchedulingRule): Draft {
       return { ...d, userId: p.userIds[0], otherUserId: p.userIds[1], mode: p.mode };
     case "LIMIT":
       return { ...d, userId: p.userId ?? ALL_PEOPLE, max: p.max, period: p.period };
-    // Role-shaped rules have no form (see CREATABLE_KINDS) — their rows don't
-    // offer Edit, so this is only ever the unreachable branch of the switch.
     case "LEADS_FROM":
+      return { ...d, roles: [...p.roles] };
     case "ROLE_HOST":
+      return { ...d, role: p.role, roles: [...p.hostRoles] };
     case "MAY_DOUBLE":
-      return d;
+      return { ...d, role: p.roles[0], otherRole: p.roles[1] };
   }
 }
-
-// The kinds the "Add a rule" picker offers. The role-shaped ones are seeded
-// from the built-in defaults and edited by toggling or deleting them — there's
-// no blank to fill in, so offering them would open an empty step 2.
-const CREATABLE_KINDS = RULE_KINDS.filter(
-  (k) => !["LEADS_FROM", "ROLE_HOST", "MAY_DOUBLE"].includes(k.kind)
-);
-
-/** Whether a rule can be opened in the builder (see CREATABLE_KINDS). */
-const isEditable = (rule: SchedulingRule) =>
-  CREATABLE_KINDS.some((k) => k.kind === rule.params.kind);
 
 /** The draft as rule params, or what's still missing / wrong with it. */
 function paramsFromDraft(d: Draft): RuleParams | string {
@@ -162,12 +160,12 @@ function paramsFromDraft(d: Draft): RuleParams | string {
         max: d.max,
         period: d.period,
       });
-    // Not offered by the picker (see CREATABLE_KINDS), so this is unreachable —
-    // it exists to keep the switch exhaustive if a kind is ever added there.
     case "LEADS_FROM":
+      return parseRuleParams({ kind: d.kind, roles: d.roles });
     case "ROLE_HOST":
+      return parseRuleParams({ kind: d.kind, role: d.role, hostRoles: d.roles });
     case "MAY_DOUBLE":
-      return "That kind of rule can't be built here.";
+      return parseRuleParams({ kind: d.kind, roles: [d.role, d.otherRole] });
   }
 }
 
@@ -365,14 +363,10 @@ export default function OrgRules({ orgId }: { orgId: string }) {
               names={names}
               busy={busy}
               onToggle={(on) => toggle(rule.id, on)}
-              onEdit={
-                isEditable(rule)
-                  ? () => {
-                      setBuilderError("");
-                      setBuilder({ editingId: rule.id, draft: draftFromRule(rule) });
-                    }
-                  : undefined
-              }
+              onEdit={() => {
+                setBuilderError("");
+                setBuilder({ editingId: rule.id, draft: draftFromRule(rule) });
+              }}
               onDelete={() => remove(rule.id)}
             />
           ))}
@@ -769,6 +763,68 @@ function RuleBuilder({
       </Select>
     </Blank>
   );
+  // The left column's filter. Matches title and description, so "md" finds
+  // "Who can lead" by its wording rather than only by name.
+  const [kindQuery, setKindQuery] = useState("");
+  const matchingKinds = RULE_KINDS.filter((k) => {
+    const q = kindQuery.trim().toLowerCase();
+    return !q || `${k.title} ${k.description}`.toLowerCase().includes(q);
+  });
+
+  // An ORDERED multi-pick: click to add (appending), click again to drop.
+  // A plain multi-select can't express order, and order is the whole point of
+  // MD preference — so each chosen role shows its position.
+  const roleList = (label: string) => (
+    <span className="inline-flex flex-wrap items-center gap-1 align-middle">
+      {options.roles.map((r) => {
+        const at = draft.roles.indexOf(r.key);
+        const picked = at >= 0;
+        return (
+          <button
+            key={r.key}
+            type="button"
+            aria-pressed={picked}
+            aria-label={`${label}: ${r.label}`}
+            onClick={() =>
+              set({
+                roles: picked
+                  ? draft.roles.filter((k) => k !== r.key)
+                  : [...draft.roles, r.key],
+              })
+            }
+            className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+              picked
+                ? "border-indigo-500 bg-indigo-100 text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200"
+                : "border-gray-300 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+            }`}
+          >
+            {picked && <span className="mr-1 opacity-60">{at + 1}.</span>}
+            {r.label}
+          </button>
+        );
+      })}
+    </span>
+  );
+  // The second role of a pair — `role` holds the first.
+  const otherRole = () => (
+    <Blank>
+      <Select
+        label="Other role"
+        hideLabel
+        value={draft.otherRole}
+        onChange={(e) => set({ otherRole: e.target.value })}
+      >
+        <option value="">Pick a role…</option>
+        {options.roles
+          .filter((r) => r.key !== draft.role)
+          .map((r) => (
+            <option key={r.key} value={r.key}>
+              {r.label}
+            </option>
+          ))}
+      </Select>
+    </Blank>
+  );
   let sentence: React.ReactNode;
   switch (draft.kind) {
     case "ONLY_IF_NEEDED":
@@ -873,6 +929,34 @@ function RuleBuilder({
         </>
       );
       break;
+    case "LEADS_FROM":
+      sentence = (
+        <>
+          <T>A musical director leads from</T>
+          {roleList("Leads from")}
+          <T>— click them in order of preference</T>
+        </>
+      );
+      break;
+    case "ROLE_HOST":
+      sentence = (
+        <>
+          {role()}
+          <T>is only played by someone already on</T>
+          {roleList("Doubles up with")}
+        </>
+      );
+      break;
+    case "MAY_DOUBLE":
+      sentence = (
+        <>
+          {role()}
+          <T>and</T>
+          {otherRole()}
+          <T>can be played by the same person</T>
+        </>
+      );
+      break;
     case "LIMIT":
       sentence = (
         <>
@@ -913,7 +997,7 @@ function RuleBuilder({
     <Modal
       open
       onClose={onClose}
-      size="wide"
+      size="xl"
       title={editing ? "Edit rule" : "Add a rule"}
       footer={
         <div className="flex w-full items-center justify-end gap-2">
@@ -930,32 +1014,54 @@ function RuleBuilder({
         </div>
       }
     >
-      <Step n={1} title="What kind of rule?">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {CREATABLE_KINDS.map((k) => (
-            <button
-              key={k.kind}
-              type="button"
-              onClick={() => set({ kind: k.kind })}
-              aria-pressed={draft.kind === k.kind}
-              className={`rounded-lg border px-3 py-2 text-left transition-colors ${
-                draft.kind === k.kind
-                  ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
-                  : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
-              }`}
-            >
-              <p className="text-sm font-medium">{k.title}</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400">{k.description}</p>
-            </button>
-          ))}
+      {/* Two columns: WHICH rule on the left, WHAT IT SAYS on the right. The
+          kinds are a fixed vocabulary you scan and filter, while everything to
+          the right only makes sense once one is picked — stacked, the blanks
+          you came to fill sat below a grid you'd already finished with. One
+          column on a phone, where side-by-side would squeeze both. */}
+      <div className="grid gap-5 md:grid-cols-[16rem_minmax(0,1fr)]">
+        <div className="min-w-0">
+          <p className="mb-2 text-sm font-medium">What kind of rule?</p>
+          <Input
+            label="Search rule kinds"
+            hideLabel
+            value={kindQuery}
+            onChange={(e) => setKindQuery(e.target.value)}
+            placeholder="Search…"
+            autoComplete="off"
+          />
+          {/* Scrolls on its own so a long list never pushes the blanks on the
+              right out of view. */}
+          <div className="mt-2 max-h-[22rem] space-y-1 overflow-y-auto overscroll-contain pr-1">
+            {matchingKinds.length === 0 && (
+              <p className="px-1 py-2 text-xs text-gray-400">No rule kinds match.</p>
+            )}
+            {matchingKinds.map((k) => (
+              <button
+                key={k.kind}
+                type="button"
+                onClick={() => set({ kind: k.kind })}
+                aria-pressed={draft.kind === k.kind}
+                className={`block w-full rounded-lg border px-3 py-2 text-left transition-colors ${
+                  draft.kind === k.kind
+                    ? "border-indigo-500 bg-indigo-50 ring-1 ring-indigo-500 dark:bg-indigo-500/10"
+                    : "border-gray-200 hover:border-gray-300 dark:border-gray-700 dark:hover:border-gray-600"
+                }`}
+              >
+                <p className="text-sm font-medium">{k.title}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{k.description}</p>
+              </button>
+            ))}
+          </div>
         </div>
-      </Step>
 
-      <Step n={2} title="Fill in the blanks">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-2">{sentence}</div>
-      </Step>
+        <div className="min-w-0">
 
-      <Step n={3} title="How strict?">
+      <p className="mb-2 text-sm font-medium">Fill in the blanks</p>
+      <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-2">{sentence}</div>
+
+      <p className="mb-2 text-sm font-medium">How strict?</p>
+      <div className="mb-5">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <TierCard
             selected={tier === "REQUIRED"}
@@ -979,7 +1085,7 @@ function RuleBuilder({
             }
           />
         </div>
-      </Step>
+      </div>
 
       {ready ? (
         <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm dark:bg-gray-900/40">
@@ -1002,23 +1108,12 @@ function RuleBuilder({
           {error}
         </p>
       )}
+        </div>
+      </div>
     </Modal>
   );
 }
 
-function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
-  return (
-    <div className="mb-5">
-      <p className="mb-2 flex items-center gap-2 text-sm font-medium">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-xs text-white">
-          {n}
-        </span>
-        {title}
-      </p>
-      {children}
-    </div>
-  );
-}
 
 // The sentence's glue words between its blanks.
 function T({ children }: { children: React.ReactNode }) {

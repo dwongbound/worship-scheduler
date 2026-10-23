@@ -66,16 +66,32 @@ export async function GET(
   // migration: it covers new and existing orgs alike, and an org that never
   // opens this page is no worse off. Deleting one is honoured (it means "no
   // such rule"), so this only fires while NONE of the three kinds is present.
+  //
+  // APPEND-ONLY, deliberately: `saveOrgRules` replaces the whole list, and
+  // `loadOrgRules` drops rules naming something since deleted — so rewriting
+  // the list here would quietly PERSIST those drops, turning a read of this
+  // page into data loss. These rows are inserted after the last position and
+  // nothing already stored is touched.
   let list = rules;
   if (!list.some((r) => ROLE_RULE_KINDS.includes(r.params.kind))) {
-    await saveOrgRules(id, [
-      ...list.map(({ tier, enabled, params }) => ({ tier, enabled, params })),
-      ...defaultRoleRules({
+    const last = await prisma.schedulingRule.aggregate({
+      where: { orgId: id },
+      _max: { position: true },
+    });
+    let position = (last._max.position ?? -1) + 1;
+    await prisma.schedulingRule.createMany({
+      data: defaultRoleRules({
         mdRoles: MD_ROLES,
         hostRoles: { [ACOUSTIC_GUITAR]: ACOUSTIC_HOST_ROLES },
         doublePairs: OVERLAP_ALLOWED_PAIRS,
-      }),
-    ]);
+      }).map((r) => ({
+        orgId: id,
+        tier: r.tier,
+        enabled: r.enabled,
+        params: r.params,
+        position: position++,
+      })),
+    });
     list = await loadOrgRules(id);
   }
   return NextResponse.json({ rules: list, options: await ruleEditorOptions(id) });
