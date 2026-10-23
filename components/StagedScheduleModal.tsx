@@ -70,7 +70,11 @@ import {
 } from "react";
 import Modal from "./common/Modal";
 import InfoTooltip from "./common/InfoTooltip";
-import OrgRules from "./OrgRules";
+import OrgRules, {
+  setLabel,
+  templateLabel,
+  type RuleOptions,
+} from "./OrgRules";
 import ScheduleHelpModal from "./ScheduleHelpModal";
 import Button from "./common/Button";
 import Input from "./common/Input";
@@ -265,19 +269,11 @@ function draftStamp(d: Date): string {
 // Shared "nothing held" answer, so a plan with no required rules doesn't
 // allocate an empty Map per card per render.
 const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
-
-// The rules holding a seat open, as the sentences the rules editor shows.
-// "Held by a rule" is only actionable once you know WHICH rule to change, and
-// several can be jointly responsible, so they're all listed.
+// The rules holding a seat open, in the exact words the rules editor shows —
+// nothing added. The mark beside it already says it's held; what the reader
+// needs from the (i) is WHICH rule to go and change.
 function heldReason(held: SchedulingRule[], names: RuleNames): string {
-  if (held.length === 0) return "A required scheduling rule is keeping this slot open.";
-  const lead =
-    held.length === 1
-      ? "A required rule is keeping this slot open:"
-      : "Required rules are keeping this slot open:";
-  return `${lead} ${held.map((r) => ruleSentence(r.params, names)).join("; ")}. Auto schedule left it rather than break ${
-    held.length === 1 ? "it" : "them"
-  } — you can still fill it by hand.`;
+  return held.map((r) => ruleSentence(r.params, names)).join("; ");
 }
 
 export default function StagedScheduleModal({
@@ -535,22 +531,6 @@ export default function StagedScheduleModal({
   // plan has people, teams and role catalogs; a rule naming a recurring set or
   // a specific one falls back to the generic wording RuleNames allows, which
   // still leaves the sentence readable.
-  const ruleNames = useMemo<RuleNames>(() => {
-    const people = new Map(users.map((u) => [u.id, u.name]));
-    const teamNames = new Map(teams.map((t) => [t.id, t.name]));
-    const roleLabels = new Map<string, string>();
-    for (const cat of catalogs?.values() ?? []) {
-      for (const r of cat) roleLabels.set(r.key, r.label);
-    }
-    return {
-      team: (id) => teamNames.get(id) ?? "a team",
-      user: (id) => people.get(id) ?? "someone",
-      role: (key) => roleLabels.get(key) ?? roleLabel(key),
-      template: (id) => "a recurring set",
-      set: (id) => "another set",
-    };
-  }, [users, teams, catalogs]);
-
 
   // Copy a selected set's shape + roster with ⌘/Ctrl+C, stamp it onto another
   // with ⌘/Ctrl+V, and take back the last paste with ⌘/Ctrl+Z. Works in both
@@ -669,6 +649,28 @@ export default function StagedScheduleModal({
   // here obeys them the way the server's fill did. Empty until they land, or if
   // they can't be read — the re-run then falls back to plain rotation.
   const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  const [ruleLabels, setRuleLabels] = useState<RuleOptions | null>(null);
+
+  const ruleNames = useMemo<RuleNames>(() => {
+    const people = new Map(users.map((u) => [u.id, u.name]));
+    const teamNames = new Map(teams.map((t) => [t.id, t.name]));
+    const roleLabels = new Map<string, string>();
+    for (const cat of catalogs?.values() ?? []) {
+      for (const r of cat) roleLabels.set(r.key, r.label);
+    }
+    const templates = new Map(
+      (ruleLabels?.templates ?? []).map((t) => [t.id, templateLabel(t)])
+    );
+    const sets = new Map((ruleLabels?.sets ?? []).map((x) => [x.id, setLabel(x)]));
+    return {
+      team: (id) => teamNames.get(id) ?? "a team",
+      user: (id) => people.get(id) ?? "someone",
+      role: (key) => roleLabels.get(key) ?? roleLabel(key),
+      template: (id) => templates.get(id) ?? "a recurring set",
+      set: (id) => sets.get(id) ?? "a set",
+    };
+  }, [users, teams, catalogs, ruleLabels]);
+
   // The rules editor, opened from the action row below. `rulesSeq` bumps when
   // it closes, re-running the fetch — the editor saves through its own PUT, so
   // this is how an edit reaches the plan's next Auto schedule.
@@ -702,7 +704,14 @@ export default function StagedScheduleModal({
     let cancelled = false;
     fetch(`/api/orgs/${orgId}/rules`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => !cancelled && d && setSchedulingRules(d.rules ?? []))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setSchedulingRules(d.rules ?? []);
+        // The same payload carries the editor's names, which is what lets a
+        // "held by a rule" tooltip say "Sat Rehearsal" instead of "a recurring
+        // set". Free — we were already asking for it and throwing it away.
+        setRuleLabels(d.options ?? null);
+      })
       .catch(() => {});
     return () => {
       cancelled = true;

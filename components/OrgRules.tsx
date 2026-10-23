@@ -55,7 +55,7 @@ import {
   type SchedulingRule,
 } from "@/lib/schedulingRules";
 
-interface RuleOptions {
+export interface RuleOptions {
   people: {
     id: string;
     name: string;
@@ -730,10 +730,10 @@ function GripIcon() {
 
 // ── The builder ───────────────────────────────────────────────────────────
 
-const templateLabel = (t: RuleOptions["templates"][number]) =>
+export const templateLabel = (t: RuleOptions["templates"][number]) =>
   `${t.label} (${DAY_ABBRS[t.dayOfWeek]} ${minutesToShortTimeLabel(t.startMinute)})`;
 
-const setLabel = (s: RuleOptions["sets"][number]) =>
+export const setLabel = (s: RuleOptions["sets"][number]) =>
   `${s.label || s.teamName || "Set"} ${shortDateTimeCompact(s.startsAt)}`;
 
 // Three steps on one screen: 1 what kind, 2 the sentence (its blanks are the

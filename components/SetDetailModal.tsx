@@ -153,18 +153,11 @@ interface SetDetailModalProps {
 // shared by every set: an admin who wants to weigh people by the past 3 months
 // wants that for the whole sitting, not one set at a time.
 const LOAD_METRIC_KEY = "worship:set-load-metric";
-
-// The rules holding a seat open, as the sentences the rules editor shows —
-// the same wording the review workspace uses for the same mark.
+// The rules holding a seat open, in the exact words the rules editor shows —
+// nothing added. The mark beside it already says it's held; what the reader
+// needs from the (i) is WHICH rule to go and change.
 function heldReason(held: SchedulingRule[], names: RuleNames): string {
-  if (held.length === 0) return "A required scheduling rule is keeping this slot open.";
-  const lead =
-    held.length === 1
-      ? "A required rule is keeping this slot open:"
-      : "Required rules are keeping this slot open:";
-  return `${lead} ${held.map((r) => ruleSentence(r.params, names)).join("; ")}. Auto schedule left it rather than break ${
-    held.length === 1 ? "it" : "them"
-  } — you can still fill it by hand.`;
+  return held.map((r) => ruleSentence(r.params, names)).join("; ");
 }
 
 // Shared "nothing held" answer for the rule marker below, so a set in an org
