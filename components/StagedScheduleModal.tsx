@@ -69,6 +69,7 @@ import {
   type ReactNode,
 } from "react";
 import Modal from "./common/Modal";
+import OrgRules from "./OrgRules";
 import ScheduleHelpModal from "./ScheduleHelpModal";
 import Button from "./common/Button";
 import Input from "./common/Input";
@@ -628,6 +629,34 @@ export default function StagedScheduleModal({
   // here obeys them the way the server's fill did. Empty until they land, or if
   // they can't be read — the re-run then falls back to plain rotation.
   const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  // The rules editor, opened from the action row below. `rulesSeq` bumps when
+  // it closes, re-running the fetch — the editor saves through its own PUT, so
+  // this is how an edit reaches the plan's next Auto schedule.
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [rulesSeq, setRulesSeq] = useState(0);
+  const closeRules = useCallback(() => {
+    setRulesOpen(false);
+    setRulesSeq((n) => n + 1);
+  }, []);
+  // Escape belongs to the TOP modal — the same problem ScheduleHelpModal
+  // solves, for the same reason: every Modal closes on a document-level
+  // keydown, so without this, dismissing the rules would also back out of the
+  // plan behind them (and on a dirty one, into the discard prompt). Caught in
+  // the CAPTURE phase, which runs before both bubble-phase listeners.
+  //
+  // Only while the rules editor's OWN builder is closed — that dialog is a
+  // third layer and Escape is rightly its own.
+  useEffect(() => {
+    if (!rulesOpen) return;
+    const swallowEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector("[data-rule-builder]")) return;
+      e.stopPropagation();
+      closeRules();
+    };
+    document.addEventListener("keydown", swallowEscape, true);
+    return () => document.removeEventListener("keydown", swallowEscape, true);
+  }, [rulesOpen, closeRules]);
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
@@ -638,7 +667,7 @@ export default function StagedScheduleModal({
     return () => {
       cancelled = true;
     };
-  }, [orgId]);
+  }, [orgId, rulesSeq]);
 
   // A staged set's database id, when it has one: an existing set the plan
   // fills (generate), or the real set itself (Preview Mode).
@@ -1535,6 +1564,21 @@ export default function StagedScheduleModal({
             {lockedTotal < totalAssignments ? "🔒 Lock all" : "🔓 Unlock all"}
           </Button>
         )}
+        {orgId && (
+          // The rules are what the fill above OBEYS, so the place you notice a
+          // wrong one is here, looking at the plan it produced — not two pages
+          // away in Org settings. Editing them reloads the list this modal
+          // hands the scheduler, so the next Auto schedule run uses them.
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setRulesOpen(true)}
+            disabled={busy}
+            title="View and edit the scheduling rules Auto schedule follows"
+          >
+            Scheduling rules
+          </Button>
+        )}
         {lockedTotal > 0 && (
           <span className="text-xs text-gray-500 dark:text-gray-400">
             🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
@@ -2008,6 +2052,20 @@ export default function StagedScheduleModal({
     {/* The guided tour. Opened by Help, and once on its own the first time this
         browser reaches this workspace. */}
     <ScheduleHelpModal open={helpOpen} preview={preview} onClose={closeHelp} />
+
+    {/* The org's scheduling rules, over the plan they govern. The editor owns
+        its own loading and saving, so this is just a frame; closing it bumps
+        rulesSeq so the plan picks up whatever changed. */}
+    {rulesOpen && orgId && (
+      <Modal
+        open
+        size="xl"
+        title="Scheduling rules"
+        onClose={closeRules}
+      >
+        <OrgRules key={orgId} orgId={orgId} />
+      </Modal>
+    )}
 
     {/* Save Draft: the confirm doubles as the name prompt, since naming is the
         only decision being made. Prefilled when this preview came from a draft,

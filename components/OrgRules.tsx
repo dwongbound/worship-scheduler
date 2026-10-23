@@ -1093,6 +1093,11 @@ function RuleBuilder({
         </div>
       }
     >
+      {/* Lets a host modal know this third layer is up, so it leaves Escape to
+          this dialog (see StagedScheduleModal's rules guard). A real node
+          because Modal only forwards the props it declares. */}
+      <span data-rule-builder hidden />
+
       {/* Two columns: WHICH rule on the left, WHAT IT SAYS on the right. The
           kinds are a fixed vocabulary you scan and filter, while everything to
           the right only makes sense once one is picked — stacked, the blanks
@@ -1186,12 +1191,15 @@ function RuleBuilder({
           />
           <TierCard
             selected={tier === "PREFERENCE"}
+            disabled={!info.tiers.includes("PREFERENCE")}
             onClick={() => set({ tier: "PREFERENCE" })}
             title="Preference"
             body={
-              editing
-                ? "Followed when possible. Keeps its place in the ranking."
-                : "Followed when possible. Added at the bottom of the ranking; drag it up to give it more weight."
+              !info.tiers.includes("PREFERENCE")
+                ? "Not for this kind: it describes what a role IS, so there's nothing for \u201cwhen possible\u201d to mean."
+                : editing
+                  ? "Followed when possible. Keeps its place in the ranking."
+                  : "Followed when possible. Added at the bottom of the ranking; drag it up to give it more weight."
             }
           />
         </div>
