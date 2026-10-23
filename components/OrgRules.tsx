@@ -1164,8 +1164,16 @@ function RuleBuilder({
           the right only makes sense once one is picked — stacked, the blanks
           you came to fill sat below a grid you'd already finished with. One
           column on a phone, where side-by-side would squeeze both. */}
-      <div className="grid gap-5 md:grid-cols-[16rem_minmax(0,1fr)]">
-        <div className="min-w-0">
+      {/* FIXED HEIGHT, sized to the tallest rule we expect (the role-list and
+          same-player forms). Every kind otherwise resized the dialog as you
+          clicked between them — the footer jumping under the cursor as the
+          blanks changed — and a form that moves while you aim at it is worse
+          than one with some empty space. Each column scrolls inside it, so a
+          long roster or an unusually tall form still fits, and the height only
+          applies once the columns are side by side: stacked on a phone it has
+          to grow. The panel's own max-h still wins on a short screen. */}
+      <div className="grid gap-5 md:h-[34rem] md:grid-cols-[16rem_minmax(0,1fr)]">
+        <div className="flex min-h-0 min-w-0 flex-col">
           <p className="mb-2 text-sm font-medium">What kind of rule?</p>
           <Input
             label="Search rule kinds"
@@ -1177,7 +1185,7 @@ function RuleBuilder({
           />
           {/* Scrolls on its own so a long list never pushes the blanks on the
               right out of view. */}
-          <div className="mt-2 max-h-[22rem] space-y-1 overflow-y-auto overscroll-contain pr-1">
+          <div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
             {matchingKinds.length === 0 && (
               <p className="px-1 py-2 text-xs text-gray-400">No rule kinds match.</p>
             )}
@@ -1202,7 +1210,7 @@ function RuleBuilder({
           </div>
         </div>
 
-        <div className="min-w-0">
+        <div className="min-h-0 min-w-0 overflow-y-auto overscroll-contain pr-1">
 
       <p className="mb-2 flex items-center gap-1.5 text-sm font-medium">
         Applies to
