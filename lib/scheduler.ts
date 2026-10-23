@@ -169,6 +169,9 @@ export interface UnavailabilityRule {
   endMinute?: number | null;
   startDate?: Date | null;
   endDate?: Date | null;
+  // RECURRING only: dates ("YYYY-MM-DD") the weekly pattern skips, one per day
+  // freed on the availability calendar.
+  exceptDates?: string[] | null;
 }
 
 export interface ProposedAssignment {
@@ -226,6 +229,10 @@ export function isUserAvailable(
   // A rule's dates are stored as instants; what matters is the calendar day
   // they land on in the app's zone.
   const ruleDay = (d: Date) => zonedParts(d, timeZone).ymd;
+  // The same day as "YYYY-MM-DD" (zonedParts hands back the numeric form),
+  // which is how a weekly rule spells the dates it skips.
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  const setYmd = `${when.year}-${pad2(when.month)}-${pad2(when.day)}`;
 
   for (const rule of rules) {
     if (rule.userId !== userId) continue;
@@ -242,6 +249,9 @@ export function isUserAvailable(
         // open-ended that way, so both null = forever).
         if (rule.startDate && when.ymd < ruleDay(rule.startDate)) continue;
         if (rule.endDate && when.ymd > ruleDay(rule.endDate)) continue;
+        // ...minus the individual dates freed on the calendar. Skipping these
+        // is what makes "free that Tuesday" schedulable rather than cosmetic.
+        if (rule.exceptDates?.includes(setYmd)) continue;
       } else {
         if (!rule.startDate) continue;
         // Compare by calendar day so a set anywhere within the day-range is
@@ -365,9 +375,15 @@ export function buildSchedule(
   };
 
   function deriveRules(teamId: string | null | undefined) {
-    const activeRules = (options.schedulingRules ?? []).filter(
-      (r) => r.enabled && scopeCovers(r.teamId, teamId)
+    // Everything governing this team's sets, switched on or not. The DISABLED
+    // ones still matter to resolveRoleBehavior: a role rule that exists but is
+    // off means the behaviour is OFF, where no rule at all means the built-in
+    // default — so it has to see both. Every other consumer wants only the
+    // enabled ones.
+    const inScope = (options.schedulingRules ?? []).filter((r) =>
+      scopeCovers(r.teamId, teamId)
     );
+    const activeRules = inScope.filter((r) => r.enabled);
     const required = activeRules.filter((r) => r.tier === "REQUIRED");
     const preferences = activeRules.filter((r) => r.tier === "PREFERENCE");
     // userId → the people a TOGETHER rule of this tier and mode pairs them with.
@@ -384,7 +400,7 @@ export function buildSchedule(
     // What the role-shaped rules say, with lib/constants.ts as the default for
     // anything no rule governs — so an org with none of them (every org before
     // these rules existed) behaves exactly as it always did.
-    const behavior = resolveRoleBehavior(activeRules, {
+    const behavior = resolveRoleBehavior(inScope, {
       mdRoles: MD_ROLES,
       hostRoles: { [ACOUSTIC_GUITAR]: ACOUSTIC_HOST_ROLES },
       doublePairs: OVERLAP_ALLOWED_PAIRS,
