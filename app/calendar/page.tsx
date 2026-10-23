@@ -543,11 +543,43 @@ function CalendarView() {
   };
 
   // Step 1 → step 2: turn the picked types into the staged plan the review
-  // workspace reads. Purely local — nothing is fetched, nothing is saved.
-  const startPreview = (typeIds: string[], colors: SetTypeColors) => {
-    setPreviewPlan(
-      buildPreviewPlan(previewSets, previewRefs?.templates ?? [], typeIds)
+  // workspace reads. The staging itself is local, but the plan also needs the
+  // BASELINE its "Auto schedule" fills against — the load tallies, who's booked
+  // near the window, and what the scheduling rules read from outside it (a
+  // LIMIT rule's other bookings, a SAME_PLAYER rule's partner set). The
+  // generate flow ships that inside its plan; nothing is generated here, so we
+  // fetch it.
+  //
+  // Fetched BEFORE the workspace opens, not folded in after: it resets its
+  // staged edits whenever the `plan` prop changes identity, so a late arrival
+  // would throw away whatever the admin had already done. Step 1 shows its own
+  // "still loading" state meanwhile. A failed fetch opens the preview anyway —
+  // a from-zero fill is worse than this one, but it beats not opening.
+  const startPreview = async (typeIds: string[], colors: SetTypeColors) => {
+    const staged = buildPreviewPlan(
+      previewSets,
+      previewRefs?.templates ?? [],
+      typeIds
     );
+    let baseline: StagedPlan["baseline"] | undefined;
+    if (staged.sets.length > 0 && previewOrgId) {
+      const times = staged.sets.map((s) => new Date(s.startsAt).getTime());
+      const from = new Date(Math.min(...times)).toISOString();
+      const to = new Date(Math.max(...times)).toISOString();
+      setPreviewLoading(true);
+      try {
+        const res = await fetch(
+          `/api/admin/schedule-baseline?from=${from}&to=${to}`,
+          { headers: orgHeaders(previewOrgId) }
+        );
+        if (res.ok) baseline = (await res.json())?.baseline ?? undefined;
+      } catch {
+        // Leave it undefined — see above.
+      } finally {
+        setPreviewLoading(false);
+      }
+    }
+    setPreviewPlan(baseline ? { ...staged, baseline } : staged);
     setPreviewColors(colors);
     setPreviewOpen(false);
   };

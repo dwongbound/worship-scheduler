@@ -149,6 +149,28 @@ describe("isUserAvailable", () => {
     expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(false);
   });
 
+  it("ignores a recurring rule on a date it's been told to skip", () => {
+    // The Tuesday was freed on the availability calendar: the weekly rule
+    // stays, carrying that date as an exception, and the set is schedulable.
+    const rules: UnavailabilityRule[] = [
+      {
+        userId: "u1",
+        type: "RECURRING",
+        dayOfWeek: 2,
+        startMinute: 1080,
+        endMinute: 1200,
+        exceptDates: ["2026-01-06"], // the set's own day
+      },
+    ];
+    expect(isUserAvailable("u1", tuesdaySet, rules)).toBe(true);
+    // Any OTHER Tuesday is still blocked — it's a hole, not an end.
+    const nextTuesday: SchedulerSet = {
+      ...tuesdaySet,
+      startsAt: new Date(2026, 0, 13, 19, 0),
+    };
+    expect(isUserAvailable("u1", nextTuesday, rules)).toBe(false);
+  });
+
   it("ignores a recurring rule that hasn't started repeating yet", () => {
     const rules: UnavailabilityRule[] = [
       {

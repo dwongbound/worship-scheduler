@@ -240,9 +240,12 @@ test("phone week strip blocks a day with one tap", async ({ page }) => {
   await expect(blockEntry.first()).toBeVisible();
   await expect(todayCell).toHaveAttribute("aria-pressed", "true");
 
-  // Tapping it again clears it — the same toggle the calendar's click has.
+  // Tapping it again clears the day completely — the same toggle the calendar's
+  // click has. (A press-and-hold, or the right-click it stands in for, frees a
+  // day whatever is on it; this is the tap-twice path.)
   await todayCell.click();
   await expect(blockEntry).toHaveCount(0);
+  await expect(todayCell).toHaveAttribute("aria-pressed", "false");
 });
 
 test("phone: adds and deletes a recurring weekly block via the single-panel adder", async ({
@@ -600,4 +603,19 @@ test("phone My Sets: a pending card's buttons share one height", async ({ page }
     )
   );
   expect(new Set(heights).size).toBe(1);
+});
+
+test("phone availability: the week view fits the screen", async ({ page }) => {
+  await login(page, "carol");
+  await page.goto("/schedule");
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  const week = page.getByTestId("availability-week-view");
+  await expect(week).toBeVisible();
+  // Seven day columns and no sideways scroll on a phone.
+  const box = (await week.boundingBox())!;
+  const viewport = page.viewportSize()!;
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    viewport.width
+  );
 });

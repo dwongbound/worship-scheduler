@@ -227,9 +227,16 @@ export interface ApiUnavailability {
   endMinute: number | null;
   startDate: string | null;
   endDate: string | null;
+  // RECURRING only: dates ("YYYY-MM-DD") this weekly rule skips, one per day
+  // freed on the calendar. Optional so hand-built test fixtures needn't carry
+  // it; every reader goes through lib/availability.ts recurringSkips.
+  exceptDates?: string[];
   // Set for SPECIFIC blocks (the request/TimeRange they belong to).
   requestId: string | null;
   note: string | null;
+  // Written by "Import from Google Calendar" (lib/googleAvailability.ts).
+  // Optional so hand-built test fixtures needn't carry it.
+  fromGoogle?: boolean;
 }
 
 export interface ApiSetTemplate {
@@ -440,8 +447,9 @@ export interface StagedPlan {
     counts: Record<string, number>;
     // teamKey(userId, teamId) → the same, split by team.
     teamCounts: Record<string, number>;
-    // Dates people are already booked on, for the spacing rule.
-    booked: { userId: string; startsAt: string }[];
+    // Dates people are already booked on, for the spacing rule. `teamId` is
+    // which team's set it was — only a team-scoped LIMIT reads it.
+    booked: { userId: string; startsAt: string; teamId?: string | null }[];
     // teamId ("" for a team-less set) → who MD'd that team's last set BEFORE
     // this window. Seeds the "don't lead two running" rotation so the modal's
     // re-run starts where the server's did, rather than handing set one back to

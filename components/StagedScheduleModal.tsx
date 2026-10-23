@@ -69,6 +69,12 @@ import {
   type ReactNode,
 } from "react";
 import Modal from "./common/Modal";
+import InfoTooltip from "./common/InfoTooltip";
+import OrgRules, {
+  setLabel,
+  templateLabel,
+  type RuleOptions,
+} from "./OrgRules";
 import ScheduleHelpModal from "./ScheduleHelpModal";
 import Button from "./common/Button";
 import Input from "./common/Input";
@@ -99,7 +105,11 @@ import {
   type ScheduleOptions,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
-import type { SchedulingRule } from "@/lib/schedulingRules";
+import {
+  ruleSentence,
+  type RuleNames,
+  type SchedulingRule,
+} from "@/lib/schedulingRules";
 import {
   conflictedUserIds,
   countAssignments,
@@ -117,8 +127,11 @@ import {
   type SetClipboard,
   totalConflicts,
   totalLocked,
+  planFixedSets,
+  totalRuleHeld,
   totalUnfillable,
   unfillableRoles,
+  ruleHeldRoles,
 } from "@/lib/stagedPlan";
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -137,6 +150,7 @@ import {
 } from "@/lib/loadMetrics";
 import {
   DEFAULT_TEAM_ROLES,
+  roleLabel,
   slottedRoles,
   resolveTeamCapacities,
   teamSupportsMD,
@@ -250,6 +264,16 @@ function draftStamp(d: Date): string {
     hour12: true,
   });
   return `${date} ${time}`;
+}
+
+// Shared "nothing held" answer, so a plan with no required rules doesn't
+// allocate an empty Map per card per render.
+const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
+// The rules holding a seat open, in the exact words the rules editor shows —
+// nothing added. The mark beside it already says it's held; what the reader
+// needs from the (i) is WHICH rule to go and change.
+function heldReason(held: SchedulingRule[], names: RuleNames): string {
+  return held.map((r) => ruleSentence(r.params, names)).join("; ");
 }
 
 export default function StagedScheduleModal({
@@ -503,6 +527,10 @@ export default function StagedScheduleModal({
   const catalogFor = (set: StagedSet): TeamRoleDef[] =>
     (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
 
+  // How a rule's ids read as words, for the "held by a rule" tooltips. The
+  // plan has people, teams and role catalogs; a rule naming a recurring set or
+  // a specific one falls back to the generic wording RuleNames allows, which
+  // still leaves the sentence readable.
 
   // Copy a selected set's shape + roster with ⌘/Ctrl+C, stamp it onto another
   // with ⌘/Ctrl+V, and take back the last paste with ⌘/Ctrl+Z. Works in both
@@ -621,44 +649,93 @@ export default function StagedScheduleModal({
   // here obeys them the way the server's fill did. Empty until they land, or if
   // they can't be read — the re-run then falls back to plain rotation.
   const [schedulingRules, setSchedulingRules] = useState<SchedulingRule[]>([]);
+  const [ruleLabels, setRuleLabels] = useState<RuleOptions | null>(null);
+
+  const ruleNames = useMemo<RuleNames>(() => {
+    const people = new Map(users.map((u) => [u.id, u.name]));
+    const teamNames = new Map(teams.map((t) => [t.id, t.name]));
+    const roleLabels = new Map<string, string>();
+    for (const cat of catalogs?.values() ?? []) {
+      for (const r of cat) roleLabels.set(r.key, r.label);
+    }
+    const templates = new Map(
+      (ruleLabels?.templates ?? []).map((t) => [t.id, templateLabel(t)])
+    );
+    const sets = new Map((ruleLabels?.sets ?? []).map((x) => [x.id, setLabel(x)]));
+    return {
+      team: (id) => teamNames.get(id) ?? "a team",
+      user: (id) => people.get(id) ?? "someone",
+      role: (key) => roleLabels.get(key) ?? roleLabel(key),
+      template: (id) => templates.get(id) ?? "a recurring set",
+      set: (id) => sets.get(id) ?? "a set",
+    };
+  }, [users, teams, catalogs, ruleLabels]);
+
+  // The rules editor, opened from the action row below. `rulesSeq` bumps when
+  // it closes, re-running the fetch — the editor saves through its own PUT, so
+  // this is how an edit reaches the plan's next Auto schedule.
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [rulesSeq, setRulesSeq] = useState(0);
+  const closeRules = useCallback(() => {
+    setRulesOpen(false);
+    setRulesSeq((n) => n + 1);
+  }, []);
+  // Escape belongs to the TOP modal — the same problem ScheduleHelpModal
+  // solves, for the same reason: every Modal closes on a document-level
+  // keydown, so without this, dismissing the rules would also back out of the
+  // plan behind them (and on a dirty one, into the discard prompt). Caught in
+  // the CAPTURE phase, which runs before both bubble-phase listeners.
+  //
+  // Only while the rules editor's OWN builder is closed — that dialog is a
+  // third layer and Escape is rightly its own.
+  useEffect(() => {
+    if (!rulesOpen) return;
+    const swallowEscape = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector("[data-rule-builder]")) return;
+      e.stopPropagation();
+      closeRules();
+    };
+    document.addEventListener("keydown", swallowEscape, true);
+    return () => document.removeEventListener("keydown", swallowEscape, true);
+  }, [rulesOpen, closeRules]);
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
     fetch(`/api/orgs/${orgId}/rules`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => !cancelled && d && setSchedulingRules(d.rules ?? []))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setSchedulingRules(d.rules ?? []);
+        // The same payload carries the editor's names, which is what lets a
+        // "held by a rule" tooltip say "Sat Rehearsal" instead of "a recurring
+        // set". Free — we were already asking for it and throwing it away.
+        setRuleLabels(d.options ?? null);
+      })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [orgId]);
+  }, [orgId, rulesSeq]);
 
   // A staged set's database id, when it has one: an existing set the plan
   // fills (generate), or the real set itself (Preview Mode).
   const setIdOf = (s: StagedSet) => s.setId ?? s.stagingId ?? null;
 
-  // Everything the rules read from outside the sets being filled: the real
-  // sets around the plan, plus — when re-running ONE set — the plan's other
-  // sets as they now stand.
+  // Everything the rules read from outside the set(s) being filled: the real
+  // sets around the plan, merged with the plan's OWN sets as they now stand —
+  // see lib/stagedPlan.ts planFixedSets for why the merge matters.
   const ruleOptions = (exceptIdx?: number): ScheduleOptions => {
-    const fixedSets: FixedSet[] = (plan?.baseline?.fixedSets ?? []).map((f) => ({
-      ...f,
-      startsAt: new Date(f.startsAt),
-    }));
-    if (exceptIdx !== undefined) {
-      sets.forEach((s, i) => {
-        if (i === exceptIdx) return;
-        fixedSets.unshift({
-          setId: setIdOf(s),
-          templateId: s.templateId ?? null,
-          startsAt: new Date(s.startsAt),
-          assignments: s.assignments.map((a) => ({ userId: a.userId, role: a.role })),
-        });
-      });
-    }
     return {
       schedulingRules,
-      fixedSets,
+      fixedSets: planFixedSets(
+        (plan?.baseline?.fixedSets ?? []).map((f) => ({
+          ...f,
+          startsAt: new Date(f.startsAt),
+        })),
+        sets,
+        exceptIdx
+      ),
       periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
@@ -716,6 +793,27 @@ export default function StagedScheduleModal({
   const unfillable = useMemo(
     () => totalUnfillable(sets, users, rules, catalogs),
     [sets, users, rules, catalogs]
+  );
+  // Open slots a REQUIRED scheduling rule is what's holding empty — a seat
+  // reserved for a SAME_PLAYER partner who can't take it, or a role every
+  // candidate is refused for. Distinct from `unfillable`: somebody COULD play
+  // here, the org's own rules say they mustn't. Both fills it runs per set are
+  // over one set and a pooled roster, and it short-circuits when the org has no
+  // required rules at all — which is the common case.
+  // Built once per render and shared by the tally and every card below —
+  // ruleOptions() rebuilds its arrays on each call, and the cards would
+  // otherwise each pay for their own copy.
+  const heldOptions = ruleOptions();
+  const hasRequiredRules = schedulingRules.some(
+    (r) => r.enabled && r.tier === "REQUIRED"
+  );
+  const ruleHeld = useMemo(
+    () =>
+      hasRequiredRules
+        ? totalRuleHeld(sets, schedulerUsers, rules, catalogs, heldOptions)
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sets, schedulerUsers, rules, catalogs, hasRequiredRules, heldOptions]
   );
 
   // Nothing to show yet. While a run is in flight that's the skeleton; the rest
@@ -880,6 +978,17 @@ export default function StagedScheduleModal({
       ),
     }));
 
+  // The same, for ONE card. Locking a whole set is how you say "this one is
+  // settled" and then let Auto schedule work on everything else — without it
+  // the only options were seat-by-seat or the entire plan.
+  const setSetLocked = (idx: number, locked: boolean) =>
+    updateSet(idx, (s) => ({
+      ...s,
+      assignments: s.assignments.map(({ locked: _was, ...a }) =>
+        locked ? { ...a, locked: true } : a
+      ),
+    }));
+
   // Lock or unlock EVERY filled seat in the plan. Locked seats survive Auto
   // schedule; unlocked ones are re-proposed. A preview opens all-locked, so
   // Unlock all is how the admin hands the whole plan back to the scheduler.
@@ -997,6 +1106,7 @@ export default function StagedScheduleModal({
       (plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId ?? null,
       })),
       new Map(Object.entries(plan?.baseline?.teamCounts ?? {})),
       ruleOptions()
@@ -1062,6 +1172,7 @@ export default function StagedScheduleModal({
       ...(plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId ?? null,
       })),
       ...sets.flatMap((s, i) =>
         i === idx
@@ -1069,6 +1180,7 @@ export default function StagedScheduleModal({
           : s.assignments.map((a) => ({
               userId: a.userId,
               startsAt: new Date(s.startsAt),
+              teamId: s.teamId ?? null,
             }))
       ),
     ];
@@ -1341,6 +1453,18 @@ export default function StagedScheduleModal({
         </p>
       )}
 
+      {/* Rule-held chip: somebody could play the slot, but a REQUIRED
+          scheduling rule says they mustn't, so the fill left it open rather
+          than break the rule. Indigo, matching the rules' own surfaces — it's
+          the plan obeying an instruction, not a problem with the roster. */}
+      {ruleHeld > 0 && (
+        <p className="mt-3 rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+          ! {ruleHeld} slot{ruleHeld === 1 ? "" : "s"} left open by a required
+          scheduling rule — look for the “!” marks below. Edit the rules in Org
+          settings → Scheduling, or fill {ruleHeld === 1 ? "it" : "them"} by hand.
+        </p>
+      )}
+
       {/* Conflict chip: a manual edit put someone on a set they're not free
           for. Non-blocking — surfaced so it's a deliberate choice. */}
       {conflicts > 0 && (
@@ -1500,6 +1624,21 @@ export default function StagedScheduleModal({
             {lockedTotal < totalAssignments ? "🔒 Lock all" : "🔓 Unlock all"}
           </Button>
         )}
+        {orgId && (
+          // The rules are what the fill above OBEYS, so the place you notice a
+          // wrong one is here, looking at the plan it produced — not two pages
+          // away in Org settings. Editing them reloads the list this modal
+          // hands the scheduler, so the next Auto schedule run uses them.
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => setRulesOpen(true)}
+            disabled={busy}
+            title="View and edit the scheduling rules Auto schedule follows"
+          >
+            Scheduling rules
+          </Button>
+        )}
         {lockedTotal > 0 && (
           <span className="text-xs text-gray-500 dark:text-gray-400">
             🔒 {lockedTotal} locked pick{lockedTotal === 1 ? "" : "s"} kept on
@@ -1609,8 +1748,16 @@ export default function StagedScheduleModal({
                 ),
               0
             );
+            // How much of THIS card is pinned, for its lock toggle.
+            const lockedHere = set.assignments.filter((a) => a.locked).length;
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
+            // Roles whose open slot a required rule is holding — flagged "!".
+            // Skipped outright when the org has no required rules, which spares
+            // every card two fills in the common case.
+            const heldByRule = hasRequiredRules
+              ? ruleHeldRoles(set, schedulerUsers, rules, catalog, heldOptions)
+              : EMPTY_HELD;
             // Roles the team offers that this set doesn't want (zero slots and
             // nobody in them) — exactly the ones the card hides below, offered
             // back as "+ role" chips.
@@ -1715,6 +1862,12 @@ export default function StagedScheduleModal({
                     {/* Fill just this card's holes. Pinned to the card's top
                         right corner (after the badges) so it's in the same
                         place on every card, badges or not. */}
+                    <LockSetButton
+                      seats={set.assignments.length}
+                      locked={lockedHere}
+                      disabled={busy}
+                      onClick={() => setSetLocked(idx, lockedHere < set.assignments.length)}
+                    />
                     <FillSetButton
                       openSlots={openTotal}
                       disabled={busy}
@@ -1743,13 +1896,20 @@ export default function StagedScheduleModal({
                     if (capacity === 0 && filled.length === 0) return null;
 
                     const noneAvailable = cantFill.has(role);
+                    // Somebody could play it; a required rule says they can't.
+                    // Checked after noneAvailable so a role that's both reads as
+                    // the harder fact — though the two can't actually overlap
+                    // (see ruleHeldRoles).
+                    const ruleHolds = !noneAvailable && heldByRule.has(role);
                     return (
                       <li key={role}>
                         <span
                           className={`text-xs font-medium ${
                             noneAvailable
                               ? "text-red-600 dark:text-red-400"
-                              : "text-gray-600 dark:text-gray-400"
+                              : ruleHolds
+                                ? "text-indigo-600 dark:text-indigo-400"
+                                : "text-gray-600 dark:text-gray-400"
                           }`}
                         >
                           {roleName}
@@ -1762,6 +1922,21 @@ export default function StagedScheduleModal({
                             <span className="ml-1 font-semibold">
                               · no one available
                             </span>
+                          )}
+                          {ruleHolds && (
+                            <>
+                              <span className="ml-1 font-semibold">
+                                · ! held by a rule
+                              </span>
+                              {/* WHICH rule, in its own words — "held by a
+                                  rule" is only actionable once you know which
+                                  one to go and change. */}
+                              <span className="ml-1 align-middle">
+                                <InfoTooltip
+                                  text={heldReason(heldByRule.get(role) ?? [], ruleNames)}
+                                />
+                              </span>
+                            </>
                           )}
                         </span>
                         <div className="mt-1 space-y-1">
@@ -1952,6 +2127,20 @@ export default function StagedScheduleModal({
     {/* The guided tour. Opened by Help, and once on its own the first time this
         browser reaches this workspace. */}
     <ScheduleHelpModal open={helpOpen} preview={preview} onClose={closeHelp} />
+
+    {/* The org's scheduling rules, over the plan they govern. The editor owns
+        its own loading and saving, so this is just a frame; closing it bumps
+        rulesSeq so the plan picks up whatever changed. */}
+    {rulesOpen && orgId && (
+      <Modal
+        open
+        size="xl"
+        title="Scheduling rules"
+        onClose={closeRules}
+      >
+        <OrgRules key={orgId} orgId={orgId} />
+      </Modal>
+    )}
 
     {/* Save Draft: the confirm doubles as the name prompt, since naming is the
         only decision being made. Prefilled when this preview came from a draft,
@@ -2400,6 +2589,48 @@ function LoadBar({
 // empty slots, leaving everyone already on it exactly where they are. Greyed
 // out (and saying so) when the roster is already full, so the button always
 // tells you whether there's a hole to fill.
+// Lock or unlock every seat on one card. Like the plan-wide toggle, it always
+// offers the move that changes something: anything unlocked → Lock, all locked
+// → Unlock. Dead on an empty card, where there are no seats to pin.
+function LockSetButton({
+  seats,
+  locked,
+  disabled,
+  onClick,
+}: {
+  seats: number;
+  locked: number;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const allLocked = seats > 0 && locked === seats;
+  const label =
+    seats === 0
+      ? "Nobody on this set to lock"
+      : allLocked
+        ? "Unlock this set, so Auto schedule may re-propose anyone on it"
+        : `Lock this set's ${seats} seat${seats === 1 ? "" : "s"}, so Auto schedule leaves it alone`;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || seats === 0}
+      title={label}
+      aria-label={label}
+      aria-pressed={allLocked}
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs
+        transition-colors disabled:cursor-not-allowed disabled:opacity-40
+        disabled:hover:bg-transparent ${
+          allLocked
+            ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300"
+            : "text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+        }`}
+    >
+      {allLocked ? "🔒" : "🔓"}
+    </button>
+  );
+}
+
 function FillSetButton({
   openSlots,
   disabled,

@@ -271,10 +271,21 @@ describe("SAME_PLAYER", () => {
     expect(seated(result, "sat")).toEqual(["g2"]);
   });
 
-  it("required: the slot stays open when that player can't make it", () => {
+  it("required: picks someone free for BOTH sets, not whoever rotation favours", () => {
+    // g1 is first by rotation but can't make Sunday. Seating them on Saturday
+    // would strand Sunday's slot, so the pair goes to g2 instead.
     const result = run(weekend(), guitars, [rule(weekly)], {
       unavailable: [busyOn("g1", sun)],
     });
+    expect(seated(result, "sat")).toEqual(["g2"]);
+    expect(seated(result, "sun")).toEqual(["g2"]);
+  });
+
+  it("required: both slots stay open when nobody is free for both", () => {
+    const result = run(weekend(), guitars, [rule(weekly)], {
+      unavailable: [busyOn("g1", sun), busyOn("g2", sun)],
+    });
+    expect(seated(result, "sat")).toEqual([]);
     expect(seated(result, "sun")).toEqual([]);
   });
 
@@ -293,8 +304,10 @@ describe("SAME_PLAYER", () => {
     const result = run(sets, [...guitars, user("g3", ["ELECTRIC_GUITAR"])], [rule(weekly)], {
       unavailable: [busyOn("g1", sun)],
     });
-    // One seat is held for g1 (who can't come); the other fills normally.
-    expect(seated(result, "sun")).toEqual(["g2"]);
+    // Saturday goes to someone free for both (g1 is out), and Sunday seats
+    // them plus a spare filled by ordinary rotation.
+    expect(seated(result, "sat")).toEqual(["g2"]);
+    expect(seated(result, "sun")).toEqual(["g2", "g3"]);
   });
 
   it("specific sets: pairs with a set outside this run", () => {
@@ -326,5 +339,212 @@ describe("switched-off rules", () => {
       rule({ kind: "ONLY_IF_NEEDED", userId: "d1", role: null }, "PREFERENCE", false),
     ]);
     expect(seated(result, "s")).toEqual(["d1"]);
+  });
+});
+
+describe("LIMIT for everyone", () => {
+  // A null userId caps each person separately, rather than naming one.
+  const everyone = (max: number, tier: RuleTier = "REQUIRED") =>
+    rule({ kind: "LIMIT", userId: null, max, period: "WEEK" }, tier);
+  const drummers = [user("d1", ["DRUMS"]), user("d2", ["DRUMS"])];
+  // Three sets in one Mon–Sun week, one drums seat each.
+  const week = [
+    set("sat", sat, { DRUMS: 1 }),
+    set("sun", sun, { DRUMS: 1 }),
+    set("mon", new Date(2026, 0, 5, 19, 0), { DRUMS: 1 }),
+  ];
+
+  it("required: nobody is seated past the cap, so a slot is left open", () => {
+    // Sat + Sun are one week; a cap of 1 leaves the second of them unfilled
+    // for whoever played the first, and rotation covers it with the other.
+    const result = run([week[0], week[1]], drummers, [everyone(1)]);
+    expect(result).toHaveLength(2);
+    expect(new Set(result.map((a) => a.userId)).size).toBe(2);
+  });
+
+  it("required: every slot past the pool's total capacity stays open", () => {
+    // Two drummers, capped at one set each in the week → the third set in that
+    // week has nobody left who may take it.
+    const sets = [week[0], week[1], set("sun2", new Date(2026, 0, 11, 19, 0), { DRUMS: 1 })];
+    const result = run(sets, drummers, [everyone(1)]);
+    expect(result).toHaveLength(2);
+    expect(result.map((a) => a.setId)).not.toContain("sun2");
+  });
+
+  it("preference: goes over the cap rather than leave a slot empty", () => {
+    const sets = [week[0], week[1], set("sun2", new Date(2026, 0, 11, 19, 0), { DRUMS: 1 })];
+    const result = run(sets, drummers, [everyone(1, "PREFERENCE")]);
+    expect(result).toHaveLength(3);
+  });
+
+  it("still caps the one person a named LIMIT points at", () => {
+    const result = run([week[0], week[1]], drummers, [
+      rule({ kind: "LIMIT", userId: "d1", max: 1, period: "WEEK" }),
+    ]);
+    expect(result.filter((a) => a.userId === "d1")).toHaveLength(1);
+  });
+});
+
+describe("per-team rule scope", () => {
+  const TEAM_B = "team-2";
+  const both = (id: string) =>
+    ({ id, rolesByTeam: { [TEAM]: ["DRUMS"], [TEAM_B]: ["DRUMS"] } }) as SchedulerUser;
+  const drummers = [both("d1"), both("d2")];
+  const scoped = (teamId: string | null, params: RuleParams): SchedulingRule => ({
+    ...rule(params),
+    teamId,
+  });
+  const teamSet = (id: string, at: Date, teamId: string) =>
+    set(id, at, { DRUMS: 1 }, { teamId });
+
+  it("a team-scoped rule governs only that team's sets", () => {
+    // d1 is barred from team A's set, but is still the first pick on team B's.
+    const rules = [scoped(TEAM, { kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" })];
+    const result = run(
+      [teamSet("a", sat, TEAM), teamSet("b", new Date(2026, 0, 13, 19, 0), TEAM_B)],
+      drummers,
+      rules
+    );
+    expect(result.find((r) => r.setId === "a")?.userId).toBe("d2");
+    expect(result.find((r) => r.setId === "b")?.userId).toBe("d1");
+  });
+
+  it("an org-wide rule (no team) still governs every team", () => {
+    const rules = [scoped(null, { kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" })];
+    const result = run(
+      [teamSet("a", sat, TEAM), teamSet("b", new Date(2026, 0, 13, 19, 0), TEAM_B)],
+      drummers,
+      rules
+    );
+    expect(result.every((r) => r.userId === "d2")).toBe(true);
+  });
+
+  it("two teams can hold opposite rules without either bending", () => {
+    const rules = [
+      scoped(TEAM, { kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" }),
+      scoped(TEAM_B, { kind: "LIMIT", userId: "d2", max: 0, period: "WEEK" }),
+    ];
+    const result = run(
+      [teamSet("a", sat, TEAM), teamSet("b", new Date(2026, 0, 13, 19, 0), TEAM_B)],
+      drummers,
+      rules
+    );
+    expect(result.find((r) => r.setId === "a")?.userId).toBe("d2");
+    expect(result.find((r) => r.setId === "b")?.userId).toBe("d1");
+  });
+});
+
+describe("spread", () => {
+  const drummers = [user("d1", ["DRUMS"]), user("d2", ["DRUMS"])];
+
+  it("of two equally loaded people, picks the one further from their bookings", () => {
+    // Both have one booking, so load ties; d2's is three weeks away and d1's is
+    // nine days away. Neither is inside the 8-day "too close" window, so before
+    // the spread tiebreak this fell through to the id.
+    const target = new Date(2026, 0, 20, 19, 0);
+    const result = buildSchedule(
+      [set("s", target, { DRUMS: 1 })],
+      drummers,
+      [],
+      new Map([
+        ["d1", 1],
+        ["d2", 1],
+      ]),
+      [
+        { userId: "d1", startsAt: new Date(2026, 0, 11, 19, 0) }, // 9 days
+        { userId: "d2", startsAt: new Date(2025, 11, 30, 19, 0) }, // 21 days
+      ],
+      new Map(),
+      { timeZone: TZ }
+    );
+    expect(result[0].userId).toBe("d2");
+  });
+
+  it("spreads a capped person's sets across the period", () => {
+    // One drummer capped at 2 a month over four weekly sets: the two they get
+    // should not be adjacent weeks.
+    const weekly = [0, 1, 2, 3].map((i) =>
+      set(`w${i}`, new Date(2026, 0, 6 + 7 * i, 19, 0), { DRUMS: 1 })
+    );
+    const result = run(weekly, drummers, [
+      rule({ kind: "LIMIT", userId: "d1", max: 2, period: "MONTH" }),
+    ]);
+    const mine = result
+      .filter((a) => a.userId === "d1")
+      .map((a) => Number(a.setId.slice(1)))
+      .sort((a, b) => a - b);
+    expect(mine).toHaveLength(2);
+    expect(mine[1] - mine[0]).toBeGreaterThan(1);
+  });
+});
+
+describe("a team-scoped LIMIT counts only that team's sets", () => {
+  const TEAM_B = "team-2";
+  const both = (id: string) =>
+    ({ id, rolesByTeam: { [TEAM]: ["DRUMS"], [TEAM_B]: ["DRUMS"] } }) as SchedulerUser;
+  const scoped = (teamId: string | null, params: RuleParams): SchedulingRule => ({
+    ...rule(params),
+    teamId,
+  });
+  const at = (day: number, teamId: string) =>
+    set(`s${day}-${teamId}`, new Date(2026, 0, day, 19, 0), { DRUMS: 1 }, { teamId });
+
+  it("doesn't count another team's sets toward the cap", () => {
+    // d1 is capped at 1 a month ON TEAM A, and already has a TEAM B booking
+    // that month — which must not use up the team A allowance.
+    const result = buildSchedule(
+      [at(20, TEAM)],
+      [both("d1")],
+      [],
+      new Map(),
+      [],
+      new Map(),
+      {
+        schedulingRules: [scoped(TEAM, { kind: "LIMIT", userId: "d1", max: 1, period: "MONTH" })],
+        periodBookings: [
+          { userId: "d1", startsAt: new Date(2026, 0, 6, 19, 0), teamId: TEAM_B },
+        ],
+        timeZone: TZ,
+      }
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("does count that team's own sets", () => {
+    const result = buildSchedule(
+      [at(20, TEAM)],
+      [both("d1")],
+      [],
+      new Map(),
+      [],
+      new Map(),
+      {
+        schedulingRules: [scoped(TEAM, { kind: "LIMIT", userId: "d1", max: 1, period: "MONTH" })],
+        periodBookings: [
+          { userId: "d1", startsAt: new Date(2026, 0, 6, 19, 0), teamId: TEAM },
+        ],
+        timeZone: TZ,
+      }
+    );
+    expect(result).toEqual([]);
+  });
+
+  it("an org-wide LIMIT counts every team's sets", () => {
+    const result = buildSchedule(
+      [at(20, TEAM)],
+      [both("d1")],
+      [],
+      new Map(),
+      [],
+      new Map(),
+      {
+        schedulingRules: [scoped(null, { kind: "LIMIT", userId: "d1", max: 1, period: "MONTH" })],
+        periodBookings: [
+          { userId: "d1", startsAt: new Date(2026, 0, 6, 19, 0), teamId: TEAM_B },
+        ],
+        timeZone: TZ,
+      }
+    );
+    expect(result).toEqual([]);
   });
 });

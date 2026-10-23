@@ -3,7 +3,15 @@
 // tests/unit/stagedPlan.test.ts) and can be shared by the UI.
 import type { StagedSet } from "./types";
 import { defaultMDId, isValidMD, type MDAssignment } from "./md";
-import { isUserAvailable, type UnavailabilityRule } from "./scheduler";
+import {
+  buildSchedule,
+  isUserAvailable,
+  type FixedSet,
+  type ScheduleOptions,
+  type SchedulerUser,
+  type UnavailabilityRule,
+} from "./scheduler";
+import type { SchedulingRule } from "./schedulingRules";
 import type { Instrument, SlotCapacityMap } from "./constants";
 import {
   DEFAULT_TEAM_ROLES,
@@ -418,4 +426,170 @@ export function popUndo(stack: PasteUndo[], current: StagedSet[]): UndoResult {
   if (!last) return { ok: false, stack };
   if (last.after !== current) return { ok: false, stack: [] };
   return { ok: true, stack: stack.slice(0, -1), sets: last.before, idx: last.idx };
+}
+
+// Roles on this set whose open slot the org's REQUIRED scheduling rules are
+// what's holding empty: the seat a required SAME_PLAYER rule reserves for a
+// partner-set player who can't take it, or a role whose every candidate a
+// required NEVER / LIMIT rule refuses. The fill leaves these open rather than
+// break the rule (lib/schedulingRules.ts), which until now was indistinguishable
+// from a slot the admin simply hadn't filled yet.
+//
+// Found by DIFFERENCE rather than by re-deriving the rule logic here: fill the
+// set once with the required rules and once with none, and any role the
+// rules-off run could fill but the rules-on run couldn't is one the rules are
+// holding. That reuses lib/scheduler.ts's own answer, so this flag can't drift
+// from the fill it explains. REQUIRED-only on the "with" side is deliberate —
+// preferences never leave a slot open on purpose, but they do change WHO gets
+// seated, and that can cascade into a different count for some other role.
+// Comparing required-only against none keeps the claim exactly "a REQUIRED rule
+// is holding this".
+//
+// Disjoint from `unfillableRoles` by construction: if nobody can fill a role at
+// all, the rules-off run can't either, so the counts match and nothing is
+// flagged.
+export function ruleHeldRoles(
+  set: StagedSet,
+  users: SchedulerUser[],
+  rules: UnavailabilityRule[],
+  catalog: TeamRoleDef[] = DEFAULT_TEAM_ROLES,
+  options: ScheduleOptions = {}
+): Map<Instrument, SchedulingRule[]> {
+  const required = (options.schedulingRules ?? []).filter(
+    (r) => r.enabled && r.tier === "REQUIRED"
+  );
+  // No required rule can be holding anything, and this is the common case —
+  // skip both fills rather than run them to prove it.
+  if (required.length === 0) return new Map();
+
+  const isMDById = new Map(users.map((u) => [u.id, !!u.isMD]));
+  // The set as the scheduler sees it, with its CURRENT roster pinned: we're
+  // asking what else could be seated from here, not re-filling from scratch.
+  const schedulerSet = {
+    id: set.startsAt,
+    startsAt: new Date(set.startsAt),
+    durationMinutes: set.durationMinutes,
+    roles: catalog,
+    capacities: set.slotCapacities,
+    requiresMD: set.requiresMD,
+    teamId: set.teamId,
+    templateId: set.templateId ?? null,
+    // Its real identity, so a SAME_PLAYER rule naming this set recognises it.
+    setId: set.setId ?? set.stagingId ?? null,
+    preAssigned: set.assignments.map((a) => ({
+      userId: a.userId,
+      role: a.role,
+      isMD: isMDById.get(a.userId) ?? false,
+    })),
+  };
+
+  // How many seats one fill proposes per role. Everything but the rules is
+  // held identical across the two runs, so only they can explain a difference.
+  const filledByRole = (schedulingRules: SchedulingRule[]) => {
+    const byRole = new Map<string, number>();
+    for (const p of buildSchedule(
+      [schedulerSet],
+      users,
+      rules,
+      new Map(),
+      [],
+      new Map(),
+      { ...options, schedulingRules }
+    )) {
+      byRole.set(p.role, (byRole.get(p.role) ?? 0) + 1);
+    }
+    return byRole;
+  };
+
+  const withRules = filledByRole(required);
+  const withoutRules = filledByRole([]);
+  const held = new Map<Instrument, SchedulingRule[]>();
+  for (const { key } of slottedRoles(catalog)) {
+    if ((withoutRules.get(key) ?? 0) <= (withRules.get(key) ?? 0)) continue;
+    // WHICH rule is holding it, by leave-one-out: drop one required rule and
+    // see whether the seat becomes fillable. Several can be jointly
+    // responsible, so every rule that frees it on its own is named.
+    //
+    // Only ever runs for a role we already know is held — the common case
+    // costs the two fills above and nothing more.
+    const blame = required.filter((r) => {
+      const without = filledByRole(required.filter((o) => o !== r));
+      return (without.get(key) ?? 0) > (withRules.get(key) ?? 0);
+    });
+    // A rule nobody can be singled out for is a group of them pulling
+    // together; naming them all beats naming none.
+    held.set(key, blame.length > 0 ? blame : required);
+  }
+  return held;
+}
+
+// Total number of rule-held role slots across the whole plan — the count the
+// review workspace's banner names, alongside the unfillable and conflict ones.
+export function totalRuleHeld(
+  sets: StagedSet[],
+  users: SchedulerUser[],
+  rules: UnavailabilityRule[],
+  catalogs?: Map<string, TeamRoleDef[]>,
+  options: ScheduleOptions = {}
+): number {
+  if (!(options.schedulingRules ?? []).some((r) => r.enabled && r.tier === "REQUIRED")) {
+    return 0;
+  }
+  let total = 0;
+  for (const set of sets) {
+    const catalog =
+      (set.teamId ? catalogs?.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
+    total += ruleHeldRoles(set, users, rules, catalog, options).size;
+  }
+  return total;
+}
+
+/**
+ * The `fixedSets` an auto-fill over this plan should read — the rosters a
+ * SAME_PLAYER rule looks up partner players in (lib/schedulingRules.ts).
+ *
+ * Two sources, and the plan wins where they overlap:
+ *   • `baseline` is the server's snapshot of the real sets around the plan,
+ *     read before anything was staged. `ruleContext` returns every set in the
+ *     window — which in the calendar's Preview Mode is the previewed sets
+ *     THEMSELVES, since those are real sets.
+ *   • the plan's own sets, with the rosters currently on screen.
+ *
+ * Left un-merged, a previewed set appears twice and the rule owes its seat to
+ * BOTH rosters' players — so someone the admin has already swapped out is still
+ * accepted for a seat reserved for "whoever plays it on the other set".
+ * `buildSchedule` drops the stale copy only for the sets it is filling in that
+ * run (its own roster wins), which is one card's worth when re-filling one card
+ * — every other set in the plan needs the swap made here.
+ *
+ * `exceptIdx` omits one set: the one being re-filled, which is the run's own
+ * subject rather than a fixed roster to read.
+ */
+export function planFixedSets(
+  baseline: FixedSet[],
+  sets: StagedSet[],
+  exceptIdx?: number
+): FixedSet[] {
+  // How a staged set names its real db row: generated plans carry `setId`,
+  // Preview Mode's carry the same id as `stagingId` (see StagedSet).
+  const idOf = (s: StagedSet) => s.setId ?? s.stagingId ?? null;
+  const planIds = new Set(sets.flatMap((s) => (idOf(s) ? [idOf(s)!] : [])));
+  return [
+    ...sets.flatMap((s, i) =>
+      i === exceptIdx
+        ? []
+        : [
+            {
+              setId: idOf(s),
+              templateId: s.templateId ?? null,
+              startsAt: new Date(s.startsAt),
+              assignments: s.assignments.map((a) => ({
+                userId: a.userId,
+                role: a.role,
+              })),
+            },
+          ]
+    ),
+    ...baseline.filter((f) => !(f.setId && planIds.has(f.setId))),
+  ];
 }

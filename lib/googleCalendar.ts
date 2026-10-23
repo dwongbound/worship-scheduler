@@ -67,10 +67,10 @@ const CHANNEL_TTL_SEC = 7 * 24 * 60 * 60;
 
 // Reuses the "Continue with Google" OAuth client (same Google Cloud project),
 // which also needs the Calendar API enabled and the callback below registered.
-function clientId(): string | undefined {
+export function clientId(): string | undefined {
   return process.env.GOOGLE_CLIENT_ID;
 }
-function clientSecret(): string | undefined {
+export function clientSecret(): string | undefined {
   return process.env.GOOGLE_CLIENT_SECRET;
 }
 
@@ -134,6 +134,34 @@ export function verifyState(token: string): { orgId: string; userId: string } | 
     const body = JSON.parse(Buffer.from(payload, "base64url").toString()) as CalState;
     if (body.p !== "gcal" || body.exp < Math.floor(Date.now() / 1000)) return null;
     return { orgId: body.orgId, userId: body.userId };
+  } catch {
+    return null;
+  }
+}
+
+// The member-side "Import from Google Calendar" (lib/googleAvailability.ts)
+// shares this callback, so its state is signed the same way under a purpose of
+// its own: neither flow's state verifies as the other's.
+type ImportState = { p: "gimport"; userId: string; requestId: string; exp: number };
+
+export function signImportState(userId: string, requestId: string, ttlSec = 600): string {
+  const body: ImportState = {
+    p: "gimport",
+    userId,
+    requestId,
+    exp: Math.floor(Date.now() / 1000) + ttlSec,
+  };
+  const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
+  return `${payload}.${sign(payload, "gimport-state")}`;
+}
+
+export function verifyImportState(token: string): { userId: string; requestId: string } | null {
+  try {
+    const [payload, sig] = token.split(".");
+    if (!payload || !sig || !safeEqual(sig, sign(payload, "gimport-state"))) return null;
+    const body = JSON.parse(Buffer.from(payload, "base64url").toString()) as ImportState;
+    if (body.p !== "gimport" || body.exp < Math.floor(Date.now() / 1000)) return null;
+    return { userId: body.userId, requestId: body.requestId };
   } catch {
     return null;
   }
