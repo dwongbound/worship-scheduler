@@ -90,7 +90,11 @@ import {
   type FixedSet,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
-import type { SchedulingRule } from "@/lib/schedulingRules";
+import {
+  ruleSentence,
+  type RuleNames,
+  type SchedulingRule,
+} from "@/lib/schedulingRules";
 import { isActiveForSet, ruleHeldRoles } from "@/lib/stagedPlan";
 import {
   DEFAULT_SET_METRIC,
@@ -150,9 +154,22 @@ interface SetDetailModalProps {
 // wants that for the whole sitting, not one set at a time.
 const LOAD_METRIC_KEY = "worship:set-load-metric";
 
+// The rules holding a seat open, as the sentences the rules editor shows —
+// the same wording the review workspace uses for the same mark.
+function heldReason(held: SchedulingRule[], names: RuleNames): string {
+  if (held.length === 0) return "A required scheduling rule is keeping this slot open.";
+  const lead =
+    held.length === 1
+      ? "A required rule is keeping this slot open:"
+      : "Required rules are keeping this slot open:";
+  return `${lead} ${held.map((r) => ruleSentence(r.params, names)).join("; ")}. Auto schedule left it rather than break ${
+    held.length === 1 ? "it" : "them"
+  } — you can still fill it by hand.`;
+}
+
 // Shared "nothing held" answer for the rule marker below, so a set in an org
 // with no required rules allocates nothing per render.
-const EMPTY_ROLES: Set<Instrument> = new Set();
+const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
 
 export default function SetDetailModal({
   set: savedSet,
@@ -518,6 +535,16 @@ export default function SetDetailModal({
     (savedSet ?? set).assignments.map((a) => a.user.id)
   ).size;
   const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
+  // How a rule's ids read as words, for the "held by a rule" tooltip. A rule
+  // naming a recurring set or another set falls back to the generic wording
+  // RuleNames allows — the sentence still reads.
+  const ruleNames: RuleNames = {
+    team: (id) => (id === (set.teamId ?? set.team?.id) ? set.team?.name ?? "this team" : "another team"),
+    user: (id) => users.find((u) => u.id === id)?.name ?? "someone",
+    role: (key) => roleLabel(key, catalog),
+    template: () => "a recurring set",
+    set: () => "another set",
+  };
   // What to call a role here — this team's own label, with the built-in name
   // (then a humanized key) as the fallback for a role it has since dropped.
   const labelFor = (role: string) => roleLabel(role, catalog);
@@ -786,7 +813,7 @@ export default function SetDetailModal({
             periodBookings: ruleData?.periodBookings ?? [],
           }
         )
-      : EMPTY_ROLES;
+      : EMPTY_HELD;
 
   // Fill this set's OWN empty slots, keeping everyone already assigned in place
   // (their seats are constraints the fill works around). Never removes or moves
@@ -1677,12 +1704,18 @@ export default function SetDetailModal({
                   />
                 )}
                 {isHole && heldByRule.has(role) && (
-                  <span
-                    className="ml-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400"
-                    title="A required scheduling rule is keeping this slot open — Auto schedule left it rather than break the rule. You can still fill it by hand."
-                  >
-                    ! held by a rule
-                  </span>
+                  <>
+                    <span className="ml-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                      ! held by a rule
+                    </span>
+                    {/* WHICH rule, in its own words — the mark is only
+                        actionable once you know what to go and change. */}
+                    <span className="ml-1 align-middle">
+                      <InfoTooltip
+                        text={heldReason(heldByRule.get(role) ?? [], ruleNames)}
+                      />
+                    </span>
+                  </>
                 )}
               </span>
 

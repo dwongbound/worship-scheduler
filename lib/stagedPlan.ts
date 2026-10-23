@@ -454,13 +454,13 @@ export function ruleHeldRoles(
   rules: UnavailabilityRule[],
   catalog: TeamRoleDef[] = DEFAULT_TEAM_ROLES,
   options: ScheduleOptions = {}
-): Set<Instrument> {
+): Map<Instrument, SchedulingRule[]> {
   const required = (options.schedulingRules ?? []).filter(
     (r) => r.enabled && r.tier === "REQUIRED"
   );
   // No required rule can be holding anything, and this is the common case —
   // skip both fills rather than run them to prove it.
-  if (required.length === 0) return new Set();
+  if (required.length === 0) return new Map();
 
   const isMDById = new Map(users.map((u) => [u.id, !!u.isMD]));
   // The set as the scheduler sees it, with its CURRENT roster pinned: we're
@@ -503,9 +503,22 @@ export function ruleHeldRoles(
 
   const withRules = filledByRole(required);
   const withoutRules = filledByRole([]);
-  const held = new Set<Instrument>();
+  const held = new Map<Instrument, SchedulingRule[]>();
   for (const { key } of slottedRoles(catalog)) {
-    if ((withoutRules.get(key) ?? 0) > (withRules.get(key) ?? 0)) held.add(key);
+    if ((withoutRules.get(key) ?? 0) <= (withRules.get(key) ?? 0)) continue;
+    // WHICH rule is holding it, by leave-one-out: drop one required rule and
+    // see whether the seat becomes fillable. Several can be jointly
+    // responsible, so every rule that frees it on its own is named.
+    //
+    // Only ever runs for a role we already know is held — the common case
+    // costs the two fills above and nothing more.
+    const blame = required.filter((r) => {
+      const without = filledByRole(required.filter((o) => o !== r));
+      return (without.get(key) ?? 0) > (withRules.get(key) ?? 0);
+    });
+    // A rule nobody can be singled out for is a group of them pulling
+    // together; naming them all beats naming none.
+    held.set(key, blame.length > 0 ? blame : required);
   }
   return held;
 }

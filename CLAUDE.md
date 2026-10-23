@@ -328,7 +328,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   by DIFFERENCE — fill the set once with the required rules and once without,
   and any role the rules-off run could fill but the rules-on run couldn't is
   held — so the flag can never drift from `buildSchedule`'s own answer.
-  Disjoint from `unfillableRoles` by construction. ✅tested
+  Disjoint from `unfillableRoles` by construction. It returns role → the RULES
+  holding it, found by leave-one-out (drop one required rule, see if the seat
+  frees) so the "!" mark's (i) can name the rule to go and change; rules that
+  only hold it jointly are all named. ✅tested
   `planFixedSets` merges the baseline's snapshot of the sets around a plan with
   the plan's OWN sets as staged, dropping the stale copy where both name the
   same set — `ruleContext` returns every set in the window, which in Preview

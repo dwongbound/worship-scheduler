@@ -57,7 +57,7 @@ describe("ruleHeldRoles", () => {
       [],
       CATALOG
     );
-    expect([...held]).toEqual([]);
+    expect([...held.keys()]).toEqual([]);
   });
 
   it("flags a seat a required SAME_PLAYER rule holds for someone who can't take it", () => {
@@ -97,7 +97,9 @@ describe("ruleHeldRoles", () => {
         ],
       }
     );
-    expect([...held]).toEqual(["DRUMS"]);
+    expect([...held.keys()]).toEqual(["DRUMS"]);
+    // And says WHICH rule, which is what the tooltip shows.
+    expect(held.get("DRUMS")).toEqual(rules);
   });
 
   it("flags a role whose every candidate a required NEVER rule refuses", () => {
@@ -110,7 +112,7 @@ describe("ruleHeldRoles", () => {
       CATALOG,
       { schedulingRules: rules }
     );
-    expect([...held]).toEqual(["DRUMS"]);
+    expect([...held.keys()]).toEqual(["DRUMS"]);
   });
 
   it("flags a role whose only candidate is over a required LIMIT", () => {
@@ -126,7 +128,7 @@ describe("ruleHeldRoles", () => {
         periodBookings: [{ userId: "d1", startsAt: new Date(SAT) }],
       }
     );
-    expect([...held]).toEqual(["DRUMS"]);
+    expect([...held.keys()]).toEqual(["DRUMS"]);
   });
 
   it("ignores a rule the admin switched off", () => {
@@ -140,7 +142,7 @@ describe("ruleHeldRoles", () => {
       CATALOG,
       { schedulingRules: rules }
     );
-    expect([...held]).toEqual([]);
+    expect([...held.keys()]).toEqual([]);
   });
 
   it("ignores a PREFERENCE — it bends, so it never holds a seat open", () => {
@@ -154,7 +156,7 @@ describe("ruleHeldRoles", () => {
       CATALOG,
       { schedulingRules: rules }
     );
-    expect([...held]).toEqual([]);
+    expect([...held.keys()]).toEqual([]);
   });
 
   it("doesn't flag a role nobody can fill anyway — that's the red unfillable flag", () => {
@@ -179,7 +181,7 @@ describe("ruleHeldRoles", () => {
       CATALOG,
       { schedulingRules: rules }
     );
-    expect([...held]).toEqual([]);
+    expect([...held.keys()]).toEqual([]);
   });
 
   it("doesn't flag a slot that's already filled", () => {
@@ -194,7 +196,7 @@ describe("ruleHeldRoles", () => {
       CATALOG,
       { schedulingRules: rules }
     );
-    expect([...held]).toEqual([]);
+    expect([...held.keys()]).toEqual([]);
   });
 });
 
@@ -216,5 +218,42 @@ describe("totalRuleHeld", () => {
 
   it("is zero — without filling anything — when no required rule is active", () => {
     expect(totalRuleHeld(sets, users, [], new Map([[TEAM, CATALOG]]))).toBe(0);
+  });
+});
+
+describe("which rule is holding it", () => {
+  const CAT: TeamRoleDef[] = [
+    { key: "DRUMS", label: "Drums", defaultCount: 1, adminOnly: false, order: 0 },
+    { key: "BASS", label: "Bass", defaultCount: 1, adminOnly: false, order: 1 },
+  ];
+
+  it("names only the rule responsible, not every required rule", () => {
+    // Two required rules: one bars the lone drummer, the other is about bass
+    // and has nothing to do with the empty drums seat.
+    const blocking = rule({ kind: "TOGETHER", mode: "NEVER", userIds: ["v1", "d1"] });
+    const unrelated = rule({ kind: "LIMIT", userId: "b1", max: 5, period: "WEEK" });
+    const held = ruleHeldRoles(
+      stagedSet(SUN, [{ userId: "v1", role: "BASS" }]),
+      [player("d1", ["DRUMS"]), player("v1", ["BASS"]), player("b1", ["BASS"])],
+      [],
+      CAT,
+      { schedulingRules: [blocking, unrelated] }
+    );
+    expect(held.get("DRUMS")).toEqual([blocking]);
+  });
+
+  it("names both when two rules each hold the seat on their own", () => {
+    const never = rule({ kind: "TOGETHER", mode: "NEVER", userIds: ["v1", "d1"] });
+    const capped = rule({ kind: "LIMIT", userId: "d1", max: 0, period: "WEEK" });
+    const held = ruleHeldRoles(
+      stagedSet(SUN, [{ userId: "v1", role: "BASS" }]),
+      [player("d1", ["DRUMS"]), player("v1", ["BASS"])],
+      [],
+      CAT,
+      { schedulingRules: [never, capped] }
+    );
+    // Neither alone frees the seat — dropping one leaves the other holding it
+    // — so the fallback names them all rather than none.
+    expect(held.get("DRUMS")).toEqual([never, capped]);
   });
 });

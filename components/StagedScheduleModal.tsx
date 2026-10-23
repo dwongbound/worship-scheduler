@@ -69,6 +69,7 @@ import {
   type ReactNode,
 } from "react";
 import Modal from "./common/Modal";
+import InfoTooltip from "./common/InfoTooltip";
 import OrgRules from "./OrgRules";
 import ScheduleHelpModal from "./ScheduleHelpModal";
 import Button from "./common/Button";
@@ -100,7 +101,11 @@ import {
   type ScheduleOptions,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
-import type { SchedulingRule } from "@/lib/schedulingRules";
+import {
+  ruleSentence,
+  type RuleNames,
+  type SchedulingRule,
+} from "@/lib/schedulingRules";
 import {
   conflictedUserIds,
   countAssignments,
@@ -141,6 +146,7 @@ import {
 } from "@/lib/loadMetrics";
 import {
   DEFAULT_TEAM_ROLES,
+  roleLabel,
   slottedRoles,
   resolveTeamCapacities,
   teamSupportsMD,
@@ -257,8 +263,22 @@ function draftStamp(d: Date): string {
 }
 
 // Shared "nothing held" answer, so a plan with no required rules doesn't
-// allocate an empty Set per card per render.
-const EMPTY_ROLES: Set<Instrument> = new Set();
+// allocate an empty Map per card per render.
+const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
+
+// The rules holding a seat open, as the sentences the rules editor shows.
+// "Held by a rule" is only actionable once you know WHICH rule to change, and
+// several can be jointly responsible, so they're all listed.
+function heldReason(held: SchedulingRule[], names: RuleNames): string {
+  if (held.length === 0) return "A required scheduling rule is keeping this slot open.";
+  const lead =
+    held.length === 1
+      ? "A required rule is keeping this slot open:"
+      : "Required rules are keeping this slot open:";
+  return `${lead} ${held.map((r) => ruleSentence(r.params, names)).join("; ")}. Auto schedule left it rather than break ${
+    held.length === 1 ? "it" : "them"
+  } — you can still fill it by hand.`;
+}
 
 export default function StagedScheduleModal({
   plan,
@@ -510,6 +530,26 @@ export default function StagedScheduleModal({
   );
   const catalogFor = (set: StagedSet): TeamRoleDef[] =>
     (set.teamId ? catalogs.get(set.teamId) : undefined) ?? DEFAULT_TEAM_ROLES;
+
+  // How a rule's ids read as words, for the "held by a rule" tooltips. The
+  // plan has people, teams and role catalogs; a rule naming a recurring set or
+  // a specific one falls back to the generic wording RuleNames allows, which
+  // still leaves the sentence readable.
+  const ruleNames = useMemo<RuleNames>(() => {
+    const people = new Map(users.map((u) => [u.id, u.name]));
+    const teamNames = new Map(teams.map((t) => [t.id, t.name]));
+    const roleLabels = new Map<string, string>();
+    for (const cat of catalogs?.values() ?? []) {
+      for (const r of cat) roleLabels.set(r.key, r.label);
+    }
+    return {
+      team: (id) => teamNames.get(id) ?? "a team",
+      user: (id) => people.get(id) ?? "someone",
+      role: (key) => roleLabels.get(key) ?? roleLabel(key),
+      template: (id) => "a recurring set",
+      set: (id) => "another set",
+    };
+  }, [users, teams, catalogs]);
 
 
   // Copy a selected set's shape + roster with ⌘/Ctrl+C, stamp it onto another
@@ -1708,7 +1748,7 @@ export default function StagedScheduleModal({
             // every card two fills in the common case.
             const heldByRule = hasRequiredRules
               ? ruleHeldRoles(set, schedulerUsers, rules, catalog, heldOptions)
-              : EMPTY_ROLES;
+              : EMPTY_HELD;
             // Roles the team offers that this set doesn't want (zero slots and
             // nobody in them) — exactly the ones the card hides below, offered
             // back as "+ role" chips.
@@ -1875,12 +1915,19 @@ export default function StagedScheduleModal({
                             </span>
                           )}
                           {ruleHolds && (
-                            <span
-                              className="ml-1 font-semibold"
-                              title="A required scheduling rule is keeping this slot open — the auto-fill left it rather than break the rule. You can still fill it by hand."
-                            >
-                              · ! held by a rule
-                            </span>
+                            <>
+                              <span className="ml-1 font-semibold">
+                                · ! held by a rule
+                              </span>
+                              {/* WHICH rule, in its own words — "held by a
+                                  rule" is only actionable once you know which
+                                  one to go and change. */}
+                              <span className="ml-1 align-middle">
+                                <InfoTooltip
+                                  text={heldReason(heldByRule.get(role) ?? [], ruleNames)}
+                                />
+                              </span>
+                            </>
                           )}
                         </span>
                         <div className="mt-1 space-y-1">
