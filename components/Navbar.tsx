@@ -12,6 +12,7 @@ import OrgSwitcher from "./OrgSwitcher";
 import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
 import { useOrgs } from "./OrgProvider";
+import { LEGAL_LINKS } from "@/lib/legal";
 import { setNavDirection } from "@/lib/navDirection";
 import { useSwipe } from "./SwipeProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
@@ -278,9 +279,11 @@ export default function Navbar() {
     return () => ro.disconnect();
   }, []);
 
-  // No chrome on the login or join-org pages. Placed after all hooks so hook
-  // order stays stable across renders (never return before a hook).
+  // No chrome on the login, join-org or legal pages (the last of those are read
+  // signed out, where there's no org to navigate). Placed after all hooks so
+  // hook order stays stable across renders (never return before a hook).
   if (pathname === "/login" || pathname === "/join") return null;
+  if (LEGAL_LINKS.some((l) => pathname === l.href)) return null;
 
   const availNeedsResponse = availStatus?.needsResponse ?? false;
   // The banner spotlights the first org still waiting on me.

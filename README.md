@@ -157,6 +157,7 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SPOTIFY_CLIENT_ID` / `_SECRET` | optional⁵ | optional⁵ | set to enable playlists⁵ |
 | `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
 | `CRON_SECRET` | optional⁶ | `openssl rand -base64 24` (unique) | `openssl rand -base64 24` (unique, ≠ staging)⁶ |
+| `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | optional⁸ | optional⁸ | the address on /privacy + /terms⁸ |
 | `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
@@ -177,6 +178,13 @@ menu → `/platform`). Env-only (bootstrap); everything else is managed in-app.
 account, whose refresh token is stored encrypted on the `Org` row. Redirect URI:
 `…/api/spotify/callback` (override with `SPOTIFY_REDIRECT_URI`). `SPOTIFY_DRY_RUN=1`
 stamps placeholder playlists instead of calling the API.
+⁸ The address shown on the public `/privacy` and `/terms` pages (the two pages
+readable without signing in, linked from the sign-in screen — Google's OAuth
+verification asks for both URLs and fetches them with no account). It must be a
+mailbox someone actually reads, since it's where deletion requests go; unset it
+falls back to `privacy@tapworship.com`. Inlined at build, so a change needs a
+redeploy. Wording lives in `lib/legal.ts` + `app/{privacy,terms}/page.tsx`.
+
 ⁷ Google Calendar is a **per-org integration** riding on the same Google OAuth
 client as "Continue with Google" — see [Google Calendar](#google-calendar).
 With that client set, org admins see a *Connect Google Calendar* button in Org
@@ -300,6 +308,17 @@ for cover in the app. Code: `lib/googleCalendar.ts` (Google + db side),
 - *Credentials → the OAuth client → Authorized redirect URIs*: add
   `https://<your-host>/api/google-calendar/callback` for each of staging and
   prod (and `http://localhost:3000/api/google-calendar/callback` for dev).
+
+**1b. Publishing status** — the Calendar scopes are *sensitive*, so an app in
+*Testing* lets only listed test users connect AND expires their refresh tokens
+after 7 days (the org's connection silently stops syncing weekly). For real use,
+*Audience → Publish app*. Unverified-but-published shows a "Google hasn't
+verified this app" warning (Advanced → continue) and caps you at 100 accounts;
+submitting for verification removes it, and Google asks for the app's home page,
+a privacy policy URL and terms URL (ours are `/privacy` and `/terms` — public,
+and linked from the sign-in page), the domain verified in Search Console, a
+reason per scope, and a screen recording of the flow. Sensitive scopes get the
+lighter review: no security audit.
 
 **2. Env vars** — no new ones on staging/prod: Google Calendar is offered
 wherever `GOOGLE_CLIENT_ID` / `_SECRET` (and `NEXTAUTH_URL`) are set, as an

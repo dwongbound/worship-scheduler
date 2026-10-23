@@ -8,12 +8,14 @@
 // Both providers land in the same dialog — signup gets its conflicts from a
 // 409, Google from the ?nameConflict params its signIn callback redirects to.
 import { getProviders, signIn } from "next-auth/react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
+import { LEGAL_LINKS } from "@/lib/legal";
 import {
   type NameConflict,
   parseNameConflicts,
@@ -392,6 +394,7 @@ function LoginForm() {
           )}
         </div>
 
+        <LegalFooter />
         <VersionFooter />
       </Card>
 
@@ -476,6 +479,21 @@ function LoginForm() {
 // Build stamp: app version + a link to the exact commit on GitHub. Both values
 // are inlined at build time by next.config.js. The commit link is hidden when
 // the sha is unknown (e.g. git unavailable in the build sandbox).
+function LegalFooter() {
+  return (
+    <p className="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
+      {LEGAL_LINKS.map((l, i) => (
+        <span key={l.href}>
+          {i > 0 && " · "}
+          <Link href={l.href} className="hover:underline">
+            {l.label}
+          </Link>
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function VersionFooter() {
   const version = process.env.NEXT_PUBLIC_APP_VERSION;
   const sha = process.env.NEXT_PUBLIC_COMMIT_SHA;
