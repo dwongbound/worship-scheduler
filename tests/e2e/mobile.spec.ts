@@ -314,6 +314,48 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   ).toBeVisible();
 });
 
+test("phone: the selected request card keeps its text whole and its actions on one row", async ({
+  page,
+}) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  // Two buttons, the case that crushed the card: the import only shows where
+  // Google is configured, which the test environment isn't — so say it is.
+  await page.route("**/api/availability", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, googleImport: true } });
+  });
+  await gotoReady(page, "/schedule");
+
+  const actions = page.getByTestId("request-actions");
+  await expect(actions).toBeVisible();
+  const importBtn = actions.getByTestId("import-google");
+  const submit = actions.getByRole("button", { name: "Submit response" });
+  const card = actions.locator("xpath=../..");
+  const text = actions.locator("xpath=preceding-sibling::div[1]");
+  const [cardBox, textBox, rowBox, importBox, submitBox, eyeBox] = await Promise.all([
+    card.boundingBox(),
+    text.boundingBox(),
+    actions.boundingBox(),
+    importBtn.boundingBox(),
+    submit.boundingBox(),
+    card.getByText("Shown on the calendar below").boundingBox(),
+  ]);
+  // The text gets the card's full width rather than a sliver beside the
+  // buttons, its calendar note reads on one line, and the actions sit BELOW.
+  expect(textBox!.width).toBeGreaterThan(cardBox!.width * 0.8);
+  expect(eyeBox!.height).toBeLessThan(30);
+  expect(rowBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height - 1);
+  // One full-width row of 44px buttons, sharing a height, confirm on the right.
+  expect(rowBox!.width).toBeGreaterThan(cardBox!.width * 0.8);
+  expect(Math.round(importBox!.height)).toBe(Math.round(submitBox!.height));
+  expect(submitBox!.height).toBeGreaterThanOrEqual(44);
+  expect(Math.abs(importBox!.y - submitBox!.y)).toBeLessThan(1);
+  expect(submitBox!.x).toBeGreaterThan(importBox!.x);
+});
+
 test("phone: confirmation modal lists a blocked day, and the date picker marks it", async ({
   page,
 }) => {

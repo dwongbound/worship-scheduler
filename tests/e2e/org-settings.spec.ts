@@ -3,7 +3,7 @@
 // org 2's settings. The test mutates org 2's key but RESTORES the seeded value
 // at the end, so the sibling "join by key" spec (which redeems orgKey(1)) still
 // passes regardless of file order.
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { login, orgKey } from "./helpers";
 
 // Org names come from env/test.env's ORG_KEYS ("Name:key,Name:key").
@@ -14,12 +14,19 @@ function orgName(index: number): string {
   return name;
 }
 
+// The settings card is split into tabs and opens on Integrations, so every
+// setting below is one tab-click away — after each org pick and each reload.
+async function openTab(page: Page, label: string) {
+  await page.getByRole("main").getByRole("button", { name: label, exact: true }).click();
+}
+
 test("an org admin can change and rotate the org join key", async ({ page }) => {
   await login(page, "paul"); // login() also suppresses the first-run tour
   await page.goto("/orgs");
 
   // Pick org 2 in the left rail; its settings (incl. the key) load on the right.
   await page.getByRole("button", { name: orgName(1) }).click();
+  await openTab(page, "General");
 
   const original = orgKey(1);
   const keyField = page.getByLabel("Join key");
@@ -33,6 +40,7 @@ test("an org admin can change and rotate the org join key", async ({ page }) => 
   // Persisted: a fresh load (re-selecting the org) shows the new key.
   await page.reload();
   await page.getByRole("button", { name: orgName(1) }).click();
+  await openTab(page, "General");
   await expect(page.getByLabel("Join key")).toHaveValue(custom);
 
   // The new key redeems (paul is already a member, so this is idempotent — no
@@ -68,6 +76,7 @@ test("an org admin includes a member in all group chats and it persists", async 
 }) => {
   await login(page, "admin"); // Alice administers org 1
   await page.goto("/orgs");
+  await openTab(page, "Teams");
 
   const savePatch = () =>
     page.waitForResponse(
@@ -94,6 +103,7 @@ test("an org admin includes a member in all group chats and it persists", async 
 
   // Persisted server-side.
   await page.reload();
+  await openTab(page, "Teams");
   await expect(bobChip()).toBeVisible();
 
   // Restore shared seed state — the chip's ✕ takes him back out.
@@ -115,6 +125,7 @@ test("changing data retention asks first, and says what it would delete", async 
   await login(page, "paul");
   await page.goto("/orgs");
   await page.getByRole("button", { name: orgName(1) }).click();
+  await openTab(page, "General");
 
   // Every workspace starts on the 1-year default, and the dropdown says so.
   const window_ = page.getByLabel("Keep data for");
@@ -141,6 +152,7 @@ test("changing data retention asks first, and says what it would delete", async 
   await expect(confirm).not.toBeVisible();
   await page.reload();
   await page.getByRole("button", { name: orgName(1) }).click();
+  await openTab(page, "General");
   await expect(page.getByLabel("Keep data for")).toHaveValue("12");
 });
 
@@ -148,6 +160,7 @@ test("a confirmed retention change sticks", async ({ page }) => {
   await login(page, "paul");
   await page.goto("/orgs");
   await page.getByRole("button", { name: orgName(1) }).click();
+  await openTab(page, "General");
 
   // Lengthening is the safe direction: nothing is old enough to delete, and
   // the dialog says so rather than warning about a danger that isn't there.
@@ -163,6 +176,7 @@ test("a confirmed retention change sticks", async ({ page }) => {
 
   await page.reload();
   await page.getByRole("button", { name: orgName(1) }).click();
+  await openTab(page, "General");
   await expect(page.getByLabel("Keep data for")).toHaveValue("48");
 
   // Put the seeded default back so file order can't affect a later spec.
