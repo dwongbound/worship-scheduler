@@ -5,13 +5,25 @@
 // It stands in for the month calendar, which is desktop-only — its cells carry
 // the blocked windows in words ("6a–5p") and there's no honest way to fit
 // seven of those across a 375px screen. A week at a time gives each day a
-// thumb-sized target and room for its actual state, and tapping one blocks or
-// clears it exactly the way clicking a calendar cell does.
+// thumb-sized target and room for its actual state, and its gestures are the
+// calendar's: a TAP blocks the day all day (whatever was on it), a tap on a
+// day already blocked all day clears it completely, and a PRESS-AND-HOLD (the
+// calendar's right-click, which a phone can't offer) frees a day outright.
+// Clearing takes weekly repeats with it, trimming their span around the day.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toYmd } from "@/components/common/DateSelect";
-import { dayBlockLevel, dayIsRepeating } from "@/lib/availability";
+import {
+  allDayBlockedDays,
+  dayBlockLevel,
+  dayHasDatedBlock,
+  dayIsRepeating,
+} from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
 import type { ApiUnavailability } from "@/lib/types";
+
+// How long a press has to last to count as a hold ("free this day") — the same
+// moment the month calendar waits.
+const HOLD_MS = 450;
 
 function addDays(d: Date, n: number): Date {
   const copy = new Date(d);
@@ -47,7 +59,7 @@ export default function WeekStrip({
 }: {
   entries: ApiUnavailability[];
   // Same signature the calendar edits with: an inclusive [start, end] of
-  // YYYY-MM-DD days, and whether to block (true) or clear (false) them. The
+  // YYYY-MM-DD days, and whether to block (true) or free (false) them. The
   // strip only ever edits one day at a time.
   onEditDays: (startYmd: string, endYmd: string, blocked: boolean) => void;
   // The selected request's window: its days get a ring, and the strip opens on
@@ -74,6 +86,34 @@ export default function WeekStrip({
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
     [weekStart]
   );
+  // Which days a tap CLEARS instead of blocks — the calendar's toggle, read the
+  // same way (lib/availability allDayBlockedDays).
+  const blockedDays = useMemo(() => allDayBlockedDays(entries), [entries]);
+
+  // Press-and-hold = "I'm free that day", the strip's stand-in for the
+  // calendar's right-click. `freedRef` remembers that the hold already handled
+  // this press, because the browser still fires a click when the finger comes
+  // up — without it, a hold would free the day and then re-block it.
+  const holdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const freedRef = useRef(false);
+  const cancelHold = () => {
+    if (holdRef.current) clearTimeout(holdRef.current);
+    holdRef.current = null;
+  };
+  const beginHold = (ymd: string) => {
+    cancelHold();
+    freedRef.current = false;
+    holdRef.current = setTimeout(() => {
+      holdRef.current = null;
+      freedRef.current = true;
+      navigator.vibrate?.(15); // a nudge, on the browsers that have one
+      onEditDays(ymd, ymd, false);
+    }, HOLD_MS);
+  };
+  // Nothing should outlive the strip — a fired timer would edit after unmount.
+  // (cancelHold only touches a ref, so it needn't be a dependency.)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => cancelHold, []);
 
   // Swipe: horizontal drag past a thumb's worth of travel moves one week.
   const touchX = useRef<number | null>(null);
@@ -122,12 +162,21 @@ export default function WeekStrip({
         onTouchStart={(e) => {
           touchX.current = e.touches[0].clientX;
         }}
+        // A finger on the move is swiping weeks or scrolling the page, not
+        // holding a day.
+        onTouchMove={cancelHold}
         onTouchEnd={onTouchEnd}
       >
         {days.map((date) => {
           const ymd = toYmd(date);
           const level = dayBlockLevel(entries, ymd);
-          const repeating = level !== null && dayIsRepeating(entries, ymd);
+          // The hatch marks a day the WEEKLY pattern is blocking. A dated
+          // block wins over the pattern (the calendar draws it the same way),
+          // so a hand-blocked day shows plain red, not red-plus-hatch.
+          const repeating =
+            level !== null &&
+            dayIsRepeating(entries, ymd) &&
+            !dayHasDatedBlock(entries, ymd);
           const isPast = date < today;
           const isToday = date.getTime() === today.getTime();
           const inWindow =
@@ -148,9 +197,30 @@ export default function WeekStrip({
                     ? ", partly blocked"
                     : ", free"
               }`}
-              // A tap on a blocked day clears it, on a free day blocks it —
-              // the calendar's single-click toggle, one day at a time.
-              onClick={() => onEditDays(ymd, ymd, level === null)}
+              // Tap a free or part-blocked day to block it all day, tap one
+              // that's already blocked all day to clear it completely; hold
+              // (or right-click) frees it whatever's on it.
+              // A mouse has a right button for this, so only touch/pen arm
+              // the hold — holding a mouse button down shouldn't free a day.
+              onPointerDown={(e) => {
+                if (e.pointerType !== "mouse") beginHold(ymd);
+              }}
+              onPointerUp={cancelHold}
+              onPointerCancel={cancelHold}
+              onPointerLeave={cancelHold}
+              // Desktop gets the calendar's right-click for the same thing.
+              onContextMenu={(e) => {
+                e.preventDefault();
+                cancelHold();
+                onEditDays(ymd, ymd, false);
+              }}
+              onClick={() => {
+                if (freedRef.current) {
+                  freedRef.current = false; // the hold already answered
+                  return;
+                }
+                onEditDays(ymd, ymd, !blockedDays.has(ymd));
+              }}
               className={`relative flex flex-1 flex-col items-center gap-1 overflow-hidden rounded-lg py-2 transition-colors ${
                 inWindow ? "ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/60" : ""
               } ${
@@ -165,9 +235,9 @@ export default function WeekStrip({
                         "bg-emerald-50 text-gray-700 dark:bg-emerald-950/30 dark:text-gray-200"
               }`}
             >
-              {/* A weekly repeat gets the calendar's diagonal hatch: it can't
-                  be cleared for one date, so it shouldn't look like a tap
-                  will do it. */}
+              {/* A weekly repeat gets the calendar's diagonal hatch — worth
+                  knowing, since freeing such a day trims the repeat's span
+                  around it rather than deleting a one-off block. */}
               {repeating && (
                 <span
                   aria-hidden
@@ -212,7 +282,9 @@ export default function WeekStrip({
           />
           Weekly
         </span>
-        <span className="ml-auto">Tap a day to block it.</span>
+        <span className="ml-auto font-medium">
+          Tap to block &middot; tap again or hold to clear
+        </span>
       </div>
     </div>
   );

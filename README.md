@@ -291,9 +291,12 @@ for cover in the app. Code: `lib/googleCalendar.ts` (Google + db side),
   calendar), `https://www.googleapis.com/auth/calendar.calendarlist.readonly`
   (list the account's calendars for the picker below) and
   `https://www.googleapis.com/auth/calendar.events` (put the sets' events on
-  whichever calendar is picked, and watch it for RSVPs). `calendar.events` is a
-  *sensitive* scope: while the app is in *Testing*, add each connecting account
-  as a test user; publishing it for real use needs Google's verification.
+  whichever calendar is picked, and watch it for RSVPs). For **Import from
+  Google Calendar** (below) also add
+  `https://www.googleapis.com/auth/calendar.events.readonly`. Both events
+  scopes are *sensitive*: while the app is in *Testing*, add each connecting
+  account (including every member who imports) as a test user; publishing it
+  for real use needs Google's verification.
 - *Credentials → the OAuth client → Authorized redirect URIs*: add
   `https://<your-host>/api/google-calendar/callback` for each of staging and
   prod (and `http://localhost:3000/api/google-calendar/callback` for dev).
@@ -357,6 +360,29 @@ calendar uses a different address than their profile won't be confirmed.
 Deleting the invite instead of answering it sends nothing back. Like Spotify,
 the refresh token is encrypted with a key derived from `NEXTAUTH_SECRET`, so
 rotating that secret means every org must reconnect.
+
+### Import from Google Calendar (members)
+
+On /schedule, the selected request's card has **Import from Google Calendar**
+whenever the OAuth client is configured. It reads the member's OWN calendar
+(read-only, never event titles) across that request's window and writes a
+block for every busy time: timed events unless marked *Free*, **all-day events
+as the whole day** (Free or not), cancelled and declined events skipped,
+overlaps merged per day. Re-importing replaces only the blocks an earlier
+import wrote for that request (`Unavailability.fromGoogle`); hand-made blocks
+are never touched, and imported ones can be edited or deleted like any other.
+The permission is asked for once: the first import shows Google's consent
+screen, and its refresh token is kept encrypted on the person's row
+(`User.googleImportRefreshToken`), so every later import runs with no Google
+screen. A token they revoke in their Google account is forgotten and the next
+import asks again. Google sign-in itself never asks for calendar access, so the
+unverified-app warning a sensitive scope brings can't land on the login. It shares
+`/api/google-calendar/callback` (told apart by its signed state), so there's no
+extra redirect URI and no new env var; it does need the `calendar.events.readonly`
+scope above and migration `20261022120000_unavailability_from_google`. The page
+then opens the **Week** view (hours down, days across) to check the result.
+Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`,
+`app/api/google-calendar/import`.
 
 ## Slack (future)
 

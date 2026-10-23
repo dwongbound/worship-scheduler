@@ -19,6 +19,7 @@ import {
 const TZ = "America/Los_Angeles";
 
 const refs: RuleRefs = {
+  teamIds: new Set<string>(),
   userIds: new Set(["a", "b", "c"]),
   roleKeys: new Set(["KEYS", "BASS"]),
   templateIds: new Set(["t1", "t2"]),
@@ -84,10 +85,37 @@ describe("validateRules", () => {
     expect(result).toEqual({
       ok: true,
       rules: [
-        { tier: "PREFERENCE", enabled: true, params: { kind: "ONLY_IF_NEEDED", userId: "a", role: "KEYS" } },
-        { tier: "REQUIRED", enabled: false, params: { kind: "LIMIT", userId: "b", max: 2, period: "WEEK" } },
+        // teamId defaults to null — an unscoped rule governs the whole org.
+        { tier: "PREFERENCE", enabled: true, teamId: null, params: { kind: "ONLY_IF_NEEDED", userId: "a", role: "KEYS" } },
+        { tier: "REQUIRED", enabled: false, teamId: null, params: { kind: "LIMIT", userId: "b", max: 2, period: "WEEK" } },
       ],
     });
+  });
+
+  it("keeps a rule's team scope, and refuses a team outside the org", () => {
+    const ok = validateRules(
+      [{ tier: "REQUIRED", teamId: "t1", params: { kind: "LIMIT", userId: "a", max: 2, period: "WEEK" } }],
+      { ...refs, teamIds: new Set(["t1"]) }
+    );
+    expect(ok.ok && ok.rules[0].teamId).toBe("t1");
+
+    const bad = validateRules(
+      [{ tier: "REQUIRED", teamId: "nope", params: { kind: "LIMIT", userId: "a", max: 2, period: "WEEK" } }],
+      { ...refs, teamIds: new Set(["t1"]) }
+    );
+    expect(bad).toMatchObject({ ok: false, index: 0 });
+  });
+
+  it("lets two teams hold rules that would contradict org-wide", () => {
+    const base = { kind: "TOGETHER", userIds: ["a", "b"] } as const;
+    const result = validateRules(
+      [
+        { tier: "REQUIRED", teamId: "t1", params: { ...base, mode: "ALWAYS" } },
+        { tier: "REQUIRED", teamId: "t2", params: { ...base, mode: "NEVER" } },
+      ],
+      { ...refs, teamIds: new Set(["t1", "t2"]) }
+    );
+    expect(result.ok).toBe(true);
   });
 
   it("refuses references outside the org, naming the rule", () => {
@@ -219,6 +247,7 @@ describe("templateIdOf", () => {
 describe("describeRule", () => {
   it("reads as a sentence with the names picked out", () => {
     const names = {
+      team: (id: string) => id,
       user: (id: string) => ({ a: "Priya", b: "Hannah" })[id] ?? id,
       role: (k: string) => (k === "KEYS" ? "Keys" : k),
       template: (id: string) => id,

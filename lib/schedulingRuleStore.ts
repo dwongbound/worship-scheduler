@@ -20,7 +20,7 @@ const PICKABLE_SET_DAYS = 180;
 
 /** Everything a rule in this org may point at. */
 export async function orgRuleRefs(orgId: string): Promise<RuleRefs> {
-  const [users, roles, templates, sets] = await Promise.all([
+  const [users, roles, templates, sets, teams] = await Promise.all([
     prisma.user.findMany({
       where: { memberships: { some: { orgId } } },
       select: { id: true },
@@ -31,8 +31,10 @@ export async function orgRuleRefs(orgId: string): Promise<RuleRefs> {
     }),
     prisma.setTemplate.findMany({ where: { orgId }, select: { id: true } }),
     prisma.set.findMany({ where: { orgId }, select: { id: true } }),
+    prisma.team.findMany({ where: { orgId }, select: { id: true } }),
   ]);
   return {
+    teamIds: new Set(teams.map((t) => t.id)),
     userIds: new Set(users.map((u) => u.id)),
     roleKeys: new Set(roles.map((r) => r.key)),
     templateIds: new Set(templates.map((t) => t.id)),
@@ -61,7 +63,7 @@ export async function loadOrgRules(orgId: string, refs?: RuleRefs): Promise<Sche
     prisma.schedulingRule.findMany({
       where: { orgId },
       orderBy: { position: "asc" },
-      select: { id: true, tier: true, enabled: true, params: true },
+      select: { id: true, tier: true, enabled: true, params: true, teamId: true },
     }),
     refs ? Promise.resolve(refs) : orgRuleRefs(orgId),
   ]);
@@ -82,6 +84,7 @@ export async function saveOrgRules(
         tier: r.tier,
         enabled: r.enabled,
         params: r.params,
+        teamId: r.teamId ?? null,
       })),
     }),
   ]);
@@ -90,7 +93,7 @@ export async function saveOrgRules(
 /** The names and choices the rules editor draws its dropdowns from. */
 export async function ruleEditorOptions(orgId: string) {
   const now = Date.now();
-  const [people, roles, templates, sets] = await Promise.all([
+  const [people, roles, templates, sets, teams, memberships] = await Promise.all([
     prisma.user.findMany({
       where: { memberships: { some: { orgId } } },
       select: { id: true, name: true },
@@ -123,13 +126,37 @@ export async function ruleEditorOptions(orgId: string) {
       select: { id: true, label: true, startsAt: true, team: { select: { name: true } } },
       orderBy: { startsAt: "asc" },
     }),
+    // Each team WITH its roles, and every membership's roles: the editor
+    // narrows as you go — team first, then that team's roles, then the people
+    // who actually play the picked role there.
+    prisma.team.findMany({
+      where: { orgId },
+      select: {
+        id: true,
+        name: true,
+        roles: { select: { key: true, label: true }, orderBy: { order: "asc" } },
+      },
+      orderBy: { name: "asc" },
+    }),
+    prisma.teamMember.findMany({
+      where: { team: { orgId } },
+      select: { userId: true, teamId: true, roles: true },
+    }),
   ]);
   // One entry per role KEY across every team — a rule's role applies wherever
   // a team has it. The first team's label (catalog order) names it.
   const roleByKey = new Map<string, { key: string; label: string }>();
   for (const r of roles) if (!roleByKey.has(r.key)) roleByKey.set(r.key, { key: r.key, label: r.label });
   return {
-    people,
+    teams,
+    // Each person's team memberships, so the people list can be narrowed to
+    // whoever plays the chosen role on the chosen team.
+    people: people.map((p) => ({
+      ...p,
+      teams: memberships
+        .filter((m) => m.userId === p.id)
+        .map((m) => ({ teamId: m.teamId, roles: m.roles })),
+    })),
     roles: [...roleByKey.values()],
     templates: templates.map((t) => ({
       id: t.id,
@@ -194,7 +221,8 @@ export async function ruleContext(
           },
         },
       },
-      select: { userId: true, set: { select: { startsAt: true } } },
+      // teamId so a TEAM-SCOPED limit counts only its own team's sets.
+      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
     }),
   ]);
   return {
@@ -204,6 +232,10 @@ export async function ruleContext(
       startsAt: s.startsAt,
       assignments: s.assignments,
     })),
-    periodBookings: bookings.map((b) => ({ userId: b.userId, startsAt: b.set.startsAt })),
+    periodBookings: bookings.map((b) => ({
+      userId: b.userId,
+      startsAt: b.set.startsAt,
+      teamId: b.set.teamId,
+    })),
   };
 }

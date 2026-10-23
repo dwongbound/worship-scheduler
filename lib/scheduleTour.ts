@@ -98,6 +98,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
           ? "Everyone already on the calendar opens locked, and so does anyone you choose by hand. Auto schedule leaves locked seats exactly where they are and fills only the rest."
           : "Anyone you choose by hand is locked. Re-run auto schedule and they stay exactly where you put them — only empty and auto-filled slots get reshuffled.",
         "To release one, set its slot back to “None” or click the padlock. Lock all and Unlock all do the whole plan at once.",
+        "A card's own padlock, top right, locks or unlocks that whole set — how you settle one and let Auto schedule keep working on the others.",
       ],
     },
     {
@@ -126,6 +127,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       body: [
         "A red “no one available” role has a seat nobody can fill — either nobody plays it, or everyone who does is busy at that time.",
         "An amber “unavailable” mark is someone placed on a set they are not free for. It never blocks you; it is flagged so that it stays a deliberate choice.",
+        "An indigo “! held by a rule” role has a seat somebody could fill, but one of your org's required scheduling rules says they must not — so the fill left it open rather than break the rule. Fill it by hand, or change the rule in Org settings → Scheduling.",
       ],
     },
     preview

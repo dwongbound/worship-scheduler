@@ -4,11 +4,13 @@
 //      `blocks` array of weekday/window blocks, SPECIFIC a `windows` array of
 //      time windows over the same date (or date range).
 import { NextRequest, NextResponse } from "next/server";
+import { recurringCovers } from "@/lib/availability";
 import { getSessionUser } from "@/lib/auth";
 import { targetsUser } from "@/lib/availabilityTargets";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { toYmd } from "@/lib/dates";
+import { isGoogleCalendarAppConfigured } from "@/lib/googleCalendar";
 
 // Parse "YYYY-MM-DD" (from <input type=date>) as LOCAL midnight.
 // `new Date("2026-08-05")` would be UTC midnight, which displays as the
@@ -113,7 +115,14 @@ export async function GET() {
     }),
   ]);
 
-  return NextResponse.json({ entries, requests, responses });
+  // `googleImport`: whether this deployment can offer "Import from Google
+  // Calendar" (the OAuth client is set) — lib/googleAvailability.ts.
+  return NextResponse.json({
+    entries,
+    requests,
+    responses,
+    googleImport: isGoogleCalendarAppConfigured(),
+  });
 }
 
 export async function POST(req: NextRequest) {
@@ -148,51 +157,129 @@ export async function POST(req: NextRequest) {
       })
     );
 
-    // Drop anything that already exists (same day + time window), and any
-    // repeat inside the batch itself, so the list can't accumulate identical
-    // rows.
+    // Overlap handling, in one pass. Exact repeats are dropped, and so is a
+    // block ALREADY SAID by a wider rule ("Tuesday mornings" under "Tuesdays,
+    // all day"); a block that says everything an existing row does absorbs it.
+    // And saying a block again un-does the days freed out of it: the rows it
+    // covers give up their exceptions, so "block every Tuesday" always means
+    // every Tuesday — the one thing a plain "already exists" could never do.
     const existing = await prisma.unavailability.findMany({
       where: { userId: user.id, type: "RECURRING" },
       select: {
+        id: true,
         dayOfWeek: true,
         startMinute: true,
         endMinute: true,
         startDate: true,
         endDate: true,
+        exceptDates: true, // the days freed out of this rule, if any
       },
+    });
+    // The same rows as plain YYYY-MM-DD bounds, which is what overlap compares.
+    const asRange = (row: {
+      dayOfWeek: number | null;
+      startMinute: number | null;
+      endMinute: number | null;
+      startDate?: Date | string | null;
+      endDate?: Date | string | null;
+    }) => ({
+      dayOfWeek: row.dayOfWeek,
+      startMinute: row.startMinute,
+      endMinute: row.endMinute,
+      startDate: row.startDate
+        ? toYmd(row.startDate instanceof Date ? row.startDate : parseLocalDate(row.startDate))
+        : null,
+      endDate: row.endDate
+        ? toYmd(row.endDate instanceof Date ? row.endDate : parseLocalDate(row.endDate))
+        : null,
     });
     const seen = new Set(existing.map(recurringKey));
     const fresh: RecurringInput[] = [];
+    const absorbed = new Set<string>(); // rows a new block replaces outright
+    const restored = new Set<string>(); // rows that stay, minus their holes
+    const rebooked = new Set<string>(); // the dates those holes had freed
+    const todayYmd = toYmd(new Date());
     for (const block of incoming) {
       const key = recurringKey(block);
-      if (seen.has(key)) continue;
+      const range = asRange(block);
+      // Saying it again RE-BOOKS what was cleared out of it: every row this
+      // block covers gives up its exceptions — an identical row keeps its
+      // place and loses the holes, a narrower one is swallowed whole. This is
+      // why re-adding a block you've freed days out of isn't a no-op.
+      for (const row of existing) {
+        if (!recurringCovers(range, asRange(row))) continue;
+        for (const date of row.exceptDates) {
+          if (date >= todayYmd) rebooked.add(date); // spent ones say nothing
+        }
+        if (recurringKey(row) === key) restored.add(row.id);
+        else absorbed.add(row.id);
+      }
+      if (seen.has(key)) continue; // the row above already says it
+      // Already covered by a row that stays? Then it says nothing new.
+      if (
+        existing.some(
+          (row) => !absorbed.has(row.id) && recurringCovers(asRange(row), range)
+        )
+      ) {
+        continue;
+      }
       seen.add(key);
       fresh.push(block);
     }
+    // Retire the rows the new blocks swallowed, and un-hole the ones that stay.
+    const settleOverlaps = async () => {
+      if (absorbed.size > 0) {
+        await prisma.unavailability.deleteMany({
+          where: { userId: user.id, id: { in: [...absorbed] } },
+        });
+      }
+      if (restored.size > 0) {
+        await prisma.unavailability.updateMany({
+          where: { userId: user.id, id: { in: [...restored] } },
+          data: { exceptDates: [] },
+        });
+      }
+    };
 
     if (!isBatch) {
       if (fresh.length === 0) {
-        return NextResponse.json(
-          { error: "That block already exists" },
-          { status: 409 }
-        );
+        // Nothing to create — but if the block had days cleared out of it,
+        // putting it back IS the edit, so that's a success, not a conflict.
+        if (rebooked.size === 0) {
+          return NextResponse.json(
+            { error: "That block already exists" },
+            { status: 409 }
+          );
+        }
+        await settleOverlaps();
+        return NextResponse.json({ created: 0, rebooked: rebooked.size });
       }
       const entry = await prisma.unavailability.create({
         data: { userId: user.id, type: "RECURRING", ...toRecurringRow(fresh[0]) },
       });
+      await settleOverlaps();
       return NextResponse.json(entry, { status: 201 });
     }
 
-    await prisma.unavailability.createMany({
-      data: fresh.map((block) => ({
-        userId: user.id,
-        type: "RECURRING" as const,
-        ...toRecurringRow(block),
-      })),
-    });
+    if (fresh.length > 0) {
+      await prisma.unavailability.createMany({
+        data: fresh.map((block) => ({
+          userId: user.id,
+          type: "RECURRING" as const,
+          ...toRecurringRow(block),
+        })),
+      });
+    }
+    await settleOverlaps();
     return NextResponse.json(
-      { created: fresh.length, skipped: incoming.length - fresh.length },
-      { status: 201 }
+      {
+        created: fresh.length,
+        skipped: incoming.length - fresh.length,
+        absorbed: absorbed.size,
+        // The freed days this put back — what makes re-adding worth doing.
+        rebooked: [...rebooked].sort(),
+      },
+      { status: fresh.length > 0 ? 201 : 200 }
     );
   }
 

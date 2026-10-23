@@ -6,7 +6,8 @@
 // Both builders take a ChatFormat and default to Slack's, so these cases assert
 // Slack mrkdwn — the same output they always did.
 import { describe, expect, it } from "vitest";
-import { teamRosterText, weeklySummaryText } from "@/lib/slack";
+import { rosterDmText, teamRosterText, weeklySummaryText } from "@/lib/slack";
+import { SLACK_FORMAT } from "@/lib/integrations/slack/format";
 
 describe("teamRosterText", () => {
   it("groups names by role in scarce-first order, skipping unfilled roles", () => {
@@ -102,5 +103,86 @@ describe("weeklySummaryText", () => {
     ]);
     expect(text).toContain("`Worship set`");
     expect(text).toContain("• _No one assigned yet_");
+  });
+});
+
+describe("rosterDmText", () => {
+  const fmt = SLACK_FORMAT;
+  const sun = (day: number, label = "Sunday AM") => ({
+    label,
+    startsAt: new Date(2026, 10, day, 10),
+  });
+  const change = (
+    kind: "added" | "removed",
+    setId: string,
+    day: number,
+    role = "SOUND"
+  ) => ({ kind, role, setId, set: sun(day) });
+
+  it("keeps a lone change as the one-line DM it always was", () => {
+    expect(rosterDmText([change("added", "s1", 1, "KEYS")], fmt, "https://x/calendar")).toBe(
+      `👍 *New Set:* Keys for \`Sunday AM\` on 11/1/26 10AM.`
+    );
+    expect(rosterDmText([change("removed", "s1", 1)], fmt, "")).toBe(
+      `👋 *Set Update:* No longer on \`Sunday AM\` on 11/1/26 10AM.`
+    );
+  });
+
+  it("folds many sets into ONE message, oldest first, added before removed", () => {
+    const text = rosterDmText(
+      [
+        change("added", "s3", 15),
+        change("removed", "s9", 22),
+        change("added", "s1", 1),
+        change("added", "s2", 8),
+      ],
+      fmt,
+      ""
+    );
+    const lines = text.split("\n");
+    expect(lines[0]).toBe(`👍 *New Sets 3:*`);
+    expect(lines.slice(1, 4).map((l) => l.match(/(\d+\/\d+\/\d+ \d+[AP]M)/)![1])).toEqual([
+      "11/1/26 10AM",
+      "11/8/26 10AM",
+      "11/15/26 10AM",
+    ]);
+    expect(lines[5]).toBe(`👋 *No Longer On 1:*`);
+    expect(lines[6]).toContain("11/22/26 10AM");
+    expect(lines).toHaveLength(7);
+  });
+
+  it("links nothing per set, and ends with ONE My Sets link", () => {
+    const old = process.env.NEXTAUTH_URL;
+    process.env.NEXTAUTH_URL = "https://app.test";
+    try {
+      const url = "https://app.test/set-manager";
+      const added = rosterDmText(
+        [change("added", "s1", 1), change("added", "s2", 8)],
+        fmt,
+        url
+      );
+      expect(added).not.toContain("?set=");
+      expect(added.match(/<https?:/g)).toHaveLength(1);
+      expect(added.endsWith("Confirm in <https://app.test/set-manager|My Sets>.")).toBe(true);
+      const removed = rosterDmText(
+        [change("removed", "s1", 1), change("removed", "s2", 8)],
+        fmt,
+        url
+      );
+      expect(removed).not.toContain("Confirm");
+      expect(removed.endsWith("See <https://app.test/set-manager|My Sets>.")).toBe(true);
+      // Mixed: the one link closes the whole message, after the removals.
+      const mixed = rosterDmText(
+        [change("added", "s1", 1), change("removed", "s2", 8)],
+        fmt,
+        url
+      );
+      expect(mixed.match(/<https?:/g)).toHaveLength(1);
+      expect(mixed.endsWith("Confirm in <https://app.test/set-manager|My Sets>.")).toBe(true);
+      // No app URL configured: no footer at all.
+      expect(rosterDmText([change("added", "s1", 1), change("added", "s2", 8)], fmt, "")).not.toContain("My Sets");
+    } finally {
+      process.env.NEXTAUTH_URL = old;
+    }
   });
 });

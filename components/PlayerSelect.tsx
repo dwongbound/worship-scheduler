@@ -279,6 +279,24 @@ export default function PlayerSelect({
             className="w-full rounded border border-indigo-200 bg-white px-2 py-1 text-sm
               focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
               dark:border-indigo-700 dark:bg-gray-800"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                // Enter takes the first match — the reason to type at all.
+                // The caller sorted the list (freshest/available first), so the
+                // top row is the one the fill itself would pick.
+                e.preventDefault();
+                if (filtered[0]) choose(filtered[0].id);
+                return;
+              }
+              if (e.key === "Escape") {
+                // This control's Escape, not the modal's: every Modal closes on
+                // a document-level keydown, so without stopping it here,
+                // dismissing the list would close the dialog behind it too.
+                e.preventDefault();
+                e.stopPropagation();
+                setOpen(false);
+              }
+            }}
           />
         </div>
         <ul role="listbox" className="min-h-0 flex-1 overflow-auto overscroll-contain pb-1">
