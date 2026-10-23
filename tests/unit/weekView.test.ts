@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { compactTime, dayBlocks, shiftWeek, weekDays, weekStart } from "@/lib/weekView";
+import {
+  VIEW_END_MIN,
+  VIEW_START_MIN,
+  clipToView,
+  compactTime,
+  dayBlocks,
+  shiftWeek,
+  weekDays,
+  weekStart,
+} from "@/lib/weekView";
 import type { ApiUnavailability } from "@/lib/types";
 
 const base = {
@@ -69,6 +78,38 @@ describe("dayBlocks", () => {
       endDate: new Date(2026, 9, 6).toISOString(),
     };
     expect(dayBlocks([range], day)[0]).toMatchObject({ startMinute: 0, endMinute: 1440 });
+  });
+});
+
+describe("clipToView", () => {
+  const day = "2026-10-21";
+  const on = (...es: ApiUnavailability[]) => clipToView(dayBlocks(es, new Date(2026, 9, 21)));
+  it("shows 6 AM to 10 PM", () => {
+    expect(VIEW_START_MIN).toBe(360);
+    expect(VIEW_END_MIN).toBe(1320);
+  });
+  it("keeps a block inside the hours as it is", () => {
+    const [b] = on(specific("a", day, 9 * 60, 11 * 60));
+    expect([b.top, b.bottom]).toEqual([540, 660]);
+  });
+  it("trims a block that runs past either end, keeping its real times", () => {
+    const [b] = on(specific("a", day, 4 * 60, 23 * 60));
+    expect([b.top, b.bottom]).toEqual([360, 1320]);
+    expect([b.startMinute, b.endMinute]).toEqual([240, 1380]);
+  });
+  it("draws an all-day block across the whole view", () => {
+    const [b] = on(specific("a", day, 0, 1440));
+    expect([b.top, b.bottom]).toEqual([360, 1320]);
+  });
+  it("drops blocks wholly before 6 AM or after 10 PM, edges included", () => {
+    expect(on(specific("a", day, 60, 180), specific("b", day, 22 * 60, 23 * 60), specific("c", day, 300, 360))).toEqual([]);
+  });
+  it("keeps the lanes dayBlocks gave overlapping blocks", () => {
+    const out = on(specific("a", day, 300, 480), specific("b", day, 330, 420));
+    expect(out.map((b) => [b.id, b.lane, b.lanes, b.top])).toEqual([
+      ["a", 0, 2, 360],
+      ["b", 1, 2, 360],
+    ]);
   });
 });
 

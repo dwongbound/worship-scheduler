@@ -1110,7 +1110,11 @@ export default function SchedulePage() {
                 the calendar stands beside it. */}
             {view === "week" && (
               <div className="min-w-0 lg:flex-[2]">
-                <AvailabilityWeekView entries={entries} highlightRange={lensRange} />
+                <AvailabilityWeekView
+                  entries={entries}
+                  highlightRange={lensRange}
+                  googleImport={googleImport}
+                />
               </div>
             )}
             <div className={view === "week" ? "hidden" : "lg:hidden"}>
