@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
     }),
     prisma.assignment.findMany({
       where: { set: { startsAt: { gte: spacingStart, lte: spacingEnd } } },
-      select: { userId: true, set: { select: { startsAt: true } } },
+      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
     }),
     // Each team's last LED set before the window — the MD rotation's seed.
     prisma.set.findMany({
@@ -78,6 +78,7 @@ export async function GET(req: NextRequest) {
     booked: booked.map((b) => ({
       userId: b.userId,
       startsAt: b.set.startsAt.toISOString(),
+      teamId: b.set.teamId,
     })),
     previousMDByTeam: Object.fromEntries(
       lastLedSets.map((s) => [s.teamId ?? "", s.mdUserId])
@@ -89,6 +90,7 @@ export async function GET(req: NextRequest) {
     periodBookings: context.periodBookings.map((b) => ({
       userId: b.userId,
       startsAt: b.startsAt.toISOString(),
+      teamId: b.teamId ?? null,
     })),
   };
   return NextResponse.json({ baseline, rules });

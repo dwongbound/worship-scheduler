@@ -5,13 +5,19 @@
 // It stands in for the month calendar, which is desktop-only — its cells carry
 // the blocked windows in words ("6a–5p") and there's no honest way to fit
 // seven of those across a 375px screen. A week at a time gives each day a
-// thumb-sized target and room for its actual state, and its two gestures are
-// the calendar's two: a TAP blocks the day all day, a PRESS-AND-HOLD (the
-// calendar's right-click, which a phone can't offer) frees it — clearing
-// everything on it, weekly repeats included.
+// thumb-sized target and room for its actual state, and its gestures are the
+// calendar's: a TAP blocks the day all day (whatever was on it), a tap on a
+// day already blocked all day clears it completely, and a PRESS-AND-HOLD (the
+// calendar's right-click, which a phone can't offer) frees a day outright.
+// Clearing takes weekly repeats with it, trimming their span around the day.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toYmd } from "@/components/common/DateSelect";
-import { dayBlockLevel, dayIsRepeating } from "@/lib/availability";
+import {
+  allDayBlockedDays,
+  dayBlockLevel,
+  dayHasDatedBlock,
+  dayIsRepeating,
+} from "@/lib/availability";
 import { DAY_LABELS } from "@/lib/constants";
 import type { ApiUnavailability } from "@/lib/types";
 
@@ -80,6 +86,9 @@ export default function WeekStrip({
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
     [weekStart]
   );
+  // Which days a tap CLEARS instead of blocks — the calendar's toggle, read the
+  // same way (lib/availability allDayBlockedDays).
+  const blockedDays = useMemo(() => allDayBlockedDays(entries), [entries]);
 
   // Press-and-hold = "I'm free that day", the strip's stand-in for the
   // calendar's right-click. `freedRef` remembers that the hold already handled
@@ -161,7 +170,13 @@ export default function WeekStrip({
         {days.map((date) => {
           const ymd = toYmd(date);
           const level = dayBlockLevel(entries, ymd);
-          const repeating = level !== null && dayIsRepeating(entries, ymd);
+          // The hatch marks a day the WEEKLY pattern is blocking. A dated
+          // block wins over the pattern (the calendar draws it the same way),
+          // so a hand-blocked day shows plain red, not red-plus-hatch.
+          const repeating =
+            level !== null &&
+            dayIsRepeating(entries, ymd) &&
+            !dayHasDatedBlock(entries, ymd);
           const isPast = date < today;
           const isToday = date.getTime() === today.getTime();
           const inWindow =
@@ -182,8 +197,9 @@ export default function WeekStrip({
                     ? ", partly blocked"
                     : ", free"
               }`}
-              // Tap blocks, hold frees — never a toggle, so the same gesture
-              // always means the same thing whatever is already on the day.
+              // Tap a free or part-blocked day to block it all day, tap one
+              // that's already blocked all day to clear it completely; hold
+              // (or right-click) frees it whatever's on it.
               // A mouse has a right button for this, so only touch/pen arm
               // the hold — holding a mouse button down shouldn't free a day.
               onPointerDown={(e) => {
@@ -203,7 +219,7 @@ export default function WeekStrip({
                   freedRef.current = false; // the hold already answered
                   return;
                 }
-                onEditDays(ymd, ymd, true);
+                onEditDays(ymd, ymd, !blockedDays.has(ymd));
               }}
               className={`relative flex flex-1 flex-col items-center gap-1 overflow-hidden rounded-lg py-2 transition-colors ${
                 inWindow ? "ring-1 ring-inset ring-indigo-300 dark:ring-indigo-500/60" : ""
@@ -266,7 +282,9 @@ export default function WeekStrip({
           />
           Weekly
         </span>
-        <span className="ml-auto font-medium">Tap to block &middot; hold to free</span>
+        <span className="ml-auto font-medium">
+          Tap to block &middot; tap again or hold to clear
+        </span>
       </div>
     </div>
   );

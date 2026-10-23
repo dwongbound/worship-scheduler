@@ -3,10 +3,12 @@
 import { describe, expect, it } from "vitest";
 import {
   FULL_DAY_MIN,
+  allDayBlockedDays,
   applyDayEdit,
   blockedDaysInRange,
   clipRecurringAroundDays,
   dayBlockLevel,
+  dayHasDatedBlock,
   dayIsRepeating,
   expandRecurringBlocks,
   mergeWindows,
@@ -229,6 +231,40 @@ describe("blockedDaysInRange", () => {
     // Wednesdays in [Jul 6, Jul 20]: the 8th and the 15th.
     expect(days.map((d) => d.ymd)).toEqual(["2026-07-08", "2026-07-15"]);
     expect(days.every((d) => d.level === "full")).toBe(true);
+  });
+});
+
+// What a click means on a given day: the toggle keys on whether an all-day
+// DATED block covers it, so a day that's only red from a weekly repeat still
+// takes a block on the first click.
+describe("allDayBlockedDays / dayHasDatedBlock", () => {
+  it("counts an all-day dated block, including every day of a range", () => {
+    const days = allDayBlockedDays([
+      specific(isoDay(2026, 7, 8), { endDate: isoDay(2026, 7, 10) }),
+    ]);
+    expect([...days].sort()).toEqual(["2026-07-08", "2026-07-09", "2026-07-10"]);
+  });
+
+  it("ignores timed blocks and weekly repeats", () => {
+    const entries = [
+      recurring(jul8Weekday), // all-day, but it's a repeat
+      specific(isoDay(2026, 7, 8), { startMinute: 9 * 60, endMinute: 12 * 60 }),
+    ];
+    expect(allDayBlockedDays(entries).size).toBe(0);
+    // ...though the timed one IS a dated block, which is what wins the cell
+    // (plain amber, no hatch) over the repeat underneath.
+    expect(dayHasDatedBlock(entries, JUL8)).toBe(true);
+  });
+
+  it("sees a legacy DATE_RANGE as an all-day block", () => {
+    const days = allDayBlockedDays([
+      dateRange(isoDay(2026, 7, 8), isoDay(2026, 7, 9)),
+    ]);
+    expect([...days].sort()).toEqual(["2026-07-08", "2026-07-09"]);
+  });
+
+  it("says a day with only a weekly repeat has no dated block", () => {
+    expect(dayHasDatedBlock([recurring(jul8Weekday)], JUL8)).toBe(false);
   });
 });
 

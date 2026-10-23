@@ -203,7 +203,8 @@ export async function ruleContext(
           },
         },
       },
-      select: { userId: true, set: { select: { startsAt: true } } },
+      // teamId so a TEAM-SCOPED limit counts only its own team's sets.
+      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
     }),
   ]);
   return {
@@ -213,6 +214,10 @@ export async function ruleContext(
       startsAt: s.startsAt,
       assignments: s.assignments,
     })),
-    periodBookings: bookings.map((b) => ({ userId: b.userId, startsAt: b.set.startsAt })),
+    periodBookings: bookings.map((b) => ({
+      userId: b.userId,
+      startsAt: b.set.startsAt,
+      teamId: b.set.teamId,
+    })),
   };
 }

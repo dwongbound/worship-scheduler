@@ -181,6 +181,11 @@ export interface ProposedAssignment {
 export interface ExistingAssignment {
   userId: string;
   startsAt: Date;
+  // The team that set belongs to, when the caller knows it. Only a
+  // TEAM-SCOPED LIMIT reads it: "at most 2 a month on Youth" counts Youth sets
+  // and nothing else. A booking with no team is counted by org-wide limits
+  // only — it can't be attributed to a team it never named.
+  teamId?: string | null;
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -193,6 +198,10 @@ const HOLD = "hold" as const;
 // deprioritized (never excluded). 8 days so exactly-a-week-apart recurring
 // sets count as back-to-back weeks.
 const MIN_GAP_DAYS = 8;
+
+// Gaps beyond this read as "not booked near here at all", so two people with
+// nothing scheduled for a year tie on spacing and load decides between them.
+const GAP_CAP = 400 * 24 * 60 * 60 * 1000;
 
 /**
  * True if no unavailability rule blocks this user from this set.
@@ -297,25 +306,40 @@ export function buildSchedule(
 
   // Every date each person is booked on (DB bookings + picks made during this
   // run) — the spacing signal. See tooClose below.
-  const bookedTimes = new Map<string, number[]>();
+  const bookedTimes = new Map<string, { time: number; teamId: string | null }[]>();
   for (const a of existingAssignments) {
     const times = bookedTimes.get(a.userId) ?? [];
-    times.push(a.startsAt.getTime());
+    times.push({ time: a.startsAt.getTime(), teamId: a.teamId ?? null });
     bookedTimes.set(a.userId, times);
   }
-  const recordBooking = (userId: string, time: number) => {
+  const recordBooking = (userId: string, time: number, teamId: string | null) => {
     const times = bookedTimes.get(userId) ?? [];
-    times.push(time);
+    times.push({ time, teamId });
     bookedTimes.set(userId, times);
   };
   // True when the person already has a booking within MIN_GAP_DAYS of `time`
   // (either side) — they served too recently, or are about to serve again.
-  const tooClose = (userId: string, time: number): boolean => {
+  const tooClose = (userId: string, time: number): boolean =>
+    nearestGap(userId, time) < MIN_GAP_DAYS * MS_PER_DAY;
+
+  // How far this set is from the person's NEAREST other booking. The spacing
+  // rule used to be the yes/no `tooClose` alone, which says nothing about two
+  // people who are both free this week — so a cap of "2 a month" could put
+  // both of someone's sets on consecutive weekends. Ranking by this gap
+  // (largest first) spreads everyone, and spreads a capped person's few sets
+  // across their period rather than clustering them.
+  //
+  // Capped rather than Infinity so the comparison stays finite arithmetic:
+  // beyond GAP_CAP two people are equally "free" and load decides.
+  const nearestGap = (userId: string, time: number): number => {
     const times = bookedTimes.get(userId);
-    if (!times) return false;
-    return times.some(
-      (t) => t !== time && Math.abs(t - time) < MIN_GAP_DAYS * MS_PER_DAY
-    );
+    if (!times || times.length === 0) return GAP_CAP;
+    let best = GAP_CAP;
+    for (const t of times) {
+      if (t.time === time) continue; // this set itself
+      best = Math.min(best, Math.abs(t.time - time));
+    }
+    return best;
   };
 
   // Who's an MD, for checking a filled roster against lib/md.ts's rule.
@@ -377,8 +401,12 @@ export function buildSchedule(
       neverRequired: togetherMap(required, "NEVER"),
       alwaysRequired: togetherMap(required, "ALWAYS"),
       alwaysPreferred: togetherMap(preferences, "ALWAYS"),
+      // The rule's scope travels with its params: it decides both WHEN the cap
+      // applies and WHAT it counts.
       requiredLimits: required.flatMap((r) =>
-        r.params.kind === "LIMIT" ? [r.params] : []
+        r.params.kind === "LIMIT"
+          ? [{ ...r.params, scopeTeam: r.teamId ?? null }]
+          : []
       ),
       requiredPrefers: required.flatMap((r) =>
         r.params.kind === "PREFER" ? [r.params] : []
@@ -389,9 +417,12 @@ export function buildSchedule(
   // LIMIT counting: distinct set times someone is booked on within a week or
   // month — this run's picks and DB bookings (bookedTimes), plus whatever the
   // caller fed in purely for the limits.
-  const extraTimes = new Map<string, number[]>();
+  const extraTimes = new Map<string, { time: number; teamId: string | null }[]>();
   for (const a of options.periodBookings ?? []) {
-    extraTimes.set(a.userId, [...(extraTimes.get(a.userId) ?? []), a.startsAt.getTime()]);
+    extraTimes.set(a.userId, [
+      ...(extraTimes.get(a.userId) ?? []),
+      { time: a.startsAt.getTime(), teamId: a.teamId ?? null },
+    ]);
   }
   const periodCache = new Map<string, number>();
   const pkey = (t: number, period: RulePeriod) => {
@@ -403,11 +434,20 @@ export function buildSchedule(
     }
     return v;
   };
-  const setsInPeriod = (userId: string, time: number, period: RulePeriod) => {
+  // `scopeTeam` non-null counts only that team's sets — a team-scoped LIMIT
+  // caps how often someone plays FOR THAT TEAM, not how often they play.
+  const setsInPeriod = (
+    userId: string,
+    time: number,
+    period: RulePeriod,
+    scopeTeam: string | null = null
+  ) => {
     const k = pkey(time, period);
     const seen = new Set<number>();
     for (const t of [...(bookedTimes.get(userId) ?? []), ...(extraTimes.get(userId) ?? [])]) {
-      if (t !== time && pkey(t, period) === k) seen.add(t);
+      if (t.time === time) continue;
+      if (scopeTeam && t.teamId !== scopeTeam) continue;
+      if (pkey(t.time, period) === k) seen.add(t.time);
     }
     return seen.size;
   };
@@ -530,7 +570,7 @@ export function buildSchedule(
       // and toward this team's tally, so a hand-picked roster steers the rest
       // of the run the same way an auto-filled one does. (Deliberately NOT the
       // global tally; see the note on `preAssigned`.)
-      recordBooking(p.userId, setTime);
+      recordBooking(p.userId, setTime, set.teamId ?? null);
       const preKey = teamKey(p.userId, set.teamId);
       teamCounts.set(preKey, (teamCounts.get(preKey) ?? 0) + 1);
     }
@@ -570,7 +610,7 @@ export function buildSchedule(
       counts.set(userId, (counts.get(userId) ?? 0) + 1);
       const tk = teamKey(userId, set.teamId);
       teamCounts.set(tk, (teamCounts.get(tk) ?? 0) + 1);
-      recordBooking(userId, setTime);
+      recordBooking(userId, setTime, set.teamId ?? null);
       remaining[role]--;
       picks.push({ setId: set.id, userId, role });
       runRoster.get(set.id)?.roster.push({ userId, role });
@@ -588,7 +628,7 @@ export function buildSchedule(
         // Drop ONE booking at this set's time: the person may legitimately
         // still have another here (a pre-assigned seat, or an overlapping role).
         const times = bookedTimes.get(p.userId);
-        const at = times ? times.indexOf(setTime) : -1;
+        const at = times ? times.findIndex((t) => t.time === setTime) : -1;
         if (times && at >= 0) times.splice(at, 1);
         remaining[p.role]++;
         const roster = runRoster.get(set.id)?.roster;
@@ -610,13 +650,26 @@ export function buildSchedule(
       Number(tooClose(a.id, setTime)) - Number(tooClose(b.id, setTime)) ||
       counts.get(a.id)! - counts.get(b.id)! ||
       teamCountOf(a.id, set.teamId) - teamCountOf(b.id, set.teamId) ||
+      // SPREAD, as the last word before determinism: of two people who are
+      // equally loaded and equally fresh, take the one whose nearest other
+      // booking is FURTHEST from this set. Deliberately below load rather than
+      // above it — ranking spread first would hand sets to whoever happens to
+      // have an empty diary and quietly undo the balancing. As a tiebreak it
+      // costs nothing and does the job it was asked for: someone capped at two
+      // sets a month has them pushed apart, because at each pick the version of
+      // them that clusters loses to the version that doesn't.
+      nearestGap(b.id, setTime) - nearestGap(a.id, setTime) ||
       a.id.localeCompare(b.id);
 
     // ── Rule helpers for THIS set ───────────────────────────────────────
     const onSet = (userId: string) => (rolesOnSet.get(userId)?.size ?? 0) > 0;
     // Adding a role to someone already on this set adds no set to their tally.
-    const overLimit = (userId: string, max: number, period: RulePeriod) =>
-      !onSet(userId) && setsInPeriod(userId, setTime, period) >= max;
+    const overLimit = (
+      userId: string,
+      max: number,
+      period: RulePeriod,
+      scopeTeam: string | null = null
+    ) => !onSet(userId) && setsInPeriod(userId, setTime, period, scopeTeam) >= max;
 
     // The first open role (fill order) `userId` could still take here — where
     // an ALWAYS partner gets seated. `takingRole` is about to lose a slot to
@@ -648,7 +701,10 @@ export function buildSchedule(
       for (const l of requiredLimits) {
         // A null userId is the org-wide cap — it applies to whoever is being
         // considered, rather than naming one person.
-        if ((l.userId === null || l.userId === userId) && overLimit(userId, l.max, l.period)) {
+        if (
+          (l.userId === null || l.userId === userId) &&
+          overLimit(userId, l.max, l.period, l.scopeTeam)
+        ) {
           return false;
         }
       }
@@ -706,7 +762,7 @@ export function buildSchedule(
           }
           case "LIMIT":
             return (p.userId === null || p.userId === user.id) &&
-              overLimit(user.id, p.max, p.period)
+              overLimit(user.id, p.max, p.period, r.teamId ?? null)
               ? 1
               : 0;
           // Role-shaped rules describe what a role IS; they're REQUIRED-only

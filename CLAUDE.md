@@ -118,13 +118,16 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `AvailabilityCalendar`, `lib/weekView.ts`, and `api/availability{,/block-days}`.
   `fromGoogle` marks a SPECIFIC block written by Import from Google Calendar;
   re-importing replaces exactly those rows for that request.
-  There is no per-date exception, so the calendar's two gestures are: a
-  click/tap BLOCKS a day all day, and a right-click (desktop) or long press
-  (touch) FREES it — which wipes every dated block on it AND clips the span of
-  any weekly rule covering it, around that day (`clipRecurringAroundDays` in
-  `lib/availability.ts`, used by both `applyDayEdit` and the block-days route;
-  a clipped piece with no occurrence left to come is dropped). Never a toggle:
-  the gesture says which way, whatever is already on the day.
+  The calendar/week-strip gestures: a click/tap BLOCKS a day all day whatever
+  was on it (the red all-day block renders OVER a weekly repeat — a dated block
+  always wins the cell, so no hatch); clicking a day already blocked all day
+  CLEARS it completely; a right-click (desktop) or long press (touch) frees a
+  day outright. Any clear wipes every dated block on the day AND clips the span
+  of a weekly rule covering it, around that day — there's no per-date exception
+  to store (`clipRecurringAroundDays`, used by both `applyDayEdit` and the
+  block-days route; a clipped piece with no occurrence left to come is
+  dropped). `allDayBlockedDays`/`dayHasDatedBlock` are the shared readings
+  behind the toggle and the hatch.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
@@ -220,6 +223,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   set — replaced `availableChoirMembers`).
   Soft spacing rule: people booked within 8 days of a set (incl. caller-fed
   existing DB bookings) are picked last → weekly sets rotate round-robin.
+  SPREAD is the last word in `byRotation`, below load and per-team load: of two
+  equally loaded, equally fresh people, the one whose nearest other booking is
+  FURTHEST away wins (`nearestGap`). Deliberately below load — ranking spread
+  first hands sets to whoever has an empty diary and undoes the balancing —
+  but it is what pushes a capped person's few sets apart instead of letting
+  them cluster at one end of the month.
   A required-MD set is filled on PURE ROTATION first and only refilled with a
   reserved MD seat if that roster has nobody who could lead (the old
   reserve-first pass pinned the seat to one person); the reserved seat goes to
@@ -251,8 +260,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   so two teams can hold opposite rules and both are honoured;
   `findContradiction` likewise runs once per scope (each team's rules plus the
   org-wide ones), so "always together" on one team and "never" on another is
-  not a clash. The scope decides WHEN a LIMIT applies, not what it counts — a
-  team-scoped cap still counts all of that person's sets. ✅tested `parseRuleParams` /
+  not a clash. A LIMIT's scope decides BOTH when it applies and what it counts:
+  "2 a month on Youth" counts Youth sets only, while an unscoped one (the
+  default) counts every team's. Bookings therefore carry a `teamId` all the way
+  from `ruleContext` / the generate + baseline routes through
+  `StagedPlan.baseline` — a booking with no team is counted by org-wide limits
+  only. ✅tested `parseRuleParams` /
   `validateRules` (ids checked against the org), `findContradiction` (between
   REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
   `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and

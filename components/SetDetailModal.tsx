@@ -349,9 +349,10 @@ export default function SetDetailModal({
             startsAt: new Date(f.startsAt),
           })),
           periodBookings: (d.periodBookings ?? []).map(
-            (b: { userId: string; startsAt: string }) => ({
+            (b: { userId: string; startsAt: string; teamId?: string | null }) => ({
               userId: b.userId,
               startsAt: new Date(b.startsAt),
+              teamId: b.teamId ?? null,
             })
           ),
         });

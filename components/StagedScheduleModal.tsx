@@ -1017,6 +1017,7 @@ export default function StagedScheduleModal({
       (plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId ?? null,
       })),
       new Map(Object.entries(plan?.baseline?.teamCounts ?? {})),
       ruleOptions()
@@ -1082,6 +1083,7 @@ export default function StagedScheduleModal({
       ...(plan?.baseline?.booked ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        teamId: b.teamId ?? null,
       })),
       ...sets.flatMap((s, i) =>
         i === idx
@@ -1089,6 +1091,7 @@ export default function StagedScheduleModal({
           : s.assignments.map((a) => ({
               userId: a.userId,
               startsAt: new Date(s.startsAt),
+              teamId: s.teamId ?? null,
             }))
       ),
     ];

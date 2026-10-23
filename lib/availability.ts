@@ -89,6 +89,51 @@ export function dayIsRepeating(
 }
 
 /**
+ * Does any DATED block (one date or a range, whatever its time window) cover
+ * this day? Dated blocks are the specific statement, so they WIN over the
+ * weekly pattern underneath: a day with one renders as an ordinary block — red
+ * "All day" over the repeat, no hatch, no ↻.
+ */
+export function dayHasDatedBlock(
+  entries: ApiUnavailability[],
+  ymd: string
+): boolean {
+  const [y, m, d] = ymd.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return entries.some((e) => {
+    if (e.type === "RECURRING" || !e.startDate) return false;
+    const s = new Date(e.startDate);
+    const startDay = new Date(s.getFullYear(), s.getMonth(), s.getDate());
+    const eRaw = e.endDate ? new Date(e.endDate) : s;
+    const endDay = new Date(eRaw.getFullYear(), eRaw.getMonth(), eRaw.getDate());
+    return date >= startDay && date <= endDay;
+  });
+}
+
+/**
+ * The days an all-day DATED block covers — the ones a click/tap CLEARS instead
+ * of blocking. That's the whole toggle: clicking a free or part-blocked day
+ * blocks it all day, clicking one that's already blocked all day by hand frees
+ * it completely (every dated block AND any weekly repeat under it).
+ *
+ * Weekly rules deliberately don't count here: a day that's red from a repeat
+ * alone still takes a dated all-day block on the first click, which is what
+ * puts a plain red "All day" over the hatch.
+ */
+export function allDayBlockedDays(entries: ApiUnavailability[]): Set<string> {
+  const days = new Set<string>();
+  for (const e of entries) {
+    if (e.type === "RECURRING" || !e.startDate) continue;
+    const start = e.startMinute ?? 0;
+    const end = e.endMinute ?? FULL_DAY_MIN;
+    // Legacy DATE_RANGE rows carry no window, so they're always all-day.
+    if (e.type !== "DATE_RANGE" && !(start <= 0 && end >= FULL_DAY_MIN)) continue;
+    for (const day of daysOfEntry(e)) days.add(day);
+  }
+  return days;
+}
+
+/**
  * Every blocked day inside [startIso, endIso] (a request's window), with a
  * short "Wed, Jul 8" label and its full/partial level — what the
  * submit-confirmation modal lists. Days iterate in the local zone so the

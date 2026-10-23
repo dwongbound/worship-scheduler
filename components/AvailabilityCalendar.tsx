@@ -4,14 +4,16 @@
 // the cell shows "All day" for a full-day block or the blocked time window(s)
 // otherwise. Fully Tailwind-styled, light + dark aware.
 //
-// It's also an editor, with two gestures and no ambiguity between them: a
-// click/tap BLOCKS a day all day (drag across several to block a run), and a
-// right-click — or a long press, on touch — FREES it, wiping everything that
-// covered it, weekly repeats included. The scrollable list beside it handles
+// It's also an editor. A click/tap BLOCKS a day all day whatever was on it
+// (a weekly repeat included — the red all-day block renders over the repeat),
+// and clicking that day again CLEARS it completely, repeat and all; drag to
+// block a run. A right-click — or a long press, on touch — frees a day
+// outright, however it was blocked. The scrollable list beside it handles
 // deleting.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toYmd } from "@/components/common/DateSelect";
 import InfoTooltip from "@/components/common/InfoTooltip";
+import { allDayBlockedDays } from "@/lib/availability";
 import type { ApiUnavailability } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -135,6 +137,14 @@ export default function AvailabilityCalendar({
   const interactive = !!onEditDays && !busy;
   const todayStart = startOfDay(today);
 
+  // Days an all-day block already covers by hand — the ones a single click
+  // CLEARS rather than blocks (see lib/availability allDayBlockedDays). Kept in
+  // a ref so the pointer-up handler can read it without being a hook dependency
+  // (it wires up once).
+  const blockedDays = useMemo(() => allDayBlockedDays(entries), [entries]);
+  const blockedDaysRef = useRef(blockedDays);
+  blockedDaysRef.current = blockedDays;
+
   // A day can be blocked if it's in the visible month and not in the past.
   const canBlock = (date: Date) =>
     interactive &&
@@ -211,10 +221,17 @@ export default function AvailabilityCalendar({
       if (s && e && onEditDays) {
         const lo = s <= e ? s : e;
         const hi = s <= e ? e : s;
-        // The gesture decides, not what's already on the day: a click/drag
-        // always blocks (a day blocked twice is just blocked), and a
-        // right-click/hold always frees. There's no toggle to guess at.
-        onEditDays(toYmd(lo), toYmd(hi), modeRef.current !== "clear");
+        if (modeRef.current === "clear") {
+          // A right-click/hold always frees, however many days it covers.
+          onEditDays(toYmd(lo), toYmd(hi), false);
+        } else {
+          // A single click on a day that's already blocked all day frees it
+          // COMPLETELY — every dated block on it plus any weekly repeat
+          // underneath. Any other click/drag blocks the run.
+          const singleDay = toYmd(lo) === toYmd(hi);
+          const blocked = !(singleDay && blockedDaysRef.current.has(toYmd(lo)));
+          onEditDays(toYmd(lo), toYmd(hi), blocked);
+        }
       }
       modeRef.current = "block";
     };
@@ -308,7 +325,7 @@ export default function AvailabilityCalendar({
           {onEditDays && (
             <InfoTooltip
               side="bottom"
-              text="Click or tap a day — or drag across several — to block it out all day. To mark a day fully free, right-click it or press and hold: that clears everything on it, weekly repeats included (the repeat is trimmed to skip that day)."
+              text="Click or tap a day — or drag across several — to block it out all day, whatever else is on it. Click a blocked day again to clear it completely, weekly repeats included. Right-click (or press and hold) frees a day straight off."
             />
           )}
         </div>
@@ -559,7 +576,7 @@ export default function AvailabilityCalendar({
         {/* The one thing the colours can't say: which gesture does what. */}
         {onEditDays && (
           <span className="ml-auto font-medium">
-            Click to block &middot; right-click or hold to free
+            Click to block &middot; click again, right-click or hold to clear
           </span>
         )}
       </div>
