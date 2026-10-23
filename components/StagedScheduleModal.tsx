@@ -929,6 +929,17 @@ export default function StagedScheduleModal({
       ),
     }));
 
+  // The same, for ONE card. Locking a whole set is how you say "this one is
+  // settled" and then let Auto schedule work on everything else — without it
+  // the only options were seat-by-seat or the entire plan.
+  const setSetLocked = (idx: number, locked: boolean) =>
+    updateSet(idx, (s) => ({
+      ...s,
+      assignments: s.assignments.map(({ locked: _was, ...a }) =>
+        locked ? { ...a, locked: true } : a
+      ),
+    }));
+
   // Lock or unlock EVERY filled seat in the plan. Locked seats survive Auto
   // schedule; unlocked ones are re-proposed. A preview opens all-locked, so
   // Unlock all is how the admin hands the whole plan back to the scheduler.
@@ -1688,6 +1699,8 @@ export default function StagedScheduleModal({
                 ),
               0
             );
+            // How much of THIS card is pinned, for its lock toggle.
+            const lockedHere = set.assignments.filter((a) => a.locked).length;
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
             // Roles whose open slot a required rule is holding — flagged "!".
@@ -1800,6 +1813,12 @@ export default function StagedScheduleModal({
                     {/* Fill just this card's holes. Pinned to the card's top
                         right corner (after the badges) so it's in the same
                         place on every card, badges or not. */}
+                    <LockSetButton
+                      seats={set.assignments.length}
+                      locked={lockedHere}
+                      disabled={busy}
+                      onClick={() => setSetLocked(idx, lockedHere < set.assignments.length)}
+                    />
                     <FillSetButton
                       openSlots={openTotal}
                       disabled={busy}
@@ -2514,6 +2533,48 @@ function LoadBar({
 // empty slots, leaving everyone already on it exactly where they are. Greyed
 // out (and saying so) when the roster is already full, so the button always
 // tells you whether there's a hole to fill.
+// Lock or unlock every seat on one card. Like the plan-wide toggle, it always
+// offers the move that changes something: anything unlocked → Lock, all locked
+// → Unlock. Dead on an empty card, where there are no seats to pin.
+function LockSetButton({
+  seats,
+  locked,
+  disabled,
+  onClick,
+}: {
+  seats: number;
+  locked: number;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  const allLocked = seats > 0 && locked === seats;
+  const label =
+    seats === 0
+      ? "Nobody on this set to lock"
+      : allLocked
+        ? "Unlock this set, so Auto schedule may re-propose anyone on it"
+        : `Lock this set's ${seats} seat${seats === 1 ? "" : "s"}, so Auto schedule leaves it alone`;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || seats === 0}
+      title={label}
+      aria-label={label}
+      aria-pressed={allLocked}
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs
+        transition-colors disabled:cursor-not-allowed disabled:opacity-40
+        disabled:hover:bg-transparent ${
+          allLocked
+            ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-900/40 dark:text-indigo-300"
+            : "text-gray-400 hover:bg-indigo-50 hover:text-indigo-600 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-400"
+        }`}
+    >
+      {allLocked ? "🔒" : "🔓"}
+    </button>
+  );
+}
+
 function FillSetButton({
   openSlots,
   disabled,

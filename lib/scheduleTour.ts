@@ -98,6 +98,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
           ? "Everyone already on the calendar opens locked, and so does anyone you choose by hand. Auto schedule leaves locked seats exactly where they are and fills only the rest."
           : "Anyone you choose by hand is locked. Re-run auto schedule and they stay exactly where you put them — only empty and auto-filled slots get reshuffled.",
         "To release one, set its slot back to “None” or click the padlock. Lock all and Unlock all do the whole plan at once.",
+        "A card's own padlock, top right, locks or unlocks that whole set — how you settle one and let Auto schedule keep working on the others.",
       ],
     },
     {

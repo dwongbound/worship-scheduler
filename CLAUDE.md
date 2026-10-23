@@ -118,16 +118,32 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `AvailabilityCalendar`, `lib/weekView.ts`, and `api/availability{,/block-days}`.
   `fromGoogle` marks a SPECIFIC block written by Import from Google Calendar;
   re-importing replaces exactly those rows for that request.
+  `exceptDates` (`String[]`, "YYYY-MM-DD") are the days a RECURRING rule SKIPS
+  — one per day freed on the calendar. A weekly rule is a pattern, so a freed
+  date is a hole in it, NOT a split of its span: the row stays whole and
+  recognisable (and so still a duplicate of a re-added identical rule), and
+  three overlapping Tuesday rules over one freed day become three exceptions,
+  not six half-rules. EVERY reader honours it alongside the bounds —
+  `lib/availability.ts` (`recurringSkips`, used by `dayBlockLevel`/
+  `dayIsRepeating`), `lib/scheduler.ts isUserAvailable`, `AvailabilityCalendar`,
+  `lib/weekView.ts` — and any narrowed prisma `select` must ask for it
+  (admin/users, swaps/candidates, lib/slack all do).
   The calendar/week-strip gestures: a click/tap BLOCKS a day all day whatever
   was on it (the red all-day block renders OVER a weekly repeat — a dated block
   always wins the cell, so no hatch); clicking a day already blocked all day
   CLEARS it completely; a right-click (desktop) or long press (touch) frees a
-  day outright. Any clear wipes every dated block on the day AND clips the span
-  of a weekly rule covering it, around that day — there's no per-date exception
-  to store (`clipRecurringAroundDays`, used by both `applyDayEdit` and the
-  block-days route; a clipped piece with no occurrence left to come is
-  dropped). `allDayBlockedDays`/`dayHasDatedBlock` are the shared readings
-  behind the toggle and the hatch.
+  day outright. Any clear wipes every dated block on the day AND adds the
+  exception to every weekly rule covering it (`recurringExceptionsFor` /
+  `mergeExceptions`, which prunes dates the rule can't fire on again; shared by
+  `applyDayEdit` and the block-days route).
+  `allDayBlockedDays`/`dayHasDatedBlock` are the shared readings behind the
+  toggle and the hatch. Adding a weekly block also settles overlaps —
+  `POST /api/availability` skips one a wider rule already says, absorbs
+  (deletes) any row the new one covers (`recurringCovers`), and RE-ADDING a
+  block you'd freed days out of re-books them (the covered rows give up their
+  exceptions), which is why a repeat is no longer a flat "already exists". It
+  answers `{created, skipped, absorbed, rebooked[]}`; /schedule's form message
+  is read off that, never guessed client-side.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
@@ -504,7 +520,9 @@ optional per-set-type color) → `StagedScheduleModal` (the preview — and, as
 `mode="preview"`, the calendar's Preview Mode too, which has the same plan-wide
 Auto schedule · Clear all people · Lock all/Unlock all row and confirms the
 batch before Save; a set type's
-color tints its cards at 10%, matched via `StagedSet.templateId`; every slot row
+color tints its cards at 10%, matched via `StagedSet.templateId`; each card's top right carries a padlock that locks or unlocks
+THAT set's whole roster (the plan-wide Lock all's per-card twin — settle one
+set and let Auto schedule keep working on the rest); every slot row
 leads with a ✕ that drops THAT slot from THAT set — capacity − 1 plus its
 occupant, written into `StagedSet.slotCapacities`, which both apply and the
 preview save persist, the same edit `SetDetailModal.deleteSlot` makes — and a
