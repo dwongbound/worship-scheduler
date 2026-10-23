@@ -240,9 +240,17 @@ test("phone week strip blocks a day with one tap", async ({ page }) => {
   await expect(blockEntry.first()).toBeVisible();
   await expect(todayCell).toHaveAttribute("aria-pressed", "true");
 
-  // Tapping it again clears it — the same toggle the calendar's click has.
+  // A second tap is NOT a toggle any more — a tap always means "block", so the
+  // day stays blocked and nothing is added twice.
   await todayCell.click();
+  await expect(blockEntry).toHaveCount(1);
+  await expect(todayCell).toHaveAttribute("aria-pressed", "true");
+
+  // Freeing a day is its own gesture: a long press on the strip, or the
+  // right-click it stands in for (the one a test can dispatch directly).
+  await todayCell.click({ button: "right" });
   await expect(blockEntry).toHaveCount(0);
+  await expect(todayCell).toHaveAttribute("aria-pressed", "false");
 });
 
 test("phone: adds and deletes a recurring weekly block via the single-panel adder", async ({

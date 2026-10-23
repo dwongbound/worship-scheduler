@@ -118,6 +118,13 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `AvailabilityCalendar`, `lib/weekView.ts`, and `api/availability{,/block-days}`.
   `fromGoogle` marks a SPECIFIC block written by Import from Google Calendar;
   re-importing replaces exactly those rows for that request.
+  There is no per-date exception, so the calendar's two gestures are: a
+  click/tap BLOCKS a day all day, and a right-click (desktop) or long press
+  (touch) FREES it — which wipes every dated block on it AND clips the span of
+  any weekly rule covering it, around that day (`clipRecurringAroundDays` in
+  `lib/availability.ts`, used by both `applyDayEdit` and the block-days route;
+  a clipped piece with no occurrence left to come is dropped). Never a toggle:
+  the gesture says which way, whatever is already on the day.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
@@ -184,6 +191,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Export: `export`, `export/[id]` (ICS).
 - Admin (re-checks `isAdmin` vs db): `admin/users(+/[id]|/stats)`,
   `admin/team-load` (per-window serve counts for the generate-review panel),
+  `admin/schedule-baseline` (GET ?from=&to= → the `StagedPlan.baseline` for a
+  window: load tallies, nearby bookings, MD seed, and `ruleContext`. The
+  generate route builds this inline; the calendar's Preview Mode has no
+  generate step, so it fetches this BEFORE opening — the workspace resets its
+  staged edits whenever the `plan` prop changes identity, so a late arrival
+  would discard the admin's work),
   `admin/sets/[id]/roster` (the WHOLE roster diff — removals, swaps and
   additions — in one PATCH, applied as one transaction with one grouped Slack
   notice; it replaced the per-seat `admin/assignments` routes, which fired a
@@ -217,9 +230,21 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   · `ics.ts` ✅ (`buildIcs`) · `stats.ts` ✅ (serve-count windows/ranges).
   `shortDateTimeCompact` ("8/20/26 10PM") is THE date every chat message names
   a set by — short enough that a swap can name two sets in one sentence.
-- `schedulingRules.ts` — the Rules vocabulary: five kinds (ONLY_IF_NEEDED,
-  PREFER, SAME_PLAYER weekly-by-set-type or two specific sets, TOGETHER
-  always/never, LIMIT per Mon–Sun week or month), `parseRuleParams` /
+- `schedulingRules.ts` — the Rules vocabulary: five person-shaped kinds
+  (ONLY_IF_NEEDED, PREFER, SAME_PLAYER weekly-by-set-type or two specific sets,
+  TOGETHER always/never, LIMIT per Mon–Sun week or month — `userId` null caps
+  EVERYONE, each person separately) plus three ROLE-shaped ones that are the
+  old hardcoded behaviour made visible: LEADS_FROM (which roles an MD leads
+  from, was `MD_ROLES`), ROLE_HOST (a role only held alongside another, was
+  `ACOUSTIC_HOST_ROLES`) and MAY_DOUBLE (was `OVERLAP_ALLOWED_PAIRS`). All
+  three are REQUIRED-only, seeded by the rules GET route the first time the
+  editor is opened, and resolved by **`resolveRoleBehavior`** — whose contract
+  is the safety net: no rule governing a thing → the lib/constants.ts default,
+  so an unseeded org schedules exactly as it did before rules existed; a rule
+  present but switched OFF → the behaviour is off, never a fallback. They have
+  no builder form (`CREATABLE_KINDS`), so rows are toggled or deleted, not
+  edited. A required SAME_PLAYER picks only from people free for BOTH sets —
+  it never seats someone on one and strands the other. ✅tested `parseRuleParams` /
   `validateRules` (ids checked against the org), `findContradiction` (between
   REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
   `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and
@@ -260,6 +285,18 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   month/3/6/12 months. Only "this plan" is counted client-side; every window is
   ONE on-demand query to `GET /api/admin/team-load?metric=…`, cached per window
   in the modal — the plan itself never carries a year of assignments. ✅tested
+  `ruleHeldRoles`/`totalRuleHeld` are the "!" marks: which open slots a
+  REQUIRED scheduling rule is what's holding empty (a SAME_PLAYER seat reserved
+  for someone who can't take it, a role every candidate is refused for). Found
+  by DIFFERENCE — fill the set once with the required rules and once without,
+  and any role the rules-off run could fill but the rules-on run couldn't is
+  held — so the flag can never drift from `buildSchedule`'s own answer.
+  Disjoint from `unfillableRoles` by construction. ✅tested
+  `planFixedSets` merges the baseline's snapshot of the sets around a plan with
+  the plan's OWN sets as staged, dropping the stale copy where both name the
+  same set — `ruleContext` returns every set in the window, which in Preview
+  Mode IS the previewed sets, so un-merged a SAME_PLAYER rule sees each twice
+  and owes its seat to both rosters' players. ✅tested
   Also the preview's COPY/PASTE clipboard: `copySet` lifts a set's EFFECTIVE
   shape (already resolved against its team catalog) + roster, `pasteSet` stamps
   both onto another set — which keeps its own identity (time, label, team) and

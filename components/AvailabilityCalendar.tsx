@@ -4,9 +4,11 @@
 // the cell shows "All day" for a full-day block or the blocked time window(s)
 // otherwise. Fully Tailwind-styled, light + dark aware.
 //
-// It's also an editor: click a day — or click-and-drag across several — to
-// block them out (an all-day specific block, not tied to any request). The
-// scrollable list beside it handles deleting.
+// It's also an editor, with two gestures and no ambiguity between them: a
+// click/tap BLOCKS a day all day (drag across several to block a run), and a
+// right-click — or a long press, on touch — FREES it, wiping everything that
+// covered it, weekly repeats included. The scrollable list beside it handles
+// deleting.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toYmd } from "@/components/common/DateSelect";
 import InfoTooltip from "@/components/common/InfoTooltip";
@@ -14,6 +16,10 @@ import type { ApiUnavailability } from "@/lib/types";
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const FULL_DAY_END = 24 * 60; // minutes — a block reaching this covers the day
+// How long a press has to last to count as a hold ("free this day"), and how
+// far the pointer may travel first.
+const HOLD_MS = 450;
+const HOLD_SLOP_PX = 10;
 
 // A block chip on a day that's already gone. Neutral instead of rose/amber:
 // the words still say what was blocked, but nothing about it invites a click,
@@ -44,11 +50,11 @@ function startOfDay(d: Date): Date {
 
 // The blocks that fall on one calendar day, reduced to what we render: whether
 // any of them covers the whole day, the blocked windows as readable times, and
-// whether the day is covered ONLY by a weekly rule. That last one matters more
-// than anything else on the cell: a repeat applies forever and can't be cleared
-// for one date, so it's marked (↻ + hatch) rather than left to be inferred from
-// three identical-looking Tuesdays. A date blocked by hand overrides the
-// pattern and renders as an ordinary block.
+// whether the day is covered ONLY by a weekly rule. That last one is worth
+// marking (↻ + hatch) rather than leaving to be inferred from three
+// identical-looking Tuesdays: freeing such a day doesn't delete a block, it
+// trims the repeat's span around that date. A date blocked by hand overrides
+// the pattern and renders as an ordinary block.
 interface DayBlocks {
   fullDay: boolean;
   labels: string[]; // blocked windows, compact ("6a–5p"), deduped
@@ -82,9 +88,9 @@ export default function AvailabilityCalendar({
 }: {
   entries: ApiUnavailability[];
   // Called when the user edits a run of days: the inclusive [start, end] as
-  // YYYY-MM-DD strings, and whether to block (true) or unblock (false) them.
-  // A drag always blocks; a single click on an already-blocked day unblocks it
-  // (a toggle). Omit to render the calendar read-only.
+  // YYYY-MM-DD strings, and whether to block (true) or free (false) them. The
+  // GESTURE decides which: click/drag blocks, right-click/hold frees. Omit to
+  // render the calendar read-only.
   onEditDays?: (startYmd: string, endYmd: string, blocked: boolean) => void;
   // Which month to open on (defaults to this one). The admin's read-only view
   // seeds it with the availability request's first month, which is usually not
@@ -119,34 +125,15 @@ export default function AvailabilityCalendar({
   // the cell elements imperatively, and cleared + committed on pointer-up.
   const startRef = useRef<Date | null>(null);
   const endRef = useRef<Date | null>(null);
-  // Which gesture is in flight. Left button paints days BLOCKED; right button
-  // paints them CLEAR — "I'm free all of these" — wiping every dated block on
-  // them, partial-day ones included. Set on pointer-down and read on pointer-up.
+  // Which gesture is in flight. Left button paints days BLOCKED; the right
+  // button — or a long press, which has no right button to offer — paints them
+  // CLEAR: "I'm free all of these", wiping every block on them, timed ones and
+  // weekly repeats included. Set on pointer-down (or when the hold fires) and
+  // read on pointer-up.
   const modeRef = useRef<"block" | "clear">("block");
   const gridRef = useRef<HTMLDivElement>(null);
   const interactive = !!onEditDays && !busy;
   const todayStart = startOfDay(today);
-
-  // Days already covered by an all-day SPECIFIC block — the ones a single click
-  // toggles OFF. Recurring/timed blocks aren't togglable this way, so they're
-  // excluded. Kept in a ref so the pointer-up handler can read it without being
-  // a hook dependency (it wires up once).
-  const specificBlockedDays = useMemo(() => {
-    const set = new Set<string>();
-    for (const e of entries) {
-      if (e.type !== "SPECIFIC" || !e.startDate) continue;
-      const s = e.startMinute ?? 0;
-      const en = e.endMinute ?? FULL_DAY_END;
-      if (!(s <= 0 && en >= FULL_DAY_END)) continue; // all-day only
-      const end = e.endDate ? startOfDay(new Date(e.endDate)) : null;
-      let d = startOfDay(new Date(e.startDate));
-      const last = end ?? d;
-      for (; d <= last; d = addDays(d, 1)) set.add(toYmd(d));
-    }
-    return set;
-  }, [entries]);
-  const blockedDaysRef = useRef(specificBlockedDays);
-  blockedDaysRef.current = specificBlockedDays;
 
   // A day can be blocked if it's in the visible month and not in the past.
   const canBlock = (date: Date) =>
@@ -174,6 +161,31 @@ export default function AvailabilityCalendar({
     });
   };
 
+  // The touch spelling of right-click: hold a day still for a moment and the
+  // gesture flips to CLEAR (the paint turns green, so it's visible before you
+  // let go). Lifting early or moving the finger cancels it — an early lift is
+  // an ordinary tap, and travel means you're dragging or scrolling.
+  const holdRef = useRef<{
+    timer: ReturnType<typeof setTimeout>;
+    x: number;
+    y: number;
+  } | null>(null);
+  const cancelHold = () => {
+    if (holdRef.current) clearTimeout(holdRef.current.timer);
+    holdRef.current = null;
+  };
+  const armHold = (x: number, y: number) => {
+    cancelHold();
+    const timer = setTimeout(() => {
+      holdRef.current = null;
+      if (!startRef.current) return; // released before the hold matured
+      modeRef.current = "clear";
+      paintSelection();
+      navigator.vibrate?.(15); // a nudge, on the browsers that have one
+    }, HOLD_MS);
+    holdRef.current = { timer, x, y };
+  };
+
   const beginDrag = (date: Date, mode: "block" | "clear") => {
     modeRef.current = mode;
     startRef.current = date;
@@ -181,6 +193,7 @@ export default function AvailabilityCalendar({
     paintSelection();
   };
   const extendDrag = (date: Date) => {
+    cancelHold(); // moving onto another day is a drag, not a hold
     endRef.current = date;
     paintSelection();
   };
@@ -189,6 +202,7 @@ export default function AvailabilityCalendar({
   // the refs synchronously so a fast click (down→up before any re-render) works.
   useEffect(() => {
     const onUp = () => {
+      cancelHold();
       const s = startRef.current;
       const e = endRef.current;
       startRef.current = null;
@@ -197,23 +211,29 @@ export default function AvailabilityCalendar({
       if (s && e && onEditDays) {
         const lo = s <= e ? s : e;
         const hi = s <= e ? e : s;
-        if (modeRef.current === "clear") {
-          // Right-drag always clears, however many days it covers.
-          onEditDays(toYmd(lo), toYmd(hi), false);
-        } else {
-          // A single left-click on an already-blocked day unblocks it
-          // (toggle); any other click/drag blocks the run.
-          const singleDay = toYmd(lo) === toYmd(hi);
-          const blocked = !(singleDay && blockedDaysRef.current.has(toYmd(lo)));
-          onEditDays(toYmd(lo), toYmd(hi), blocked);
-        }
+        // The gesture decides, not what's already on the day: a click/drag
+        // always blocks (a day blocked twice is just blocked), and a
+        // right-click/hold always frees. There's no toggle to guess at.
+        onEditDays(toYmd(lo), toYmd(hi), modeRef.current !== "clear");
       }
       modeRef.current = "block";
     };
+    const onCancel = () => {
+      cancelHold();
+      startRef.current = null;
+      endRef.current = null;
+      modeRef.current = "block";
+      paintSelection();
+    };
     window.addEventListener("pointerup", onUp);
-    return () => window.removeEventListener("pointerup", onUp);
-    // paintSelection + blockedDaysRef only read refs (stable), so onEditDays is
-    // the only real dep.
+    window.addEventListener("pointercancel", onCancel);
+    return () => {
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      cancelHold();
+    };
+    // paintSelection + the hold helpers only read refs (stable), so onEditDays
+    // is the only real dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onEditDays]);
 
@@ -235,9 +255,8 @@ export default function AvailabilityCalendar({
     for (const date of cells) {
       const day = startOfDay(date);
       // A day you marked by hand WINS over the weekly pattern underneath it:
-      // it's the more specific statement, and the one you can act on here
-      // (right-click frees a date; it can't punch a hole in a repeat). So when
-      // both land on a day, only the dated blocks are drawn — no hatch, no ↻.
+      // it's the more specific statement. So when both land on a day, only the
+      // dated blocks are drawn — no hatch, no ↻.
       const applying = entries.filter((rule) => ruleAppliesOn(rule, day));
       const dated = applying.filter((rule) => rule.type !== "RECURRING");
       const shown = dated.length > 0 ? dated : applying;
@@ -289,7 +308,7 @@ export default function AvailabilityCalendar({
           {onEditDays && (
             <InfoTooltip
               side="bottom"
-              text="Click a day — or drag across several — to block it out (all day). Click a blocked day again to clear it. Right-click (or right-drag) marks days fully free, wiping every dated block on them."
+              text="Click or tap a day — or drag across several — to block it out all day. To mark a day fully free, right-click it or press and hold: that clears everything on it, weekly repeats included (the repeat is trimmed to skip that day)."
             />
           )}
         </div>
@@ -343,6 +362,18 @@ export default function AvailabilityCalendar({
         onContextMenu={(e) => {
           if (interactive) e.preventDefault();
         }}
+        // A finger that travels is dragging a run or scrolling the page —
+        // either way it isn't holding still on one day.
+        onPointerMove={(e) => {
+          const hold = holdRef.current;
+          if (!hold) return;
+          if (
+            Math.abs(e.clientX - hold.x) > HOLD_SLOP_PX ||
+            Math.abs(e.clientY - hold.y) > HOLD_SLOP_PX
+          ) {
+            cancelHold();
+          }
+        }}
       >
         {cells.map((date) => {
           const inMonth = date.getMonth() === month;
@@ -371,13 +402,15 @@ export default function AvailabilityCalendar({
                 if (e.button !== 0 && e.button !== 2) return;
                 e.preventDefault(); // don't start a text selection
                 beginDrag(date, e.button === 2 ? "clear" : "block");
+                // A mouse has a right button, so only touch/pen need the hold.
+                if (e.pointerType !== "mouse") armHold(e.clientX, e.clientY);
               }}
               onPointerEnter={() => {
                 if (startRef.current && blockable) extendDrag(date);
               }}
               className={`relative ${
                 compact ? "min-h-[54px] p-1" : "min-h-[92px] p-1.5"
-              } select-none border-b border-r border-gray-200 dark:border-gray-700/60 ${
+              } select-none [-webkit-touch-callout:none] border-b border-r border-gray-200 dark:border-gray-700/60 ${
                 // ONE opacity decision per cell: two `opacity-*` utilities on
                 // the same element would fight over stylesheet order. Outside
                 // the lens wins (it's the stronger "not what you're looking
@@ -523,6 +556,12 @@ export default function AvailabilityCalendar({
           <span className="h-3 w-3 rounded-sm bg-gray-200 ring-1 ring-gray-300 dark:bg-gray-700 dark:ring-gray-600" />
           Past &mdash; can&rsquo;t be changed
         </span>
+        {/* The one thing the colours can't say: which gesture does what. */}
+        {onEditDays && (
+          <span className="ml-auto font-medium">
+            Click to block &middot; right-click or hold to free
+          </span>
+        )}
       </div>
     </div>
   );

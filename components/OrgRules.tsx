@@ -100,6 +100,10 @@ const EMPTY_DRAFT: Draft = {
   period: "MONTH",
 };
 
+// The Draft's stand-in for "no one person" on a Limit rule — a real id is a
+// cuid, so this can't collide. Becomes `userId: null` on the way out.
+const ALL_PEOPLE = "__ALL__";
+
 function draftFromRule(rule: SchedulingRule): Draft {
   const d: Draft = { ...EMPTY_DRAFT, kind: rule.params.kind, tier: rule.tier };
   const p = rule.params;
@@ -115,9 +119,26 @@ function draftFromRule(rule: SchedulingRule): Draft {
     case "TOGETHER":
       return { ...d, userId: p.userIds[0], otherUserId: p.userIds[1], mode: p.mode };
     case "LIMIT":
-      return { ...d, userId: p.userId, max: p.max, period: p.period };
+      return { ...d, userId: p.userId ?? ALL_PEOPLE, max: p.max, period: p.period };
+    // Role-shaped rules have no form (see CREATABLE_KINDS) — their rows don't
+    // offer Edit, so this is only ever the unreachable branch of the switch.
+    case "LEADS_FROM":
+    case "ROLE_HOST":
+    case "MAY_DOUBLE":
+      return d;
   }
 }
+
+// The kinds the "Add a rule" picker offers. The role-shaped ones are seeded
+// from the built-in defaults and edited by toggling or deleting them — there's
+// no blank to fill in, so offering them would open an empty step 2.
+const CREATABLE_KINDS = RULE_KINDS.filter(
+  (k) => !["LEADS_FROM", "ROLE_HOST", "MAY_DOUBLE"].includes(k.kind)
+);
+
+/** Whether a rule can be opened in the builder (see CREATABLE_KINDS). */
+const isEditable = (rule: SchedulingRule) =>
+  CREATABLE_KINDS.some((k) => k.kind === rule.params.kind);
 
 /** The draft as rule params, or what's still missing / wrong with it. */
 function paramsFromDraft(d: Draft): RuleParams | string {
@@ -135,7 +156,18 @@ function paramsFromDraft(d: Draft): RuleParams | string {
     case "TOGETHER":
       return parseRuleParams({ kind: d.kind, userIds: [d.userId, d.otherUserId], mode: d.mode });
     case "LIMIT":
-      return parseRuleParams({ kind: d.kind, userId: d.userId, max: d.max, period: d.period });
+      return parseRuleParams({
+        kind: d.kind,
+        userId: d.userId === ALL_PEOPLE ? null : d.userId,
+        max: d.max,
+        period: d.period,
+      });
+    // Not offered by the picker (see CREATABLE_KINDS), so this is unreachable —
+    // it exists to keep the switch exhaustive if a kind is ever added there.
+    case "LEADS_FROM":
+    case "ROLE_HOST":
+    case "MAY_DOUBLE":
+      return "That kind of rule can't be built here.";
   }
 }
 
@@ -333,10 +365,14 @@ export default function OrgRules({ orgId }: { orgId: string }) {
               names={names}
               busy={busy}
               onToggle={(on) => toggle(rule.id, on)}
-              onEdit={() => {
-                setBuilderError("");
-                setBuilder({ editingId: rule.id, draft: draftFromRule(rule) });
-              }}
+              onEdit={
+                isEditable(rule)
+                  ? () => {
+                      setBuilderError("");
+                      setBuilder({ editingId: rule.id, draft: draftFromRule(rule) });
+                    }
+                  : undefined
+              }
               onDelete={() => remove(rule.id)}
             />
           ))}
@@ -456,7 +492,9 @@ function RuleRowBody({
   names: RuleNames;
   busy: boolean;
   onToggle: (on: boolean) => void;
-  onEdit: () => void;
+  // Absent for a rule with no builder form (see CREATABLE_KINDS) — those are
+  // changed by switching them off or deleting them.
+  onEdit?: () => void;
   onDelete: () => void;
 }) {
   const sentence = ruleSentence(rule.params, names);
@@ -483,9 +521,11 @@ function RuleRowBody({
           />
         </span>
         <div className="flex shrink-0 gap-1 sm:order-3">
-          <Button variant="ghost" size="sm" onClick={onEdit} disabled={busy}>
-            Edit
-          </Button>
+          {onEdit && (
+            <Button variant="ghost" size="sm" onClick={onEdit} disabled={busy}>
+              Edit
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -695,10 +735,18 @@ function RuleBuilder({
   const ready = typeof params !== "string";
   const clash = ready ? findContradiction(prospective(params, tier)) : null;
 
-  const person = (value: string, onPick: (id: string) => void, label: string, exclude?: string) => (
+  // `everyone` adds the org-wide option a Limit rule can take (userId null).
+  const person = (
+    value: string,
+    onPick: (id: string) => void,
+    label: string,
+    exclude?: string,
+    everyone = false
+  ) => (
     <Blank>
       <Select label={label} hideLabel value={value} onChange={(e) => onPick(e.target.value)}>
         <option value="">Pick a person…</option>
+        {everyone && <option value={ALL_PEOPLE}>Everyone</option>}
         {options.people
           .filter((p) => p.id !== exclude)
           .map((p) => (
@@ -726,7 +774,7 @@ function RuleBuilder({
     case "ONLY_IF_NEEDED":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "Person")}
+          {person(draft.userId, (userId) => set({ userId }), "Person", undefined, true)}
           <T>is seated on</T>
           {role(true)}
           <T>only if nobody else is free</T>
@@ -828,7 +876,7 @@ function RuleBuilder({
     case "LIMIT":
       sentence = (
         <>
-          {person(draft.userId, (userId) => set({ userId }), "Person")}
+          {person(draft.userId, (userId) => set({ userId }), "Person", undefined, true)}
           <T>plays at most</T>
           <Blank narrow>
             <Select
@@ -884,7 +932,7 @@ function RuleBuilder({
     >
       <Step n={1} title="What kind of rule?">
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {RULE_KINDS.map((k) => (
+          {CREATABLE_KINDS.map((k) => (
             <button
               key={k.kind}
               type="button"

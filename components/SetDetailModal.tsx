@@ -91,7 +91,7 @@ import {
   type UnavailabilityRule,
 } from "@/lib/scheduler";
 import type { SchedulingRule } from "@/lib/schedulingRules";
-import { isActiveForSet } from "@/lib/stagedPlan";
+import { isActiveForSet, ruleHeldRoles } from "@/lib/stagedPlan";
 import {
   DEFAULT_SET_METRIC,
   type LoadMetric,
@@ -149,6 +149,10 @@ interface SetDetailModalProps {
 // shared by every set: an admin who wants to weigh people by the past 3 months
 // wants that for the whole sitting, not one set at a time.
 const LOAD_METRIC_KEY = "worship:set-load-metric";
+
+// Shared "nothing held" answer for the rule marker below, so a set in an org
+// with no required rules allocates nothing per render.
+const EMPTY_ROLES: Set<Instrument> = new Set();
 
 export default function SetDetailModal({
   set: savedSet,
@@ -747,6 +751,41 @@ export default function SetDetailModal({
         u.teams.map((t) => ({ teamId: t.id, roles: t.roles, active: t.active }))
       ),
     }));
+
+  // Roles whose open slot a REQUIRED scheduling rule is holding — the same
+  // check the review workspace marks "!" with, so "Auto schedule" leaving a
+  // seat empty reads the same way in both places. Empty (and free) unless the
+  // org actually has a required rule; see lib/stagedPlan.ts ruleHeldRoles.
+  const heldByRule =
+    (ruleData?.rules ?? []).some((r) => r.enabled && r.tier === "REQUIRED")
+      ? ruleHeldRoles(
+          {
+            startsAt: set.startsAt,
+            label: set.label ?? null,
+            durationMinutes: set.durationMinutes,
+            requiresMD: set.requiresMD,
+            mdUserId,
+            slotCapacities: set.slotCapacities ?? null,
+            existing: true,
+            setId: set.id,
+            teamId: set.teamId ?? set.team?.id ?? null,
+            templateId:
+              ruleData?.fixedSets.find((f) => f.setId === set.id)?.templateId ?? null,
+            assignments: ownAssignments.map((a) => ({
+              userId: a.user.id,
+              role: a.role,
+            })),
+          },
+          schedulerPool(),
+          rules,
+          catalog,
+          {
+            schedulingRules: ruleData?.rules ?? [],
+            fixedSets: ruleData?.fixedSets ?? [],
+            periodBookings: ruleData?.periodBookings ?? [],
+          }
+        )
+      : EMPTY_ROLES;
 
   // Fill this set's OWN empty slots, keeping everyone already assigned in place
   // (their seats are constraints the fill works around). Never removes or moves
@@ -1635,6 +1674,14 @@ export default function SetDetailModal({
                     label="Open slot — this is why the set shows red"
                     className="ml-1.5 h-1.5 w-1.5"
                   />
+                )}
+                {isHole && heldByRule.has(role) && (
+                  <span
+                    className="ml-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400"
+                    title="A required scheduling rule is keeping this slot open — Auto schedule left it rather than break the rule. You can still fill it by hand."
+                  >
+                    ! held by a rule
+                  </span>
                 )}
               </span>
 

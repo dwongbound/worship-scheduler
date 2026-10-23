@@ -182,6 +182,82 @@ function isDated(e: ApiUnavailability): boolean {
   return (e.type === "SPECIFIC" || e.type === "DATE_RANGE") && !!e.startDate;
 }
 
+// ── Freeing a day a WEEKLY rule covers ─────────────────────────────────────
+// A recurring rule has no per-date exception in the schema, so "this day is
+// free" is said by CLIPPING the span it repeats over: the rule becomes the
+// piece before the freed run plus the piece after it (usually just one of the
+// two). Shared by the calendar's optimistic edit below and by
+// /api/availability/block-days, so a hold on a day does the same thing in both.
+
+/** The span a weekly rule repeats over, as YYYY-MM-DD bounds (null = open). */
+export interface RecurringSpan {
+  startDate: string | null;
+  endDate: string | null;
+}
+
+// "YYYY-MM-DD" n days away. Lexicographic order on these strings IS date order,
+// which is what every comparison below leans on.
+function shiftYmd(value: string, days: number): string {
+  const d = parseYmd(value);
+  d.setDate(d.getDate() + days);
+  return toYmd(d);
+}
+
+// Does `dayOfWeek` land inside [from, to]? A null `to` is open-ended that way,
+// so the next occurrence always counts.
+function weekdayFalls(dayOfWeek: number, from: string, to: string | null): boolean {
+  const d = parseYmd(from);
+  d.setDate(d.getDate() + ((dayOfWeek - d.getDay() + 7) % 7)); // first one
+  return to === null || toYmd(d) <= to;
+}
+
+/**
+ * Clip a weekly rule so [startYmd, endYmd] comes out FREE, returning the spans
+ * that survive — 0, 1 or 2 of them — or null when the rule never touched those
+ * days, meaning there's nothing to do.
+ *
+ * A surviving piece whose last occurrence is already in the past is dropped
+ * rather than kept as a spent row: freeing next Monday on an open-ended "every
+ * Monday" leaves "Mondays from the week after", not that plus a dead "Mondays
+ * until last week".
+ */
+export function clipRecurringAroundDays(
+  rule: {
+    dayOfWeek: number | null;
+    startDate: string | null;
+    endDate: string | null;
+  },
+  startYmd: string,
+  endYmd: string,
+  today = new Date()
+): RecurringSpan[] | null {
+  const dow = rule.dayOfWeek;
+  if (dow == null) return null;
+  // Where the freed run and the rule's own span overlap — if the weekday never
+  // lands in there, this rule isn't what's blocking those days.
+  const lo = rule.startDate && rule.startDate > startYmd ? rule.startDate : startYmd;
+  const hi = rule.endDate && rule.endDate < endYmd ? rule.endDate : endYmd;
+  if (lo > hi || !weekdayFalls(dow, lo, hi)) return null;
+
+  const spans: RecurringSpan[] = [];
+  const before = shiftYmd(startYmd, -1);
+  if (!rule.startDate || rule.startDate <= before) {
+    spans.push({ startDate: rule.startDate, endDate: before });
+  }
+  const after = shiftYmd(endYmd, 1);
+  if (!rule.endDate || rule.endDate >= after) {
+    spans.push({ startDate: after, endDate: rule.endDate });
+  }
+  const todayYmd = toYmd(today);
+  return spans.filter((span) => {
+    // Measure from today, never from a start date that's already gone by.
+    const from =
+      span.startDate && span.startDate > todayYmd ? span.startDate : todayYmd;
+    if (span.endDate && from > span.endDate) return false;
+    return weekdayFalls(dow, from, span.endDate);
+  });
+}
+
 // Optimistic (not-yet-saved) entries carry a throwaway id with this prefix so
 // the UI can tell them apart from real DB rows — e.g. to keep their Delete
 // button disabled until the reload swaps in the real id.
@@ -227,6 +303,26 @@ function synthBlock(
   };
 }
 
+// Build a synthetic weekly rule: `like`'s weekday, time window and note over a
+// new span — what a clipped recurring rule looks like before the reload brings
+// back the real rows.
+function synthRecurring(
+  like: ApiUnavailability,
+  span: RecurringSpan
+): ApiUnavailability {
+  return {
+    id: `${OPTIMISTIC_ID_PREFIX}${optimisticCounter++}`,
+    type: "RECURRING",
+    dayOfWeek: like.dayOfWeek,
+    startMinute: like.startMinute,
+    endMinute: like.endMinute,
+    startDate: span.startDate ? parseYmd(span.startDate).toISOString() : null,
+    endDate: span.endDate ? parseYmd(span.endDate).toISOString() : null,
+    requestId: like.requestId,
+    note: like.note,
+  };
+}
+
 /**
  * Apply a whole-day block (`blocked`) or a full clear (`!blocked`) of
  * [startYmd, endYmd] to `entries`, returning a NEW array — the same merge/split
@@ -235,13 +331,16 @@ function synthBlock(
  * when there's nothing to do.
  *
  * Blocking only ever creates all-day blocks; clearing removes every dated block
- * on those days, whatever its time window.
+ * on those days, whatever its time window, AND clips any weekly rule covering
+ * them so the days really do come out free. `today` is injectable only so the
+ * clipping is testable (it decides which clipped piece is already spent).
  */
 export function applyDayEdit(
   entries: ApiUnavailability[],
   startYmd: string,
   endYmd: string,
-  blocked: boolean
+  blocked: boolean,
+  today = new Date()
 ): ApiUnavailability[] {
   const targetDays = new Set<string>();
   for (const d = parseYmd(startYmd); toYmd(d) <= endYmd; d.setDate(d.getDate() + 1)) {
@@ -271,11 +370,29 @@ export function applyDayEdit(
 
   // Clear: sweep EVERY dated block off the target days — partial-day ones
   // included — splitting each around the days it still covers and preserving
-  // its window, requestId and note. Weekly recurring rules are left alone
-  // (they have no per-date exception; see the block-days route).
+  // its window, requestId and note. A weekly rule can't be left standing or the
+  // day wouldn't be free, so it's CLIPPED around the run instead (see
+  // clipRecurringAroundDays).
   const dated = entries.filter(isDated);
-  const untouchable = entries.filter((e) => !isDated(e));
+  const untouchable = entries.filter(
+    (e) => !isDated(e) && e.type !== "RECURRING"
+  );
   const survivors: ApiUnavailability[] = [];
+  for (const r of entries) {
+    if (r.type !== "RECURRING") continue;
+    const spans = clipRecurringAroundDays(
+      {
+        dayOfWeek: r.dayOfWeek,
+        startDate: r.startDate ? toYmd(new Date(r.startDate)) : null,
+        endDate: r.endDate ? toYmd(new Date(r.endDate)) : null,
+      },
+      startYmd,
+      endYmd,
+      today
+    );
+    if (spans === null) survivors.push(r); // doesn't touch these days
+    else for (const span of spans) survivors.push(synthRecurring(r, span));
+  }
   for (const b of dated) {
     const days = daysOfEntry(b);
     const kept = new Set(days.filter((d) => !targetDays.has(d)));

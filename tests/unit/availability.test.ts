@@ -5,6 +5,7 @@ import {
   FULL_DAY_MIN,
   applyDayEdit,
   blockedDaysInRange,
+  clipRecurringAroundDays,
   dayBlockLevel,
   dayIsRepeating,
   expandRecurringBlocks,
@@ -231,6 +232,53 @@ describe("blockedDaysInRange", () => {
   });
 });
 
+// Freeing a day a weekly rule covers is expressed by clipping the span the rule
+// repeats over — there's no per-date exception in the schema.
+describe("clipRecurringAroundDays", () => {
+  const openWed = { dayOfWeek: jul8Weekday, startDate: null, endDate: null };
+  const jul2 = new Date(2026, 6, 2);
+
+  it("leaves a rule alone when its weekday misses the freed run", () => {
+    const thursdays = { ...openWed, dayOfWeek: (jul8Weekday + 1) % 7 };
+    expect(clipRecurringAroundDays(thursdays, JUL8, JUL8, jul2)).toBeNull();
+  });
+
+  it("resumes an open-ended rule the day after the freed day", () => {
+    expect(clipRecurringAroundDays(openWed, JUL8, JUL8, jul2)).toEqual([
+      { startDate: "2026-07-09", endDate: null },
+    ]);
+  });
+
+  it("resumes after the LAST day of a multi-day run", () => {
+    expect(clipRecurringAroundDays(openWed, "2026-07-06", "2026-07-12", jul2)).toEqual([
+      { startDate: "2026-07-13", endDate: null },
+    ]);
+  });
+
+  it("drops a rule whose every remaining occurrence was freed", () => {
+    // Wednesdays Jul 1–10 — only the 1st (spent) and the 8th (freed) — so
+    // nothing is left to repeat and the rule should go.
+    const bounded = {
+      dayOfWeek: jul8Weekday,
+      startDate: "2026-07-01",
+      endDate: "2026-07-10",
+    };
+    expect(clipRecurringAroundDays(bounded, JUL8, JUL8, new Date(2026, 6, 5))).toEqual(
+      []
+    );
+  });
+
+  it("keeps a rule's own start date on the piece before the freed day", () => {
+    const bounded = { dayOfWeek: jul8Weekday, startDate: "2026-07-01", endDate: null };
+    expect(
+      clipRecurringAroundDays(bounded, JUL8, JUL8, new Date(2026, 6, 1))
+    ).toEqual([
+      { startDate: "2026-07-01", endDate: "2026-07-07" },
+      { startDate: "2026-07-09", endDate: null },
+    ]);
+  });
+});
+
 // applyDayEdit is the client-side mirror of /api/availability/block-days, so its
 // result is described the same way the calendar reads it: dayBlockLevel per day.
 describe("applyDayEdit", () => {
@@ -285,19 +333,31 @@ describe("applyDayEdit", () => {
     expect(next.every((e) => e.requestId === "req1")).toBe(true);
   });
 
-  it("clears timed blocks too, but leaves weekly rules alone", () => {
+  it("clears timed blocks AND trims a weekly repeat off the day", () => {
     const entries = [
-      recurring(jul8Weekday), // all-day recurring
+      recurring(jul8Weekday), // every Wednesday, all day, forever
       specific(isoDay(2026, 7, 8), { startMinute: 9 * 60, endMinute: 12 * 60 }),
     ];
-    const next = applyDayEdit(entries, "2026-07-08", "2026-07-08", false);
+    // Thu Jul 2: the 8th is still to come, and the Wednesdays before it are
+    // spent — so the repeat survives only as "Wednesdays from the 9th".
+    const next = applyDayEdit(entries, JUL8, JUL8, false, new Date(2026, 6, 2));
     // Clearing a day means "I'm free all of it", so the timed block goes.
     expect(next).not.toContain(entries[1]);
-    // A weekly rule has no per-date exception in the schema, so it survives —
-    // and keeps the day blocked. The UI says so rather than leaving it a
-    // mystery (see the block-days route's recurringDays count).
-    expect(next).toContain(entries[0]);
-    expect(dayBlockLevel(next, "2026-07-08")).toBe("full");
+    // And the repeat can't be left standing either, or the day wouldn't be
+    // free. It's clipped around the date, not deleted: later Wednesdays stay.
+    expect(dayBlockLevel(next, JUL8)).toBeNull();
+    expect(dayBlockLevel(next, "2026-07-15")).toBe("full");
+  });
+
+  it("keeps both halves of a repeat when each still has days to come", () => {
+    const entries = [recurring(jul8Weekday)]; // every Wednesday, forever
+    // Wed Jul 1: that Wednesday is today, so the piece BEFORE the freed day
+    // still has a date of its own and is worth keeping.
+    const next = applyDayEdit(entries, JUL8, JUL8, false, new Date(2026, 6, 1));
+    expect(next).toHaveLength(2);
+    expect(dayBlockLevel(next, "2026-07-01")).toBe("full");
+    expect(dayBlockLevel(next, JUL8)).toBeNull();
+    expect(dayBlockLevel(next, "2026-07-15")).toBe("full");
   });
 
   it("clearing a partly-overlapped timed block keeps its window on the rest", () => {

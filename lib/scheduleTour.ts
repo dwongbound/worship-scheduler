@@ -126,6 +126,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       body: [
         "A red “no one available” role has a seat nobody can fill — either nobody plays it, or everyone who does is busy at that time.",
         "An amber “unavailable” mark is someone placed on a set they are not free for. It never blocks you; it is flagged so that it stays a deliberate choice.",
+        "An indigo “! held by a rule” role has a seat somebody could fill, but one of your org's required scheduling rules says they must not — so the fill left it open rather than break the rule. Fill it by hand, or change the rule in Org settings → Scheduling.",
       ],
     },
     preview

@@ -117,8 +117,11 @@ import {
   type SetClipboard,
   totalConflicts,
   totalLocked,
+  planFixedSets,
+  totalRuleHeld,
   totalUnfillable,
   unfillableRoles,
+  ruleHeldRoles,
 } from "@/lib/stagedPlan";
 import {
   AUTOSAVE_INTERVAL_MS,
@@ -251,6 +254,10 @@ function draftStamp(d: Date): string {
   });
   return `${date} ${time}`;
 }
+
+// Shared "nothing held" answer, so a plan with no required rules doesn't
+// allocate an empty Set per card per render.
+const EMPTY_ROLES: Set<Instrument> = new Set();
 
 export default function StagedScheduleModal({
   plan,
@@ -637,28 +644,20 @@ export default function StagedScheduleModal({
   // fills (generate), or the real set itself (Preview Mode).
   const setIdOf = (s: StagedSet) => s.setId ?? s.stagingId ?? null;
 
-  // Everything the rules read from outside the sets being filled: the real
-  // sets around the plan, plus — when re-running ONE set — the plan's other
-  // sets as they now stand.
+  // Everything the rules read from outside the set(s) being filled: the real
+  // sets around the plan, merged with the plan's OWN sets as they now stand —
+  // see lib/stagedPlan.ts planFixedSets for why the merge matters.
   const ruleOptions = (exceptIdx?: number): ScheduleOptions => {
-    const fixedSets: FixedSet[] = (plan?.baseline?.fixedSets ?? []).map((f) => ({
-      ...f,
-      startsAt: new Date(f.startsAt),
-    }));
-    if (exceptIdx !== undefined) {
-      sets.forEach((s, i) => {
-        if (i === exceptIdx) return;
-        fixedSets.unshift({
-          setId: setIdOf(s),
-          templateId: s.templateId ?? null,
-          startsAt: new Date(s.startsAt),
-          assignments: s.assignments.map((a) => ({ userId: a.userId, role: a.role })),
-        });
-      });
-    }
     return {
       schedulingRules,
-      fixedSets,
+      fixedSets: planFixedSets(
+        (plan?.baseline?.fixedSets ?? []).map((f) => ({
+          ...f,
+          startsAt: new Date(f.startsAt),
+        })),
+        sets,
+        exceptIdx
+      ),
       periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
@@ -716,6 +715,27 @@ export default function StagedScheduleModal({
   const unfillable = useMemo(
     () => totalUnfillable(sets, users, rules, catalogs),
     [sets, users, rules, catalogs]
+  );
+  // Open slots a REQUIRED scheduling rule is what's holding empty — a seat
+  // reserved for a SAME_PLAYER partner who can't take it, or a role every
+  // candidate is refused for. Distinct from `unfillable`: somebody COULD play
+  // here, the org's own rules say they mustn't. Both fills it runs per set are
+  // over one set and a pooled roster, and it short-circuits when the org has no
+  // required rules at all — which is the common case.
+  // Built once per render and shared by the tally and every card below —
+  // ruleOptions() rebuilds its arrays on each call, and the cards would
+  // otherwise each pay for their own copy.
+  const heldOptions = ruleOptions();
+  const hasRequiredRules = schedulingRules.some(
+    (r) => r.enabled && r.tier === "REQUIRED"
+  );
+  const ruleHeld = useMemo(
+    () =>
+      hasRequiredRules
+        ? totalRuleHeld(sets, schedulerUsers, rules, catalogs, heldOptions)
+        : 0,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sets, schedulerUsers, rules, catalogs, hasRequiredRules, heldOptions]
   );
 
   // Nothing to show yet. While a run is in flight that's the skeleton; the rest
@@ -1341,6 +1361,18 @@ export default function StagedScheduleModal({
         </p>
       )}
 
+      {/* Rule-held chip: somebody could play the slot, but a REQUIRED
+          scheduling rule says they mustn't, so the fill left it open rather
+          than break the rule. Indigo, matching the rules' own surfaces — it's
+          the plan obeying an instruction, not a problem with the roster. */}
+      {ruleHeld > 0 && (
+        <p className="mt-3 rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+          ! {ruleHeld} slot{ruleHeld === 1 ? "" : "s"} left open by a required
+          scheduling rule — look for the “!” marks below. Edit the rules in Org
+          settings → Scheduling, or fill {ruleHeld === 1 ? "it" : "them"} by hand.
+        </p>
+      )}
+
       {/* Conflict chip: a manual edit put someone on a set they're not free
           for. Non-blocking — surfaced so it's a deliberate choice. */}
       {conflicts > 0 && (
@@ -1611,6 +1643,12 @@ export default function StagedScheduleModal({
             );
             // Roles on this set no available person can fill — flagged in red.
             const cantFill = unfillableRoles(set, users, rules, catalog);
+            // Roles whose open slot a required rule is holding — flagged "!".
+            // Skipped outright when the org has no required rules, which spares
+            // every card two fills in the common case.
+            const heldByRule = hasRequiredRules
+              ? ruleHeldRoles(set, schedulerUsers, rules, catalog, heldOptions)
+              : EMPTY_ROLES;
             // Roles the team offers that this set doesn't want (zero slots and
             // nobody in them) — exactly the ones the card hides below, offered
             // back as "+ role" chips.
@@ -1743,13 +1781,20 @@ export default function StagedScheduleModal({
                     if (capacity === 0 && filled.length === 0) return null;
 
                     const noneAvailable = cantFill.has(role);
+                    // Somebody could play it; a required rule says they can't.
+                    // Checked after noneAvailable so a role that's both reads as
+                    // the harder fact — though the two can't actually overlap
+                    // (see ruleHeldRoles).
+                    const ruleHolds = !noneAvailable && heldByRule.has(role);
                     return (
                       <li key={role}>
                         <span
                           className={`text-xs font-medium ${
                             noneAvailable
                               ? "text-red-600 dark:text-red-400"
-                              : "text-gray-600 dark:text-gray-400"
+                              : ruleHolds
+                                ? "text-indigo-600 dark:text-indigo-400"
+                                : "text-gray-600 dark:text-gray-400"
                           }`}
                         >
                           {roleName}
@@ -1761,6 +1806,14 @@ export default function StagedScheduleModal({
                           {noneAvailable && (
                             <span className="ml-1 font-semibold">
                               · no one available
+                            </span>
+                          )}
+                          {ruleHolds && (
+                            <span
+                              className="ml-1 font-semibold"
+                              title="A required scheduling rule is keeping this slot open — the auto-fill left it rather than break the rule. You can still fill it by hand."
+                            >
+                              · ! held by a rule
                             </span>
                           )}
                         </span>

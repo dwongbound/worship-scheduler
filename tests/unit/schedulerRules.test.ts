@@ -271,10 +271,21 @@ describe("SAME_PLAYER", () => {
     expect(seated(result, "sat")).toEqual(["g2"]);
   });
 
-  it("required: the slot stays open when that player can't make it", () => {
+  it("required: picks someone free for BOTH sets, not whoever rotation favours", () => {
+    // g1 is first by rotation but can't make Sunday. Seating them on Saturday
+    // would strand Sunday's slot, so the pair goes to g2 instead.
     const result = run(weekend(), guitars, [rule(weekly)], {
       unavailable: [busyOn("g1", sun)],
     });
+    expect(seated(result, "sat")).toEqual(["g2"]);
+    expect(seated(result, "sun")).toEqual(["g2"]);
+  });
+
+  it("required: both slots stay open when nobody is free for both", () => {
+    const result = run(weekend(), guitars, [rule(weekly)], {
+      unavailable: [busyOn("g1", sun), busyOn("g2", sun)],
+    });
+    expect(seated(result, "sat")).toEqual([]);
     expect(seated(result, "sun")).toEqual([]);
   });
 
@@ -293,8 +304,10 @@ describe("SAME_PLAYER", () => {
     const result = run(sets, [...guitars, user("g3", ["ELECTRIC_GUITAR"])], [rule(weekly)], {
       unavailable: [busyOn("g1", sun)],
     });
-    // One seat is held for g1 (who can't come); the other fills normally.
-    expect(seated(result, "sun")).toEqual(["g2"]);
+    // Saturday goes to someone free for both (g1 is out), and Sunday seats
+    // them plus a spare filled by ordinary rotation.
+    expect(seated(result, "sat")).toEqual(["g2"]);
+    expect(seated(result, "sun")).toEqual(["g2", "g3"]);
   });
 
   it("specific sets: pairs with a set outside this run", () => {
@@ -326,5 +339,48 @@ describe("switched-off rules", () => {
       rule({ kind: "ONLY_IF_NEEDED", userId: "d1", role: null }, "PREFERENCE", false),
     ]);
     expect(seated(result, "s")).toEqual(["d1"]);
+  });
+});
+
+describe("LIMIT for everyone", () => {
+  // A null userId caps each person separately, rather than naming one.
+  const everyone = (max: number, tier: RuleTier = "REQUIRED") =>
+    rule({ kind: "LIMIT", userId: null, max, period: "WEEK" }, tier);
+  const drummers = [user("d1", ["DRUMS"]), user("d2", ["DRUMS"])];
+  // Three sets in one Mon–Sun week, one drums seat each.
+  const week = [
+    set("sat", sat, { DRUMS: 1 }),
+    set("sun", sun, { DRUMS: 1 }),
+    set("mon", new Date(2026, 0, 5, 19, 0), { DRUMS: 1 }),
+  ];
+
+  it("required: nobody is seated past the cap, so a slot is left open", () => {
+    // Sat + Sun are one week; a cap of 1 leaves the second of them unfilled
+    // for whoever played the first, and rotation covers it with the other.
+    const result = run([week[0], week[1]], drummers, [everyone(1)]);
+    expect(result).toHaveLength(2);
+    expect(new Set(result.map((a) => a.userId)).size).toBe(2);
+  });
+
+  it("required: every slot past the pool's total capacity stays open", () => {
+    // Two drummers, capped at one set each in the week → the third set in that
+    // week has nobody left who may take it.
+    const sets = [week[0], week[1], set("sun2", new Date(2026, 0, 11, 19, 0), { DRUMS: 1 })];
+    const result = run(sets, drummers, [everyone(1)]);
+    expect(result).toHaveLength(2);
+    expect(result.map((a) => a.setId)).not.toContain("sun2");
+  });
+
+  it("preference: goes over the cap rather than leave a slot empty", () => {
+    const sets = [week[0], week[1], set("sun2", new Date(2026, 0, 11, 19, 0), { DRUMS: 1 })];
+    const result = run(sets, drummers, [everyone(1, "PREFERENCE")]);
+    expect(result).toHaveLength(3);
+  });
+
+  it("still caps the one person a named LIMIT points at", () => {
+    const result = run([week[0], week[1]], drummers, [
+      rule({ kind: "LIMIT", userId: "d1", max: 1, period: "WEEK" }),
+    ]);
+    expect(result.filter((a) => a.userId === "d1")).toHaveLength(1);
   });
 });

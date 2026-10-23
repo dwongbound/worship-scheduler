@@ -531,14 +531,19 @@ export default function SchedulePage() {
         body: JSON.stringify({ start: startYmd, end: endYmd, blocked }),
       });
       if (!res.ok) throw new Error("block-days failed");
-      // Clearing days can't punch a hole in a weekly rule, so those days stay
-      // blocked. Say why, rather than letting the gesture look broken.
+      // Freeing a day a weekly repeat covers TRIMS that repeat's span around
+      // the day (there's no per-date exception to store). The day really is
+      // free either way, but the rule below now reads differently, so say so.
       const data = await res.json().catch(() => ({}));
-      if (!blocked && data.recurringDays > 0) {
+      if (!blocked && data.recurringClipped > 0) {
         setClearNote(
-          `${data.recurringDays} of those ${
-            data.recurringDays === 1 ? "days is" : "days are"
-          } still blocked by a weekly repeat — remove it below to free them.`
+          `${startYmd === endYmd ? "That day is" : "Those days are"} free. ${
+            data.recurringClipped === 1
+              ? "A weekly repeat was"
+              : `${data.recurringClipped} weekly repeats were`
+          } trimmed to skip ${
+            startYmd === endYmd ? "it" : "them"
+          } — see the list below.`
         );
       }
       await reload();
@@ -1301,7 +1306,7 @@ export default function SchedulePage() {
           </div>
             </div>
             {clearNote && (
-              <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              <p className="rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                 {clearNote}
               </p>
             )}

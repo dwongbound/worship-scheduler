@@ -23,7 +23,8 @@
 //   PREFER          pick A over B in a role, when both could take it.
 //   SAME_PLAYER     two sets share whoever plays a role: every week for two
 //                   recurring set types (same Mon–Sun week), or two specific
-//                   sets once.
+//                   sets once. Required, the pick is made from people free for
+//                   BOTH sets; if nobody is, both slots stay open.
 //   TOGETHER        two people ALWAYS or NEVER serve on the same set.
 //   LIMIT           at most N sets a WEEK (Mon–Sun) or calendar MONTH.
 //
@@ -54,7 +55,24 @@ export type RuleParams =
       setIds: [string, string];
     }
   | { kind: "TOGETHER"; userIds: [string, string]; mode: "ALWAYS" | "NEVER" }
-  | { kind: "LIMIT"; userId: string; max: number; period: RulePeriod };
+  // `userId` null caps EVERYONE in the org — the same ceiling applied to each
+  // person separately, not a total across the team.
+  | { kind: "LIMIT"; userId: string | null; max: number; period: RulePeriod }
+  // ── Role-shaped rules ──────────────────────────────────────────────────
+  // The three below describe ROLES, not people, and they are how the built-in
+  // behaviours that predate rules became visible and editable. Each one has a
+  // built-in default (lib/constants.ts) that applies when an org has no rule
+  // governing that thing — so an org that has never been seeded behaves
+  // EXACTLY as it did before rules existed. See resolveRoleBehavior.
+  //
+  // Which roles a musical director may lead from, best first. One per org.
+  | { kind: "LEADS_FROM"; roles: string[] }
+  // `role` is only ever played by someone already holding one of `hostRoles`
+  // on that set (acoustic guitar ← worship leader / vocals). One per role.
+  | { kind: "ROLE_HOST"; role: string; hostRoles: string[] }
+  // These two roles may be held by the SAME person on one set. Everything
+  // else is one role per person.
+  | { kind: "MAY_DOUBLE"; roles: [string, string] };
 
 export type RuleKind = RuleParams["kind"];
 
@@ -102,6 +120,26 @@ export const RULE_KINDS: {
     description: "Cap how often someone is scheduled.",
     tiers: ["REQUIRED", "PREFERENCE"],
   },
+  // REQUIRED only: these describe what a role IS, not who to prefer, so
+  // "follow it when convenient" has no meaning.
+  {
+    kind: "LEADS_FROM",
+    title: "Who can lead",
+    description: "Which roles a musical director leads from.",
+    tiers: ["REQUIRED"],
+  },
+  {
+    kind: "ROLE_HOST",
+    title: "Doubles up with",
+    description: "A role only played by someone already in another role.",
+    tiers: ["REQUIRED"],
+  },
+  {
+    kind: "MAY_DOUBLE",
+    title: "Can play both",
+    description: "Two roles one person may hold on the same set.",
+    tiers: ["REQUIRED"],
+  },
 ];
 
 export const MAX_RULES = 200;
@@ -111,6 +149,8 @@ export const LIMIT_MAX = 31;
 
 const isId = (v: unknown): v is string =>
   typeof v === "string" && v.length > 0 && v.length <= 100;
+const isRoleList = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.length <= 20 && v.every(isId);
 const isPair = (v: unknown): v is [string, string] =>
   Array.isArray(v) && v.length === 2 && isId(v[0]) && isId(v[1]);
 
@@ -150,12 +190,28 @@ export function parseRuleParams(raw: unknown): RuleParams | string {
       if (r.mode !== "ALWAYS" && r.mode !== "NEVER") return "Pick always or never.";
       return { kind: "TOGETHER", userIds: [r.userIds[0], r.userIds[1]], mode: r.mode };
     case "LIMIT": {
-      if (!isId(r.userId)) return "Pick a person.";
+      if (r.userId != null && !isId(r.userId)) return "Pick a person.";
       const max = Number(r.max);
       if (!Number.isInteger(max) || max < 1 || max > LIMIT_MAX) return `A limit must be 1–${LIMIT_MAX} sets.`;
       if (r.period !== "WEEK" && r.period !== "MONTH") return "Pick a week or a month.";
-      return { kind: "LIMIT", userId: r.userId, max, period: r.period };
+      return { kind: "LIMIT", userId: (r.userId as string) ?? null, max, period: r.period };
     }
+    case "LEADS_FROM": {
+      if (!isRoleList(r.roles) || r.roles.length === 0) return "Pick at least one role.";
+      if (new Set(r.roles).size !== r.roles.length) return "Each role can only be listed once.";
+      return { kind: "LEADS_FROM", roles: [...r.roles] };
+    }
+    case "ROLE_HOST": {
+      if (!isId(r.role)) return "Pick a role.";
+      if (!isRoleList(r.hostRoles) || r.hostRoles.length === 0) return "Pick at least one role to double up with.";
+      if (r.hostRoles.includes(r.role)) return "A role can't double up with itself.";
+      if (new Set(r.hostRoles).size !== r.hostRoles.length) return "Each role can only be listed once.";
+      return { kind: "ROLE_HOST", role: r.role, hostRoles: [...r.hostRoles] };
+    }
+    case "MAY_DOUBLE":
+      if (!isPair(r.roles)) return "Pick two roles.";
+      if (r.roles[0] === r.roles[1]) return "Pick two different roles.";
+      return { kind: "MAY_DOUBLE", roles: [r.roles[0], r.roles[1]] };
     default:
       return "Unknown kind of rule.";
   }
@@ -211,7 +267,14 @@ export function ruleRefs(p: RuleParams): {
     case "TOGETHER":
       return { users: [...p.userIds], roles: [], templates: [], sets: [] };
     case "LIMIT":
-      return { users: [p.userId], roles: [], templates: [], sets: [] };
+      // An everyone-limit names nobody, so it can't go stale.
+      return { users: p.userId ? [p.userId] : [], roles: [], templates: [], sets: [] };
+    case "LEADS_FROM":
+      return { users: [], roles: [...p.roles], templates: [], sets: [] };
+    case "ROLE_HOST":
+      return { users: [], roles: [p.role, ...p.hostRoles], templates: [], sets: [] };
+    case "MAY_DOUBLE":
+      return { users: [], roles: [...p.roles], templates: [], sets: [] };
   }
 }
 
@@ -277,7 +340,7 @@ const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
  *   • PREFER: a cycle in one role (A over B, B over C, C over A);
  *   • LIMIT: two different caps on one person for the same period.
  * SAME_PLAYER isn't checked: it can always hold on its own terms, because when
- * the shared player can't make the second set the slot is simply left open.
+ * nobody is free for both sets their slots are simply left open.
  * `index` is the position (in the list given) of the rule that tipped it over;
  * `otherIndex` the earlier rule it clashes with, when there is one.
  */
@@ -296,7 +359,7 @@ export function findContradiction(
   const never: { a: string; b: string; i: number }[] = [];
   // PREFER: role → edges a→b (a beats b).
   const prefer = new Map<string, { a: string; b: string; i: number }[]>();
-  // LIMIT: user|period → { max, index }.
+  // LIMIT: user|period → { max, index }; "*" is the everyone-limit.
   const limits = new Map<string, { max: number; i: number }>();
 
   for (let i = 0; i < rules.length; i++) {
@@ -415,7 +478,16 @@ export function canonicalKey(p: RuleParams): string {
       // different caps, are contradictions with their own (clearer) messages.
       return `T|${p.mode}|${pairKey(...p.userIds)}`;
     case "LIMIT":
-      return `L|${p.userId}|${p.period}|${p.max}`;
+      return `L|${p.userId ?? "*"}|${p.period}|${p.max}`;
+    // The payload is deliberately NOT in these keys: two "who can lead" rules
+    // are a contradiction whatever they say, and so are two rules governing
+    // the same role. One each is the whole point.
+    case "LEADS_FROM":
+      return "LF";
+    case "ROLE_HOST":
+      return `RH|${p.role}`;
+    case "MAY_DOUBLE":
+      return `MD|${pairKey(...p.roles)}`;
   }
 }
 
@@ -452,8 +524,21 @@ export function describeRule(p: RuleParams, names: RuleNames): RulePart[] {
     case "TOGETHER":
       return [S(names.user(p.userIds[0])), T(" and "), S(names.user(p.userIds[1])), T(p.mode === "ALWAYS" ? " always serve on the same set" : " never serve on the same set")];
     case "LIMIT":
-      return [S(names.user(p.userId)), T(" plays at most "), S(String(p.max)), T(` set${p.max === 1 ? "" : "s"} a ${p.period === "WEEK" ? "week" : "month"}`)];
+      return [S(p.userId ? names.user(p.userId) : "Everyone"), T(" plays at most "), S(String(p.max)), T(` set${p.max === 1 ? "" : "s"} a ${p.period === "WEEK" ? "week" : "month"}`)];
+    case "LEADS_FROM":
+      return [T("A musical director leads from "), S(roleList(p.roles, names)), T(", in that order")];
+    case "ROLE_HOST":
+      return [S(names.role(p.role)), T(" is only played by someone already on "), S(roleList(p.hostRoles, names))];
+    case "MAY_DOUBLE":
+      return [S(names.role(p.roles[0])), T(" and "), S(names.role(p.roles[1])), T(" can be played by the same person")];
   }
+}
+
+/** "Electric guitar, Keys or Bass" — a role list as one readable run. */
+function roleList(roles: string[], names: RuleNames): string {
+  const named = roles.map((r) => names.role(r));
+  if (named.length <= 1) return named[0] ?? "";
+  return `${named.slice(0, -1).join(", ")} or ${named[named.length - 1]}`;
 }
 
 export const ruleSentence = (p: RuleParams, names: RuleNames) =>
@@ -483,7 +568,7 @@ export function explainRule(p: RuleParams, tier: RuleTier, names: RuleNames): st
           : `${names.set(p.setIds[0])} and ${names.set(p.setIds[1])}`;
       return `Whoever is picked for ${role} on ${pair} plays both. ${
         req
-          ? "If that person can't make the second one, its slot stays open for you to fill."
+          ? "Only someone free for both is picked, so nobody is scheduled for one and then missing from the other. If nobody is free for both, both slots stay open for you to fill."
           : "If nobody can make both, each set gets its own player."
       }`;
     }
@@ -498,12 +583,20 @@ export function explainRule(p: RuleParams, tier: RuleTier, names: RuleNames): st
       return `${a} and ${b} won't both be put on one set. ${req ? "Never broken, even if a slot stays empty." : "Broken only to avoid an empty slot."}`;
     }
     case "LIMIT": {
-      const a = names.user(p.userId);
+      const a = p.userId ? names.user(p.userId) : "anyone";
       const span = p.period === "WEEK" ? "week (Monday to Sunday)" : "calendar month";
       return `Auto schedule won't seat ${a} more than ${p.max} time${p.max === 1 ? "" : "s"} in a ${span}. ${
         req ? "Picking them by hand still works." : "It can go over to avoid an empty slot."
       }`;
     }
+    case "LEADS_FROM":
+      return `Only these roles count as leading, and a set that needs a musical director gets one seated in the first of them they play. Someone who directs but plays nothing on this list won't be the set's MD.`;
+    case "ROLE_HOST": {
+      const role = names.role(p.role);
+      return `${role} goes to someone already on ${roleList(p.hostRoles, names)} who also plays it — never to a ${role}-only player. If none of them play it, the slot is left open.`;
+    }
+    case "MAY_DOUBLE":
+      return `One person can hold both ${names.role(p.roles[0])} and ${names.role(p.roles[1])} on the same set. Every other pair of roles is one person each.`;
   }
 }
 
@@ -558,4 +651,111 @@ export function templateIdOf(
       t.startMinute === at.minuteOfDay
   );
   return hit?.id ?? null;
+}
+
+// ── Role behaviour: the built-ins, as rules ───────────────────────────────
+//
+// LEADS_FROM / ROLE_HOST / MAY_DOUBLE describe what used to be hardcoded in
+// lib/constants.ts. `resolveRoleBehavior` is the ONE place that answers "so
+// what applies here?", and its contract is what keeps this safe to ship:
+//
+//   • No rule governing a thing → the BUILT-IN default applies. An org that
+//     has never been seeded (and every existing one) behaves exactly as it did
+//     before rules existed.
+//   • A rule governing it → that rule is the answer. Switched off means the
+//     behaviour is OFF, not "fall back to the built-in" — otherwise an admin
+//     could never turn one of these off at all.
+//
+// "Governing a thing" is per-scope: LEADS_FROM is org-wide, ROLE_HOST is per
+// governed role, MAY_DOUBLE is per unordered pair. So adding a ROLE_HOST for a
+// custom role leaves acoustic guitar's built-in default alone.
+
+export interface RoleBehavior {
+  /** Roles an MD may lead from, best first. */
+  mdRoles: string[];
+  /** Roles `role` must already be held alongside, or null if unrestricted. */
+  hostRolesFor: (role: string) => string[] | null;
+  /** Whether one person may hold both roles on a set. */
+  mayDouble: (a: string, b: string) => boolean;
+}
+
+export function resolveRoleBehavior(
+  rules: SchedulingRule[] | undefined,
+  builtIn: {
+    mdRoles: string[];
+    hostRoles: Record<string, string[]>;
+    doublePairs: [string, string][];
+  }
+): RoleBehavior {
+  const all = rules ?? [];
+  const on = all.filter((r) => r.enabled);
+
+  const leads = all.find((r) => r.params.kind === "LEADS_FROM");
+  const leadsOn = on.find((r) => r.params.kind === "LEADS_FROM");
+  const mdRoles = leads
+    ? leadsOn
+      ? (leadsOn.params as Extract<RuleParams, { kind: "LEADS_FROM" }>).roles
+      : [] // present but switched off: nothing counts as leading
+    : builtIn.mdRoles;
+
+  const hostAll = new Set(
+    all.flatMap((r) => (r.params.kind === "ROLE_HOST" ? [r.params.role] : []))
+  );
+  const hostOn = new Map(
+    on.flatMap((r) =>
+      r.params.kind === "ROLE_HOST" ? ([[r.params.role, r.params.hostRoles]] as const) : []
+    )
+  );
+
+  const doubleAll = new Set(
+    all.flatMap((r) =>
+      r.params.kind === "MAY_DOUBLE" ? [rolePairKey(r.params.roles)] : []
+    )
+  );
+  const doubleOn = new Set(
+    on.flatMap((r) =>
+      r.params.kind === "MAY_DOUBLE" ? [rolePairKey(r.params.roles)] : []
+    )
+  );
+  const builtInDoubles = new Set(builtIn.doublePairs.map(rolePairKey));
+
+  return {
+    mdRoles,
+    hostRolesFor: (role) =>
+      hostAll.has(role)
+        ? hostOn.get(role) ?? null // present but off → unrestricted
+        : builtIn.hostRoles[role] ?? null,
+    mayDouble: (a, b) => {
+      const key = rolePairKey([a, b]);
+      return doubleAll.has(key) ? doubleOn.has(key) : builtInDoubles.has(key);
+    },
+  };
+}
+
+const rolePairKey = ([a, b]: readonly [string, string]) => pairKey(a, b);
+
+/**
+ * The rules a new org starts with: the built-in behaviour, written out. Seeded
+ * on org create and backfilled onto existing orgs, purely so an admin can SEE
+ * and change it — resolveRoleBehavior already falls back to the same values,
+ * so an org without these rows schedules identically.
+ */
+export function defaultRoleRules(builtIn: {
+  mdRoles: string[];
+  hostRoles: Record<string, string[]>;
+  doublePairs: [string, string][];
+}): Omit<SchedulingRule, "id">[] {
+  return [
+    { tier: "REQUIRED", enabled: true, params: { kind: "LEADS_FROM", roles: [...builtIn.mdRoles] } },
+    ...Object.entries(builtIn.hostRoles).map(([role, hostRoles]) => ({
+      tier: "REQUIRED" as RuleTier,
+      enabled: true,
+      params: { kind: "ROLE_HOST" as const, role, hostRoles: [...hostRoles] },
+    })),
+    ...builtIn.doublePairs.map(([a, b]) => ({
+      tier: "REQUIRED" as RuleTier,
+      enabled: true,
+      params: { kind: "MAY_DOUBLE" as const, roles: [a, b] as [string, string] },
+    })),
+  ];
 }
