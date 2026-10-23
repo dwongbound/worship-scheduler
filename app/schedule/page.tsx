@@ -859,8 +859,14 @@ export default function SchedulePage() {
                     setSelectedRequestId((cur) => (cur === r.id ? "" : r.id))
                   }
                 >
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-                    <div className="min-w-0 flex-1">
+                  {/* Text first, actions after. The text keeps at least
+                      16rem before the actions may sit beside it — without
+                      that floor, flex-1's zero basis let two wide buttons
+                      claim the row and crush the title to a word per line on
+                      phones. Below `sm` the actions are always their own
+                      full-width row. */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-3">
+                    <div className="min-w-0 flex-1 basis-full sm:min-w-64 sm:basis-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="font-semibold">{requestLabel(r)}</span>
                         {/* Which org is asking — requests span them all. */}
@@ -929,65 +935,75 @@ export default function SchedulePage() {
                     </div>
 
                     {/* The action lives on the selected card only, so there's
-                        exactly one submit button on screen at a time. */}
-                    {active &&
-                      (done ? (
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleComplete();
-                          }}
-                          disabled={busyAction === "complete"}
-                        >
-                          {busyAction === "complete" ? (
-                            <LoadingDots size="sm" />
-                          ) : (
-                            "Make changes"
-                          )}
-                        </Button>
-                      ) : (
-                        <div className="flex flex-wrap items-center gap-2">
-                        {/* Reads THEIR Google Calendar across this request's
-                            window and blocks every busy time, all-day events
-                            as whole days (lib/googleAvailability.ts). A full
-                            navigation: Google's consent screen, then back. */}
-                        {googleImport && (
+                        exactly one submit button on screen at a time. On phones
+                        it's one full-width row of 44px buttons, confirm on the
+                        right, stretched so a label that wraps to two lines
+                        doesn't leave its neighbour shorter. */}
+                    {active && (
+                      <div
+                        data-testid="request-actions"
+                        className="flex w-full items-stretch gap-2 sm:w-auto sm:items-center [&>button]:min-h-11 [&>button]:flex-1 [&>button]:text-sm sm:[&>button]:min-h-0 sm:[&>button]:flex-none sm:[&>button]:text-xs"
+                      >
+                        {done ? (
                           <Button
                             size="sm"
                             variant="secondary"
-                            data-testid="import-google"
                             onClick={(e) => {
                               e.stopPropagation();
-                              window.location.href = `/api/google-calendar/import?requestId=${encodeURIComponent(r.id)}`;
+                              toggleComplete();
                             }}
+                            disabled={busyAction === "complete"}
                           >
-                            Import from Google Calendar
+                            {busyAction === "complete" ? (
+                              <LoadingDots size="sm" />
+                            ) : (
+                              "Make changes"
+                            )}
                           </Button>
+                        ) : (
+                          <>
+                            {/* Reads THEIR Google Calendar across this
+                                request's window and blocks every busy time,
+                                all-day events as whole days
+                                (lib/googleAvailability.ts). A full navigation:
+                                Google's consent screen, then back. */}
+                            {googleImport && (
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                data-testid="import-google"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  window.location.href = `/api/google-calendar/import?requestId=${encodeURIComponent(r.id)}`;
+                                }}
+                              >
+                                Import from Google Calendar
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Start from what they sent last time (a
+                                // re-submit after "Make changes"), else empty.
+                                setResponseNote(
+                                  responses.find((x) => x.requestId === r.id)
+                                    ?.note ?? ""
+                                );
+                                setConfirmOpen(true);
+                              }}
+                              disabled={busyAction === "complete"}
+                            >
+                              {busyAction === "complete" ? (
+                                <LoadingDots size="sm" />
+                              ) : (
+                                "Submit response"
+                              )}
+                            </Button>
+                          </>
                         )}
-                        <Button
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            // Start from what they sent last time (a re-submit
-                            // after "Make changes"), else empty.
-                            setResponseNote(
-                              responses.find((x) => x.requestId === r.id)
-                                ?.note ?? ""
-                            );
-                            setConfirmOpen(true);
-                          }}
-                          disabled={busyAction === "complete"}
-                        >
-                          {busyAction === "complete" ? (
-                            <LoadingDots size="sm" />
-                          ) : (
-                            "Submit response"
-                          )}
-                        </Button>
-                        </div>
-                      ))}
+                      </div>
+                    )}
                   </div>
                 </Card>
               );
