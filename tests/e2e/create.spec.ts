@@ -178,6 +178,14 @@ test("admin can add a weekly template and generate a schedule", async ({ page })
   await expect(review.getByText(/bars show past month/)).toHaveCount(0);
 
   await review.getByRole("button", { name: "Apply schedule" }).click();
+  // A plan with seats that break a scheduling rule lists them once first, with
+  // "Apply anyway" — never disabled. A clean plan applies straight through.
+  const ruleConfirm = page
+    .getByRole("dialog")
+    .filter({ hasText: "Some seats break a rule" });
+  if (await ruleConfirm.isVisible()) {
+    await ruleConfirm.getByRole("button", { name: "Apply anyway" }).click();
+  }
   await expect(page.getByText(/Created \d+ sets and \d+ assignments/)).toBeVisible();
 });
 

@@ -191,9 +191,16 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
-- Google Calendar: `google-calendar/import` (GET ?requestId= → a MEMBER's
-  one-shot read of their own calendar into blocks; comes back through the same
-  callback and lands on `/schedule?gcalImport=<n>|denied|error`),
+- Google Calendar: `google-calendar/import` — a MEMBER's import, now three
+  routes because it's a SCREEN (`components/GoogleImportModal`), not one click:
+  `/import/calendars` (GET ?requestId= → their own calendars, for the picker),
+  `/import/preview` (GET + `calendarIds=` → the merged busy windows, written
+  nowhere — it runs the import's own code, so the preview can't disagree with
+  what lands) and `/import` itself (GET = the consent trip ONLY, which imports
+  nothing and lands on `/schedule?gcalImport=connected` to REOPEN the modal;
+  POST `{requestId, calendarIds}` = the import, answering `{blocks}`). A denied
+  or failed consent still lands on `?gcalImport=denied|error`. Shared guard in
+  `import/guard.ts`.
   `google-calendar/connect` (GET → consent, DELETE →
   disconnect; org admin), `/callback`, `/status` (admin: connected account,
   chosen calendar's NAME, who connected; members with no email get an
@@ -470,7 +477,11 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   (`signImportState`/`verifyImportState` in `googleCalendar.ts`). ✅tested
 - `weekView.ts` — the availability WEEK view's layout: `weekStart` (Sunday),
   `dayBlocks` (each block's kind google|specific|recurring + side-by-side
-  lanes for overlaps). ✅tested
+  lanes for overlaps). Overlapping IMPORTED blocks are merged into one first —
+  one import already merges its own day, so this is what stops a second
+  request's import drawing two half-width sky columns over one busy afternoon.
+  Hand-made blocks and weekly repeats are left alone: different things, and
+  their colour says so. ✅tested
 - `googleCalendar.ts` — the per-org Google Calendar integration (README
   "Google Calendar"): one connected account per org, an app-made calendar by
   default or one the connecting admin picks (`listCalendarsFor`/`selectCalendar`
@@ -511,7 +522,13 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 ## Components
 
-Feature: `CalendarMonth`, `AvailabilityWeekView` (/schedule's Month · Week
+Feature: `CalendarMonth`, `GoogleImportModal` (Import from Google Calendar as a
+screen: pick which of your own calendars to read, preview what they'd block in
+the page's own week grid — only the import's blocks, no weekly repeats and
+nothing already on your availability — then import. Every Google call draws a
+BLOCKING overlay over the body with what it's doing, and the footer's buttons
+are disabled to match; the consent screen is the one step that leaves the page
+and it comes back into this modal), `AvailabilityWeekView` (/schedule's Month · Week
 toggle: hours down, days across, a box per block coloured by where it came
 from — sky Google, rose by hand, amber weekly; read-only; 6 AM–10 PM only
 (`lib/weekView.ts clipToView`) at a FIXED height with no scroll box; the legend

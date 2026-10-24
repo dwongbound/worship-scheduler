@@ -662,8 +662,12 @@ function UsersPageInner() {
           <div className="flex w-full items-center gap-2 sm:w-auto">
             {/* All cover/swap/approval activity across the org, filterable. */}
             <Button
-              size="sm"
               variant="secondary"
+              // Sized to the Select beside it, not to the small buttons in the
+              // rows below: text-base on phones is what Select carries (it is
+              // what stops iOS zooming a focused field), so matching it is the
+              // only way the two line up at every width.
+              className="whitespace-nowrap text-base sm:text-sm"
               onClick={() => setActivityOpen(true)}
             >
               Team Activity

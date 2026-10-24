@@ -18,8 +18,10 @@ import { prisma } from "@/lib/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import {
   importAuthorizeUrl,
-  importFromCode,
-  importWithRememberedAccess,
+  listImportCalendars,
+  previewImport,
+  rememberAccessFromCode,
+  runImportFor,
 } from "@/lib/googleAvailability";
 import { verifyImportState, verifyState } from "@/lib/googleCalendar";
 
@@ -32,6 +34,7 @@ const REQUEST = {
   endDate: new Date(2026, 9, 31),
 };
 
+let calendarListCalls: number;
 let eventUrls: string[];
 let tokenBodies: string[];
 let refreshStatus: number;
@@ -41,6 +44,7 @@ beforeEach(() => {
   process.env.GOOGLE_CLIENT_SECRET = "secret";
   process.env.NEXTAUTH_SECRET = "s";
   eventUrls = [];
+  calendarListCalls = 0;
   tokenBodies = [];
   refreshStatus = 200;
   m(prisma.availabilityRequest.findFirst).mockResolvedValue(REQUEST);
@@ -63,8 +67,30 @@ beforeEach(() => {
           })
         );
       }
+      // The calendar LIST comes first: two own calendars and a subscription
+      // the import must leave alone.
+      if (url.startsWith("https://www.googleapis.com/calendar/v3/users/me/calendarList")) {
+        calendarListCalls++;
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "primary", primary: true, accessRole: "owner", summary: "me@example.com" },
+              { id: "work@example.com", accessRole: "writer", summary: "Work" },
+              {
+                id: "holidays@group.v.calendar.google.com",
+                accessRole: "reader",
+                summary: "Holidays in United States",
+              },
+            ],
+          })
+        );
+      }
       eventUrls.push(url);
+      // Only the FIRST calendar pages, so the page-token walk is still covered
+      // without every calendar repeating it.
+      const isPrimary = url.includes("/calendars/primary/");
       const page2 = url.includes("pageToken=p2");
+      if (!isPrimary) return new Response(JSON.stringify({ items: [] }));
       return new Response(
         JSON.stringify(
           page2
@@ -95,6 +121,8 @@ describe("importAuthorizeUrl", () => {
   it("asks once for read-only events, with a refresh token to remember", () => {
     const url = new URL(importAuthorizeUrl("u1", "req1", "me@example.com"));
     expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
+    // Without the list scope the import can only ever see `primary`.
+    expect(url.searchParams.get("scope")).toContain("calendar.calendarlist.readonly");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("prompt")).toBe("consent");
     expect(url.searchParams.get("login_hint")).toBe("me@example.com");
@@ -107,75 +135,211 @@ describe("importAuthorizeUrl", () => {
   });
 });
 
-describe("importFromCode", () => {
-  it("reads every page and replaces only the earlier imported blocks", async () => {
-    const result = await importFromCode("u1", "req1", "code");
-    expect(result).toEqual({ ok: true, blocks: 2 });
+// A remembered permission, which is what every call but the consent trip
+// starts from.
+const remembered = () =>
+  m(prisma.user.findUnique).mockResolvedValue({
+    googleImportRefreshToken: encryptSecret("rt"),
+  });
+
+describe("rememberAccessFromCode", () => {
+  it("keeps the refresh token and imports nothing", async () => {
+    expect(await rememberAccessFromCode("u1", "code")).toEqual({ ok: true });
+    const saved = m(prisma.user.update).mock.calls[0][0];
+    expect(saved.where).toEqual({ id: "u1" });
+    expect(decryptSecret(saved.data.googleImportRefreshToken)).toBe("rt");
+    // The consent trip's only job is the permission: the person lands back in
+    // the modal and picks their calendars there.
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(eventUrls).toHaveLength(0);
+  });
+
+  it("keeps nothing when calendar access wasn't granted", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ access_token: "at", scope: "openid email" })))
+    );
+    expect(await rememberAccessFromCode("u1", "code")).toEqual({
+      ok: false,
+      error: expect.stringMatching(/wasn't granted/),
+    });
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("listImportCalendars", () => {
+  it("lists the person's own calendars by name, primary first", async () => {
+    remembered();
+    const result = await listImportCalendars("u1");
+    expect(result).toEqual({
+      ok: true,
+      calendars: [
+        { id: "primary", name: "me@example.com", primary: true },
+        { id: "work@example.com", name: "Work", primary: false },
+      ],
+    });
+    // A subscription is not this person's commitment, and a holidays calendar
+    // would block whole days for everyone.
+    expect(JSON.stringify(result)).not.toContain("Holidays");
+    expect(calendarListCalls).toBe(1);
+    expect(eventUrls).toHaveLength(0);
+  });
+
+  it("asks for consent when nothing was ever granted", async () => {
+    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: null });
+    expect(await listImportCalendars("u1")).toMatchObject({ ok: false, needsConsent: true });
+  });
+
+  it("re-asks consent for a token that predates the calendar-list scope", async () => {
+    // Such a token can list nothing, so Google answers 403. Re-asking is what
+    // turns it into a token that can see every calendar.
+    remembered();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.startsWith("https://oauth2.googleapis.com/token")
+          ? new Response(JSON.stringify({ access_token: "at2" }))
+          : new Response('{"error":"insufficient scope"}', { status: 403 })
+      )
+    );
+    expect(await listImportCalendars("u1")).toMatchObject({ ok: false, needsConsent: true });
+  });
+
+  it("forgets a revoked permission and asks for consent again", async () => {
+    remembered();
+    refreshStatus = 400;
+    expect(await listImportCalendars("u1")).toMatchObject({ ok: false, needsConsent: true });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { googleImportRefreshToken: null },
+    });
+  });
+});
+
+describe("previewImport", () => {
+  it("reads only the chosen calendars and writes nothing", async () => {
+    remembered();
+    const result = await previewImport("u1", "req1", ["primary"]);
+    expect(result).toEqual({
+      ok: true,
+      windows: [
+        { ymd: "2026-10-05", startMinute: 540, endMinute: 600 },
+        { ymd: "2026-10-10", startMinute: 0, endMinute: 1440 },
+      ],
+    });
+    // One calendar, its two pages — and never the one that wasn't picked.
     expect(eventUrls).toHaveLength(2);
+    expect(eventUrls.some((u) => u.includes("work%40example.com"))).toBe(false);
     // Never asks for titles.
     expect(decodeURIComponent(eventUrls[0])).not.toContain("summary");
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("merges overlapping events from different calendars into one window", async () => {
+    remembered();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.startsWith("https://oauth2.googleapis.com/token")) {
+          return new Response(JSON.stringify({ access_token: "at2" }));
+        }
+        // 4–6pm on one calendar, 5–7pm on the other: one 4–7pm block.
+        const hours = url.includes("work%40example.com") ? [16, 18] : [17, 19];
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                start: { dateTime: `2026-10-07T${hours[0]}:00:00-07:00` },
+                end: { dateTime: `2026-10-07T${hours[1]}:00:00-07:00` },
+              },
+            ],
+          })
+        );
+      })
+    );
+    const result = await previewImport("u1", "req1", ["primary", "work@example.com"]);
+    expect(result).toEqual({
+      ok: true,
+      windows: [{ ymd: "2026-10-07", startMinute: 16 * 60, endMinute: 19 * 60 }],
+    });
+  });
+
+  it("reads nothing at all when no calendar is picked", async () => {
+    remembered();
+    expect(await previewImport("u1", "req1", [])).toEqual({ ok: true, windows: [] });
+    expect(eventUrls).toHaveLength(0);
+  });
+
+  it("refuses a request the person isn't asked", async () => {
+    m(prisma.availabilityRequest.findFirst).mockResolvedValue(null);
+    expect(await previewImport("u1", "req1", ["primary"])).toMatchObject({ ok: false });
+    expect(eventUrls).toHaveLength(0);
+  });
+});
+
+describe("runImportFor", () => {
+  it("replaces only the earlier imported blocks for that request", async () => {
+    remembered();
+    const result = await runImportFor("u1", "req1", ["primary", "work@example.com"]);
+    expect(result).toEqual({ ok: true, blocks: 2 });
+    // Both picked calendars, primary's two pages among them.
+    expect(eventUrls).toHaveLength(3);
+    expect(tokenBodies[0]).toContain("refresh_token=rt");
 
     expect(prisma.unavailability.deleteMany).toHaveBeenCalledWith({
       where: { userId: "u1", requestId: "req1", fromGoogle: true },
     });
     const rows = m(prisma.unavailability.createMany).mock.calls[0][0].data;
     expect(rows).toEqual([
-      expect.objectContaining({ startDate: new Date(2026, 9, 5), startMinute: 540, endMinute: 600, fromGoogle: true, requestId: "req1", type: "SPECIFIC" }),
+      expect.objectContaining({
+        startDate: new Date(2026, 9, 5),
+        startMinute: 540,
+        endMinute: 600,
+        fromGoogle: true,
+        requestId: "req1",
+        type: "SPECIFIC",
+      }),
       expect.objectContaining({ startDate: new Date(2026, 9, 10), startMinute: 0, endMinute: 1440 }),
     ]);
   });
 
-  it("remembers the permission so later imports skip Google's screen", async () => {
-    await importFromCode("u1", "req1", "code");
-    const saved = m(prisma.user.update).mock.calls[0][0];
-    expect(saved.where).toEqual({ id: "u1" });
-    expect(decryptSecret(saved.data.googleImportRefreshToken)).toBe("rt");
+  it("writes what the preview showed, so importing twice leaves the same rows", async () => {
+    remembered();
+    const previewed = await previewImport("u1", "req1", ["primary", "work@example.com"]);
+    const first = await runImportFor("u1", "req1", ["primary", "work@example.com"]);
+    const firstRows = m(prisma.unavailability.createMany).mock.calls[0][0].data;
+    m(prisma.unavailability.createMany).mockClear();
+    const second = await runImportFor("u1", "req1", ["primary", "work@example.com"]);
+    const secondRows = m(prisma.unavailability.createMany).mock.calls[0][0].data;
+    expect(second).toEqual(first);
+    expect(secondRows).toEqual(firstRows);
+    // And the preview was the same answer, not an estimate of it.
+    expect(previewed).toMatchObject({ ok: true });
+    expect(firstRows).toHaveLength(
+      (previewed as { ok: true; windows: unknown[] }).windows.length
+    );
+  });
+
+  it("clears the import when no calendar is picked, without reading Google", async () => {
+    remembered();
+    expect(await runImportFor("u1", "req1", [])).toEqual({ ok: true, blocks: 0 });
+    expect(eventUrls).toHaveLength(0);
+    expect(m(prisma.unavailability.createMany).mock.calls[0][0].data).toEqual([]);
+  });
+
+  it("asks for consent rather than wiping the blocks when access is gone", async () => {
+    remembered();
+    refreshStatus = 400;
+    expect(await runImportFor("u1", "req1", ["primary"])).toMatchObject({
+      ok: false,
+      needsConsent: true,
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("refuses a request the person isn't asked", async () => {
     m(prisma.availabilityRequest.findFirst).mockResolvedValue(null);
-    const result = await importFromCode("u1", "req1", "code");
-    expect(result.ok).toBe(false);
+    expect(await runImportFor("u1", "req1", ["primary"])).toMatchObject({ ok: false });
     expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-
-  it("writes nothing when calendar access wasn't granted", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ access_token: "at", scope: "openid email" })))
-    );
-    const result = await importFromCode("u1", "req1", "code");
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/wasn't granted/) });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-});
-
-describe("importWithRememberedAccess", () => {
-  it("imports with the remembered permission, no consent", async () => {
-    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: encryptSecret("rt") });
-    const result = await importWithRememberedAccess("u1", "req1");
-    expect(result).toEqual({ ok: true, blocks: 2 });
-    expect(tokenBodies[0]).toContain("refresh_token=rt");
-    expect(prisma.$transaction).toHaveBeenCalled();
-  });
-
-  it("forgets a revoked permission and asks for consent again", async () => {
-    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: encryptSecret("rt") });
-    refreshStatus = 400;
-    const result = await importWithRememberedAccess("u1", "req1");
-    expect(result).toMatchObject({ ok: false, needsConsent: true });
-    expect(prisma.user.update).toHaveBeenCalledWith({
-      where: { id: "u1" },
-      data: { googleImportRefreshToken: null },
-    });
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-  });
-
-  it("asks for consent when nothing was ever granted", async () => {
-    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: null });
-    expect(await importWithRememberedAccess("u1", "req1")).toMatchObject({
-      ok: false,
-      needsConsent: true,
-    });
   });
 });

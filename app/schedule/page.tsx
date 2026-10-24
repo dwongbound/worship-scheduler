@@ -41,10 +41,12 @@ import {
   blockedDaysInRange,
   dayBlockLevel,
   expandRecurringBlocks,
+  listedBlocks,
   mergeWindows,
   isOptimisticId,
   weeksFromToday,
 } from "@/lib/availability";
+import GoogleImportModal from "@/components/GoogleImportModal";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   dateRangeLabel,
@@ -299,20 +301,34 @@ export default function SchedulePage() {
   const [view, setView] = useState<"month" | "week">("month");
   // Whether this deployment offers "Import from Google Calendar" at all.
   const [googleImport, setGoogleImport] = useState(false);
-  // What the last import did, shown once on coming back from Google.
+  // What the last import did, shown once it's done.
   const [notice, setNotice] = useState<ReturnType<typeof importNotice>>(null);
+  // Which request's import modal is open. The import is a screen now — pick
+  // the calendars, preview what they'd block, then write it.
+  const [importFor, setImportFor] = useState<string | null>(null);
 
-  // Coming back from Google (lib/googleAvailability.ts): say how it went,
-  // focus the request it was for, and open the week view to check it. The
+  // Coming back from Google (lib/googleAvailability.ts). `connected` means the
+  // permission was just granted and nothing was imported: REOPEN the modal on
+  // the request it was for, so the consent screen returns to the picker rather
+  // than looking like the app restarting. Anything else is a notice. The
   // params are then dropped so a reload doesn't announce it twice.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const result = importNotice(params.get("gcalImport"));
-    if (!result) return;
-    setNotice(result);
+    const status = params.get("gcalImport");
     const requestId = params.get("request");
-    if (requestId) setSelectedRequestId(requestId);
-    setView("week");
+    const result = importNotice(status);
+    if (!status) return;
+    if (status === "connected") {
+      if (requestId) {
+        setSelectedRequestId(requestId);
+        setImportFor(requestId);
+      }
+    } else {
+      if (!result) return;
+      setNotice(result);
+      if (requestId) setSelectedRequestId(requestId);
+      setView("week");
+    }
     params.delete("gcalImport");
     params.delete("request");
     const rest = params.toString();
@@ -720,31 +736,12 @@ export default function SchedulePage() {
     ? blockedDaysInRange(entries, selectedRequest.startDate, selectedRequest.endDate)
     : [];
 
-  // The Busy Blocks list: dated (specific) blocks first — only ones ending
-  // today or later, so past blocks drop off — in chronological order, then the
-  // recurring blocks by weekday. Deleting still targets the real entry id.
+  // The Busy Blocks list (lib/availability.ts listedBlocks): dated blocks
+  // first, then the recurring ones. Past blocks drop off unless they sit
+  // inside the window being looked at, so an import's early days still have a
+  // row to delete them from.
   const todayYmd = toYmd(new Date());
-  const listEntries = [...entries]
-    .filter((e) => {
-      if (e.type === "RECURRING") return true;
-      const end = e.endDate ?? e.startDate;
-      return !end || toYmd(new Date(end)) >= todayYmd; // hide fully-past blocks
-    })
-    .sort((a, b) => {
-      const aRec = a.type === "RECURRING";
-      const bRec = b.type === "RECURRING";
-      if (aRec !== bRec) return aRec ? 1 : -1; // specific/dated first, recurring last
-      if (!aRec) {
-        const ad = a.startDate ? new Date(a.startDate).getTime() : 0;
-        const bd = b.startDate ? new Date(b.startDate).getTime() : 0;
-        if (ad !== bd) return ad - bd;
-        return (a.startMinute ?? 0) - (b.startMinute ?? 0);
-      }
-      // Both recurring: order by weekday, then start time.
-      const ao = (a.dayOfWeek ?? 0) * 1440 + (a.startMinute ?? 0);
-      const bo = (b.dayOfWeek ?? 0) * 1440 + (b.startMinute ?? 0);
-      return ao - bo;
-    });
+  const listEntries = listedBlocks(entries, todayYmd, lensRange);
 
   return (
     <div className="space-y-6">
@@ -875,15 +872,10 @@ export default function SchedulePage() {
                             {r.org.name}
                           </span>
                         )}
-                        {done ? (
-                          <Badge tone="green">
-                            {response!.edited ? "Updated" : "Completed"}
-                          </Badge>
-                        ) : (
-                          // "Todo" rather than "Not sent" — the same word the
-                          // filter tab above uses for exactly these cards.
-                          <Badge tone="amber">Todo</Badge>
-                        )}
+                        {/* No status pill. The Todo / All switch above IS the
+                            status: Todo lists exactly the unanswered requests,
+                            so a pill on the card only repeated the tab you were
+                            already standing on. */}
                       </div>
                       {/* The description line. On the SELECTED card it also
                           carries what the calendar is doing, the way out, and a
@@ -962,11 +954,12 @@ export default function SchedulePage() {
                           </Button>
                         ) : (
                           <>
-                            {/* Reads THEIR Google Calendar across this
-                                request's window and blocks every busy time,
-                                all-day events as whole days
-                                (lib/googleAvailability.ts). A full navigation:
-                                Google's consent screen, then back. */}
+                            {/* Opens the import modal: which of THEIR
+                                calendars to read, a preview of what those
+                                would block across this request's window, then
+                                the import (components/GoogleImportModal).
+                                Granting the permission is the one step that
+                                leaves the page, and it returns here. */}
                             {googleImport && (
                               <Button
                                 size="sm"
@@ -974,7 +967,7 @@ export default function SchedulePage() {
                                 data-testid="import-google"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  window.location.href = `/api/google-calendar/import?requestId=${encodeURIComponent(r.id)}`;
+                                  setImportFor(r.id);
                                 }}
                               >
                                 Import from Google Calendar
@@ -1387,10 +1380,15 @@ export default function SchedulePage() {
                       className="flex items-center justify-between gap-2"
                     >
                       <span className="flex min-w-0 items-baseline gap-2">
-                        <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
-                          {entry.type === "RECURRING" ? "Recurring" : "Specific"}
-                        </Badge>
-                        {entry.fromGoogle && <Badge tone="indigo">Google</Badge>}
+                        {/* An imported block says Google and nothing else:
+                            "Specific" beside it was the same fact twice. */}
+                        {entry.fromGoogle ? (
+                          <Badge tone="indigo">Google</Badge>
+                        ) : (
+                          <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
+                            {entry.type === "RECURRING" ? "Recurring" : "Specific"}
+                          </Badge>
+                        )}
                         <span>
                           {entryText(entry)}
                           {req && (
@@ -1539,6 +1537,30 @@ export default function SchedulePage() {
           </div>
         </Modal>
       )}
+
+      {/* Import from Google Calendar: the picker, the preview and the import
+          itself. It keeps the page as it is underneath, which is why coming
+          back from Google's consent screen can land straight back in here. */}
+      {importFor &&
+        (() => {
+          const r = requests.find((x) => x.id === importFor);
+          if (!r) return null;
+          return (
+            <GoogleImportModal
+              open
+              requestId={r.id}
+              window={{ start: r.startDate.slice(0, 10), end: r.endDate.slice(0, 10) }}
+              onClose={() => setImportFor(null)}
+              onImported={(blocks) => {
+                setImportFor(null);
+                setNotice(importNotice(String(blocks)));
+                setSelectedRequestId(r.id);
+                setView("week");
+                void reload();
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }

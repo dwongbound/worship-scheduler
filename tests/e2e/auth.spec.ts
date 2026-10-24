@@ -221,3 +221,27 @@ test("signs up a namesake anyway when told it's a different person", async ({
 // consent redirect, so it's skipped in CI. The find-or-create-by-email
 // linking lives in lib/auth.ts's signIn/jwt callbacks.
 test.skip("signs in with Google (needs OAuth credentials + mock)", () => {});
+
+// The two public pages: Google's OAuth verification fetches them with no
+// account, so a redirect to /login here would fail the review.
+test("the privacy policy and terms are readable signed out, and linked from sign in", async ({
+  page,
+}) => {
+  await page.goto("/login");
+  await page.getByRole("link", { name: "Privacy Policy" }).click();
+  await expect(page).toHaveURL(/\/privacy$/);
+  await expect(page.getByRole("heading", { name: "Privacy Policy" })).toBeVisible();
+  // The Google-specific promise Google looks for.
+  await expect(page.getByText("API Services User Data Policy")).toBeVisible();
+
+  // The pair link to each other, and back to signing in.
+  await page.getByRole("link", { name: "Terms of Service" }).click();
+  await expect(page).toHaveURL(/\/terms$/);
+  await expect(page.getByRole("heading", { name: "Terms of Service" })).toBeVisible();
+  await page.getByRole("link", { name: "Back to sign in" }).click();
+  await expect(page).toHaveURL(/\/login/);
+
+  // And straight to the URL, as Google fetches it: no bounce to /login.
+  await page.goto("/privacy");
+  await expect(page).toHaveURL(/\/privacy$/);
+});

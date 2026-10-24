@@ -74,12 +74,17 @@ beforeEach(() => {
     { id: "s2", orgId: "org1", teamId: "t1" },
   ]);
   m(requireOrgAdminFor).mockResolvedValue({ user: { id: "admin" } });
-  // Seat a1 (Carol, keys) lives on s1; a2 (Bob, drums) on s2.
+  // Seat a1 (Carol, keys) lives on s1; a2 (Bob, drums) on s2. The prepare step
+  // reads a set's WHOLE roster (`{ setId }`, no id filter) — it has to see the
+  // seats a diff doesn't mention, which is where the duplicates came from.
   m(prisma.assignment.findMany).mockImplementation(async ({ where }) =>
     [
       { id: "a1", setId: "s1", role: "KEYS", userId: "u1", user: { name: "Carol" } },
       { id: "a2", setId: "s2", role: "DRUMS", userId: "u2", user: { name: "Bob" } },
-    ].filter((a) => a.setId === where.setId && where.id.in.includes(a.id))
+    ].filter(
+      (a) =>
+        a.setId === where.setId && (!where.id || where.id.in.includes(a.id))
+    )
   );
   m(prisma.orgMembership.findMany).mockImplementation(async ({ where }) =>
     where.userId.in.map((userId: string) => ({ userId, user: { name: userId } }))
@@ -114,6 +119,69 @@ describe("PUT /api/admin/sets/roster", () => {
         { userId: "u9", kind: "added", role: "DRUMS", setId: "s2", catalog: expect.any(Array) },
       ],
     ]);
+  });
+
+  it("saves when a guest-team seat's holder is seated again in that role", async () => {
+    // The 400 this fixes. Preview Mode leaves borrowed seats off the card, so
+    // it couldn't see that Carol already held keys on s1 as a guest — Auto
+    // schedule proposed her for keys, and the db's unique [set, person, role]
+    // refused the whole batch.
+    m(prisma.assignment.findMany).mockImplementation(async ({ where }) =>
+      [
+        { id: "g1", setId: "s1", role: "KEYS", userId: "u1", user: { name: "Carol" } },
+      ].filter(
+        (a) =>
+          a.setId === where.setId && (!where.id || where.id.in.includes(a.id))
+      )
+    );
+    const res = await put({
+      sets: [{ setId: "s1", added: [{ role: "KEYS", userId: "u1" }] }],
+    });
+    expect(res.status).toBe(200);
+    // Her existing seat is left exactly as it is — status, confirmation and
+    // any cover request on it intact — and nothing is inserted.
+    expect(prisma.assignment.create).not.toHaveBeenCalled();
+    expect(prisma.assignment.delete).not.toHaveBeenCalled();
+    expect(m(prisma.$transaction).mock.calls[0][0]).toHaveLength(0);
+    // Nobody is told about a change that didn't happen.
+    expect(m(notifyRosterChanges).mock.calls[0][1]).toEqual([]);
+    expect(notifySetChange).not.toHaveBeenCalled();
+  });
+
+  it("saves a two-person trade inside one role", async () => {
+    // Two people swapping seats in the SAME role is a cycle: neither update can
+    // go first, because each seat still holds its old occupant. One seat is
+    // rebuilt (deleted, then inserted under its new occupant) so the other can
+    // simply be updated — and no moment holds one person in VOCALS twice.
+    m(prisma.assignment.findMany).mockImplementation(async ({ where }) =>
+      [
+        { id: "v1", setId: "s1", role: "VOCALS", userId: "u1", user: { name: "Carol" } },
+        { id: "v2", setId: "s1", role: "VOCALS", userId: "u2", user: { name: "Bob" } },
+      ].filter(
+        (a) =>
+          a.setId === where.setId && (!where.id || where.id.in.includes(a.id))
+      )
+    );
+    const res = await put({
+      sets: [
+        {
+          setId: "s1",
+          reassigned: [
+            { id: "v1", userId: "u2" },
+            { id: "v2", userId: "u1" },
+          ],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+    expect(prisma.assignment.update).toHaveBeenCalledTimes(1);
+    expect(prisma.assignment.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.assignment.create).toHaveBeenCalledTimes(1);
+    // Both people are still in VOCALS afterwards, just in each other's seats.
+    expect(m(prisma.assignment.create).mock.calls[0][0].data).toMatchObject({
+      setId: "s1",
+      role: "VOCALS",
+    });
   });
 
   it("writes nothing when any set in the batch is stale", async () => {

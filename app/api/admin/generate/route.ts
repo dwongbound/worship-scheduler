@@ -174,7 +174,11 @@ export async function POST(req: NextRequest) {
     // also cross-org, so the spacing rule sees ALL of a person's bookings.
     prisma.assignment.findMany({
       where: { set: { startsAt: { gte: spacingStart, lte: spacingEnd } } },
-      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
+      select: {
+        userId: true,
+        setId: true,
+        set: { select: { startsAt: true, teamId: true } },
+      },
     }),
   ]);
 
@@ -382,6 +386,7 @@ export async function POST(req: NextRequest) {
         userId: b.userId,
         startsAt: b.set.startsAt.toISOString(),
         teamId: b.set.teamId,
+        setId: b.setId,
       })),
       // Seed for the MD rotation, so the modal's re-run starts where this did.
       previousMDByTeam: Object.fromEntries(previousMDSeed),
@@ -392,6 +397,7 @@ export async function POST(req: NextRequest) {
         userId: b.userId,
         startsAt: b.startsAt.toISOString(),
         teamId: b.teamId ?? null,
+        setId: b.setId ?? null,
       })),
     },
   };

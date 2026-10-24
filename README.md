@@ -157,6 +157,7 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SPOTIFY_CLIENT_ID` / `_SECRET` | optional⁵ | optional⁵ | set to enable playlists⁵ |
 | `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
 | `CRON_SECRET` | optional⁶ | `openssl rand -base64 24` (unique) | `openssl rand -base64 24` (unique, ≠ staging)⁶ |
+| `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | optional⁸ | optional⁸ | the address on /privacy + /terms⁸ |
 | `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
@@ -177,6 +178,13 @@ menu → `/platform`). Env-only (bootstrap); everything else is managed in-app.
 account, whose refresh token is stored encrypted on the `Org` row. Redirect URI:
 `…/api/spotify/callback` (override with `SPOTIFY_REDIRECT_URI`). `SPOTIFY_DRY_RUN=1`
 stamps placeholder playlists instead of calling the API.
+⁸ The address shown on the public `/privacy` and `/terms` pages (the two pages
+readable without signing in, linked from the sign-in screen — Google's OAuth
+verification asks for both URLs and fetches them with no account). It must be a
+mailbox someone actually reads, since it's where deletion requests go; unset it
+falls back to `privacy@tapworship.com`. Inlined at build, so a change needs a
+redeploy. Wording lives in `lib/legal.ts` + `app/{privacy,terms}/page.tsx`.
+
 ⁷ Google Calendar is a **per-org integration** riding on the same Google OAuth
 client as "Continue with Google" — see [Google Calendar](#google-calendar).
 With that client set, org admins see a *Connect Google Calendar* button in Org
@@ -293,13 +301,26 @@ for cover in the app. Code: `lib/googleCalendar.ts` (Google + db side),
   `https://www.googleapis.com/auth/calendar.events` (put the sets' events on
   whichever calendar is picked, and watch it for RSVPs). For **Import from
   Google Calendar** (below) also add
-  `https://www.googleapis.com/auth/calendar.events.readonly`. Both events
+  `https://www.googleapis.com/auth/calendar.events.readonly` (the member's own
+  events) — the `calendarlist.readonly` scope above is shared with it, since
+  the import reads every calendar the member owns, not just `primary`. Both events
   scopes are *sensitive*: while the app is in *Testing*, add each connecting
   account (including every member who imports) as a test user; publishing it
   for real use needs Google's verification.
 - *Credentials → the OAuth client → Authorized redirect URIs*: add
   `https://<your-host>/api/google-calendar/callback` for each of staging and
   prod (and `http://localhost:3000/api/google-calendar/callback` for dev).
+
+**1b. Publishing status** — the Calendar scopes are *sensitive*, so an app in
+*Testing* lets only listed test users connect AND expires their refresh tokens
+after 7 days (the org's connection silently stops syncing weekly). For real use,
+*Audience → Publish app*. Unverified-but-published shows a "Google hasn't
+verified this app" warning (Advanced → continue) and caps you at 100 accounts;
+submitting for verification removes it, and Google asks for the app's home page,
+a privacy policy URL and terms URL (ours are `/privacy` and `/terms` — public,
+and linked from the sign-in page), the domain verified in Search Console, a
+reason per scope, and a screen recording of the flow. Sensitive scopes get the
+lighter review: no security audit.
 
 **2. Env vars** — no new ones on staging/prod: Google Calendar is offered
 wherever `GOOGLE_CLIENT_ID` / `_SECRET` (and `NEXTAUTH_URL`) are set, as an
@@ -364,11 +385,24 @@ rotating that secret means every org must reconnect.
 ### Import from Google Calendar (members)
 
 On /schedule, the selected request's card has **Import from Google Calendar**
-whenever the OAuth client is configured. It reads the member's OWN calendar
-(read-only, never event titles) across that request's window and writes a
-block for every busy time: timed events unless marked *Free*, **all-day events
-as the whole day** (Free or not), cancelled and declined events skipped,
-overlaps merged per day. Re-importing replaces only the blocks an earlier
+whenever the OAuth client is configured. It opens a modal
+(`components/GoogleImportModal.tsx`) with three steps: **pick** which of the
+member's own calendars to read, **preview** what those would block in the same
+week grid the page draws, then **import**. Nothing is written until they press
+Import, every Google call puts a blocking indicator over the modal, and the
+consent screen — the one step that must leave the page — returns to
+`/schedule?gcalImport=connected`, which REOPENS the modal rather than importing
+behind their back.
+
+It reads the chosen calendars (read-only, never event titles) across that
+request's window and writes a block for every busy time: timed events unless
+marked *Free*, **all-day events as the whole day** (Free or not), cancelled and
+declined events skipped, **overlaps merged per day** — two calendars holding
+the same meeting, or a chain of back-to-back ones, is ONE block. The preview
+runs the import's own code (`previewImport` beside `runImportFor`), so what it
+shows is what lands. The week view merges overlapping imported blocks into one
+column too (`lib/weekView.ts`), so even blocks from two different requests read
+as one busy stretch rather than side-by-side lanes. Re-importing replaces only the blocks an earlier
 import wrote for that request (`Unavailability.fromGoogle`); hand-made blocks
 are never touched, and imported ones can be edited or deleted like any other.
 The permission is asked for once: the first import shows Google's consent
@@ -379,10 +413,17 @@ import asks again. Google sign-in itself never asks for calendar access, so the
 unverified-app warning a sensitive scope brings can't land on the login. It shares
 `/api/google-calendar/callback` (told apart by its signed state), so there's no
 extra redirect URI and no new env var; it does need the `calendar.events.readonly`
-scope above and migration `20261022120000_unavailability_from_google`. The page
+and `calendar.calendarlist.readonly` scopes above and migration
+`20261022120000_unavailability_from_google`. The picker lists every calendar the member
+owns or can edit (a work one, a family one), all ticked to begin with, and
+leaves out ones they merely subscribe to — a holidays feed would otherwise
+block whole days. A token remembered from
+before the list scope was added can't list calendars, so the import sends that
+person through consent once more rather than silently reading `primary` alone. The page
 then opens the **Week** view (hours down, days across) to check the result.
-Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`,
-`app/api/google-calendar/import`.
+Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`
+(`listImportCalendars` / `previewImport` / `runImportFor`, one route each under
+`app/api/google-calendar/import`), `components/GoogleImportModal.tsx`.
 
 ## Slack (future)
 

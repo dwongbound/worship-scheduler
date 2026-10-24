@@ -20,11 +20,17 @@ import { signOut, useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import { useMe } from "@/components/MeProvider";
+import { LEGAL_LINKS } from "@/lib/legal";
 
-// Paths that must render for logged-out users. `/login` is the only one; its
-// own chrome is already suppressed in Navbar.
+// Paths that must render for logged-out users: the sign-in screen, and the two
+// legal pages (`lib/legal.ts` LEGAL_LINKS — Google's OAuth verification fetches
+// them with no account). This list has to stay in step with proxy.ts's matcher:
+// proxy.ts lets the request through the edge, and this decides whether the
+// client renders it or redirects to /login, so a path missing here is served
+// and then bounced.
 function isPublicPath(pathname: string): boolean {
-  return pathname === "/login" || pathname.startsWith("/login/");
+  if (pathname === "/login" || pathname.startsWith("/login/")) return true;
+  return LEGAL_LINKS.some((l) => pathname === l.href);
 }
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {

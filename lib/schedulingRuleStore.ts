@@ -222,7 +222,11 @@ export async function ruleContext(
         },
       },
       // teamId so a TEAM-SCOPED limit counts only its own team's sets.
-      select: { userId: true, set: { select: { startsAt: true, teamId: true } } },
+      select: {
+        userId: true,
+        setId: true,
+        set: { select: { startsAt: true, teamId: true } },
+      },
     }),
   ]);
   return {
@@ -236,6 +240,7 @@ export async function ruleContext(
       userId: b.userId,
       startsAt: b.set.startsAt,
       teamId: b.set.teamId,
+      setId: b.setId,
     })),
   };
 }

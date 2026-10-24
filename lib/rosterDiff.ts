@@ -14,6 +14,21 @@
 // PATCH /api/admin/sets/[id]/roster runs one of these in its own transaction;
 // PUT /api/admin/sets/roster (the calendar Preview Mode's Save) runs a whole
 // plan's worth in ONE transaction, so the batch is all-or-nothing too.
+//
+// The diff arrives keyed by SEAT (an assignment row id), but what it means is a
+// final roster: who holds which role when the save is done. Those two readings
+// come apart whenever the same (person, role) is named twice, which the db
+// cannot store — `@@unique([setId, userId, role])` — and the clients can't
+// always see: Preview Mode leaves a set's borrowed guest seats out of the card,
+// so Auto schedule or a hand pick could seat someone in a role they already
+// hold as a guest, and the whole save came back 400.
+//
+// So the diff is reconciled against the set's WHOLE roster before anything is
+// written, by person and role rather than by seat (see `collapseByPersonRole`):
+// a seat somebody already holds is kept as it is rather than inserted a second
+// time, and the writes are ordered deletes → reassignments → insertions so no
+// moment inside the transaction holds a person in one role twice. Rules are
+// never consulted — they steer Auto schedule, they don't gate a save.
 import type { Prisma } from "./generated/prisma/client";
 import { prisma } from "./prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "./setMd";
@@ -85,6 +100,173 @@ export function isEmptyOps(ops: AssignmentOps): boolean {
   );
 }
 
+/** One seat as the collapse needs to see it. */
+interface RosterSeat {
+  id: string;
+  role: string;
+  userId: string;
+  guestTeamId?: string | null;
+}
+
+export interface CollapsedOps {
+  /** Seats to delete: the ones asked for, plus any collapsed away. */
+  removed: string[];
+  reassigned: AssignmentOps["reassigned"];
+  added: AssignmentOps["added"];
+  /**
+   * Moves that had to be rebuilt rather than updated: the seat is deleted and
+   * inserted again under its new occupant. Only a CYCLE inside one role needs
+   * this, and everything downstream reports it as an ordinary reassignment.
+   */
+  rebuilt: {
+    seatId: string;
+    userId: string;
+    role: string;
+    guestTeamId: string | null;
+  }[];
+  /** Seats deleted because their new occupant already holds the role here. */
+  collapsedSeatIds: string[];
+  /** Insertions dropped because that person already holds the role here. */
+  droppedAdded: AssignmentOps["added"];
+}
+
+/**
+ * Reads a seat-keyed diff as the final roster it means, against the set's whole
+ * roster — borrowed guest seats included, which is the case the clients can't
+ * see (lib/calendarPreview.ts leaves them off the card).
+ *
+ * Nobody can hold one role twice on a set: `@@unique([setId, userId, role])`
+ * says so, and that is the only thing here that is genuinely impossible rather
+ * than merely unwise. So a seat that would duplicate one the set already keeps
+ * is COLLAPSED instead of inserted:
+ *
+ *   - an insertion for a (person, role) that survives the save is dropped —
+ *     they are already there, and the seat they hold keeps its status, its
+ *     confirmation and any cover request on it;
+ *   - a reassignment whose new occupant already holds that role here deletes
+ *     the seat instead, since the admin plainly meant that person to hold the
+ *     role once, not for the seat's old occupant to stay.
+ *
+ * The updates are also ORDERED here. A seat keeps its old occupant until its
+ * own update runs, so a straight pass collides halfway through a transaction:
+ * in a rotation inside one role (b takes a's seat, c takes b's, a takes c's)
+ * there is no seat free to move first, and the database rejects the batch —
+ * the 400 a shuffle of a multi-seat role like Audio - Support (4/4) produced.
+ * So each update is emitted only once its target (person, role) is free, and
+ * where a cycle leaves nothing free, one seat of it is REBUILT instead: delete
+ * the row, insert it again under its new occupant. That frees the key the rest
+ * of the cycle is waiting on, and costs that one seat its confirmation — which
+ * a plain reassignment resets anyway.
+ *
+ * Returned rather than applied so the caller can order its writes: deletes
+ * first, then reassignments, then insertions.
+ */
+export function collapseByPersonRole(
+  ops: AssignmentOps,
+  roster: RosterSeat[]
+): CollapsedOps {
+  const key = (userId: string, role: string) => `${userId}|${role}`;
+  const removedIds = new Set(ops.removed);
+  const movingSeats = new Set(ops.reassigned.map((r) => r.id));
+  const seatById = new Map(roster.map((a) => [a.id, a]));
+
+  // Who holds what once the seats this diff touches are set aside.
+  const occupied = new Map<string, string>();
+  for (const a of roster) {
+    if (removedIds.has(a.id) || movingSeats.has(a.id)) continue;
+    occupied.set(key(a.userId, a.role), a.id);
+  }
+
+  const collapsedSeatIds: string[] = [];
+  const reassigned: AssignmentOps["reassigned"] = [];
+  for (const r of ops.reassigned) {
+    const seat = seatById.get(r.id);
+    // An id that isn't on this set is rejected by the caller's validation; it
+    // is passed through here rather than silently swallowed.
+    if (!seat) {
+      reassigned.push(r);
+      continue;
+    }
+    const k = key(r.userId, seat.role);
+    if (occupied.has(k)) {
+      collapsedSeatIds.push(r.id);
+      continue;
+    }
+    occupied.set(k, r.id);
+    reassigned.push(r);
+  }
+
+  // ── Order the updates, breaking any cycle ───────────────────────────────
+  // Each surviving seat still holds its old (person, role) until its own update
+  // runs, so an update whose target key is still held has to wait for the seat
+  // holding it. When nothing can go first, the moves form a cycle.
+  const heldBySeat = new Map<string, string>();
+  for (const r of reassigned) {
+    const seat = seatById.get(r.id);
+    if (seat) heldBySeat.set(key(seat.userId, seat.role), r.id);
+  }
+  const ordered: AssignmentOps["reassigned"] = [];
+  const rebuilt: CollapsedOps["rebuilt"] = [];
+  let waiting = reassigned;
+  while (waiting.length > 0) {
+    const free = new Set(
+      waiting.filter((r) => {
+        const seat = seatById.get(r.id);
+        // An unknown id has no role to collide over; the caller rejects it.
+        if (!seat) return true;
+        return !heldBySeat.has(key(r.userId, seat.role));
+      })
+    );
+    if (free.size === 0) {
+      // Every remaining move waits on another one: a cycle. Rebuilding ONE of
+      // its seats frees that seat's key and unblocks the rest, so each cycle
+      // costs exactly one rebuild however long it is.
+      const victim = waiting[0];
+      const seat = seatById.get(victim.id)!;
+      heldBySeat.delete(key(seat.userId, seat.role));
+      rebuilt.push({
+        seatId: victim.id,
+        userId: victim.userId,
+        role: seat.role,
+        guestTeamId: seat.guestTeamId ?? null,
+      });
+      waiting = waiting.filter((r) => r !== victim);
+      continue;
+    }
+    for (const r of free) {
+      const seat = seatById.get(r.id);
+      if (seat) heldBySeat.delete(key(seat.userId, seat.role));
+      ordered.push(r);
+    }
+    waiting = waiting.filter((r) => !free.has(r));
+  }
+
+  const added: AssignmentOps["added"] = [];
+  const droppedAdded: AssignmentOps["added"] = [];
+  for (const a of ops.added) {
+    const k = key(a.userId, a.role);
+    if (occupied.has(k)) {
+      droppedAdded.push(a);
+      continue;
+    }
+    occupied.set(k, NEW_SEAT);
+    added.push(a);
+  }
+
+  return {
+    removed: [...ops.removed, ...collapsedSeatIds],
+    reassigned: ordered,
+    added,
+    rebuilt,
+    collapsedSeatIds,
+    droppedAdded,
+  };
+}
+
+// Stands in for "a seat that doesn't exist yet" in the occupancy map, which
+// only ever asks whether a key is taken.
+const NEW_SEAT = "+";
+
 export async function prepareRosterDiff(
   setId: string,
   set: { orgId: string; teamId: string | null },
@@ -99,16 +281,28 @@ export async function prepareRosterDiff(
   // by set (not just by id) is also what stops one set's ids being used to edit
   // another's.
   const touchedIds = [...removed, ...reassigned.map((r) => r.id)];
-  const existing = await prisma.assignment.findMany({
-    where: { id: { in: touchedIds }, setId },
+  // The WHOLE roster, not only the touched seats: the collapse below has to
+  // know about seats this diff never mentions, which is exactly where the
+  // duplicates came from (a guest seat Preview Mode never showed).
+  const roster = await prisma.assignment.findMany({
+    where: { setId },
     select: {
       id: true,
       role: true,
       userId: true,
+      // A rebuilt seat is inserted again, so a borrowed one has to come back
+      // borrowed from the same guest team.
+      guestTeamId: true,
       user: { select: { name: true } },
     },
   });
-  const existingById = new Map(existing.map((a) => [a.id, a]));
+  const rosterById = new Map(roster.map((a) => [a.id, a]));
+  const existingById = new Map(
+    [...new Set(touchedIds)].flatMap((id) => {
+      const a = rosterById.get(id);
+      return a ? [[id, a] as const] : [];
+    })
+  );
   if (existingById.size !== new Set(touchedIds).size) {
     // Someone else changed this roster while the modal was open.
     return {
@@ -158,6 +352,12 @@ export async function prepareRosterDiff(
     }
   }
 
+  // ── Collapse by person and role ─────────────────────────────────────────
+  const collapsed = collapseByPersonRole(
+    { removed, reassigned, added },
+    roster
+  );
+
   // ── Build the writes ────────────────────────────────────────────────────
   // The history rows go in the same transaction, so the log can't disagree
   // with the roster.
@@ -171,8 +371,8 @@ export async function prepareRosterDiff(
     ownCatalog,
   };
 
-  for (const assignmentId of removed) {
-    const was = existingById.get(assignmentId)!;
+  for (const assignmentId of collapsed.removed) {
+    const was = rosterById.get(assignmentId)!;
     out.writes.push(prisma.assignment.delete({ where: { id: assignmentId } }));
     out.writes.push(
       prisma.setHistoryEvent.create({
@@ -194,8 +394,14 @@ export async function prepareRosterDiff(
     });
   }
 
-  for (const r of reassigned) {
-    const was = existingById.get(r.id)!;
+  // Ahead of the updates: dropping the cycle's one seat is what frees the key
+  // the rest of the rotation moves into.
+  for (const b of collapsed.rebuilt) {
+    out.writes.push(prisma.assignment.delete({ where: { id: b.seatId } }));
+  }
+
+  for (const r of collapsed.reassigned) {
+    const was = rosterById.get(r.id)!;
     // A reassignment always resets to PENDING: the new person hasn't agreed yet,
     // even if the seat was confirmed by whoever held it.
     out.writes.push(
@@ -238,7 +444,57 @@ export async function prepareRosterDiff(
     });
   }
 
-  for (const a of added) {
+  // A rebuilt seat is a reassignment the database wouldn't let us do in place,
+  // so it is written as a delete and an insert but REPORTED as a reassignment:
+  // the log, the summary and the DMs say what happened to the people, not how
+  // the rows had to move. The delete rides with the deletes above and the
+  // insert with the insertions below, which is what frees the key in between.
+  for (const b of collapsed.rebuilt) {
+    const was = rosterById.get(b.seatId)!;
+    out.writes.push(
+      prisma.setHistoryEvent.create({
+        data: {
+          setId,
+          role: b.role,
+          actorId,
+          targetUserId: b.userId,
+          previousUserId: was.userId,
+          type: "REASSIGNED",
+        },
+      })
+    );
+    out.changes.push({
+      kind: "reassigned",
+      role: b.role,
+      name: nameByUserId.get(b.userId)!,
+    });
+    out.seatedUserIds.push(b.userId);
+    out.dms.push({
+      userId: was.userId,
+      kind: "removed",
+      role: b.role,
+      catalog: ownCatalog,
+    });
+    out.dms.push({
+      userId: b.userId,
+      kind: "added",
+      role: b.role,
+      catalog: ownCatalog,
+    });
+    out.writes.push(
+      prisma.assignment.create({
+        data: {
+          setId,
+          userId: b.userId,
+          role: b.role,
+          guestTeamId: b.guestTeamId,
+          status: "PENDING",
+        },
+      })
+    );
+  }
+
+  for (const a of collapsed.added) {
     out.writes.push(
       prisma.assignment.create({
         data: {

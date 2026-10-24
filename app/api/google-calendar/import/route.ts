@@ -1,50 +1,46 @@
-// GET /api/google-calendar/import?requestId= — a member runs "Import from
-// Google Calendar" for one availability request. Once they've granted access
-// it imports right here and lands back on /schedule; the first time (or after
-// they revoke it) it redirects to Google's consent screen, and the shared
-// callback finishes the import. See lib/googleAvailability.ts.
+// "Import from Google Calendar" on /schedule, the two halves that aren't JSON
+// reads:
+//
+//   GET  — the consent trip. A full navigation to Google, because a consent
+//          screen can't live in a fetch. It lands back on
+//          /schedule?gcalImport=connected, which REOPENS the modal rather than
+//          importing anything: coming back from Google now looks like arriving
+//          at the picker, not like the app restarting.
+//   POST — the import itself, for the calendars the person ticked.
+//
+// The picker's list and the preview are the two routes beside this one.
+// See lib/googleAvailability.ts.
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { isGoogleCalendarAppConfigured } from "@/lib/googleCalendar";
-import {
-  hasRememberedAccess,
-  importAuthorizeUrl,
-  importWithRememberedAccess,
-  importableRequest,
-} from "@/lib/googleAvailability";
+import { importAuthorizeUrl, runImportFor } from "@/lib/googleAvailability";
+import { guardImport } from "./guard";
 
 export async function GET(req: NextRequest) {
-  const user = await getSessionUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
   const requestId = req.nextUrl.searchParams.get("requestId");
-  if (!requestId) {
-    return NextResponse.json({ error: "requestId required" }, { status: 400 });
-  }
-  if (!isGoogleCalendarAppConfigured()) {
-    return NextResponse.json({ error: "Google Calendar not configured" }, { status: 500 });
-  }
-  if (!(await importableRequest(user.id, requestId))) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  if (await hasRememberedAccess(user.id)) {
-    const result = await importWithRememberedAccess(user.id, requestId);
-    if (result.ok || !result.needsConsent) {
-      const q = new URLSearchParams({
-        gcalImport: result.ok ? String(result.blocks) : "error",
-        request: requestId,
-      });
-      if (!result.ok) console.error(`[gimport] error — ${result.error}`);
-      return NextResponse.redirect(new URL(`/schedule?${q.toString()}`, req.url));
-    }
-    // Revoked since: fall through and ask again.
-  }
+  const guard = await guardImport(requestId);
+  if (!guard.ok) return guard.response;
 
   const { email } = (await prisma.user.findUnique({
-    where: { id: user.id },
+    where: { id: guard.userId },
     select: { email: true },
   })) ?? { email: null };
-  return NextResponse.redirect(importAuthorizeUrl(user.id, requestId, email));
+  return NextResponse.redirect(importAuthorizeUrl(guard.userId, guard.requestId, email));
+}
+
+export async function POST(req: NextRequest) {
+  const body = (await req.json().catch(() => ({}))) as {
+    requestId?: string;
+    calendarIds?: unknown;
+  };
+  const guard = await guardImport(body.requestId ?? null);
+  if (!guard.ok) return guard.response;
+
+  const calendarIds = Array.isArray(body.calendarIds)
+    ? body.calendarIds.filter((id): id is string => typeof id === "string" && !!id)
+    : [];
+  const result = await runImportFor(guard.userId, guard.requestId, calendarIds);
+  if (result.ok) return NextResponse.json({ blocks: result.blocks });
+  if (result.needsConsent) return NextResponse.json({ needsConsent: true });
+  console.error(`[gimport] import — ${result.error}`);
+  return NextResponse.json({ error: "Couldn't import from Google Calendar" }, { status: 502 });
 }

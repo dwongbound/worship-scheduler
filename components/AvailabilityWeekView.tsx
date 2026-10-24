@@ -63,6 +63,7 @@ export default function AvailabilityWeekView({
   entries,
   highlightRange,
   googleImport = false,
+  legendKinds,
 }: {
   entries: ApiUnavailability[];
   // A request's window (YYYY-MM-DD, inclusive): days outside it are dimmed,
@@ -71,6 +72,10 @@ export default function AvailabilityWeekView({
   // Is Import from Google Calendar set up? Without it the legend has no
   // Google entry — unless blocks from an earlier import are still here.
   googleImport?: boolean;
+  // Which kinds the legend may name. The import modal's preview passes
+  // ["google"]: nothing else is drawn there, so naming the other two would
+  // promise colours that can't appear.
+  legendKinds?: BlockKind[];
 }) {
   const [start, setStart] = useState(() => {
     if (highlightRange) {
@@ -87,7 +92,7 @@ export default function AvailabilityWeekView({
 
   const todayYmd = toYmd(new Date());
   const days = weekDays(start);
-  const legend = (Object.keys(KIND_LABELS) as BlockKind[]).filter(
+  const legend = (legendKinds ?? (Object.keys(KIND_LABELS) as BlockKind[])).filter(
     (k) => k !== "google" || googleImport || entries.some((e) => e.fromGoogle),
   );
 

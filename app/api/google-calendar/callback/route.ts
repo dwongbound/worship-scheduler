@@ -16,9 +16,11 @@ import {
   verifyImportState,
   verifyState,
 } from "@/lib/googleCalendar";
-import { importFromCode } from "@/lib/googleAvailability";
+import { rememberAccessFromCode } from "@/lib/googleAvailability";
 
-// ?gcalImport=<blocks written> on success, or the reason it didn't happen.
+// The member's import comes back here only to have its permission remembered.
+// Nothing is imported: they land on /schedule?gcalImport=connected and the
+// modal they started in reopens with their calendars now readable.
 async function importCallback(
   base: string,
   params: URLSearchParams,
@@ -36,9 +38,9 @@ async function importCallback(
   // The state names who started it; whoever finishes it must be them.
   const user = await getSessionUser();
   if (!user || user.id !== imported.userId) return back("error", "signed-in user changed mid-import");
-  const result = await importFromCode(imported.userId, imported.requestId, code);
+  const result = await rememberAccessFromCode(imported.userId, code);
   if (!result.ok) return back("error", result.error);
-  return back(String(result.blocks));
+  return back("connected");
 }
 
 // The backfill makes one Google call per upcoming set.

@@ -71,6 +71,36 @@ function kindOf(rule: ApiUnavailability): BlockKind {
 }
 
 /**
+ * Imported blocks that overlap or touch, collapsed into one.
+ *
+ * One import already merges its own day (lib/googleBusy busyWindows), so this
+ * is what keeps a SECOND import's blocks — another request covering the same
+ * week — from drawing as two half-width sky columns over one busy afternoon.
+ * The merged block keeps the first one's id, which is only ever a React key
+ * here. Blocks made by hand and weekly repeats are left alone: those are
+ * separate things the person edits separately, and they say so by their colour.
+ */
+function mergeImported<T extends { id: string; kind: BlockKind; startMinute: number; endMinute: number }>(
+  blocks: T[]
+): T[] {
+  const out: T[] = [];
+  let open: T | null = null;
+  for (const b of blocks) {
+    if (b.kind !== "google") {
+      out.push(b);
+      continue;
+    }
+    if (open && b.startMinute <= open.endMinute) {
+      open.endMinute = Math.max(open.endMinute, b.endMinute);
+      continue;
+    }
+    open = { ...b };
+    out.push(open);
+  }
+  return out;
+}
+
+/**
  * The blocks on one day, positioned. A block with no window (a legacy
  * DATE_RANGE) covers the whole day. Overlapping blocks are spread into lanes
  * so neither hides the other: each cluster of mutually-overlapping blocks
@@ -78,16 +108,18 @@ function kindOf(rule: ApiUnavailability): BlockKind {
  */
 export function dayBlocks(entries: ApiUnavailability[], day: Date): WeekBlock[] {
   const d = startOfDay(day);
-  const raw = entries
-    .filter((e) => appliesOn(e, d))
-    .map((e) => ({
-      id: e.id,
-      kind: kindOf(e),
-      startMinute: e.type === "DATE_RANGE" ? 0 : (e.startMinute ?? 0),
-      endMinute: e.type === "DATE_RANGE" ? FULL_DAY_MIN : (e.endMinute ?? FULL_DAY_MIN),
-    }))
-    .filter((b) => b.endMinute > b.startMinute)
-    .sort((a, b) => a.startMinute - b.startMinute || b.endMinute - a.endMinute);
+  const raw = mergeImported(
+    entries
+      .filter((e) => appliesOn(e, d))
+      .map((e) => ({
+        id: e.id,
+        kind: kindOf(e),
+        startMinute: e.type === "DATE_RANGE" ? 0 : (e.startMinute ?? 0),
+        endMinute: e.type === "DATE_RANGE" ? FULL_DAY_MIN : (e.endMinute ?? FULL_DAY_MIN),
+      }))
+      .filter((b) => b.endMinute > b.startMinute)
+      .sort((a, b) => a.startMinute - b.startMinute || b.endMinute - a.endMinute)
+  );
 
   const out: WeekBlock[] = [];
   let cluster: WeekBlock[] = [];
