@@ -2016,13 +2016,6 @@ export default function StagedScheduleModal({
                   </div>
                 </div>
 
-                {missingMD && (
-                  <p className="mb-2 text-xs text-amber-700 dark:text-amber-400">
-                    Requires an MD but none could be scheduled. Assign one below
-                    or apply as-is and fix it later.
-                  </p>
-                )}
-
                 <ul className="space-y-2">
                   {slottedRoles(catalog).map(({ key: role, label: roleName }) => {
                     const capacity = capacities[role];
@@ -2223,38 +2216,32 @@ export default function StagedScheduleModal({
 
                 {/* MD picker: one per set, chosen from the assignees; only those
                     who qualify (an MD on keys/electric/bass, not the WL) are
-                    clickable. Empty when nobody qualifies. Absent entirely for
-                    a team whose catalog has no MD role. */}
-                {supportsMD && set.requiresMD && (
+                    clickable. Absent when nobody on the set qualifies, and for
+                    a team whose catalog has no MD role — the header's "No MD"
+                    badge is what says the seat is unfilled. */}
+                {supportsMD && set.requiresMD && mdEligibleIds.size > 0 && (
                   <div className="mt-2 border-t border-gray-100 pt-2 dark:border-gray-700">
-                    {mdEligibleIds.size === 0 ? (
-                      <p className="text-xs text-gray-500 dark:text-gray-400">
-                        No eligible MD — needs someone on keys, electric guitar,
-                        or bass.
-                      </p>
-                    ) : (
-                      <Select
-                        label="MD"
-                        value={mdUserId ?? ""}
-                        disabled={busy}
-                        onChange={(e) => setMD(idx, e.target.value)}
-                        className="py-1 text-xs"
-                      >
-                        <option value="">None</option>
-                        {Array.from(
-                          new Set(set.assignments.map((a) => a.userId))
-                        ).map((uid) => (
-                          <option
-                            key={uid}
-                            value={uid}
-                            disabled={!mdEligibleIds.has(uid)}
-                          >
-                            {nameOf(uid)}
-                            {mdEligibleIds.has(uid) ? "" : " — not eligible"}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
+                    <Select
+                      label="MD"
+                      value={mdUserId ?? ""}
+                      disabled={busy}
+                      onChange={(e) => setMD(idx, e.target.value)}
+                      className="py-1 text-xs"
+                    >
+                      <option value="">None</option>
+                      {Array.from(
+                        new Set(set.assignments.map((a) => a.userId))
+                      ).map((uid) => (
+                        <option
+                          key={uid}
+                          value={uid}
+                          disabled={!mdEligibleIds.has(uid)}
+                        >
+                          {nameOf(uid)}
+                          {mdEligibleIds.has(uid) ? "" : " — not eligible"}
+                        </option>
+                      ))}
+                    </Select>
                   </div>
                 )}
               </div>
