@@ -6,6 +6,13 @@
 // subscribe to are left out; see OWNED_ROLES below. The rules for what counts as busy
 // are lib/googleBusy.ts; this is the Google + db side.
 //
+// The screen it drives is components/GoogleImportModal: the person picks WHICH
+// of their calendars to read, sees the merged busy windows in a week preview,
+// and only then imports. So this file answers three questions rather than one —
+// list the calendars, preview a selection, write a selection — and the consent
+// trip no longer imports anything by itself; it just remembers the permission
+// and returns to the modal.
+//
 // The permission is asked for ONCE: the first import goes through Google's
 // consent screen, and the refresh token it returns is kept (encrypted) on the
 // person's row, so every later import runs server-side with no Google screen
@@ -24,7 +31,7 @@ import { decryptSecret, encryptSecret } from "./crypto";
 import { targetsUser } from "./availabilityTargets";
 import { getMyOrgIds } from "./org";
 import { parseLocalDate, toYmd } from "./dates";
-import { busyWindows, type GoogleEvent } from "./googleBusy";
+import { busyWindows, type BusyWindow, type GoogleEvent } from "./googleBusy";
 import { clientId, clientSecret, redirectUri, signImportState } from "./googleCalendar";
 
 const ACCOUNTS = "https://accounts.google.com/o/oauth2/v2/auth";
@@ -100,9 +107,19 @@ export type ImportResult =
 
 interface CalendarListEntry {
   id: string;
+  summary?: string;
+  summaryOverride?: string;
   accessRole?: string;
   primary?: boolean;
   deleted?: boolean;
+}
+
+/** One of the person's own calendars, as the picker lists it. */
+export interface ImportCalendar {
+  id: string;
+  /** What Google calls it — the person's own rename wins. */
+  name: string;
+  primary: boolean;
 }
 
 /**
@@ -113,8 +130,8 @@ interface CalendarListEntry {
  * turns it into one more trip through Google's consent screen rather than
  * quietly importing a single calendar again.
  */
-async function fetchOwnCalendarIds(token: string): Promise<string[] | null> {
-  const ids: string[] = [];
+async function fetchOwnCalendars(token: string): Promise<ImportCalendar[] | null> {
+  const out: ImportCalendar[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
     const params = new URLSearchParams({
@@ -122,7 +139,7 @@ async function fetchOwnCalendarIds(token: string): Promise<string[] | null> {
       // Hidden calendars still count: hiding one in Google's sidebar says
       // nothing about whether its events occupy the person.
       showHidden: "true",
-      fields: "nextPageToken,items(id,accessRole,primary,deleted)",
+      fields: "nextPageToken,items(id,summary,summaryOverride,accessRole,primary,deleted)",
     });
     if (pageToken) params.set("pageToken", pageToken);
     const res = await fetch(`${CALENDARS}?${params.toString()}`, {
@@ -141,12 +158,22 @@ async function fetchOwnCalendarIds(token: string): Promise<string[] | null> {
     };
     for (const c of json.items ?? []) {
       if (c.deleted) continue;
-      if (c.primary || OWNED_ROLES.has(c.accessRole ?? "")) ids.push(c.id);
+      if (!c.primary && !OWNED_ROLES.has(c.accessRole ?? "")) continue;
+      out.push({
+        id: c.id,
+        name: c.summaryOverride || c.summary || c.id,
+        primary: !!c.primary,
+      });
     }
     pageToken = json.nextPageToken;
     if (!pageToken) break;
   }
-  return ids.slice(0, MAX_CALENDARS);
+  // Primary first, then by name: the picker ticks them all, and the one with
+  // the person's own address on it is the one they look for.
+  out.sort((a, b) =>
+    a.primary === b.primary ? a.name.localeCompare(b.name) : a.primary ? -1 : 1
+  );
+  return out.slice(0, MAX_CALENDARS);
 }
 
 /** One calendar's events in the window. `null` = that calendar couldn't be read. */
@@ -186,30 +213,23 @@ async function fetchCalendarEvents(
 }
 
 /**
- * Every own calendar's events in the window, in one list.
+ * The chosen calendars' events in the window, in one list.
  *
  * The same event can sit on two of them (an invitation the person accepted
  * also lands on their own calendar), but `busyWindows` merges overlapping
  * windows per day, so a duplicate costs nothing.
  *
- * One calendar failing does NOT fail the import: the rest still make blocks,
- * and a missing calendar means a few blocks short, not a wrong answer.
- * Failing to list the calendars at all is different — that's `null`.
+ * One calendar failing does NOT fail the read: the rest still make blocks,
+ * and a missing calendar means a few blocks short, not a wrong answer. Every
+ * one of them failing is a failure, so an empty answer can never silently
+ * replace the blocks the person already had.
  */
-type FetchedEvents =
-  | { ok: true; events: GoogleEvent[] }
-  // The calendars couldn't be listed. A token remembered from before the list
-  // scope existed looks exactly like this, so the caller re-asks for consent.
-  | { ok: false; needsConsent: true }
-  | { ok: false; needsConsent: false };
-
 async function fetchEvents(
   token: string,
+  calendarIds: string[],
   timeMin: Date,
   timeMax: Date
-): Promise<FetchedEvents> {
-  const calendarIds = await fetchOwnCalendarIds(token);
-  if (!calendarIds) return { ok: false, needsConsent: true };
+): Promise<GoogleEvent[] | null> {
   const events: GoogleEvent[] = [];
   let read = 0;
   for (const id of calendarIds) {
@@ -218,55 +238,8 @@ async function fetchEvents(
     read++;
     events.push(...got);
   }
-  // Every single calendar refused: report the failure rather than writing an
-  // empty import over the blocks the person already had.
-  if (read === 0 && calendarIds.length > 0) return { ok: false, needsConsent: false };
-  return { ok: true, events };
-}
-
-/** Read the request's window with `accessToken` and replace the imported blocks. */
-async function runImport(
-  userId: string,
-  request: { id: string; startDate: Date; endDate: Date },
-  accessToken: string
-): Promise<ImportResult> {
-  // Request dates are server-local midnights (the server runs on APP_TZ),
-  // and endDate is the LAST day asked about, so read through the end of it.
-  const timeMax = new Date(request.endDate);
-  timeMax.setDate(timeMax.getDate() + 1);
-  const fetched = await fetchEvents(accessToken, request.startDate, timeMax);
-  if (!fetched.ok) {
-    return fetched.needsConsent
-      ? // The remembered permission predates reading the calendar LIST, so it
-        // can only ever see `primary`. One more consent screen fixes that for
-        // good, which beats silently importing one calendar out of several.
-        { ok: false, error: "needs permission to see your calendars", needsConsent: true }
-      : { ok: false, error: "couldn't read the calendars" };
-  }
-
-  const windows = busyWindows(
-    fetched.events,
-    toYmd(request.startDate),
-    toYmd(request.endDate)
-  );
-  await prisma.$transaction([
-    prisma.unavailability.deleteMany({
-      where: { userId, requestId: request.id, fromGoogle: true },
-    }),
-    prisma.unavailability.createMany({
-      data: windows.map((w) => ({
-        userId,
-        type: "SPECIFIC" as const,
-        startDate: parseLocalDate(w.ymd)!,
-        endDate: null,
-        startMinute: w.startMinute,
-        endMinute: w.endMinute,
-        requestId: request.id,
-        fromGoogle: true,
-      })),
-    }),
-  ]);
-  return { ok: true, blocks: windows.length };
+  if (read === 0 && calendarIds.length > 0) return null;
+  return events;
 }
 
 /** Has this person granted (and not since revoked) calendar access? */
@@ -286,19 +259,178 @@ export async function forgetAccess(userId: string): Promise<void> {
   });
 }
 
+type AccessToken =
+  | { ok: true; token: string }
+  | { ok: false; error: string; needsConsent?: boolean };
+
 /**
- * The first import: swap the callback's code for tokens, remember the refresh
- * token, then import. Blocks made by hand are never touched.
+ * An access token from the remembered permission — the first thing all three
+ * operations do. A refused refresh (revoked in their Google account, or
+ * expired) forgets it and answers needsConsent, so the caller sends them to
+ * Google and the modal picks up where it left off.
  */
-export async function importFromCode(
+async function accessTokenFor(userId: string): Promise<AccessToken> {
+  const row = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { googleImportRefreshToken: true },
+  });
+  if (!row?.googleImportRefreshToken) {
+    return { ok: false, error: "no access", needsConsent: true };
+  }
+  let refresh: string;
+  try {
+    refresh = decryptSecret(row.googleImportRefreshToken);
+  } catch {
+    await forgetAccess(userId);
+    return { ok: false, error: "unreadable token", needsConsent: true };
+  }
+  const res = await fetch(TOKEN, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: clientId() ?? "",
+      client_secret: clientSecret() ?? "",
+      refresh_token: refresh,
+      grant_type: "refresh_token",
+    }),
+  });
+  if (!res.ok) {
+    console.error(`[gimport] refresh failed for ${userId}: ${res.status} ${await res.text()}`);
+    await forgetAccess(userId);
+    return { ok: false, error: "access revoked", needsConsent: true };
+  }
+  const { access_token } = (await res.json()) as { access_token: string };
+  return { ok: true, token: access_token };
+}
+
+export type CalendarsResult =
+  | { ok: true; calendars: ImportCalendar[] }
+  | { ok: false; error: string; needsConsent?: boolean };
+
+/**
+ * The person's own calendars, for the picker.
+ *
+ * Failing to LIST them is `needsConsent`, not an error: a token remembered
+ * from before the list scope existed looks exactly like this, and one more
+ * consent screen fixes it for good.
+ */
+export async function listImportCalendars(userId: string): Promise<CalendarsResult> {
+  try {
+    const access = await accessTokenFor(userId);
+    if (!access.ok) return access;
+    const calendars = await fetchOwnCalendars(access.token);
+    if (!calendars) {
+      return { ok: false, error: "can't list the calendars", needsConsent: true };
+    }
+    return { ok: true, calendars };
+  } catch (err) {
+    console.error("[gimport] listing calendars failed", err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+/** The window to read for a request: through the END of its last day. */
+function readRange(request: { startDate: Date; endDate: Date }): [Date, Date] {
+  // Request dates are server-local midnights (the server runs on APP_TZ),
+  // and endDate is the LAST day asked about, so read through the end of it.
+  const timeMax = new Date(request.endDate);
+  timeMax.setDate(timeMax.getDate() + 1);
+  return [request.startDate, timeMax];
+}
+
+export type PreviewResult =
+  | { ok: true; windows: BusyWindow[] }
+  | { ok: false; error: string; needsConsent?: boolean };
+
+/**
+ * What importing `calendarIds` WOULD block, and nothing else: the merged busy
+ * windows, in the same shape and from the same code the import writes. The
+ * preview is therefore not an approximation of the import — it is the import's
+ * own answer, read without writing it.
+ */
+export async function previewImport(
   userId: string,
   requestId: string,
-  code: string
+  calendarIds: string[]
+): Promise<PreviewResult> {
+  try {
+    const request = await importableRequest(userId, requestId);
+    if (!request) return { ok: false, error: "request not found for this person" };
+    if (calendarIds.length === 0) return { ok: true, windows: [] };
+    const access = await accessTokenFor(userId);
+    if (!access.ok) return access;
+    const [timeMin, timeMax] = readRange(request);
+    const events = await fetchEvents(access.token, calendarIds, timeMin, timeMax);
+    if (!events) return { ok: false, error: "couldn't read the calendars" };
+    return {
+      ok: true,
+      windows: busyWindows(events, toYmd(request.startDate), toYmd(request.endDate)),
+    };
+  } catch (err) {
+    console.error("[gimport] preview failed", err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+/**
+ * Import `calendarIds` for real.
+ *
+ * It REPLACES this request's earlier imported blocks rather than adding to
+ * them, so importing twice leaves the same rows rather than two of each — and
+ * because `busyWindows` has already merged the day, two calendars holding the
+ * same meeting are one block, not two. Blocks made by hand are never touched.
+ */
+export async function runImportFor(
+  userId: string,
+  requestId: string,
+  calendarIds: string[]
 ): Promise<ImportResult> {
   try {
     const request = await importableRequest(userId, requestId);
     if (!request) return { ok: false, error: "request not found for this person" };
+    let windows: BusyWindow[] = [];
+    if (calendarIds.length > 0) {
+      const access = await accessTokenFor(userId);
+      if (!access.ok) return access;
+      const [timeMin, timeMax] = readRange(request);
+      const events = await fetchEvents(access.token, calendarIds, timeMin, timeMax);
+      if (!events) return { ok: false, error: "couldn't read the calendars" };
+      windows = busyWindows(events, toYmd(request.startDate), toYmd(request.endDate));
+    }
+    await prisma.$transaction([
+      prisma.unavailability.deleteMany({
+        where: { userId, requestId: request.id, fromGoogle: true },
+      }),
+      prisma.unavailability.createMany({
+        data: windows.map((w) => ({
+          userId,
+          type: "SPECIFIC" as const,
+          startDate: parseLocalDate(w.ymd)!,
+          endDate: null,
+          startMinute: w.startMinute,
+          endMinute: w.endMinute,
+          requestId: request.id,
+          fromGoogle: true,
+        })),
+      }),
+    ]);
+    return { ok: true, blocks: windows.length };
+  } catch (err) {
+    console.error("[gimport] import failed", err);
+    return { ok: false, error: String(err) };
+  }
+}
 
+/**
+ * The consent trip's only job: swap the callback's code for tokens and
+ * remember the refresh token. It imports NOTHING — the person is sent back to
+ * the modal they started in, with their calendars now readable.
+ */
+export async function rememberAccessFromCode(
+  userId: string,
+  code: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
     const res = await fetch(TOKEN, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -310,71 +442,25 @@ export async function importFromCode(
         grant_type: "authorization_code",
       }),
     });
-    if (!res.ok) return { ok: false, error: `token exchange ${res.status}: ${await res.text()}` };
-    const tokens = (await res.json()) as {
-      access_token: string;
-      refresh_token?: string;
-      scope?: string;
-    };
+    if (!res.ok) {
+      return { ok: false, error: `token exchange ${res.status}: ${await res.text()}` };
+    }
+    const tokens = (await res.json()) as { refresh_token?: string; scope?: string };
     if (!tokens.scope?.includes(READ_SCOPE)) {
       return { ok: false, error: "calendar access wasn't granted on the consent screen" };
     }
-    if (tokens.refresh_token) {
-      await prisma.user.update({
-        where: { id: userId },
-        data: { googleImportRefreshToken: encryptSecret(tokens.refresh_token) },
-      });
+    if (!tokens.refresh_token) {
+      // No refresh token means nothing to remember, and the modal would ask
+      // again on its next call anyway — say so rather than looking connected.
+      return { ok: false, error: "Google returned no refresh token" };
     }
-    return await runImport(userId, request, tokens.access_token);
-  } catch (err) {
-    console.error("[gimport] import failed", err);
-    return { ok: false, error: String(err) };
-  }
-}
-
-/**
- * Every import after the first: no Google screen, just the remembered
- * permission. A refused refresh (revoked in their Google account, or expired)
- * forgets it and answers needsConsent, so the caller sends them to Google.
- */
-export async function importWithRememberedAccess(
-  userId: string,
-  requestId: string
-): Promise<ImportResult> {
-  try {
-    const request = await importableRequest(userId, requestId);
-    if (!request) return { ok: false, error: "request not found for this person" };
-    const row = await prisma.user.findUnique({
+    await prisma.user.update({
       where: { id: userId },
-      select: { googleImportRefreshToken: true },
+      data: { googleImportRefreshToken: encryptSecret(tokens.refresh_token) },
     });
-    if (!row?.googleImportRefreshToken) return { ok: false, error: "no access", needsConsent: true };
-    let refresh: string;
-    try {
-      refresh = decryptSecret(row.googleImportRefreshToken);
-    } catch {
-      await forgetAccess(userId);
-      return { ok: false, error: "unreadable token", needsConsent: true };
-    }
-    const res = await fetch(TOKEN, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: clientId() ?? "",
-        client_secret: clientSecret() ?? "",
-        refresh_token: refresh,
-        grant_type: "refresh_token",
-      }),
-    });
-    if (!res.ok) {
-      console.error(`[gimport] refresh failed for ${userId}: ${res.status} ${await res.text()}`);
-      await forgetAccess(userId);
-      return { ok: false, error: "access revoked", needsConsent: true };
-    }
-    const { access_token } = (await res.json()) as { access_token: string };
-    return await runImport(userId, request, access_token);
+    return { ok: true };
   } catch (err) {
-    console.error("[gimport] import failed", err);
+    console.error("[gimport] remembering access failed", err);
     return { ok: false, error: String(err) };
   }
 }

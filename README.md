@@ -385,11 +385,24 @@ rotating that secret means every org must reconnect.
 ### Import from Google Calendar (members)
 
 On /schedule, the selected request's card has **Import from Google Calendar**
-whenever the OAuth client is configured. It reads the member's OWN calendar
-(read-only, never event titles) across that request's window and writes a
-block for every busy time: timed events unless marked *Free*, **all-day events
-as the whole day** (Free or not), cancelled and declined events skipped,
-overlaps merged per day. Re-importing replaces only the blocks an earlier
+whenever the OAuth client is configured. It opens a modal
+(`components/GoogleImportModal.tsx`) with three steps: **pick** which of the
+member's own calendars to read, **preview** what those would block in the same
+week grid the page draws, then **import**. Nothing is written until they press
+Import, every Google call puts a blocking indicator over the modal, and the
+consent screen — the one step that must leave the page — returns to
+`/schedule?gcalImport=connected`, which REOPENS the modal rather than importing
+behind their back.
+
+It reads the chosen calendars (read-only, never event titles) across that
+request's window and writes a block for every busy time: timed events unless
+marked *Free*, **all-day events as the whole day** (Free or not), cancelled and
+declined events skipped, **overlaps merged per day** — two calendars holding
+the same meeting, or a chain of back-to-back ones, is ONE block. The preview
+runs the import's own code (`previewImport` beside `runImportFor`), so what it
+shows is what lands. The week view merges overlapping imported blocks into one
+column too (`lib/weekView.ts`), so even blocks from two different requests read
+as one busy stretch rather than side-by-side lanes. Re-importing replaces only the blocks an earlier
 import wrote for that request (`Unavailability.fromGoogle`); hand-made blocks
 are never touched, and imported ones can be edited or deleted like any other.
 The permission is asked for once: the first import shows Google's consent
@@ -401,14 +414,16 @@ unverified-app warning a sensitive scope brings can't land on the login. It shar
 `/api/google-calendar/callback` (told apart by its signed state), so there's no
 extra redirect URI and no new env var; it does need the `calendar.events.readonly`
 and `calendar.calendarlist.readonly` scopes above and migration
-`20261022120000_unavailability_from_google`. It reads EVERY calendar the member
-owns or can edit (a work one, a family one), skipping ones they merely subscribe
-to — a holidays feed would otherwise block whole days. A token remembered from
+`20261022120000_unavailability_from_google`. The picker lists every calendar the member
+owns or can edit (a work one, a family one), all ticked to begin with, and
+leaves out ones they merely subscribe to — a holidays feed would otherwise
+block whole days. A token remembered from
 before the list scope was added can't list calendars, so the import sends that
 person through consent once more rather than silently reading `primary` alone. The page
 then opens the **Week** view (hours down, days across) to check the result.
-Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`,
-`app/api/google-calendar/import`.
+Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`
+(`listImportCalendars` / `previewImport` / `runImportFor`, one route each under
+`app/api/google-calendar/import`), `components/GoogleImportModal.tsx`.
 
 ## Slack (future)
 

@@ -45,6 +45,7 @@ import {
   isOptimisticId,
   weeksFromToday,
 } from "@/lib/availability";
+import GoogleImportModal from "@/components/GoogleImportModal";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   dateRangeLabel,
@@ -299,20 +300,34 @@ export default function SchedulePage() {
   const [view, setView] = useState<"month" | "week">("month");
   // Whether this deployment offers "Import from Google Calendar" at all.
   const [googleImport, setGoogleImport] = useState(false);
-  // What the last import did, shown once on coming back from Google.
+  // What the last import did, shown once it's done.
   const [notice, setNotice] = useState<ReturnType<typeof importNotice>>(null);
+  // Which request's import modal is open. The import is a screen now — pick
+  // the calendars, preview what they'd block, then write it.
+  const [importFor, setImportFor] = useState<string | null>(null);
 
-  // Coming back from Google (lib/googleAvailability.ts): say how it went,
-  // focus the request it was for, and open the week view to check it. The
+  // Coming back from Google (lib/googleAvailability.ts). `connected` means the
+  // permission was just granted and nothing was imported: REOPEN the modal on
+  // the request it was for, so the consent screen returns to the picker rather
+  // than looking like the app restarting. Anything else is a notice. The
   // params are then dropped so a reload doesn't announce it twice.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const result = importNotice(params.get("gcalImport"));
-    if (!result) return;
-    setNotice(result);
+    const status = params.get("gcalImport");
     const requestId = params.get("request");
-    if (requestId) setSelectedRequestId(requestId);
-    setView("week");
+    const result = importNotice(status);
+    if (!status) return;
+    if (status === "connected") {
+      if (requestId) {
+        setSelectedRequestId(requestId);
+        setImportFor(requestId);
+      }
+    } else {
+      if (!result) return;
+      setNotice(result);
+      if (requestId) setSelectedRequestId(requestId);
+      setView("week");
+    }
     params.delete("gcalImport");
     params.delete("request");
     const rest = params.toString();
@@ -957,11 +972,12 @@ export default function SchedulePage() {
                           </Button>
                         ) : (
                           <>
-                            {/* Reads THEIR Google Calendar across this
-                                request's window and blocks every busy time,
-                                all-day events as whole days
-                                (lib/googleAvailability.ts). A full navigation:
-                                Google's consent screen, then back. */}
+                            {/* Opens the import modal: which of THEIR
+                                calendars to read, a preview of what those
+                                would block across this request's window, then
+                                the import (components/GoogleImportModal).
+                                Granting the permission is the one step that
+                                leaves the page, and it returns here. */}
                             {googleImport && (
                               <Button
                                 size="sm"
@@ -969,7 +985,7 @@ export default function SchedulePage() {
                                 data-testid="import-google"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  window.location.href = `/api/google-calendar/import?requestId=${encodeURIComponent(r.id)}`;
+                                  setImportFor(r.id);
                                 }}
                               >
                                 Import from Google Calendar
@@ -1534,6 +1550,30 @@ export default function SchedulePage() {
           </div>
         </Modal>
       )}
+
+      {/* Import from Google Calendar: the picker, the preview and the import
+          itself. It keeps the page as it is underneath, which is why coming
+          back from Google's consent screen can land straight back in here. */}
+      {importFor &&
+        (() => {
+          const r = requests.find((x) => x.id === importFor);
+          if (!r) return null;
+          return (
+            <GoogleImportModal
+              open
+              requestId={r.id}
+              window={{ start: r.startDate.slice(0, 10), end: r.endDate.slice(0, 10) }}
+              onClose={() => setImportFor(null)}
+              onImported={(blocks) => {
+                setImportFor(null);
+                setNotice(importNotice(String(blocks)));
+                setSelectedRequestId(r.id);
+                setView("week");
+                void reload();
+              }}
+            />
+          );
+        })()}
     </div>
   );
 }
