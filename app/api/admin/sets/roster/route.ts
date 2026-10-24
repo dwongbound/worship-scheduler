@@ -109,7 +109,14 @@ export async function PUT(req: NextRequest) {
   if (prepared.length > 0) {
     try {
       await prisma.$transaction(prepared.flatMap((p) => p.writes));
-    } catch {
+    } catch (err) {
+      // See the single-set route: the admin gets the sentence, the log gets
+      // the database's own message, which is the only thing that names the
+      // seat that failed.
+      console.error("[roster] batch save failed", {
+        setIds: prepared.map((p) => p.setId),
+        error: err,
+      });
       return NextResponse.json(DUPLICATE_SEAT, { status: DUPLICATE_SEAT.status });
     }
     for (const p of prepared) await rosterAftermath(p, { sendDms: false });
