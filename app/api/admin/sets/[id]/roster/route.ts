@@ -75,7 +75,11 @@ export async function PATCH(
   // One transaction: either the whole save lands or none of it does.
   try {
     await prisma.$transaction(prepared.writes);
-  } catch {
+  } catch (err) {
+    // The answer to the admin stays the plain sentence, but the database's own
+    // error names the set, the person and the role — without it in the log
+    // there is nothing to go on when a save fails in production.
+    console.error("[roster] save failed", { setId, error: err });
     return NextResponse.json(
       { error: DUPLICATE_SEAT.error },
       { status: DUPLICATE_SEAT.status }

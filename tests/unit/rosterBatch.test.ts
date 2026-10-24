@@ -149,8 +149,10 @@ describe("PUT /api/admin/sets/roster", () => {
   });
 
   it("saves a two-person trade inside one role", async () => {
-    // Both seats keep their role, so the save is two reassignments — and the
-    // writes are ordered so neither moment holds one person in VOCALS twice.
+    // Two people swapping seats in the SAME role is a cycle: neither update can
+    // go first, because each seat still holds its old occupant. One seat is
+    // rebuilt (deleted, then inserted under its new occupant) so the other can
+    // simply be updated — and no moment holds one person in VOCALS twice.
     m(prisma.assignment.findMany).mockImplementation(async ({ where }) =>
       [
         { id: "v1", setId: "s1", role: "VOCALS", userId: "u1", user: { name: "Carol" } },
@@ -172,7 +174,14 @@ describe("PUT /api/admin/sets/roster", () => {
       ],
     });
     expect(res.status).toBe(200);
-    expect(prisma.assignment.update).toHaveBeenCalledTimes(2);
+    expect(prisma.assignment.update).toHaveBeenCalledTimes(1);
+    expect(prisma.assignment.delete).toHaveBeenCalledTimes(1);
+    expect(prisma.assignment.create).toHaveBeenCalledTimes(1);
+    // Both people are still in VOCALS afterwards, just in each other's seats.
+    expect(m(prisma.assignment.create).mock.calls[0][0].data).toMatchObject({
+      setId: "s1",
+      role: "VOCALS",
+    });
   });
 
   it("writes nothing when any set in the batch is stale", async () => {
