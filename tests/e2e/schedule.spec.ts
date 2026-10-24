@@ -299,8 +299,9 @@ test("submits availability and re-opens it for changes", async ({ page }) => {
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  // The card flips to a "Completed" badge with the date it went.
-  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  // The card reports the date it went. There's no status pill — the
+  // Todo / All switch above is what says answered or not.
+  await expect(page.getByText(/· sent /)).toBeVisible();
 
   // "Make changes" re-opens it (unsubmits).
   await page.getByRole("button", { name: "Make changes" }).click();
