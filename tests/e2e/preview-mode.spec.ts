@@ -187,7 +187,12 @@ test("auto schedule keeps the locked calendar and saves as one confirmed batch",
   expect(sent).toBeNull();
 
   await review.getByRole("button", { name: "Save Changes" }).click();
-  await confirm.getByRole("button", { name: "Save Changes" }).click();
+  // The confirm's commit button reads "Save anyway" when the plan has seats
+  // that break a scheduling rule, and "Save Changes" when it doesn't — the
+  // seeded roster can go either way, and neither is ever disabled.
+  await confirm
+    .getByRole("button", { name: /^Save (Changes|anyway)$/ })
+    .click();
   await expect(review).not.toBeVisible();
   expect(sent).not.toBeNull();
   // Only edited sets travel, and the locked Sunday crew wasn't one of them.
