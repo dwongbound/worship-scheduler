@@ -113,6 +113,58 @@ describe("clipToView", () => {
   });
 });
 
+describe("dayBlocks merges imported blocks", () => {
+  const ymd = "2026-10-05";
+  const day = new Date(2026, 9, 5);
+  const google = (id: string, st: number, en: number) => specific(id, ymd, st, en, true);
+
+  it("collapses overlapping imported blocks into one, in one lane", () => {
+    // Two imports covering the same week — one request's and another's — would
+    // otherwise draw as two half-width sky columns over one busy afternoon.
+    const out = dayBlocks([google("a", 16 * 60, 18 * 60), google("b", 17 * 60, 19 * 60)], day);
+    expect(out).toHaveLength(1);
+    expect([out[0].startMinute, out[0].endMinute, out[0].lanes]).toEqual([16 * 60, 19 * 60, 1]);
+  });
+
+  it("collapses a chain of three, and only where they meet", () => {
+    const out = dayBlocks(
+      [
+        google("a", 540, 600),
+        google("b", 600, 660), // touching: joins
+        google("c", 630, 720),
+        google("d", 900, 960), // clear of the rest: its own block
+      ],
+      day
+    );
+    expect(out.map((b) => [b.startMinute, b.endMinute])).toEqual([
+      [540, 720],
+      [900, 960],
+    ]);
+    expect(out.every((b) => b.lanes === 1)).toBe(true);
+  });
+
+  it("leaves hand-made blocks and weekly repeats alone", () => {
+    // Different things the person edits separately, and their colour says so:
+    // an imported block overlapping one of those still shows both.
+    const recurring: ApiUnavailability = {
+      ...base,
+      id: "r",
+      type: "RECURRING",
+      dayOfWeek: 1,
+      startMinute: 16 * 60,
+      endMinute: 18 * 60,
+    };
+    const out = dayBlocks([google("g", 16 * 60, 17 * 60), specific("h", ymd, 16 * 60, 17 * 60), recurring], day);
+    expect(out.map((b) => b.kind).sort()).toEqual(["google", "recurring", "specific"]);
+    expect(out.every((b) => b.lanes === 3)).toBe(true);
+  });
+
+  it("keeps one imported block as it is", () => {
+    const out = dayBlocks([google("a", 540, 600)], day);
+    expect(out.map((b) => [b.id, b.startMinute, b.endMinute])).toEqual([["a", 540, 600]]);
+  });
+});
+
 describe("compactTime", () => {
   it("writes hours the short way", () => {
     expect(compactTime(0)).toBe("12a");
