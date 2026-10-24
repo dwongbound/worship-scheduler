@@ -208,6 +208,7 @@ describe("toStagedSet", () => {
       teamId: sundayTeam.id,
       templateId: "tpl-sunday",
       existing: true,
+      guestSeats: [],
       assignments: [
         { userId: "u1", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: null },
         { userId: "u2", role: "DRUMS", assignmentId: "a2", locked: true, pendingFromUserId: null },
@@ -247,7 +248,7 @@ describe("toStagedSet", () => {
     ]);
   });
 
-  it("drops borrowed guest-team seats — the card has no column for them", () => {
+  it("reports borrowed guest-team seats apart from the card's own roster", () => {
     const set = apiSet({
       startsAt: SUNDAY,
       assignments: [
@@ -266,9 +267,32 @@ describe("toStagedSet", () => {
         },
       ],
     });
-    expect(toStagedSet(set, templates, TZ).assignments).toEqual([
+    const staged = toStagedSet(set, templates, TZ);
+    // Not a seat on the card: the role belongs to the LENDING team's catalog.
+    expect(staged.assignments).toEqual([
       { userId: "u1", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: null },
     ]);
+    // But still a person on the set, so the pick lists and Auto schedule can
+    // leave them out instead of proposing a seat the db would refuse.
+    expect(staged.guestSeats).toEqual([{ userId: "u3", role: "CHOIR" }]);
+  });
+
+  it("never diffs a borrowed seat away on save", () => {
+    const set = apiSet({
+      id: "set-1",
+      startsAt: SUNDAY,
+      assignments: [
+        {
+          id: "a2",
+          role: "CHOIR",
+          status: "PENDING",
+          user: { id: "u3", name: "Guest" },
+          guestTeamId: "gt-1",
+        },
+      ],
+    });
+    const before = toStagedSet(set, templates, TZ);
+    expect(previewSaves([before], [before])).toEqual([]);
   });
 
   it("keeps same-time sets distinct via their real ids", () => {

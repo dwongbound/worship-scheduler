@@ -134,9 +134,11 @@ export function previewSetTypes(
  * `stagingId` is the set's real id, so two sets that start at the same instant
  * — a Sunday service and a prayer meeting at 9am — stay distinct rows.
  *
- * Guest-team seats are dropped: a borrowed seat belongs to the LENDING team's
- * role catalog, which the staged card (built from the owning team's roles)
- * has no column for. The preview shows the set's own roster.
+ * Guest-team seats are not staged as seats: a borrowed seat belongs to the
+ * LENDING team's role catalog, which the staged card (built from the owning
+ * team's roles) has no column for. They are reported as `guestSeats` instead,
+ * so the card shows the set's own roster while the pick lists and Auto schedule
+ * still know those people are on the set.
  */
 export function toStagedSet(
   set: ApiSet,
@@ -155,6 +157,9 @@ export function toStagedSet(
     teamId: teamIdOf(set),
     templateId: setTypeOf(set, templates, timeZone),
     existing: true,
+    guestSeats: set.assignments
+      .filter((a) => a.guestTeamId)
+      .map((a) => ({ userId: a.user.id, role: a.role })),
     assignments: set.assignments
       .filter((a) => !a.guestTeamId)
       // The row id rides along so a SAVE can tell "same seat, new person"
