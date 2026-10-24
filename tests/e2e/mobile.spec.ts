@@ -304,8 +304,8 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  // The card flips to a "Completed" badge.
-  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  // The card reports the date it went, in place of the old status pill.
+  await expect(page.getByText(/· sent /)).toBeVisible();
 
   // "Make changes" re-opens it (unsubmits) so the response can be edited.
   await page.getByRole("button", { name: "Make changes" }).click();
