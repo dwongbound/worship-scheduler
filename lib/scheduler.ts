@@ -189,6 +189,11 @@ export interface ExistingAssignment {
   // and nothing else. A booking with no team is counted by org-wide limits
   // only — it can't be attributed to a team it never named.
   teamId?: string | null;
+  // Which set it is, when the caller knows. Nothing in the fill reads it; it
+  // rides along so a client that is PREVIEWING those same sets can tell its
+  // own staged copy from the db row behind it (lib/ruleWarnings.ts) instead of
+  // counting the booking twice.
+  setId?: string | null;
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;

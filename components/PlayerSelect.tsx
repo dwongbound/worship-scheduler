@@ -113,6 +113,12 @@ interface PlayerSelectProps {
   // styling is gated behind `lg:`): it answers a question you can only ask with
   // a pointer, on a screen wide enough to show several sets at once.
   highlighted?: boolean;
+  // This pick breaks one of the org's scheduling rules (lib/ruleWarnings.ts).
+  // A yellow EDGE only — no fill, so the locked-indigo and hover-yellow
+  // backgrounds still read underneath it, and so one warned seat in a column
+  // doesn't become the loudest thing on the card. Advisory: the caller never
+  // disables anything on the strength of it.
+  warned?: boolean;
   // Who the pointer is resting on right now, or null for nobody. Fires for the
   // person in the CLOSED control, and — once the menu is open — for whichever
   // option row is under the cursor, so the highlight follows you down the list
@@ -128,6 +134,7 @@ export default function PlayerSelect({
   dashed,
   locked,
   highlighted,
+  warned,
   onHoverChange,
   widthClass = PLAYER_SELECT_WIDTH,
 }: PlayerSelectProps) {
@@ -376,11 +383,17 @@ export default function PlayerSelect({
         aria-expanded={open}
         className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1 text-left text-sm disabled:opacity-50
           ${
-            dashed && !selected
-              ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
-              : locked
-                ? "border-indigo-400 font-medium dark:border-indigo-500"
-                : "border-gray-300 dark:border-gray-600"
+            // Exactly one border-colour utility, like the backgrounds below.
+            // The warning wins the edge: it is the thing you came to notice.
+            // `ring` rather than a second border width — a thicker border
+            // would shift every other box on the card by a pixel.
+            warned
+              ? "border-yellow-500 ring-1 ring-yellow-500 dark:border-yellow-400 dark:ring-yellow-400"
+              : dashed && !selected
+                ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
+                : locked
+                  ? "border-indigo-400 font-medium dark:border-indigo-500"
+                  : "border-gray-300 dark:border-gray-600"
           }
           ${
             // Backgrounds are kept in their own chain so exactly ONE bg utility

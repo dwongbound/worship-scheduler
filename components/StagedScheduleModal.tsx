@@ -157,6 +157,13 @@ import {
   type TeamRoleDef,
 } from "@/lib/teamRoles";
 import { describePreviewSaves, previewSaves } from "@/lib/calendarPreview";
+import {
+  describeSeatWarning,
+  ruleWarnings,
+  seatKey,
+  warningTierLabel,
+  type SeatWarning,
+} from "@/lib/ruleWarnings";
 import type { ApiAdminUser, ApiTeam, StagedPlan, StagedSet } from "@/lib/types";
 
 interface StagedScheduleModalProps {
@@ -272,6 +279,19 @@ const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
 // The rules holding a seat open, in the exact words the rules editor shows —
 // nothing added. The mark beside it already says it's held; what the reader
 // needs from the (i) is WHICH rule to go and change.
+/**
+ * The (!) tooltip on a seat that breaks a rule. It names the rule and then says
+ * outright that saving is still fine: a yellow mark that looked like a refusal
+ * would have admins hunting for a way round something that was never in the
+ * way.
+ */
+function warnReason(list: SeatWarning[], names: RuleNames): string {
+  const reasons = list.map((w) => describeSeatWarning(w, names)).join("; ");
+  return `${
+    list.length === 1 ? "Breaks a rule you set" : "Breaks rules you set"
+  }: ${reasons}. You can still save — rules only steer Auto schedule.`;
+}
+
 function heldReason(held: SchedulingRule[], names: RuleNames): string {
   return held.map((r) => ruleSentence(r.params, names)).join("; ");
 }
@@ -399,6 +419,9 @@ export default function StagedScheduleModal({
   // and the ✕/backdrop), which is why it wraps onClose rather than sitting on
   // the button.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Generate flow only: the "these seats break a rule" list, shown once when
+  // Apply is pressed on a plan that has any.
+  const [confirmApply, setConfirmApply] = useState(false);
   // Preview only: the "you're about to save N changes across K sets" step.
   const [confirmSave, setConfirmSave] = useState(false);
 
@@ -739,9 +762,75 @@ export default function StagedScheduleModal({
       periodBookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
         userId: b.userId,
         startsAt: new Date(b.startsAt),
+        // Which team's set it was: a team-scoped LIMIT counts only its own.
+        teamId: b.teamId ?? null,
+        setId: b.setId ?? null,
       })),
     };
   };
+
+  // Every seat in the plan that breaks a scheduling rule.
+  //
+  // ADVISORY, always. Rules steer Auto schedule; they are not permissions, and
+  // nothing here can stop a save — the server doesn't consult them when it
+  // writes a roster. What this buys is that an admin seating someone against
+  // their own rule SEES it (a yellow box and a "!"), and sees the list again
+  // before committing, rather than finding out later.
+  const planWarnings = useMemo(
+    () =>
+      ruleWarnings(
+        sets.map((set) => ({
+          key: stagingKey(set),
+          setId: setIdOf(set),
+          startsAt: new Date(set.startsAt),
+          teamId: set.teamId ?? null,
+          templateId: set.templateId ?? null,
+          // Borrowed guest seats count: they are people on this set, and a
+          // rule about who serves with whom doesn't care which team lent them.
+          seats: [
+            ...set.assignments.map((a) => ({ userId: a.userId, role: a.role })),
+            ...(set.guestSeats ?? []),
+          ],
+        })),
+        schedulingRules,
+        {
+          bookings: (plan?.baseline?.periodBookings ?? []).map((b) => ({
+            userId: b.userId,
+            startsAt: new Date(b.startsAt),
+            teamId: b.teamId ?? null,
+            setId: b.setId ?? null,
+          })),
+        }
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sets, schedulingRules, plan]
+  );
+
+  /** One row per marked seat, for the list the save confirmation shows. */
+  const warningRows = useMemo(
+    () =>
+      sets.flatMap((set) => {
+        const key = stagingKey(set);
+        if (!planWarnings.bySet.has(key)) return [];
+        const seats = [
+          ...set.assignments.map((a) => ({
+            userId: a.userId,
+            role: a.role,
+            borrowed: false,
+          })),
+          ...(set.guestSeats ?? []).map((g) => ({ ...g, borrowed: true })),
+        ];
+        return seats.flatMap((seat) => {
+          const why = planWarnings.bySeat.get(
+            seatKey(key, seat.userId, seat.role)
+          );
+          return why
+            ? [{ set, seat, why, rowKey: `${key}|${seat.userId}|${seat.role}` }]
+            : [];
+        });
+      }),
+    [sets, planWarnings]
+  );
 
   // Fetch the selected window's tally, unless it's the plan (counted locally)
   // or we already have it. A wide window is a big read, which is exactly why
@@ -1094,7 +1183,14 @@ export default function StagedScheduleModal({
         teamId: s.teamId,
         templateId: s.templateId ?? null,
         setId: setIdOf(s),
-        preAssigned: (keptBySet.get(stagingKey(s)) ?? []).map((a) => ({
+        preAssigned: [
+          ...(keptBySet.get(stagingKey(s)) ?? []),
+          // Seats lent by a guest team: not on the card, but those people ARE
+          // on the set, so the fill must treat them as taken — seating one of
+          // them again in the role they already hold is the one thing the db
+          // refuses outright (lib/rosterDiff.ts).
+          ...(s.guestSeats ?? []),
+        ].map((a) => ({
           userId: a.userId,
           role: a.role,
           isMD: isMdOf(a.userId),
@@ -1197,7 +1293,11 @@ export default function StagedScheduleModal({
           teamId: set.teamId,
           templateId: set.templateId ?? null,
           setId: setIdOf(set),
-          preAssigned: set.assignments.map((a) => ({
+          preAssigned: [
+            ...set.assignments,
+            // See the plan-wide fill: a borrowed seat is still a seat.
+            ...(set.guestSeats ?? []),
+          ].map((a) => ({
             userId: a.userId,
             role: a.role,
             isMD: isMdOf(a.userId),
@@ -1277,8 +1377,13 @@ export default function StagedScheduleModal({
         durationMinutes: set.durationMinutes,
       },
       rules,
-      // One slot per person on a staged set, so anyone already on it is out.
-      exclude: new Set(set.assignments.map((a) => a.userId)),
+      // One slot per person on a staged set, so anyone already on it is out —
+      // including anyone holding a seat borrowed from a guest team, which the
+      // card doesn't show but the set (and the db) certainly does.
+      exclude: new Set([
+        ...set.assignments.map((a) => a.userId),
+        ...(set.guestSeats ?? []).map((g) => g.userId),
+      ]),
     });
 
   const title = preview ? "Schedule preview" : "Review generated schedule";
@@ -1426,7 +1531,18 @@ export default function StagedScheduleModal({
                   </>
                 )}
                 <HelpButton onClick={() => setHelpOpen(true)} />
-                <Button onClick={() => onApply(applySets())} disabled={busy}>
+                {/* Applying is the last moment anything can be reconsidered, so
+                    a plan that breaks a rule shows the list once. With nothing
+                    marked, Apply goes straight through as it always did — a
+                    confirmation nobody can fail is just a second click. */}
+                <Button
+                  onClick={() =>
+                    planWarnings.total > 0
+                      ? setConfirmApply(true)
+                      : onApply(applySets())
+                  }
+                  disabled={busy}
+                >
                   {busy ? <LoadingDots size="sm" /> : "Apply schedule"}
                 </Button>
               </>
@@ -1472,6 +1588,19 @@ export default function StagedScheduleModal({
           ⚠ {conflicts} assignment{conflicts === 1 ? "" : "s"} to someone who is
           unavailable at that time — look for the amber “unavailable” marks
           below.
+        </p>
+      )}
+
+      {/* Rule-warning chip: a seat breaks one of the org's own scheduling
+          rules. Yellow, and it says the quiet part out loud — nothing here is
+          refused. The rules exist to steer Auto schedule, and an admin putting
+          someone somewhere on purpose outranks them. */}
+      {planWarnings.total > 0 && (
+        <p className="mt-3 rounded-md bg-yellow-50 px-3 py-2 text-sm text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200">
+          ! {planWarnings.total} seat{planWarnings.total === 1 ? "" : "s"} break
+          {planWarnings.total === 1 ? "s" : ""} a scheduling rule — look for the
+          yellow boxes below, and hover the “!” for which rule. You can still
+          {preview ? " save" : " apply"}: rules only steer Auto schedule.
         </p>
       )}
 
@@ -1853,6 +1982,17 @@ export default function StagedScheduleModal({
                           {set.existing ? "Already exists" : "New set"}
                         </Badge>
                       )}
+                      {/* How many of this card's seats break a rule — so a
+                          card with a problem is findable without reading every
+                          row of it. The seats themselves say which rule. */}
+                      {(planWarnings.bySet.get(stagingKey(set)) ?? 0) > 0 && (
+                        <Badge
+                          tone="yellow"
+                          title="Seats on this set break a scheduling rule. You can still save."
+                        >
+                          ! {planWarnings.bySet.get(stagingKey(set))}
+                        </Badge>
+                      )}
                       {supportsMD && set.requiresMD && (
                         <Badge tone={missingMD ? "amber" : "blue"}>
                           {missingMD ? "⚠ No MD" : "MD ✓"}
@@ -1941,7 +2081,12 @@ export default function StagedScheduleModal({
                         </span>
                         <div className="mt-1 space-y-1">
                           {/* Filled slots: swap or clear via the dropdown. */}
-                          {filled.map((a) => (
+                          {filled.map((a) => {
+                            const brokenRules =
+                              planWarnings.bySeat.get(
+                                seatKey(stagingKey(set), a.userId, role)
+                              ) ?? [];
+                            return (
                             <div
                               key={`${a.userId}-${role}`}
                               className="flex items-center gap-1.5"
@@ -1984,6 +2129,7 @@ export default function StagedScheduleModal({
                                 // tinted so a hand-picked roster reads apart
                                 // from the auto-filled one at a glance.
                                 locked={a.locked}
+                                warned={brokenRules.length > 0}
                                 highlighted={hoveredUserId === a.userId}
                                 // The control reports WHO is under the pointer
                                 // — its own occupant while closed, or whichever
@@ -2000,9 +2146,20 @@ export default function StagedScheduleModal({
                                     : remove(idx, a.userId, role)
                                 }
                               />
+                              {/* WHICH rule, on hover or tap. The mark sits
+                                  outside the box, between it and the load
+                                  figure, so the box still ends where every
+                                  other box in the column ends. */}
+                              {brokenRules.length > 0 && (
+                                <InfoTooltip
+                                  variant="warn"
+                                  text={warnReason(brokenRules, ruleNames)}
+                                />
+                              )}
                               <LoadCell count={counts.get(a.userId) ?? 0} />
                             </div>
-                          ))}
+                            );
+                          })}
 
                           {/* Empty slots: pick someone to fill them. */}
                           {Array.from({ length: openSlots }).map((_, i) => (
@@ -2298,7 +2455,7 @@ export default function StagedScheduleModal({
               Close
             </Button>
             <Button onClick={() => onApply(sets)} loading={busy}>
-              Save Changes
+              {planWarnings.total > 0 ? "Save anyway" : "Save Changes"}
             </Button>
           </>
         }
@@ -2312,11 +2469,40 @@ export default function StagedScheduleModal({
             in one batch. Everyone whose seat changes is notified, and
             it all lands together or not at all.
           </p>
+          <RuleWarningList rows={warningRows} names={ruleNames} />
           {applyError && (
             <p role="alert" className="text-red-600 dark:text-red-400">
               {applyError}
             </p>
           )}
+        </div>
+      </Modal>
+    )}
+
+    {!preview && (
+      <Modal
+        open={confirmApply}
+        onClose={() => !busy && setConfirmApply(false)}
+        title="Some seats break a rule"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setConfirmApply(false)}
+              disabled={busy}
+            >
+              Keep editing
+            </Button>
+            {/* Never disabled, on purpose: the rules are guidance for Auto
+                schedule, and the admin is the one who decides. */}
+            <Button onClick={() => onApply(applySets())} loading={busy}>
+              Apply anyway
+            </Button>
+          </>
+        }
+      >
+        <div className="flex flex-col gap-3 text-sm text-gray-600 dark:text-gray-400">
+          <RuleWarningList rows={warningRows} names={ruleNames} />
         </div>
       </Modal>
     )}
@@ -2357,6 +2543,73 @@ export default function StagedScheduleModal({
       </p>
     </Modal>
     </>
+  );
+}
+
+/** One marked seat, as the save confirmation lists it. */
+interface WarningRow {
+  set: StagedSet;
+  seat: { userId: string; role: string; borrowed: boolean };
+  why: SeatWarning[];
+  rowKey: string;
+}
+
+/**
+ * The seats that break a rule, before a commit: which set, who, which role and
+ * which rule, tagged Required or Preference.
+ *
+ * Read-only on purpose. It is here so nothing is a surprise after the fact, not
+ * to argue — the button beside it says "anyway" and is never disabled.
+ */
+function RuleWarningList({
+  rows,
+  names,
+}: {
+  rows: WarningRow[];
+  names: RuleNames;
+}) {
+  if (rows.length === 0) return null;
+  const one = rows.length === 1;
+  return (
+    <div className="overflow-hidden rounded-md border border-yellow-300 dark:border-yellow-700/60">
+      <p className="bg-yellow-50 px-3 py-2 text-xs font-semibold text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200">
+        ! {rows.length} seat{one ? "" : "s"} break{one ? "s" : ""} a scheduling
+        rule
+      </p>
+      <ul className="divide-y divide-yellow-100 dark:divide-yellow-900/40">
+        {rows.map((row) => {
+          // A seat can break more than one rule; the harder tier labels the
+          // row, since that's the one worth noticing.
+          const required = row.why.some((w) => w.tier === "REQUIRED");
+          return (
+            <li key={row.rowKey} className="flex items-start gap-2 px-3 py-2">
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs text-gray-500 dark:text-gray-400">
+                  {formatDay(row.set.startsAt)} ·{" "}
+                  {formatTime(row.set.startsAt)} ·{" "}
+                  {row.set.label ?? "Worship Set"}
+                </span>
+                <span className="block font-medium text-gray-800 dark:text-gray-200">
+                  {names.user(row.seat.userId)} — {names.role(row.seat.role)}
+                  {/* A seat lent by another team isn't on the card above, so
+                      the row says where it came from rather than naming a
+                      slot that can't be found. */}
+                  {row.seat.borrowed && " (guest team)"}
+                </span>
+                <span className="block text-yellow-800 dark:text-yellow-300">
+                  {row.why
+                    .map((w) => describeSeatWarning(w, names))
+                    .join("; ")}
+                </span>
+              </span>
+              <Badge tone={required ? "red" : "indigo"} size="sm">
+                {warningTierLabel(required ? "REQUIRED" : "PREFERENCE")}
+              </Badge>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 

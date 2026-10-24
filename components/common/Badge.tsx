@@ -3,7 +3,17 @@
 // tone mapping lives in components/StatusBadge.tsx.
 import { ReactNode } from "react";
 
-export type BadgeTone = "green" | "amber" | "red" | "gray" | "blue" | "indigo";
+export type BadgeTone =
+  | "green"
+  | "amber"
+  | "red"
+  | "gray"
+  | "blue"
+  | "indigo"
+  // Breaks one of the org's scheduling rules. Deliberately NOT amber: amber is
+  // "unavailable at that time", and the two mean different things and can sit
+  // on the same card (lib/ruleWarnings.ts).
+  | "yellow";
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
   green: "bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300",
@@ -13,6 +23,8 @@ const TONE_CLASSES: Record<BadgeTone, string> = {
   blue: "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300",
   indigo:
     "bg-indigo-100 text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-300",
+  yellow:
+    "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-300",
 };
 
 // "sm" is for pills that ride INSIDE another control next to the text they
