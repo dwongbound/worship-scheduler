@@ -415,28 +415,122 @@ test("coming back from a Google import says how it went and opens the week view"
   await expect(page).toHaveURL(/\/schedule$/);
 });
 
-test("Import from Google Calendar starts from the request being answered", async ({ page }) => {
-  await requestAvailability(page);
-  await login(page, "carol");
-  // The button only shows where the Google OAuth client is configured, which
-  // the test environment isn't — so say it is, and catch the hand-off to Google.
+// The import is a screen: pick calendars, preview what they'd block, import.
+// Everything Google is stubbed — the test environment has no OAuth client, and
+// the button only shows where one is configured, so this says it is.
+async function withGoogleImport(page: import("@playwright/test").Page) {
   await page.route("**/api/availability", async (route) => {
     if (route.request().method() !== "GET") return route.continue();
     const res = await route.fetch();
     const body = await res.json();
     await route.fulfill({ response: res, json: { ...body, googleImport: true } });
   });
+}
+
+test("the import modal picks calendars, previews them, then imports", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await withGoogleImport(page);
+
+  const calls: string[] = [];
+  await page.route("**/api/google-calendar/import/calendars**", async (route) => {
+    calls.push(route.request().url());
+    await route.fulfill({
+      json: {
+        calendars: [
+          { id: "primary", name: "carol@example.com", primary: true },
+          { id: "work", name: "Work", primary: false },
+        ],
+      },
+    });
+  });
+  await page.route("**/api/google-calendar/import/preview**", async (route) => {
+    calls.push(route.request().url());
+    await route.fulfill({
+      json: { windows: [{ ymd: "2026-10-05", startMinute: 600, endMinute: 720 }] },
+    });
+  });
+  let imported: string | null = null;
+  await page.route("**/api/google-calendar/import", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    imported = route.request().postData();
+    await route.fulfill({ json: { blocks: 1 } });
+  });
+
+  await page.goto("/schedule");
+  await page.getByTestId("import-google").click();
+
+  // The picker: their own calendars, all ticked to begin with.
+  const main = page.getByRole("checkbox", { name: /carol@example.com/ });
+  const work = page.getByRole("checkbox", { name: "Work" });
+  await expect(main).toBeChecked();
+  await expect(work).toBeChecked();
+  expect(calls[0]).toMatch(/\/calendars\?requestId=\w+/);
+
+  // Untick one and preview: only the ticked one is read.
+  await work.uncheck();
+  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  await expect.poll(() => calls.find((c) => c.includes("/preview"))).toMatch(
+    /calendarIds=primary(?!%2C)/
+  );
+  // The preview is the week view, and it shows ONLY what Google would add.
+  const week = page.getByTestId("availability-week-view");
+  await expect(week).toBeVisible();
+  await expect(week.getByTestId("week-block")).toHaveCount(1);
+  await expect(week.getByTestId("week-block")).toHaveAttribute("data-kind", "google");
+
+  await page.getByRole("button", { name: /^Import 1 block$/ }).click();
+  await expect.poll(() => imported).toContain('"calendarIds":["primary"]');
+  // Closing says what landed, on the week view where the blocks now are.
+  await expect(page.getByTestId("import-notice")).toContainText("Imported 1 block");
+  await clearBusyBlocks(page);
+});
+
+test("the import modal sends you to Google when it has no permission yet", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await withGoogleImport(page);
+
+  await page.route("**/api/google-calendar/import/calendars**", async (route) => {
+    await route.fulfill({ json: { needsConsent: true } });
+  });
   let started: string | null = null;
-  await page.route("**/api/google-calendar/import**", async (route) => {
+  await page.route("**/api/google-calendar/import?*", async (route) => {
     started = route.request().url();
     await route.fulfill({ status: 200, contentType: "text/html", body: "<p>google</p>" });
   });
 
   await page.goto("/schedule");
-  const button = page.getByTestId("import-google");
-  await expect(button).toBeVisible();
-  await button.click();
+  await page.getByTestId("import-google").click();
   await expect.poll(() => started).toMatch(/\/api\/google-calendar\/import\?requestId=\w+/);
+});
+
+test("coming back from Google's consent screen reopens the picker", async ({ page }) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  await withGoogleImport(page);
+  await page.route("**/api/google-calendar/import/calendars**", async (route) => {
+    await route.fulfill({
+      json: { calendars: [{ id: "primary", name: "carol@example.com", primary: true }] },
+    });
+  });
+
+  await page.goto("/schedule");
+  const requestId = await page.evaluate(async () => {
+    const res = await fetch("/api/availability");
+    const data = await res.json();
+    return data.requests?.[0]?.id as string;
+  });
+  expect(requestId).toBeTruthy();
+
+  // What the callback redirects to once the permission is remembered. Nothing
+  // was imported, so there's nothing to announce: the picker opens, rather
+  // than the page reloading into the schedule as it used to.
+  await page.goto(`/schedule?gcalImport=connected&request=${requestId}`);
+  await expect(page.getByRole("checkbox", { name: /carol@example.com/ })).toBeVisible();
+  await expect(page.getByTestId("import-notice")).toHaveCount(0);
+  // And the params are dropped, so a reload doesn't reopen it again.
+  await expect(page).toHaveURL(/\/schedule$/);
 });
 
 test("the week view's legend names Google Calendar only where it's set up", async ({ page }) => {
