@@ -39,7 +39,9 @@ export async function GET(req: NextRequest) {
       if (!result.ok) console.error(`[gimport] error — ${result.error}`);
       return NextResponse.redirect(new URL(`/schedule?${q.toString()}`, req.url));
     }
-    // Revoked since: fall through and ask again.
+    // Revoked since, or remembered from before the app read the calendar LIST:
+    // fall through and ask again, which is also how an old token gains the
+    // scope that lets the import see every calendar rather than just primary.
   }
 
   const { email } = (await prisma.user.findUnique({

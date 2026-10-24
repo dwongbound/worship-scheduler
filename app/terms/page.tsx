@@ -13,8 +13,8 @@ export default function TermsPage() {
   return (
     <LegalPage
       title="Terms of Service"
-      intro="These terms cover your use of TapWorship, scheduling software for church
-        worship teams. By signing in you agree to them."
+      intro="These terms cover your use of TapWorship, scheduling software for teams
+        that serve on a rota. By signing in you agree to them."
     >
       <Section title="Your account">
         <p>
@@ -39,7 +39,7 @@ export default function TermsPage() {
       <Section title="Your content">
         <p>
           Set lists, notes, availability and the rest stay yours and your
-          church&rsquo;s. We store and display them to run the app for you, and nothing
+          organization&rsquo;s. We store and display them to run the app for you, and nothing
           more. See the Privacy Policy for what is stored and how to have it deleted.
         </p>
       </Section>

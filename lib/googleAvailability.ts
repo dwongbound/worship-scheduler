@@ -1,6 +1,9 @@
 // "Import from Google Calendar" on /schedule: a member lets the app read their
-// OWN Google Calendar once, and every busy time inside one availability
-// request's window becomes a block on it. The rules for what counts as busy
+// OWN Google Calendars once, and every busy time inside one availability
+// request's window becomes a block on it. ALL of their calendars, not just
+// `primary` — people keep a work one and a family one, and reading only
+// `primary` quietly missed everything on the others. Calendars they merely
+// subscribe to are left out; see OWNED_ROLES below. The rules for what counts as busy
 // are lib/googleBusy.ts; this is the Google + db side.
 //
 // The permission is asked for ONCE: the first import goes through Google's
@@ -26,12 +29,28 @@ import { clientId, clientSecret, redirectUri, signImportState } from "./googleCa
 
 const ACCOUNTS = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN = "https://oauth2.googleapis.com/token";
-const EVENTS = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const CALENDARS = "https://www.googleapis.com/calendar/v3/users/me/calendarList";
+const eventsUrl = (calendarId: string) =>
+  `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
 
 // Read-only events on the person's calendars. Free/busy alone isn't enough:
 // Google marks all-day events Free by default, and those must still block.
 const READ_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
-const SCOPES = ["openid", "email", READ_SCOPE].join(" ");
+// ...and the LIST of their calendars, because people keep their commitments
+// across several (a work one, a family one) and reading only `primary` missed
+// every one of them.
+const LIST_SCOPE = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+const SCOPES = ["openid", "email", READ_SCOPE, LIST_SCOPE].join(" ");
+
+// A person's own calendars, which is what the import reads. Anything they
+// merely SUBSCRIBE to is deliberately left out: holidays, a sports fixture
+// feed or someone else's shared calendar are not that person's commitments,
+// and a holidays calendar alone would block whole days for everyone.
+// accessRole tells the two apart — owner/writer is theirs, reader and
+// freeBusyReader are subscriptions.
+const OWNED_ROLES = new Set(["owner", "writer"]);
+// A ceiling, not an expectation: one request's window is a page per calendar.
+const MAX_CALENDARS = 50;
 
 // Only what lib/googleBusy reads — never an event's title or description.
 const FIELDS =
@@ -79,8 +98,61 @@ export type ImportResult =
   // needsConsent: there's no usable remembered permission — send them to Google.
   | { ok: false; error: string; needsConsent?: boolean };
 
-async function fetchEvents(
+interface CalendarListEntry {
+  id: string;
+  accessRole?: string;
+  primary?: boolean;
+  deleted?: boolean;
+}
+
+/**
+ * The calendars this import should read: the person's own, by `accessRole`.
+ *
+ * `null` means the permission to list them is missing — which is exactly what
+ * a token remembered from before this scope existed looks like, so the caller
+ * turns it into one more trip through Google's consent screen rather than
+ * quietly importing a single calendar again.
+ */
+async function fetchOwnCalendarIds(token: string): Promise<string[] | null> {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      maxResults: "250",
+      // Hidden calendars still count: hiding one in Google's sidebar says
+      // nothing about whether its events occupy the person.
+      showHidden: "true",
+      fields: "nextPageToken,items(id,accessRole,primary,deleted)",
+    });
+    if (pageToken) params.set("pageToken", pageToken);
+    const res = await fetch(`${CALENDARS}?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.status === 401 || res.status === 403) return null;
+    if (!res.ok) {
+      console.error(
+        `[gimport] calendar list → ${res.status} ${(await res.text()).slice(0, 500)}`
+      );
+      return null;
+    }
+    const json = (await res.json()) as {
+      items?: CalendarListEntry[];
+      nextPageToken?: string;
+    };
+    for (const c of json.items ?? []) {
+      if (c.deleted) continue;
+      if (c.primary || OWNED_ROLES.has(c.accessRole ?? "")) ids.push(c.id);
+    }
+    pageToken = json.nextPageToken;
+    if (!pageToken) break;
+  }
+  return ids.slice(0, MAX_CALENDARS);
+}
+
+/** One calendar's events in the window. `null` = that calendar couldn't be read. */
+async function fetchCalendarEvents(
   token: string,
+  calendarId: string,
   timeMin: Date,
   timeMax: Date
 ): Promise<GoogleEvent[] | null> {
@@ -96,11 +168,13 @@ async function fetchEvents(
       fields: FIELDS,
     });
     if (pageToken) params.set("pageToken", pageToken);
-    const res = await fetch(`${EVENTS}?${params.toString()}`, {
+    const res = await fetch(`${eventsUrl(calendarId)}?${params.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!res.ok) {
-      console.error(`[gimport] events list → ${res.status} ${(await res.text()).slice(0, 500)}`);
+      console.error(
+        `[gimport] events list → ${res.status} ${(await res.text()).slice(0, 500)}`
+      );
       return null;
     }
     const json = (await res.json()) as { items?: GoogleEvent[]; nextPageToken?: string };
@@ -109,6 +183,45 @@ async function fetchEvents(
     if (!pageToken) break;
   }
   return events;
+}
+
+/**
+ * Every own calendar's events in the window, in one list.
+ *
+ * The same event can sit on two of them (an invitation the person accepted
+ * also lands on their own calendar), but `busyWindows` merges overlapping
+ * windows per day, so a duplicate costs nothing.
+ *
+ * One calendar failing does NOT fail the import: the rest still make blocks,
+ * and a missing calendar means a few blocks short, not a wrong answer.
+ * Failing to list the calendars at all is different — that's `null`.
+ */
+type FetchedEvents =
+  | { ok: true; events: GoogleEvent[] }
+  // The calendars couldn't be listed. A token remembered from before the list
+  // scope existed looks exactly like this, so the caller re-asks for consent.
+  | { ok: false; needsConsent: true }
+  | { ok: false; needsConsent: false };
+
+async function fetchEvents(
+  token: string,
+  timeMin: Date,
+  timeMax: Date
+): Promise<FetchedEvents> {
+  const calendarIds = await fetchOwnCalendarIds(token);
+  if (!calendarIds) return { ok: false, needsConsent: true };
+  const events: GoogleEvent[] = [];
+  let read = 0;
+  for (const id of calendarIds) {
+    const got = await fetchCalendarEvents(token, id, timeMin, timeMax);
+    if (!got) continue;
+    read++;
+    events.push(...got);
+  }
+  // Every single calendar refused: report the failure rather than writing an
+  // empty import over the blocks the person already had.
+  if (read === 0 && calendarIds.length > 0) return { ok: false, needsConsent: false };
+  return { ok: true, events };
 }
 
 /** Read the request's window with `accessToken` and replace the imported blocks. */
@@ -121,10 +234,21 @@ async function runImport(
   // and endDate is the LAST day asked about, so read through the end of it.
   const timeMax = new Date(request.endDate);
   timeMax.setDate(timeMax.getDate() + 1);
-  const events = await fetchEvents(accessToken, request.startDate, timeMax);
-  if (!events) return { ok: false, error: "couldn't read the calendar" };
+  const fetched = await fetchEvents(accessToken, request.startDate, timeMax);
+  if (!fetched.ok) {
+    return fetched.needsConsent
+      ? // The remembered permission predates reading the calendar LIST, so it
+        // can only ever see `primary`. One more consent screen fixes that for
+        // good, which beats silently importing one calendar out of several.
+        { ok: false, error: "needs permission to see your calendars", needsConsent: true }
+      : { ok: false, error: "couldn't read the calendars" };
+  }
 
-  const windows = busyWindows(events, toYmd(request.startDate), toYmd(request.endDate));
+  const windows = busyWindows(
+    fetched.events,
+    toYmd(request.startDate),
+    toYmd(request.endDate)
+  );
   await prisma.$transaction([
     prisma.unavailability.deleteMany({
       where: { userId, requestId: request.id, fromGoogle: true },
