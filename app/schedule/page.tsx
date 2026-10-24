@@ -41,6 +41,7 @@ import {
   blockedDaysInRange,
   dayBlockLevel,
   expandRecurringBlocks,
+  listedBlocks,
   mergeWindows,
   isOptimisticId,
   weeksFromToday,
@@ -735,31 +736,12 @@ export default function SchedulePage() {
     ? blockedDaysInRange(entries, selectedRequest.startDate, selectedRequest.endDate)
     : [];
 
-  // The Busy Blocks list: dated (specific) blocks first — only ones ending
-  // today or later, so past blocks drop off — in chronological order, then the
-  // recurring blocks by weekday. Deleting still targets the real entry id.
+  // The Busy Blocks list (lib/availability.ts listedBlocks): dated blocks
+  // first, then the recurring ones. Past blocks drop off unless they sit
+  // inside the window being looked at, so an import's early days still have a
+  // row to delete them from.
   const todayYmd = toYmd(new Date());
-  const listEntries = [...entries]
-    .filter((e) => {
-      if (e.type === "RECURRING") return true;
-      const end = e.endDate ?? e.startDate;
-      return !end || toYmd(new Date(end)) >= todayYmd; // hide fully-past blocks
-    })
-    .sort((a, b) => {
-      const aRec = a.type === "RECURRING";
-      const bRec = b.type === "RECURRING";
-      if (aRec !== bRec) return aRec ? 1 : -1; // specific/dated first, recurring last
-      if (!aRec) {
-        const ad = a.startDate ? new Date(a.startDate).getTime() : 0;
-        const bd = b.startDate ? new Date(b.startDate).getTime() : 0;
-        if (ad !== bd) return ad - bd;
-        return (a.startMinute ?? 0) - (b.startMinute ?? 0);
-      }
-      // Both recurring: order by weekday, then start time.
-      const ao = (a.dayOfWeek ?? 0) * 1440 + (a.startMinute ?? 0);
-      const bo = (b.dayOfWeek ?? 0) * 1440 + (b.startMinute ?? 0);
-      return ao - bo;
-    });
+  const listEntries = listedBlocks(entries, todayYmd, lensRange);
 
   return (
     <div className="space-y-6">
@@ -1398,10 +1380,15 @@ export default function SchedulePage() {
                       className="flex items-center justify-between gap-2"
                     >
                       <span className="flex min-w-0 items-baseline gap-2">
-                        <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
-                          {entry.type === "RECURRING" ? "Recurring" : "Specific"}
-                        </Badge>
-                        {entry.fromGoogle && <Badge tone="indigo">Google</Badge>}
+                        {/* An imported block says Google and nothing else:
+                            "Specific" beside it was the same fact twice. */}
+                        {entry.fromGoogle ? (
+                          <Badge tone="indigo">Google</Badge>
+                        ) : (
+                          <Badge tone={entry.type === "RECURRING" ? "gray" : "blue"}>
+                            {entry.type === "RECURRING" ? "Recurring" : "Specific"}
+                          </Badge>
+                        )}
                         <span>
                           {entryText(entry)}
                           {req && (

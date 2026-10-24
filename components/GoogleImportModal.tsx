@@ -270,6 +270,7 @@ export default function GoogleImportModal({
               entries={busyWindowEntries(windows)}
               highlightRange={requestWindow}
               googleImport
+              legendKinds={["google"]}
             />
           </div>
         ) : (

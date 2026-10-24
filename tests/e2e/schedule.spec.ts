@@ -485,6 +485,10 @@ test("the import modal picks calendars, previews them, then imports", async ({ p
   await expect(week).toBeVisible();
   await expect(week.getByTestId("week-block")).toHaveCount(1);
   await expect(week.getByTestId("week-block")).toHaveAttribute("data-kind", "google");
+  // Its legend names Google and nothing else: no other colour can appear here.
+  await expect(week).toContainText("From Google Calendar");
+  await expect(week).not.toContainText("Blocked by you");
+  await expect(week).not.toContainText("Weekly repeat");
 
   await page.getByRole("button", { name: /^Import 1 block$/ }).click();
   await expect.poll(() => imported).toContain('"calendarIds":["primary"]');
