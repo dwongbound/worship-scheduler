@@ -533,3 +533,44 @@ export function expandRecurringBlocks(
       merged.map((w) => ({ dayOfWeek, ...w, startDate, endDate }))
     );
 }
+
+/**
+ * The Busy Blocks list under the calendar: dated blocks first in
+ * chronological order, then the recurring ones by weekday and time.
+ *
+ * Past blocks drop off, so the list stays about what's ahead — EXCEPT inside
+ * the window you're currently looking at. A request you're answering is often
+ * half in the past by the time you open it, and an import fills its whole
+ * window; hiding the early days would leave blocks drawn on the calendar with
+ * no row to delete them from, which is the one thing this list is for.
+ */
+export function listedBlocks(
+  entries: ApiUnavailability[],
+  todayYmd: string,
+  window?: { start: string; end: string } | null
+): ApiUnavailability[] {
+  const inWindow = (ymd: string) =>
+    !!window && ymd >= window.start && ymd <= window.end;
+  return [...entries]
+    .filter((e) => {
+      if (e.type === "RECURRING") return true;
+      const start = e.startDate ? toYmd(new Date(e.startDate)) : null;
+      const end = e.endDate ? toYmd(new Date(e.endDate)) : start;
+      if (!end) return true;
+      return end >= todayYmd || inWindow(end) || (!!start && inWindow(start));
+    })
+    .sort((a, b) => {
+      const aRec = a.type === "RECURRING";
+      const bRec = b.type === "RECURRING";
+      if (aRec !== bRec) return aRec ? 1 : -1; // specific/dated first, recurring last
+      if (!aRec) {
+        const ad = a.startDate ? new Date(a.startDate).getTime() : 0;
+        const bd = b.startDate ? new Date(b.startDate).getTime() : 0;
+        if (ad !== bd) return ad - bd;
+        return (a.startMinute ?? 0) - (b.startMinute ?? 0);
+      }
+      const ao = (a.dayOfWeek ?? 0) * 1440 + (a.startMinute ?? 0);
+      const bo = (b.dayOfWeek ?? 0) * 1440 + (b.startMinute ?? 0);
+      return ao - bo;
+    });
+}

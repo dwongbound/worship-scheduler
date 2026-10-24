@@ -10,6 +10,7 @@ import {
   dayHasDatedBlock,
   dayIsRepeating,
   expandRecurringBlocks,
+  listedBlocks,
   mergeExceptions,
   mergeWindows,
   recurringCovers,
@@ -609,5 +610,58 @@ describe("weeksFromToday", () => {
 
   it("crosses a year boundary", () => {
     expect(weeksFromToday(2, new Date(2026, 11, 28))).toBe("2027-01-11");
+  });
+});
+
+describe("listedBlocks", () => {
+  const today = "2026-10-24";
+  const win = { start: "2026-10-01", end: "2026-10-31" };
+
+  it("drops blocks that are wholly in the past", () => {
+    const past = specific(isoDay(2026, 9, 20));
+    const soon = specific(isoDay(2026, 10, 28));
+    expect(listedBlocks([past, soon], today, null).map((e) => e.id)).toEqual([soon.id]);
+  });
+
+  it("keeps a past block that sits inside the window being looked at", () => {
+    // An import fills a whole request window, and a request is usually
+    // half-past by the time it's answered. Hiding those days would leave
+    // blocks drawn on the calendar with no row to delete them from.
+    const early = specific(isoDay(2026, 10, 5));
+    const later = specific(isoDay(2026, 10, 28));
+    expect(listedBlocks([later, early], today, win).map((e) => e.id)).toEqual([
+      early.id,
+      later.id,
+    ]);
+  });
+
+  it("still drops a past block from outside that window", () => {
+    const before = specific(isoDay(2026, 8, 15));
+    expect(listedBlocks([before], today, win)).toEqual([]);
+  });
+
+  it("keeps a range that started in the past and runs into the window", () => {
+    const spanning = specific(isoDay(2026, 9, 28), { endDate: isoDay(2026, 10, 3) });
+    expect(listedBlocks([spanning], today, win).map((e) => e.id)).toEqual([spanning.id]);
+  });
+
+  it("puts dated blocks first, in time order, and recurring ones last by weekday", () => {
+    const mon = recurring(1, { startMinute: 600 });
+    const sun = recurring(0, { startMinute: 540 });
+    const d1 = specific(isoDay(2026, 10, 26), { startMinute: 600 });
+    const d2 = specific(isoDay(2026, 10, 26), { startMinute: 300 });
+    const d3 = specific(isoDay(2026, 10, 25));
+    expect(listedBlocks([mon, d1, sun, d3, d2], today, null).map((e) => e.id)).toEqual([
+      d3.id,
+      d2.id,
+      d1.id,
+      sun.id,
+      mon.id,
+    ]);
+  });
+
+  it("keeps every recurring block, which has no date to be past", () => {
+    const r = recurring(3);
+    expect(listedBlocks([r], today, null).map((e) => e.id)).toEqual([r.id]);
   });
 });
