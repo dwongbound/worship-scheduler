@@ -16,6 +16,7 @@
 // People can still edit or delete any imported block afterwards.
 import { zonedParts } from "./dates";
 import { FULL_DAY_MIN } from "./availability";
+import type { ApiUnavailability } from "./types";
 
 /** The few fields of a Google Calendar event this reads — never its title. */
 export interface GoogleEvent {
@@ -132,6 +133,33 @@ export function busyWindows(
     out.push({ ymd, ...cur });
   }
   return out;
+}
+
+/**
+ * Busy windows as the availability week view's own entries, which is how the
+ * import modal previews them before anything is written.
+ *
+ * `startDate` is a LOCAL-midnight instant, the way the API's rows arrive:
+ * `new Date("2026-10-05")` is UTC midnight, which in any negative offset reads
+ * back as the 4th, so a bare day string would draw every block a day early.
+ * `fromGoogle` draws them sky, the colour the page already uses for an import.
+ */
+export function busyWindowEntries(windows: BusyWindow[]): ApiUnavailability[] {
+  return windows.map((w, i) => {
+    const [y, m, d] = w.ymd.split("-").map(Number);
+    return {
+      id: `preview-${i}`,
+      type: "SPECIFIC" as const,
+      dayOfWeek: null,
+      startMinute: w.startMinute,
+      endMinute: w.endMinute,
+      startDate: new Date(y, m - 1, d).toISOString(),
+      endDate: null,
+      requestId: null,
+      note: null,
+      fromGoogle: true,
+    };
+  });
 }
 
 /**

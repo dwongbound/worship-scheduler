@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  busyWindowEntries,
   busyWindows,
   eventBlocks,
   eventWindows,
@@ -110,6 +111,32 @@ describe("busyWindows", () => {
       "2026-10-05",
       "2026-10-07",
     ]);
+  });
+});
+
+describe("busyWindowEntries", () => {
+  it("dates each block at LOCAL midnight, so the week view draws the right day", () => {
+    // A bare "2026-10-05" parses as UTC midnight, which west of Greenwich
+    // reads back as the 4th — every previewed block a day early.
+    const [entry] = busyWindowEntries([
+      { ymd: "2026-10-05", startMinute: 600, endMinute: 720 },
+    ]);
+    const back = new Date(entry.startDate!);
+    expect([back.getFullYear(), back.getMonth(), back.getDate()]).toEqual([2026, 9, 5]);
+    expect([back.getHours(), back.getMinutes()]).toEqual([0, 0]);
+  });
+
+  it("carries the window and marks it as an import", () => {
+    const entries = busyWindowEntries([
+      { ymd: "2026-10-05", startMinute: 600, endMinute: 720 },
+      { ymd: "2026-10-06", startMinute: 0, endMinute: 1440 },
+    ]);
+    expect(entries.map((e) => [e.type, e.startMinute, e.endMinute, e.fromGoogle])).toEqual([
+      ["SPECIFIC", 600, 720, true],
+      ["SPECIFIC", 0, 1440, true],
+    ]);
+    // Distinct ids: they are React keys in the week view.
+    expect(new Set(entries.map((e) => e.id)).size).toBe(2);
   });
 });
 

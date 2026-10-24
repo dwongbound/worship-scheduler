@@ -25,29 +25,11 @@ import Checkbox from "./common/Checkbox";
 import LoadingDots from "./common/LoadingDots";
 import Modal from "./common/Modal";
 import type { ImportCalendar } from "@/lib/googleAvailability";
-import type { BusyWindow } from "@/lib/googleBusy";
-import type { ApiUnavailability } from "@/lib/types";
+import { busyWindowEntries, type BusyWindow } from "@/lib/googleBusy";
 
 // Where the person is in the flow. "picking" and "previewing" are the two
 // screens; the rest is what's between them.
 type Phase = "loading" | "picking" | "previewing";
-
-/** The preview's windows as the week view's own entries. */
-function previewEntries(windows: BusyWindow[]): ApiUnavailability[] {
-  return windows.map((w, i) => ({
-    id: `preview-${i}`,
-    type: "SPECIFIC" as const,
-    dayOfWeek: null,
-    startMinute: w.startMinute,
-    endMinute: w.endMinute,
-    startDate: w.ymd,
-    endDate: null,
-    requestId: null,
-    note: null,
-    // Draws them sky, the colour the page already uses for "from Google".
-    fromGoogle: true,
-  }));
-}
 
 export default function GoogleImportModal({
   open,
@@ -285,7 +267,7 @@ export default function GoogleImportModal({
             {/* Only the import's own blocks: what's already on the calendar
                 isn't the question on this screen. */}
             <AvailabilityWeekView
-              entries={previewEntries(windows)}
+              entries={busyWindowEntries(windows)}
               highlightRange={requestWindow}
               googleImport
             />

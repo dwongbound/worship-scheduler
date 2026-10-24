@@ -444,12 +444,6 @@ test("the import modal picks calendars, previews them, then imports", async ({ p
       },
     });
   });
-  await page.route("**/api/google-calendar/import/preview**", async (route) => {
-    calls.push(route.request().url());
-    await route.fulfill({
-      json: { windows: [{ ymd: "2026-10-05", startMinute: 600, endMinute: 720 }] },
-    });
-  });
   let imported: string | null = null;
   await page.route("**/api/google-calendar/import", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
@@ -458,6 +452,19 @@ test("the import modal picks calendars, previews them, then imports", async ({ p
   });
 
   await page.goto("/schedule");
+  // The preview opens on the week the REQUEST starts in, so the stubbed busy
+  // time has to land inside it — a fixed date would be off screen.
+  const start = await page.evaluate(async () => {
+    const res = await fetch("/api/availability");
+    const data = await res.json();
+    return (data.requests?.[0]?.startDate as string)?.slice(0, 10);
+  });
+  expect(start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  await page.route("**/api/google-calendar/import/preview**", async (route) => {
+    calls.push(route.request().url());
+    await route.fulfill({ json: { windows: [{ ymd: start, startMinute: 600, endMinute: 720 }] } });
+  });
+
   await page.getByTestId("import-google").click();
 
   // The picker: their own calendars, all ticked to begin with.
