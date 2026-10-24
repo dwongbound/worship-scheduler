@@ -430,6 +430,13 @@ export interface StagedSet {
   // sets carry their id as `stagingId` instead.
   setId?: string | null;
   assignments: StagedAssignment[];
+  // People already on this set in a seat the card does NOT show: a role
+  // borrowed from a guest team, which belongs to the LENDING team's catalog
+  // and so has no column here (lib/calendarPreview.ts toStagedSet). They are
+  // still on the set, so the pick lists leave them out and Auto schedule
+  // counts them as taken — otherwise the same person could be seated in a role
+  // they already hold as a guest, which the db refuses outright.
+  guestSeats?: { userId: string; role: string }[];
 }
 
 // The full proposal returned by the preview and posted back to apply.
@@ -449,7 +456,12 @@ export interface StagedPlan {
     teamCounts: Record<string, number>;
     // Dates people are already booked on, for the spacing rule. `teamId` is
     // which team's set it was — only a team-scoped LIMIT reads it.
-    booked: { userId: string; startsAt: string; teamId?: string | null }[];
+    booked: {
+      userId: string;
+      startsAt: string;
+      teamId?: string | null;
+      setId?: string | null;
+    }[];
     // teamId ("" for a team-less set) → who MD'd that team's last set BEFORE
     // this window. Seeds the "don't lead two running" rotation so the modal's
     // re-run starts where the server's did, rather than handing set one back to
@@ -464,7 +476,14 @@ export interface StagedPlan {
       assignments: { userId: string; role: string }[];
     }[];
     // A month either side of bookings, counted only by LIMIT rules.
-    periodBookings?: { userId: string; startsAt: string }[];
+    periodBookings?: {
+      userId: string;
+      startsAt: string;
+      teamId?: string | null;
+      // Which set the booking is, so a PREVIEW of those same sets doesn't
+      // count its own staged copy and the db row behind it as two.
+      setId?: string | null;
+    }[];
   };
 }
 

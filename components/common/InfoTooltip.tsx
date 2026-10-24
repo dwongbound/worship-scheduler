@@ -10,9 +10,14 @@ import { createPortal } from "react-dom";
 export default function InfoTooltip({
   text,
   side = "top",
+  variant = "info",
 }: {
   // Accepts plain strings or JSX (e.g. <strong> to emphasize a phrase).
   text: ReactNode;
+  // "info" is the grey "i". "warn" is a yellow "!", for a thing that is worth
+  // noticing rather than merely worth knowing — a seat that breaks one of the
+  // org's scheduling rules. Same bubble either way.
+  variant?: "info" | "warn";
   // Where the bubble opens relative to the icon. "bottom" is handy when the
   // icon sits near the top of the viewport, where an upward bubble would be cut
   // off by the window edge.
@@ -73,14 +78,17 @@ export default function InfoTooltip({
       <span
         ref={iconRef}
         tabIndex={0}
-        aria-label="More information"
+        aria-label={variant === "warn" ? "Why this is marked" : "More information"}
         // Tap opens on touch (where there's no hover); idempotent for mouse.
         onClick={show}
-        className="flex h-4 w-4 cursor-help select-none items-center justify-center
-          rounded-full border border-gray-400 text-[10px] font-semibold leading-none
-          text-gray-500 dark:border-gray-500 dark:text-gray-400"
+        className={`flex h-4 w-4 cursor-help select-none items-center justify-center
+          rounded-full border text-[10px] font-semibold leading-none ${
+            variant === "warn"
+              ? "border-yellow-600 text-yellow-700 dark:border-yellow-400 dark:text-yellow-300"
+              : "border-gray-400 text-gray-500 dark:border-gray-500 dark:text-gray-400"
+          }`}
       >
-        i
+        {variant === "warn" ? "!" : "i"}
       </span>
       {pos &&
         createPortal(

@@ -875,15 +875,10 @@ export default function SchedulePage() {
                             {r.org.name}
                           </span>
                         )}
-                        {done ? (
-                          <Badge tone="green">
-                            {response!.edited ? "Updated" : "Completed"}
-                          </Badge>
-                        ) : (
-                          // "Todo" rather than "Not sent" — the same word the
-                          // filter tab above uses for exactly these cards.
-                          <Badge tone="amber">Todo</Badge>
-                        )}
+                        {/* No status pill. The Todo / All switch above IS the
+                            status: Todo lists exactly the unanswered requests,
+                            so a pill on the card only repeated the tab you were
+                            already standing on. */}
                       </div>
                       {/* The description line. On the SELECTED card it also
                           carries what the calendar is doing, the way out, and a
