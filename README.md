@@ -301,7 +301,9 @@ for cover in the app. Code: `lib/googleCalendar.ts` (Google + db side),
   `https://www.googleapis.com/auth/calendar.events` (put the sets' events on
   whichever calendar is picked, and watch it for RSVPs). For **Import from
   Google Calendar** (below) also add
-  `https://www.googleapis.com/auth/calendar.events.readonly`. Both events
+  `https://www.googleapis.com/auth/calendar.events.readonly` (the member's own
+  events) — the `calendarlist.readonly` scope above is shared with it, since
+  the import reads every calendar the member owns, not just `primary`. Both events
   scopes are *sensitive*: while the app is in *Testing*, add each connecting
   account (including every member who imports) as a test user; publishing it
   for real use needs Google's verification.
@@ -398,7 +400,12 @@ import asks again. Google sign-in itself never asks for calendar access, so the
 unverified-app warning a sensitive scope brings can't land on the login. It shares
 `/api/google-calendar/callback` (told apart by its signed state), so there's no
 extra redirect URI and no new env var; it does need the `calendar.events.readonly`
-scope above and migration `20261022120000_unavailability_from_google`. The page
+and `calendar.calendarlist.readonly` scopes above and migration
+`20261022120000_unavailability_from_google`. It reads EVERY calendar the member
+owns or can edit (a work one, a family one), skipping ones they merely subscribe
+to — a holidays feed would otherwise block whole days. A token remembered from
+before the list scope was added can't list calendars, so the import sends that
+person through consent once more rather than silently reading `primary` alone. The page
 then opens the **Week** view (hours down, days across) to check the result.
 Code: `lib/googleBusy.ts` (the rules, unit-tested), `lib/googleAvailability.ts`,
 `app/api/google-calendar/import`.

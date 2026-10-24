@@ -14,15 +14,15 @@ export default function PrivacyPage() {
   return (
     <LegalPage
       title="Privacy Policy"
-      intro="TapWorship is scheduling software for church worship teams. Your church
-        runs it for its own team, and this page explains what the app stores about you,
-        why it needs it, and how to have it removed."
+      intro="TapWorship is scheduling software for teams that serve on a rota. The
+        organization you belong to runs it for its own teams, and this page explains what
+        the app stores about you, why it needs it, and how to have it removed."
     >
       <Section title="Who holds your information">
         <p>
-          Each church (an &ldquo;organization&rdquo; in the app) decides who is on its
-          teams and who administers it. TapWorship stores that information on the
-          church&rsquo;s behalf. Your organization&rsquo;s administrators can see
+          Each organization decides who is on its teams and who administers it.
+          TapWorship stores that information on the organization&rsquo;s behalf.
+          Your organization&rsquo;s administrators can see
           everything in their own organization; they cannot see other organizations.
         </p>
       </Section>
@@ -39,7 +39,7 @@ export default function PrivacyPage() {
             the times you mark yourself unavailable.
           </li>
           <li>
-            <strong>Messaging</strong>: if your church connects Slack, the app stores
+            <strong>Messaging</strong>: if your organization connects Slack, the app stores
             your Slack user ID so it can send you your own notifications.
           </li>
           <li>
@@ -59,7 +59,7 @@ export default function PrivacyPage() {
         </p>
         <ul className="list-disc space-y-1 pl-5">
           <li>
-            <strong>An administrator connects the church&rsquo;s calendar.</strong> The
+            <strong>An administrator connects the organization&rsquo;s calendar.</strong> The
             app then creates one calendar event per upcoming set on the calendar they
             chose, invites the people scheduled on that set, and keeps the event in step
             when the roster or the time changes. It reads the invitation replies on
@@ -67,11 +67,13 @@ export default function PrivacyPage() {
             the app. It does not read anything else on that calendar.
           </li>
           <li>
-            <strong>You import your own calendar</strong> when filling in your
-            availability. The app reads your events for the dates being asked about, and
-            turns the times you are busy into blocks on your availability. It stores the
-            resulting blocks, which you can then edit or delete, not your events, their
-            titles or their guests.
+            <strong>You import your own calendars</strong> when filling in your
+            availability. The app lists the calendars in your Google account and reads
+            the events on the ones you own or can edit, for the dates being asked about,
+            and turns the times you are busy into blocks on your availability. Calendars
+            you only subscribe to, such as holidays or someone else&rsquo;s, are not
+            read. It stores the resulting blocks, which you can then edit or delete, not
+            your events, their titles or their guests.
           </li>
         </ul>
         <p>
@@ -134,9 +136,9 @@ export default function PrivacyPage() {
 
       <Section title="Children">
         <p>
-          The app is for members of a church&rsquo;s worship teams and is not aimed at
+          The app is for members of an organization&rsquo;s teams and is not aimed at
           children under 13. Where a minor serves on a team, their account is created
-          and managed by the church&rsquo;s administrators.
+          and managed by the organization&rsquo;s administrators.
         </p>
       </Section>
 

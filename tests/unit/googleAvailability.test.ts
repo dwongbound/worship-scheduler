@@ -32,6 +32,7 @@ const REQUEST = {
   endDate: new Date(2026, 9, 31),
 };
 
+let calendarListCalls: number;
 let eventUrls: string[];
 let tokenBodies: string[];
 let refreshStatus: number;
@@ -41,6 +42,7 @@ beforeEach(() => {
   process.env.GOOGLE_CLIENT_SECRET = "secret";
   process.env.NEXTAUTH_SECRET = "s";
   eventUrls = [];
+  calendarListCalls = 0;
   tokenBodies = [];
   refreshStatus = 200;
   m(prisma.availabilityRequest.findFirst).mockResolvedValue(REQUEST);
@@ -63,8 +65,26 @@ beforeEach(() => {
           })
         );
       }
+      // The calendar LIST comes first: two own calendars and a subscription
+      // the import must leave alone.
+      if (url.startsWith("https://www.googleapis.com/calendar/v3/users/me/calendarList")) {
+        calendarListCalls++;
+        return new Response(
+          JSON.stringify({
+            items: [
+              { id: "primary", primary: true, accessRole: "owner" },
+              { id: "work@example.com", accessRole: "writer" },
+              { id: "holidays@group.v.calendar.google.com", accessRole: "reader" },
+            ],
+          })
+        );
+      }
       eventUrls.push(url);
+      // Only the FIRST calendar pages, so the page-token walk is still covered
+      // without every calendar repeating it.
+      const isPrimary = url.includes("/calendars/primary/");
       const page2 = url.includes("pageToken=p2");
+      if (!isPrimary) return new Response(JSON.stringify({ items: [] }));
       return new Response(
         JSON.stringify(
           page2
@@ -95,6 +115,8 @@ describe("importAuthorizeUrl", () => {
   it("asks once for read-only events, with a refresh token to remember", () => {
     const url = new URL(importAuthorizeUrl("u1", "req1", "me@example.com"));
     expect(url.searchParams.get("scope")).toContain("calendar.events.readonly");
+    // Without the list scope the import can only ever see `primary`.
+    expect(url.searchParams.get("scope")).toContain("calendar.calendarlist.readonly");
     expect(url.searchParams.get("access_type")).toBe("offline");
     expect(url.searchParams.get("prompt")).toBe("consent");
     expect(url.searchParams.get("login_hint")).toBe("me@example.com");
@@ -111,7 +133,12 @@ describe("importFromCode", () => {
   it("reads every page and replaces only the earlier imported blocks", async () => {
     const result = await importFromCode("u1", "req1", "code");
     expect(result).toEqual({ ok: true, blocks: 2 });
-    expect(eventUrls).toHaveLength(2);
+    // Primary's two pages plus the one other OWN calendar — the subscribed
+    // holidays calendar is never fetched.
+    expect(eventUrls).toHaveLength(3);
+    expect(calendarListCalls).toBe(1);
+    expect(eventUrls.some((u) => u.includes("work%40example.com"))).toBe(true);
+    expect(eventUrls.some((u) => u.includes("holidays"))).toBe(false);
     // Never asks for titles.
     expect(decodeURIComponent(eventUrls[0])).not.toContain("summary");
 
@@ -157,6 +184,24 @@ describe("importWithRememberedAccess", () => {
     expect(result).toEqual({ ok: true, blocks: 2 });
     expect(tokenBodies[0]).toContain("refresh_token=rt");
     expect(prisma.$transaction).toHaveBeenCalled();
+  });
+
+  it("re-asks consent for a token that predates the calendar-list scope", async () => {
+    // Such a token can list nothing, so Google answers 403 — importing
+    // `primary` alone would quietly be the old, wrong behaviour.
+    m(prisma.user.findUnique).mockResolvedValue({ googleImportRefreshToken: encryptSecret("rt") });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.startsWith("https://oauth2.googleapis.com/token")
+          ? new Response(JSON.stringify({ access_token: "at2" }))
+          : new Response('{"error":"insufficient scope"}', { status: 403 })
+      )
+    );
+    const result = await importWithRememberedAccess("u1", "req1");
+    expect(result).toMatchObject({ ok: false, needsConsent: true });
+    // Nothing is written, so the blocks they already had survive.
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
   it("forgets a revoked permission and asks for consent again", async () => {
