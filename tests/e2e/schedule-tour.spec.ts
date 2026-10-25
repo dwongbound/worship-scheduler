@@ -100,21 +100,25 @@ test("Help brings the tour back, from the top", async ({ page }) => {
 test("the tour describes the mode it was opened in", async ({ page }) => {
   await login(page, "admin");
 
-  // Preview Mode has no draft to park and commits with Save Changes.
+  // Preview Mode parks drafts too, but commits with Save Changes and never
+  // offers to apply a plan.
   const review = await openPreviewMode(page);
   await review.getByRole("button", { name: "Help" }).click();
   const tour = tourOf(page);
   for (let i = 0; i < TO_LAST; i++) {
     await tour.getByRole("button", { name: "Next" }).click();
   }
-  await expect(tour.getByRole("heading", { name: "Saving your changes" })).toBeVisible();
+  await expect(tour.getByRole("heading", { name: "Drafts, and saving" })).toBeVisible();
   // Pinned to the prose: the step's little illustration says "Save Changes" too.
   await expect(
     tour.getByText(/Save Changes is the only thing that writes/)
   ).toBeVisible();
-  // Nowhere on the step — not in the words, and not in the drawing of the
-  // action bar, which has to be the bar this mode actually shows.
-  await expect(tour.getByText(/Save Draft/)).toHaveCount(0);
+  // Preview drafts are the kind that can go stale, so the step has to say what
+  // reopening one does about that.
+  await expect(tour.getByText(/lays it back over the calendar/)).toBeVisible();
+  // Nowhere on this mode's step — not in the words, and not in the drawing of
+  // the action bar, which has to be the bar this mode actually shows.
+  await expect(tour.getByText(/Apply schedule/)).toHaveCount(0);
   await tour.getByRole("button", { name: "Done" }).click();
   await review.getByRole("button", { name: "Close", exact: true }).click();
 
