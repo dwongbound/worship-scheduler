@@ -28,12 +28,19 @@ export default function PreviewModeModal({
   // The set types are derived from sets that may still be loading (the page
   // fetches its recurring sets on the first open).
   loading,
+  draftCount = 0,
+  onOpenDrafts,
   onPreview,
   onClose,
 }: {
   open: boolean;
   setTypes: PreviewSetType[];
   loading: boolean;
+  // Saved preview drafts for this org. The button is absent at zero: an empty
+  // list is a dead end, and its absence is itself the answer (same rule as the
+  // Create tab's Drafts button).
+  draftCount?: number;
+  onOpenDrafts?: () => void;
   // Colours ride alongside the picks: they're a preview-only reading aid and
   // never reach the API (nothing here ever does).
   onPreview: (typeIds: string[], colors: SetTypeColors) => void;
@@ -106,6 +113,11 @@ export default function PreviewModeModal({
       }
       footer={
         <>
+          {draftCount > 0 && onOpenDrafts && (
+            <Button variant="secondary" className="mr-auto" onClick={onOpenDrafts}>
+              Drafts
+            </Button>
+          )}
           <Button variant="secondary" onClick={onClose}>
             Close
           </Button>

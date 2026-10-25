@@ -235,8 +235,14 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   of one role is one message, not one per set; a multi-set DM lists sets as
   plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`,
-  `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
-  their plan payloads, `[id]` GET is what carries one back).
+  `admin/drafts(+/[id])` (saved previews — GET lists them WITHOUT
+  their plan payloads, `[id]` GET is what carries one back. `?mode=` /
+  `mode` in the body picks the WORKSPACE: `generate` (default, and what every
+  legacy row is) or `preview`. Lists, the five keep-slots and the recovery slot
+  are all per mode, so the two piles never mix — a generate plan only ADDS
+  people on apply, a preview plan is one roster per existing set saved as a
+  diff, and either opened in the other's workspace would quietly do the wrong
+  thing).
   (`admin/users/[id]` PATCH also renames a member — `name` is global to the
   person, and the Team tab's cog → "Edit details" is its only caller.)
   (No `sets/[id]/autofill` — "Auto schedule" in the set detail modal runs
@@ -352,8 +358,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   both onto another set — which keeps its own identity (time, label, team) and
   takes the source's form, every pasted seat LOCKED so a later auto-fill treats
   it as a constraint. ✅tested
-- `drafts.ts` — saved generate previews: `MAX_DRAFTS` (5 per org),
-  `AUTOSAVE_INTERVAL_MS`, `canSaveDraft` (its `replacingId` is what makes
+- `drafts.ts` — saved previews: `MAX_DRAFTS` (5 per org PER MODE),
+  `AUTOSAVE_INTERVAL_MS`, `DraftMode`/`parseDraftMode` (`generate` | `preview`,
+  the `ScheduleDraft.mode` column — anything unrecognised reads as `generate`,
+  which is what rows predating the column are), `canSaveDraft` (its `replacingId` is what makes
   re-saving an existing draft free, and promoting the recovery row NOT free),
   `draftLabel`, `normalizeDraftName`. Two kinds of `ScheduleDraft` row, told
   apart by `isRecovery`: DELIBERATE ones (the Save Draft button, capped, may be
@@ -364,8 +372,9 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 - `scheduleTour.ts` — the words of the review workspace's guided tour, as data:
   `tourSteps({preview})` → one step per quirk (views · team load · hover ·
   locking · the card's ↻/✕ · copy-paste-undo · the warnings · committing), with
-  the last step forked per mode (Preview Mode has no draft to park and commits
-  with Save Changes). It is the ONLY explanation of that screen — the paragraph
+  the last step forked per mode (Preview Mode commits with Save Changes, and
+  its drafts can go stale, so its step says reopening lays one back over the
+  calendar as it stands). It is the ONLY explanation of that screen — the paragraph
   of instructions that used to head the modal and the shortcut hint under it
   were deleted in its favour, so a missing step = an undiscoverable feature.
   ✅tested
@@ -379,8 +388,14 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   (every real seat opens LOCKED, so Auto schedule only fills gaps until the
   admin unlocks), `previewSaves` (the save diff; re-proposed seats are matched
   back to their rows — same person+role = no change, same role = reassignment —
-  so a Clear all + Auto schedule doesn't delete and re-add people), and
-  `describePreviewSaves` (the batch confirm's sentence). ✅tested
+  so a Clear all + Auto schedule doesn't delete and re-add people),
+  `describePreviewSaves` (the batch confirm's sentence), and `applyDraftSets`
+  (reopening a saved preview draft: the CURRENT sets are the ground truth and
+  the draft supplies only roster, MD and shape — its seats come back WITHOUT
+  row ids, so `previewSaves` folds them into reassignments of the live rows,
+  and sets the draft names that no longer exist come back as `missing` for the
+  caller to say out loud. The draft is deleted once its rosters really save,
+  so a spent plan can't be re-imposed later). ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
   (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.
@@ -562,11 +577,14 @@ directors across the plan, and a snapshot whose `after` no longer matches `sets`
 means something else edited since — the history is dropped rather than rewinding
 over that work); all three are bound on the document so cards needn't enter the
 tab order, and each flashes a pill on the card it happened to
-(`animate-flash-fade`); in the generate flow only, Save Draft parks the
+(`animate-flash-fade`); in BOTH modes Save Draft parks the
 plan via `lib/drafts.ts` and a once-a-minute autosave writes the same plan into the
-org's recovery slot),
+org's recovery slot — in Preview Mode it's dead until something has changed,
+since an unedited preview is just a copy of the calendar),
 `DraftsModal` (the saved-preview list — open or delete, the delete confirm
-stacked over it so you stay in the list, which is where making room happens),
+stacked over it so you stay in the list, which is where making room happens;
+shared by the Create tab and `PreviewModeModal`'s own Drafts button, each
+reading its own mode's rows),
 `ScheduleHelpModal` (the review workspace's guided tour: a STEPPED modal, not
 spotlights — that screen scrolls two ways and regroups itself, so anything
 anchored to a live element would point at empty space half the time; each step

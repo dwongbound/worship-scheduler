@@ -73,13 +73,14 @@ describe("tourSteps", () => {
     }
   });
 
-  it("talks about drafts only where drafts exist", () => {
-    // Preview Mode edits real sets — there is nothing to park, so offering to
-    // save a draft there would describe a button that isn't on the screen.
+  it("talks about drafts in both modes, since both can park a plan", () => {
     const text = (steps: ReturnType<typeof tourSteps>) =>
       steps.flatMap((s) => s.body).join(" ");
     expect(text(generate)).toMatch(/Save Draft/);
-    expect(text(preview)).not.toMatch(/Save Draft/);
+    expect(text(preview)).toMatch(/Save Draft/);
+    // Preview drafts are the one kind that can go stale — the sets they name
+    // keep living — so the tour has to say what reopening one does about that.
+    expect(text(preview)).toMatch(/as it stands/);
   });
 
   it("names the commit button each mode actually shows", () => {

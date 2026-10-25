@@ -880,6 +880,13 @@ model ScheduleDraft {
   // The rolling autosave slot rather than something deliberately kept.
   isRecovery Boolean @default(false)
 
+  // WHICH workspace parked this plan: "generate" (the Create tab's run) or
+  // "preview" (the calendar's Preview Mode). The two hold different things — a
+  // generate plan proposes sets that may not exist yet, a preview plan is one
+  // roster per set that already does — so they are listed, capped and opened
+  // separately rather than sharing one pile. Legacy rows are generate plans.
+  mode String @default("generate")
+
   // The StagedPlan payload (lib/types.ts): sets, skipped, baseline.
   plan Json
 
@@ -893,11 +900,11 @@ model ScheduleDraft {
   // honest about when the stored plan last changed.
   updatedAt DateTime @updatedAt
 
-  // The list is always "this org's drafts, newest activity first".
-  @@index([orgId, updatedAt])
-  // One recovery slot per person per org is an application rule (a partial
-  // unique index can't express it here) — see POST /api/admin/drafts.
-  @@index([orgId, createdById, isRecovery])
+  // The list is always "this org's drafts OF ONE MODE, newest activity first".
+  @@index([orgId, mode, updatedAt])
+  // One recovery slot per person per org PER MODE is an application rule (a
+  // partial unique index can't express it here) — see POST /api/admin/drafts.
+  @@index([orgId, createdById, mode, isRecovery])
   @@map("schedule_drafts")
 }
 

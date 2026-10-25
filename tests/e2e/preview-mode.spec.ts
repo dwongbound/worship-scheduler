@@ -235,3 +235,95 @@ test("preview mode is admin-only", async ({ page }) => {
     page.getByRole("button", { name: "Preview Mode" })
   ).toHaveCount(0);
 });
+
+test("preview mode parks a roster as a draft and lays it back on", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/calendar");
+
+  await page.getByRole("button", { name: "Preview Mode" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "See preview" }).click();
+  const review = page.getByRole("dialog").filter({ hasText: "Schedule preview" });
+  await expect(
+    review.getByRole("heading", { name: "Schedule preview" })
+  ).toBeVisible();
+
+  // Nothing is edited yet, so there is nothing worth parking either.
+  await expect(review.getByRole("button", { name: "Save Draft" })).toBeDisabled();
+
+  // Fill the empty seeded set — the edit this draft is about to carry.
+  const empty = review
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Private Rehearsal" })
+    .first();
+  await empty.scrollIntoViewIfNeeded();
+  const openBefore = await empty.getByText("None", { exact: true }).count();
+  await empty.getByRole("button", { name: /^Auto schedule this set/ }).click();
+  await expect(async () => {
+    expect(await empty.getByText("None", { exact: true }).count()).toBeLessThan(
+      openBefore
+    );
+  }).toPass();
+
+  const saveDraft = review.getByRole("button", { name: "Save Draft" });
+  await expect(saveDraft).toBeEnabled();
+  await saveDraft.click();
+  const saveDialog = page
+    .getByRole("dialog")
+    .filter({ hasText: "Save this preview as a draft?" });
+  await saveDialog.getByLabel("Name (optional)").fill("Rehearsal crew");
+  await saveDialog.getByRole("button", { name: "Confirm" }).click();
+
+  // Parking it leaves the workspace, and the calendar is untouched: a draft is
+  // the one way out of here that writes nothing and messages nobody.
+  await expect(review).toBeHidden();
+
+  // The picker now offers the drafts behind it.
+  await page.getByRole("button", { name: "Preview Mode" }).click();
+  const options = page.getByRole("dialog").filter({ hasText: "Set types to show" });
+  await options.getByRole("button", { name: "Drafts" }).click();
+  const list = page.getByRole("dialog").filter({ hasText: "Drafts" });
+  await expect(list.getByText("Rehearsal crew")).toBeVisible();
+  await list.getByRole("button", { name: "Open Rehearsal crew" }).click();
+
+  // Reopened, the draft's roster is back on the card and Save Changes is live:
+  // the calendar still has the empty set, so the restored seats ARE the diff.
+  const reopened = page
+    .getByRole("dialog")
+    .filter({ hasText: "Schedule preview" });
+  const restored = reopened
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Private Rehearsal" })
+    .first();
+  await restored.scrollIntoViewIfNeeded();
+  expect(await restored.getByText("None", { exact: true }).count()).toBeLessThan(
+    openBefore
+  );
+  await expect(
+    reopened.getByRole("button", { name: "Save Changes" })
+  ).toBeEnabled();
+
+  // Leave without saving, then clear the draft up after ourselves.
+  await reopened.getByRole("button", { name: "Close", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard your changes?" })
+    .getByRole("button", { name: "Discard", exact: true })
+    .click();
+
+  await page.getByRole("button", { name: "Preview Mode" }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Set types to show" })
+    .getByRole("button", { name: "Drafts" })
+    .click();
+  const cleanup = page.getByRole("dialog").filter({ hasText: "Drafts" });
+  await cleanup.getByRole("button", { name: "Delete Rehearsal crew" }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Delete this draft?" })
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(cleanup.getByText("Rehearsal crew")).toHaveCount(0);
+});

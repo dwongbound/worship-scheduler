@@ -1,4 +1,10 @@
-// GET/POST /api/admin/drafts — saved generate previews for one org.
+// GET/POST /api/admin/drafts — saved previews for one org.
+//
+// A draft belongs to ONE workspace, named by `mode`: "generate" (the Create
+// tab's run) or "preview" (the calendar's Preview Mode). The lists, the
+// five keep-slots and the recovery slot are all per mode, so parking a month
+// of roster fixes never costs you a generate slot — and neither list can
+// offer a plan the other workspace couldn't apply correctly.
 //
 // GET lists them WITHOUT their plan payloads: a plan is a whole schedule, and
 // five of them would make opening the Drafts list far heavier than reading it
@@ -13,7 +19,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
-import { canSaveDraft, normalizeDraftName } from "@/lib/drafts";
+import { canSaveDraft, normalizeDraftName, parseDraftMode } from "@/lib/drafts";
 import type { Prisma } from "@/lib/generated/prisma/client";
 
 // Everything the list needs and nothing else — notably not `plan`.
@@ -48,8 +54,9 @@ export async function GET(req: NextRequest) {
   const admin = await requireOrgAdmin(req);
   if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
+  const mode = parseDraftMode(req.nextUrl.searchParams.get("mode"));
   const drafts = await prisma.scheduleDraft.findMany({
-    where: { orgId: admin.orgId },
+    where: { orgId: admin.orgId, mode },
     select: SUMMARY_FIELDS,
     // Most recently touched first — the one you're most likely to want back.
     orderBy: { updatedAt: "desc" },
@@ -67,13 +74,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "A plan is required." }, { status: 400 });
   }
   const isRecovery = body?.isRecovery === true;
+  const mode = parseDraftMode(body?.mode);
   const name = isRecovery ? null : normalizeDraftName(body?.name);
 
   // The recovery slot is one row per person per org, overwritten in place, so
   // a long session leaves one autosave rather than a trail of them.
   if (isRecovery) {
     const existing = await prisma.scheduleDraft.findFirst({
-      where: { orgId: admin.orgId, createdById: admin.user.id, isRecovery: true },
+      where: {
+        orgId: admin.orgId,
+        createdById: admin.user.id,
+        mode,
+        isRecovery: true,
+      },
       select: { id: true },
     });
     const saved = existing
@@ -86,6 +99,7 @@ export async function POST(req: NextRequest) {
           data: {
             orgId: admin.orgId,
             createdById: admin.user.id,
+            mode,
             isRecovery: true,
             plan: plan as Prisma.InputJsonValue,
           },
@@ -98,7 +112,7 @@ export async function POST(req: NextRequest) {
   // against the db rather than trusted from the client, which is working off a
   // list that may be minutes old.
   const existing = await prisma.scheduleDraft.findMany({
-    where: { orgId: admin.orgId },
+    where: { orgId: admin.orgId, mode },
     select: { id: true, isRecovery: true },
   });
   const allowed = canSaveDraft(existing);
@@ -110,6 +124,7 @@ export async function POST(req: NextRequest) {
     data: {
       orgId: admin.orgId,
       createdById: admin.user.id,
+      mode,
       name,
       plan: plan as Prisma.InputJsonValue,
     },
