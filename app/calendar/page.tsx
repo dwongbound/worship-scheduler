@@ -16,6 +16,7 @@ import { useSession } from "next-auth/react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Banner from "@/components/common/Banner";
+import Modal from "@/components/common/Modal";
 import Button from "@/components/common/Button";
 import Select from "@/components/common/Select";
 import { usePullToRefresh } from "@/components/PullToRefresh";
@@ -28,6 +29,7 @@ import CreateSetModal from "@/components/CreateSetModal";
 import MySetsPanel from "@/components/MySetsPanel";
 import ExportModal from "@/components/ExportModal";
 import PreviewModeModal from "@/components/PreviewModeModal";
+import DraftsModal from "@/components/DraftsModal";
 import StagedScheduleModal from "@/components/StagedScheduleModal";
 import ShieldIcon from "@/components/common/ShieldIcon";
 import type { SetTypeColors } from "@/components/SetTypePicker";
@@ -42,11 +44,13 @@ import { toYmd } from "@/lib/dates";
 import { SET_PARAM } from "@/lib/setLink";
 import { setStatus, type SetStatus } from "@/lib/setStatus";
 import {
+  applyDraftSets,
   buildPreviewPlan,
   previewCandidates,
   previewSaves,
   previewSetTypes,
 } from "@/lib/calendarPreview";
+import type { DraftSummary } from "@/lib/drafts";
 import type {
   ApiAdminUser,
   ApiSet,
@@ -121,6 +125,22 @@ function CalendarView() {
   const [previewSaving, setPreviewSaving] = useState(false);
   // Why the last preview save was refused, shown in its confirm dialog.
   const [previewError, setPreviewError] = useState("");
+  // Preview Mode's own saved drafts (mode=preview — the generate flow's five
+  // are a separate pile). Read when step 1 opens rather than with the page:
+  // most calendar visits never reach Preview Mode at all.
+  const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [draftBusyId, setDraftBusyId] = useState<string | null>(null);
+  // The draft this preview was opened FROM: its name prefills the save dialog
+  // and the autosave writes back into it rather than the recovery slot.
+  const [openedDraft, setOpenedDraft] = useState<{
+    id: string;
+    name: string | null;
+  } | null>(null);
+  // Sets a draft named that are no longer on the calendar. Said once, in a
+  // dialog over the workspace, because a roster that silently didn't come back
+  // is the one thing an admin would never think to check.
+  const [draftMissing, setDraftMissing] = useState(0);
   // Sidebar width; defaults to ~30% of the screen once mounted.
   const [panelWidth, setPanelWidth] = useState(420);
   // Per-org admin user lists (assignment dropdowns are scoped to the open
@@ -217,8 +237,17 @@ function CalendarView() {
 
   // Open step 1, fetching that org's recurring sets + teams the first time
   // (and again whenever the preview org changes).
+  const reloadDrafts = useCallback(async () => {
+    if (!previewOrgId) return;
+    const res = await fetch("/api/admin/drafts?mode=preview", {
+      headers: orgHeaders(previewOrgId),
+    }).catch(() => null);
+    setDrafts(res?.ok ? await res.json() : []);
+  }, [previewOrgId]);
+
   const openPreview = useCallback(async () => {
     setPreviewOpen(true);
+    void reloadDrafts();
     if (!previewOrgId || previewRefs?.orgId === previewOrgId) return;
     setPreviewLoading(true);
     try {
@@ -232,7 +261,7 @@ function CalendarView() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [previewOrgId, previewRefs]);
+  }, [previewOrgId, previewRefs, reloadDrafts]);
 
   // Confirm one of my assignments straight from its calendar hover popover
   // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot
@@ -533,7 +562,13 @@ function CalendarView() {
         setPreviewError(data?.error ?? "Couldn't save these changes.");
         return;
       }
+      // These rosters are on the calendar now, so the draft they came from is
+      // spent: leaving it in the list would offer an admin a plan that has
+      // already happened, and reopening it later would re-impose rosters
+      // people have moved on from.
+      if (openedDraft) await deleteDraft(openedDraft.id);
       setPreviewPlan(null);
+      setOpenedDraft(null);
       await refetchSets();
     } catch {
       setPreviewError("Couldn't save these changes.");
@@ -555,33 +590,135 @@ function CalendarView() {
   // would throw away whatever the admin had already done. Step 1 shows its own
   // "still loading" state meanwhile. A failed fetch opens the preview anyway —
   // a from-zero fill is worse than this one, but it beats not opening.
+  const fetchBaseline = async (
+    staged: StagedSet[]
+  ): Promise<StagedPlan["baseline"] | undefined> => {
+    if (staged.length === 0 || !previewOrgId) return undefined;
+    const times = staged.map((s) => new Date(s.startsAt).getTime());
+    const from = new Date(Math.min(...times)).toISOString();
+    const to = new Date(Math.max(...times)).toISOString();
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(
+        `/api/admin/schedule-baseline?from=${from}&to=${to}`,
+        { headers: orgHeaders(previewOrgId) }
+      );
+      if (res.ok) return (await res.json())?.baseline ?? undefined;
+    } catch {
+      // Leave it undefined — see above.
+    } finally {
+      setPreviewLoading(false);
+    }
+    return undefined;
+  };
+
   const startPreview = async (typeIds: string[], colors: SetTypeColors) => {
     const staged = buildPreviewPlan(
       previewSets,
       previewRefs?.templates ?? [],
       typeIds
     );
-    let baseline: StagedPlan["baseline"] | undefined;
-    if (staged.sets.length > 0 && previewOrgId) {
-      const times = staged.sets.map((s) => new Date(s.startsAt).getTime());
-      const from = new Date(Math.min(...times)).toISOString();
-      const to = new Date(Math.max(...times)).toISOString();
-      setPreviewLoading(true);
-      try {
-        const res = await fetch(
-          `/api/admin/schedule-baseline?from=${from}&to=${to}`,
-          { headers: orgHeaders(previewOrgId) }
-        );
-        if (res.ok) baseline = (await res.json())?.baseline ?? undefined;
-      } catch {
-        // Leave it undefined — see above.
-      } finally {
-        setPreviewLoading(false);
-      }
-    }
+    const baseline = await fetchBaseline(staged.sets);
+    setOpenedDraft(null);
     setPreviewPlan(baseline ? { ...staged, baseline } : staged);
     setPreviewColors(colors);
     setPreviewOpen(false);
+  };
+
+  /**
+   * Park the open preview. Mirrors the Create tab's saver, with mode=preview so
+   * these never mix with generate drafts: a preview opened FROM a draft is
+   * PATCHed back into it, a fresh one autosaves into this org's preview
+   * recovery slot, and a deliberate save takes one of its five keep-slots.
+   */
+  const saveDraft = async (
+    plan: StagedPlan,
+    name: string | null,
+    silent: boolean
+  ): Promise<boolean> => {
+    if (!previewOrgId) return false;
+    const headers = {
+      "Content-Type": "application/json",
+      ...orgHeaders(previewOrgId),
+    };
+    // An autosave sends only the plan, so it can never blank a chosen name.
+    const body = silent ? { plan } : { plan, name };
+    const res = openedDraft
+      ? await fetch(`/api/admin/drafts/${openedDraft.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify(body),
+        })
+      : await fetch("/api/admin/drafts", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ...body, mode: "preview", isRecovery: silent }),
+        });
+    if (!res.ok) {
+      // The autosave stays quiet, including at the limit — but it reports the
+      // miss back, so the "last saved" stamp never claims a save that didn't
+      // happen.
+      if (silent) return false;
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.error ?? "Could not save the draft.");
+    }
+    const saved = await res.json().catch(() => null);
+    // A deliberate save becomes the draft we're now in, so a second Save Draft
+    // replaces it rather than spending another slot.
+    if (!silent && saved?.id) setOpenedDraft({ id: saved.id, name: saved.name });
+    if (saved?.id) {
+      setDrafts((current) => [saved, ...current.filter((d) => d.id !== saved.id)]);
+    }
+    return true;
+  };
+
+  /**
+   * Open a saved roster back into the workspace. The draft is laid over the
+   * calendar AS IT STANDS NOW (applyDraftSets) rather than reopened as it was
+   * saved: the sets it names have gone on living, and a diff computed against
+   * stale rows would be a diff against a calendar that no longer exists.
+   */
+  const openDraft = async (id: string) => {
+    if (!previewOrgId) return;
+    setDraftBusyId(id);
+    try {
+      const res = await fetch(`/api/admin/drafts/${id}`, {
+        headers: orgHeaders(previewOrgId),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const saved = data.plan as StagedPlan;
+      // Every type, not the picker's selection: the draft itself says which
+      // sets matter, and leaving its sets out would silently drop rosters.
+      const current = buildPreviewPlan(
+        previewSets,
+        previewRefs?.templates ?? [],
+        previewTypes.map((t) => t.id)
+      );
+      const { sets: merged, missing } = applyDraftSets(
+        current.sets,
+        saved.sets ?? []
+      );
+      const baseline = await fetchBaseline(merged);
+      setOpenedDraft({ id: data.id, name: data.name });
+      setDraftMissing(missing.length);
+      setPreviewPlan({ ...current, sets: merged, ...(baseline ? { baseline } : {}) });
+      setDraftsOpen(false);
+      setPreviewOpen(false);
+    } finally {
+      setDraftBusyId(null);
+    }
+  };
+
+  const deleteDraft = async (id: string) => {
+    if (!previewOrgId) return;
+    await fetch(`/api/admin/drafts/${id}`, {
+      method: "DELETE",
+      headers: orgHeaders(previewOrgId),
+    });
+    // The draft we're editing just went away — stop writing back into it.
+    setOpenedDraft((current) => (current?.id === id ? null : current));
+    setDrafts((current) => current.filter((draft) => draft.id !== id));
   };
 
   // Header + calendar. Rendered either centered (panel closed) or as the
@@ -773,8 +910,21 @@ function CalendarView() {
         open={previewOpen}
         setTypes={previewTypes}
         loading={previewLoading}
+        draftCount={drafts.length}
+        onOpenDrafts={() => setDraftsOpen(true)}
         onPreview={startPreview}
         onClose={() => setPreviewOpen(false)}
+      />
+
+      {/* The saved rosters for this org, opened or deleted in place — the same
+          list the Create tab uses, reading this workspace's own drafts. */}
+      <DraftsModal
+        open={draftsOpen}
+        drafts={drafts}
+        busyId={draftBusyId}
+        onOpenDraft={openDraft}
+        onDelete={deleteDraft}
+        onClose={() => setDraftsOpen(false)}
       />
 
       {/* Step 2: the Create tab's review workspace, opened over the real
@@ -790,11 +940,33 @@ function CalendarView() {
         busy={previewSaving}
         onApply={savePreview}
         applyError={previewError}
+        onSaveDraft={saveDraft}
+        openedDraft={openedDraft}
+        drafts={drafts}
+        onDeleteDraft={deleteDraft}
         onClose={() => {
           setPreviewPlan(null);
           setPreviewError("");
+          setOpenedDraft(null);
         }}
       />
+
+      {/* A draft can outlive the sets it was about. Saying so once, over the
+          workspace, is the only way an admin would learn that a roster they
+          expected back isn't there — the restored plan itself looks complete. */}
+      <Modal
+        open={draftMissing > 0}
+        title="Some sets are gone"
+        onClose={() => setDraftMissing(0)}
+        footer={<Button onClick={() => setDraftMissing(0)}>Close</Button>}
+      >
+        <p className="text-sm text-gray-600 dark:text-gray-400">
+          {draftMissing === 1
+            ? "One set in this draft is no longer on the calendar, so its roster couldn't be restored."
+            : `${draftMissing} sets in this draft are no longer on the calendar, so their rosters couldn't be restored.`}{" "}
+          Everything else is here and nothing has been saved yet.
+        </p>
+      </Modal>
     </>
   );
 }

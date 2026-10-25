@@ -134,9 +134,10 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       ? {
           id: "commit",
           art: "commit",
-          title: "Saving your changes",
+          title: "Drafts, and saving",
           body: [
             "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone. It shows how many changes you are about to save first, then saves them all together.",
+            "Save Draft parks your edits without touching the calendar, to come back to another day; you can keep five, and the workspace also autosaves into a separate recovery slot once a minute so a closed tab costs you nothing. Reopening a draft lays it back over the calendar as it stands then, and says so if any of its sets have gone.",
             "Close backs out. If you have made changes it asks first, and lists what it is about to throw away.",
           ],
         }

@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OTHER_SET_TYPE,
+  applyDraftSets,
   buildPreviewPlan,
   describePreviewSaves,
   previewCandidates,
@@ -558,5 +559,101 @@ describe("describePreviewSaves", () => {
         },
       ])
     ).toBe("1 roster change across 1 set");
+  });
+});
+
+describe("applyDraftSets", () => {
+  // A set as it is on the calendar right now, with one live seat per role.
+  const live = (
+    id: string,
+    seats: { role: string; userId: string; assignmentId: string }[],
+    mdUserId: string | null = null
+  ): StagedSet => ({
+    stagingId: id,
+    startsAt: "2026-11-01T17:00:00.000Z",
+    label: "Sunday Service",
+    durationMinutes: 90,
+    requiresMD: true,
+    mdUserId,
+    slotCapacities: null,
+    groupChatLeadDays: null,
+    teamId: "team-sun",
+    existing: true,
+    assignments: seats.map((s) => ({ ...s, locked: true })),
+  });
+
+  // What a draft stores: the same set id, the admin's roster, no live row ids
+  // that can be trusted by the time it is reopened.
+  const saved = (
+    id: string,
+    seats: { role: string; userId: string }[],
+    mdUserId: string | null = null
+  ): StagedSet => ({
+    ...live(id, []),
+    mdUserId,
+    assignments: seats.map((s) => ({ ...s, locked: true })),
+  });
+
+  it("puts the draft's roster and MD onto the set that still exists", () => {
+    const { sets, missing } = applyDraftSets(
+      [live("s1", [{ role: "DRUMS", userId: "u-old", assignmentId: "a1" }], "u-old")],
+      [saved("s1", [{ role: "DRUMS", userId: "u-new" }], "u-new")]
+    );
+    expect(missing).toEqual([]);
+    expect(sets[0].assignments).toEqual([
+      { role: "DRUMS", userId: "u-new", locked: true },
+    ]);
+    expect(sets[0].mdUserId).toBe("u-new");
+    // The set's own identity is the calendar's, never the draft's.
+    expect(sets[0].stagingId).toBe("s1");
+    expect(sets[0].label).toBe("Sunday Service");
+  });
+
+  it("drops the draft's row ids so the save reads as a reassignment", () => {
+    const before = [
+      live("s1", [{ role: "DRUMS", userId: "u-old", assignmentId: "a1" }]),
+    ];
+    const { sets } = applyDraftSets(before, [
+      saved("s1", [{ role: "DRUMS", userId: "u-new" }]),
+    ]);
+    // previewSaves folds an id-less seat in the same role back into an update
+    // of the live row, which is what keeps the seat's history and its DM sane.
+    expect(previewSaves(before, sets)).toEqual([
+      {
+        setId: "s1",
+        ops: { removed: [], reassigned: [{ id: "a1", userId: "u-new" }], added: [] },
+      },
+    ]);
+  });
+
+  it("leaves sets the draft never mentioned exactly as they are", () => {
+    const untouched = live("s2", [
+      { role: "KEYS", userId: "u-k", assignmentId: "a2" },
+    ]);
+    const { sets } = applyDraftSets(
+      [live("s1", []), untouched],
+      [saved("s1", [{ role: "DRUMS", userId: "u-new" }])]
+    );
+    expect(sets[1]).toBe(untouched);
+    expect(previewSaves([live("s1", []), untouched], sets)).toHaveLength(1);
+  });
+
+  it("reports a draft's sets that are no longer on the calendar", () => {
+    const gone = saved("deleted-set", [{ role: "BASS", userId: "u-b" }]);
+    const { sets, missing } = applyDraftSets(
+      [live("s1", [])],
+      [saved("s1", [{ role: "DRUMS", userId: "u-new" }]), gone]
+    );
+    expect(sets).toHaveLength(1);
+    expect(missing).toEqual([gone]);
+  });
+
+  it("restores a roster the draft emptied", () => {
+    const before = [
+      live("s1", [{ role: "DRUMS", userId: "u-old", assignmentId: "a1" }]),
+    ];
+    const { sets } = applyDraftSets(before, [saved("s1", [])]);
+    expect(sets[0].assignments).toEqual([]);
+    expect(previewSaves(before, sets)[0].ops.removed).toEqual(["a1"]);
   });
 });

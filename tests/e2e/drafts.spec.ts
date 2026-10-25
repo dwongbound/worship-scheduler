@@ -1,8 +1,8 @@
 // E2E: saving a generated preview as a draft, reopening it, and deleting it.
 //
-// Drafts are Create-tab only: the calendar's Preview Mode mirrors real sets, so
-// there's nothing to park. The Drafts button is hidden until one exists, which
-// is the first thing this checks.
+// The Create tab's own five slots — Preview Mode keeps a separate pile of its
+// own (tests/e2e/preview-mode.spec.ts). The Drafts button is hidden until one
+// exists, which is the first thing this checks.
 import { expect, test } from "@playwright/test";
 import { login, seedOwnSetTime } from "./helpers";
 
