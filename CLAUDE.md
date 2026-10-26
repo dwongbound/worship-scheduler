@@ -357,6 +357,12 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   month/3/6/12 months. Only "this plan" is counted client-side; every window is
   ONE on-demand query to `GET /api/admin/team-load?metric=…`, cached per window
   in the modal — the plan itself never carries a year of assignments. ✅tested
+  `HOVER_HIGHLIGHT_DELAY_MS` (2000) is how long the pointer must REST on a
+  name before every other seat that person holds lights up. `StagedScheduleModal`'s
+  `hoverUser` is the debounce: arriving clears the current highlight and starts
+  the clock, leaving (null) clears and cancels at once — undelayed, the grid
+  flickered through every name the cursor crossed. The tour says "about two
+  seconds" in words, so the number and the copy are pinned to each other. ✅tested
   `ruleHeldRoles`/`totalRuleHeld` are the "!" marks: which open slots a
   REQUIRED scheduling rule is what's holding empty (a SAME_PLAYER seat reserved
   for someone who can't take it, a role every candidate is refused for). Found
@@ -403,11 +409,19 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   stands. A slug nothing answers to says so instead of opening the wrong plan.
   ✅tested
 - `scheduleTour.ts` — the words of the review workspace's guided tour, as data:
-  `tourSteps({preview})` → one step per quirk (views · team load · hover ·
-  locking · the card's ↻/✕ · copy-paste-undo · the warnings · committing), with
+  `tourSteps({preview})` → one step per quirk (views · team load · the person
+  filter · hover · **the plan-wide action row** · locking · the card's ↻/✕ ·
+  copy-paste-undo · the warnings · committing), with
   the last step forked per mode (Preview Mode commits with Save Changes, and
   its drafts can go stale, so its step says reopening lays one back over the
-  calendar as it stands). It is the ONLY explanation of that screen — the paragraph
+  calendar as it stands; it also names the Drafts button on the step-1 modal,
+  the `?draft=` link in the address bar, and that the screen won't open on a
+  phone). `actions` covers the four buttons that act on the WHOLE plan — Auto
+  schedule, Clear all people, Lock all/Unlock all, Scheduling rules — and
+  `warnings` covers all FOUR colours, the yellow rule-BREAK box included. Every
+  step's art lives in `ScheduleHelpModal.StepArt`, so a new `TourArt` needs a
+  branch there or the step draws an empty box.
+  It is the ONLY explanation of that screen — the paragraph
   of instructions that used to head the modal and the shortcut hint under it
   were deleted in its favour, so a missing step = an undiscoverable feature.
   ✅tested
@@ -485,7 +499,15 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   Disconnect on Org settings, calls `invalidateSlackStatus(orgId)`. ✅tested
 - `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
   behind "is this the app-style layout?", shared by the bottom bar's `lg:`
-  classes, SwipePager and PullToRefresh.
+  classes, SwipePager and PullToRefresh. Plus `PREVIEW_MIN_WIDTH` (768 = `md`)
+  + `isPreviewWidth()`: the narrowest screen the review workspace is usable at.
+  The Preview Mode button is already absent below it (it lives in the month
+  grid's `md:` toolbar), so the one way in a phone still has is a `?draft=`
+  link — which is made to be pasted into a message. `app/calendar/page.tsx`
+  checks this BEFORE the link's three fetches and says "too wide for a phone
+  screen … computer or tablet" in the same `linkError` banner a dead `?set=`
+  link uses. Deliberately `md` and not `BOTTOM_NAV_MAX_WIDTH`: a tablet gets
+  the bottom bar AND the workspace. ✅tested
 - `swipeNav.ts` — the tab-swipe gesture's math: `gestureAxis` (a move is a
   swipe only if it's `AXIS_RATIO`× more horizontal than vertical — a scroll
   that drifts sideways stays a scroll, and once vertical wins the touch is the
@@ -621,7 +643,12 @@ preview save persist, the same edit `SetDetailModal.deleteSlot` makes — and a
 role emptied of slots comes back via the card's "+ role" chips; the unfillable
 (red) and conflict (amber) banners ride ON the footer's action bar, bled to the
 modal's edges — the body scrolls for a long plan, so at the top they were gone
-by the time you were looking at the roles they named; clicking a
+by the time you were looking at the roles they named. The two RULE banners
+(indigo "left open by a required rule", yellow "break a scheduling rule") lead
+with `RuleAlertIcon`, a drawn circled "!", not a bare "!" character — beside
+the "⚠" the other two lead with, a lone exclamation mark read as stray
+punctuation. The per-seat marks stay a plain "!": those sit in a `Badge`,
+which gives them the frame this icon has to draw. Clicking a
 card's own space SELECTS it — ⌘/Ctrl+C then copies its shape + people and
 ⌘/Ctrl+V stamps them onto another selected card, ⌘/Ctrl+Z takes the last paste
 back (an undo entry snapshots the WHOLE set list, since `designateMDs` re-settles

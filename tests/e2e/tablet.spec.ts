@@ -95,3 +95,17 @@ test("tablet moves through months with the arrows instead", async ({ page }) => 
   await page.getByRole("button", { name: "Today" }).click();
   await expect(heading).toHaveText(startedOn!);
 });
+
+test("tablet follows a Preview Mode draft link", async ({ page }) => {
+  // The other half of the phone case in mobile.spec.ts: a tablet is wide
+  // enough, so the width gate stands aside and the link is resolved like any
+  // other. The slug matches nothing on the seed, so the proof that it got
+  // that far is the message about the SLUG rather than about the screen.
+  await login(page, "admin");
+  await page.goto("/calendar?draft=some-saved-plan");
+
+  await expect(
+    page.getByText(/doesn't match a saved plan/i)
+  ).toBeVisible();
+  await expect(page.getByText(/too wide for a phone screen/i)).toHaveCount(0);
+});
