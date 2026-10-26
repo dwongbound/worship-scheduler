@@ -369,6 +369,20 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   autosave), which never counts against the cap — a full set of keep-slots is
   exactly when you most need the safety net. Both the POST and the promoting
   PATCH re-check the cap against the db. ✅tested
+- `draftLink.ts` — the ONE spelling of a link to a saved draft:
+  `DRAFT_PARAM` (`?draft=`), `slugifyDraftName`, `draftSlugs`, `draftSlug`,
+  `draftForSlug`, `draftSearch`. The link carries a slug of the draft's NAME,
+  never its cuid, because its whole point is being pasted into a message — so
+  renaming a draft changes its link, which is the trade. Slugs are resolved
+  against a LIST, not looked up: two drafts in one org and mode may share a
+  name, so `draftSlugs` numbers the duplicates in list order (`-2`, `-3`) and
+  the first keeps the bare slug. BOTH workspaces mirror the open draft into the
+  URL and clear it on the way out (`app/calendar/page.tsx` Preview Mode,
+  `app/create/page.tsx` generate), and following a link opens that draft
+  directly — on the calendar that means waiting for the preview refs, the draft
+  list and the sets themselves, since a draft is laid over the calendar as it
+  stands. A slug nothing answers to says so instead of opening the wrong plan.
+  ✅tested
 - `scheduleTour.ts` — the words of the review workspace's guided tour, as data:
   `tourSteps({preview})` → one step per quirk (views · team load · hover ·
   locking · the card's ↻/✕ · copy-paste-undo · the warnings · committing), with
@@ -543,8 +557,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 ## Components
 
 Feature: `CalendarMonth`, `GoogleImportModal` (Import from Google Calendar as a
-screen: pick which of your own calendars to read, preview what they'd block in
-the page's own week grid — only the import's blocks, no weekly repeats and
+screen: pick which of your own calendars to read — NOTHING is ticked to begin
+with, since an import writes onto someone's availability and which diary it
+reads is a deliberate choice; the header's one button offers whichever way the
+list isn't ("Select all" with nothing ticked, "Deselect all" with any), so the
+way out of a half-made selection is always the same button — preview what
+they'd block in the page's own week grid — only the import's blocks, no weekly repeats and
 nothing already on your availability — then import. Every Google call draws a
 BLOCKING overlay over the body with what it's doing, and the footer's buttons
 are disabled to match; the consent screen is the one step that leaves the page

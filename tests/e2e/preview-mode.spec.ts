@@ -303,6 +303,9 @@ test("preview mode parks a roster as a draft and lays it back on", async ({
   await expect(
     reopened.getByRole("button", { name: "Save Changes" })
   ).toBeEnabled();
+  // And the URL now names the plan, by its NAME rather than its id, so the
+  // workspace someone is looking at can be sent to someone else.
+  await expect(page).toHaveURL(/\?draft=rehearsal-crew$/);
 
   // Leave without saving, then clear the draft up after ourselves.
   await reopened.getByRole("button", { name: "Close", exact: true }).click();
@@ -311,6 +314,30 @@ test("preview mode parks a roster as a draft and lays it back on", async ({
     .filter({ hasText: "Discard your changes?" })
     .getByRole("button", { name: "Discard", exact: true })
     .click();
+  // Closing takes the link away with it: the URL would otherwise reopen the
+  // plan that was just walked away from.
+  await expect(page).toHaveURL(/\/calendar$/);
+
+  // Following that link cold is the whole point of it — it opens Preview Mode
+  // and lays the draft back on without passing through the picker.
+  await page.goto("/calendar?draft=rehearsal-crew");
+  const linked = page.getByRole("dialog").filter({ hasText: "Schedule preview" });
+  await expect(
+    linked.getByRole("heading", { name: "Schedule preview" })
+  ).toBeVisible();
+  const linkedCard = linked
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Private Rehearsal" })
+    .first();
+  await linkedCard.scrollIntoViewIfNeeded();
+  expect(await linkedCard.getByText("None", { exact: true }).count()).toBeLessThan(
+    openBefore
+  );
+  await linked.getByRole("button", { name: "Close", exact: true }).click();
+  const discard = page.getByRole("dialog").filter({ hasText: "Discard your changes?" });
+  if (await discard.count()) {
+    await discard.getByRole("button", { name: "Discard", exact: true }).click();
+  }
 
   await page.getByRole("button", { name: "Preview Mode" }).click();
   await page

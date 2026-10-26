@@ -51,6 +51,12 @@ import {
   previewSetTypes,
 } from "@/lib/calendarPreview";
 import type { DraftSummary } from "@/lib/drafts";
+import {
+  DRAFT_PARAM,
+  draftForSlug,
+  draftSearch,
+  draftSlug,
+} from "@/lib/draftLink";
 import type {
   ApiAdminUser,
   ApiSet,
@@ -102,6 +108,16 @@ function CalendarView() {
   const [linkError, setLinkError] = useState("");
   const resolvedLinks = useRef<Set<string>>(new Set());
   const clickedSetIds = useRef<Set<string>>(new Set());
+  // ?draft=<slug>: the plan a link names (see the effect below), and the three
+  // one-shot guards it needs — which slugs have already been followed, and
+  // whether the two things a link has to fetch have been asked for.
+  const linkedDraftSlug = searchParams.get(DRAFT_PARAM);
+  const followedDraftLinks = useRef<Set<string>>(new Set());
+  const askedPreviewRefs = useRef(false);
+  const askedLinkedDrafts = useRef(false);
+  // `openDraft` is defined past the early return below, so the effect that
+  // follows a link holds it here instead.
+  const openDraftRef = useRef<(id: string) => void>(() => {});
   // Day whose inline "+" (admin) create form is open, or null.
   const [createDate, setCreateDate] = useState<Date | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -147,6 +163,10 @@ function CalendarView() {
   // dialog over the workspace, because a roster that silently didn't come back
   // is the one thing an admin would never think to check.
   const [draftMissing, setDraftMissing] = useState(0);
+  // Whether this org's draft list has been read yet. `drafts` being empty is a
+  // real answer ("no saved plans"), so it can't double as "not asked" — and a
+  // ?draft= link has to know the difference before it says a slug is dead.
+  const [draftsLoaded, setDraftsLoaded] = useState(false);
   // Sidebar width; defaults to ~30% of the screen once mounted.
   const [panelWidth, setPanelWidth] = useState(420);
   // Per-org admin user lists (assignment dropdowns are scoped to the open
@@ -249,11 +269,13 @@ function CalendarView() {
       headers: orgHeaders(previewOrgId),
     }).catch(() => null);
     setDrafts(res?.ok ? await res.json() : []);
+    setDraftsLoaded(true);
   }, [previewOrgId]);
 
-  const openPreview = useCallback(async () => {
-    setPreviewOpen(true);
-    void reloadDrafts();
+  // The recurring sets + team catalogs Preview Mode reads. Split out from
+  // `openPreview` because a ?draft= link needs them without the picker: it is
+  // going straight to the workspace.
+  const loadPreviewRefs = useCallback(async () => {
     if (!previewOrgId || previewRefs?.orgId === previewOrgId) return;
     setPreviewLoading(true);
     try {
@@ -267,7 +289,13 @@ function CalendarView() {
     } finally {
       setPreviewLoading(false);
     }
-  }, [previewOrgId, previewRefs, reloadDrafts]);
+  }, [previewOrgId, previewRefs]);
+
+  const openPreview = useCallback(async () => {
+    setPreviewOpen(true);
+    void reloadDrafts();
+    await loadPreviewRefs();
+  }, [loadPreviewRefs, reloadDrafts]);
 
   // Confirm one of my assignments straight from its calendar hover popover
   // (same PATCH as MySetsPanel; fires SWAPS_CHANGED_EVENT so the navbar dot
@@ -326,6 +354,17 @@ function CalendarView() {
   const closeSet = useCallback(() => {
     router.replace(pathname, { scroll: false });
   }, [router, pathname]);
+
+  // Mirror the open draft into ?draft=<slug>, or clear it. Through
+  // `draftSearch` so a ?set= link on the same URL survives either way.
+  const setDraftParam = useCallback(
+    (slug: string | null) => {
+      router.replace(`${pathname}${draftSearch(searchParams.toString(), slug)}`, {
+        scroll: false,
+      });
+    },
+    [router, pathname, searchParams]
+  );
 
   // ── ?set=<id> deep links ──────────────────────────────────────────────
   // A link can name a set this page hasn't loaded: one outside the fetch window
@@ -500,6 +539,45 @@ function CalendarView() {
     [previewSets, previewRefs?.templates]
   );
 
+  // ── ?draft=<slug> deep links ──────────────────────────────────────────
+  // A draft's link is a slug of its NAME, so it reads as something in a
+  // message rather than a cuid. Following one needs more than a ?set= link
+  // does: Preview Mode's refs (the recurring sets and team catalogs), the
+  // draft list to resolve the slug against, and the calendar itself, since a
+  // draft is laid over the sets as they stand. So the effect waits for all
+  // three and asks for what's missing, then opens the draft exactly ONCE —
+  // running twice would throw away whatever has been edited since.
+  //
+  // It runs on every render (openDraft isn't memoized), so each step is also
+  // guarded by a ref: without that, the frames while a fetch is in flight
+  // would each start another one. And it has to sit ABOVE the `if (!sets)`
+  // return below with the rest of the hooks, which is why it reaches `openDraft`
+  // through a ref rather than calling it directly.
+  useEffect(() => {
+    const slug = linkedDraftSlug;
+    if (!slug || !previewOrgId || sets === null) return;
+    if (followedDraftLinks.current.has(slug)) return;
+    if (previewRefs?.orgId !== previewOrgId) {
+      if (askedPreviewRefs.current) return;
+      askedPreviewRefs.current = true;
+      void loadPreviewRefs();
+      return;
+    }
+    if (!draftsLoaded) {
+      if (askedLinkedDrafts.current) return;
+      askedLinkedDrafts.current = true;
+      void reloadDrafts();
+      return;
+    }
+    followedDraftLinks.current.add(slug);
+    const match = draftForSlug(slug, drafts);
+    if (match) openDraftRef.current(match.id);
+    else
+      setLinkError(
+        "That draft link doesn't match a saved plan — it may have been renamed or deleted."
+      );
+  });
+
   usePageLoading(!sets);
   if (!sets) return null;
 
@@ -576,6 +654,7 @@ function CalendarView() {
       setPreviewPlan(null);
       setPreviewBase(null);
       setOpenedDraft(null);
+      setDraftParam(null);
       await refetchSets();
     } catch {
       setPreviewError("Couldn't save these changes.");
@@ -675,7 +754,12 @@ function CalendarView() {
     // replaces it rather than spending another slot.
     if (!silent && saved?.id) setOpenedDraft({ id: saved.id, name: saved.name });
     if (saved?.id) {
-      setDrafts((current) => [saved, ...current.filter((d) => d.id !== saved.id)]);
+      const next = [saved, ...drafts.filter((d) => d.id !== saved.id)];
+      setDrafts(next);
+      // Naming a plan names its link, so a deliberate save re-points the URL.
+      // An autosave doesn't: the recovery slot is a safety net, not a plan
+      // anyone would send someone else.
+      if (!silent) setDraftParam(draftSlug(saved, next));
     }
     return true;
   };
@@ -716,10 +800,14 @@ function CalendarView() {
       setPreviewPlan({ ...current, sets: merged, ...(baseline ? { baseline } : {}) });
       setDraftsOpen(false);
       setPreviewOpen(false);
+      // The URL now names this plan, so the workspace can be linked to.
+      setDraftParam(draftSlug({ id: data.id, name: data.name, isRecovery: data.isRecovery }, drafts));
     } finally {
       setDraftBusyId(null);
     }
   };
+
+  openDraftRef.current = (id: string) => void openDraft(id);
 
   const deleteDraft = async (id: string) => {
     if (!previewOrgId) return;
@@ -727,10 +815,13 @@ function CalendarView() {
       method: "DELETE",
       headers: orgHeaders(previewOrgId),
     });
-    // The draft we're editing just went away — stop writing back into it.
+    // The draft we're editing just went away — stop writing back into it, and
+    // drop the link that named it.
+    if (openedDraft?.id === id) setDraftParam(null);
     setOpenedDraft((current) => (current?.id === id ? null : current));
     setDrafts((current) => current.filter((draft) => draft.id !== id));
   };
+
 
   // Header + calendar. Rendered either centered (panel closed) or as the
   // flex-1 left side that the sidebar pushes over (panel open).
@@ -960,6 +1051,7 @@ function CalendarView() {
           setPreviewBase(null);
           setPreviewError("");
           setOpenedDraft(null);
+          setDraftParam(null);
         }}
       />
 
