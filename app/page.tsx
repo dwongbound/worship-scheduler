@@ -111,8 +111,11 @@ export default function HomePage() {
           >
             How it works
           </a>
+          {/* The way IN, for someone who already has an account. The hero's
+              button below is for someone who doesn't — it goes to the contact
+              block instead, since there is no self-serve sign-up. */}
           <Link href="/login" className={`${primaryButton} h-9 px-4`}>
-            Get started
+            Sign in
           </Link>
         </div>
       </header>
@@ -132,12 +135,24 @@ export default function HomePage() {
               TapWorship builds the roster, keeps everyone&rsquo;s availability in
               one place, and lets the team sort out its own covers.
             </p>
+            {/* "Get started" means getting an organization set up, which is a
+                conversation, not a form — so it lands on the contact block at
+                the foot of the page rather than on /login. Anyone who already
+                has an account wants the header's Sign in, which the line
+                beside it points at. */}
             <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
-              <Link href="/login" className={primaryButton}>
+              <a href="#contact" className={primaryButton}>
                 Get started
-              </Link>
+              </a>
               <span className="text-sm text-gray-500 dark:text-gray-400">
-                Already in a team? The same button signs you in.
+                Already in a team?{" "}
+                <Link
+                  href="/login"
+                  className="font-medium text-indigo-700 underline underline-offset-2 hover:text-indigo-800 dark:text-indigo-300 dark:hover:text-indigo-200"
+                >
+                  Sign in
+                </Link>
+                .
               </span>
             </div>
           </div>

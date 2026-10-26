@@ -186,8 +186,12 @@ grant/revoke admin, instruments).
 **TapWorship** and what the app does, which is what Google's OAuth verification
 fetches and judges the app's name and logo by; it failed review as a login wall.
 Its hero is an EXAMPLE set roster (invented people — the page is public), its
-four steps are numbered because they're a real sequence, and its one CTA is
-**Get started** → `/login`. The closing block asks people with no account to
+four steps are numbered because they're a real sequence, and it carries TWO
+buttons for two different people: the header's **Sign in** → `/login` for
+someone who already has an account, and the hero's **Get started** → `#contact`
+for someone who doesn't. They are NOT interchangeable — there is no self-serve
+sign-up, so a "Get started" landing on /login strands the very person it's for.
+The closing block asks people with no account to
 write in: the address is `CONTACT_EMAIL` (`lib/legal.ts`, overridable with
 `NEXT_PUBLIC_CONTACT_EMAIL`), shown as selectable text AND behind
 `components/CopyEmailButton.tsx` — never only a `mailto:`, since a clipboard
