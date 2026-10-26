@@ -29,6 +29,15 @@
 // time, and the writes are ordered deletes → reassignments → insertions so no
 // moment inside the transaction holds a person in one role twice. Rules are
 // never consulted — they steer Auto schedule, they don't gate a save.
+//
+// A prepared roster carries its writes as the four GROUPS above rather than as
+// finished prisma calls, because `rosterWrites` folds them across every set in
+// the batch: one deleteMany, the reassignments (which each need their own
+// `data`), one createMany for the seats and one for the history. A quarter of
+// Sunday rosters saved as a call per seat was 428 statements, which is both
+// slow and over Prisma's five-second transaction limit — the save died of that
+// timeout and the route reported it as a duplicate seat, which sent us hunting
+// for a clash that was never there. The same save is five statements now.
 import type { Prisma } from "./generated/prisma/client";
 import { prisma } from "./prisma";
 import { clearStaleMD, promoteMDIfEmpty } from "./setMd";
@@ -44,8 +53,14 @@ export type RosterError = { error: string; status: number };
 export interface PreparedRoster {
   setId: string;
   orgId: string;
-  // Unexecuted prisma writes, for the caller's $transaction.
-  writes: Prisma.PrismaPromise<unknown>[];
+  // The writes, as groups rather than prisma calls: `rosterWrites` turns one
+  // or many of these into the handful of statements a $transaction runs.
+  deletes: string[];
+  // Reassignments IN ORDER — each is only safe once the seat whose (person,
+  // role) it moves into has had its own turn (see collapseByPersonRole).
+  updates: { id: string; userId: string }[];
+  inserts: Prisma.AssignmentCreateManyInput[];
+  history: Prisma.SetHistoryEventCreateManyInput[];
   changes: RosterChange[];
   // Who to DM once the writes land, gathered here so the aftermath doesn't have
   // to reconstruct "which person was this change about" from the summary.
@@ -364,7 +379,10 @@ export async function prepareRosterDiff(
   const out: PreparedRoster = {
     setId,
     orgId: set.orgId,
-    writes: [],
+    deletes: [],
+    updates: [],
+    inserts: [],
+    history: [],
     changes: [],
     dms: [],
     seatedUserIds: [],
@@ -373,18 +391,14 @@ export async function prepareRosterDiff(
 
   for (const assignmentId of collapsed.removed) {
     const was = rosterById.get(assignmentId)!;
-    out.writes.push(prisma.assignment.delete({ where: { id: assignmentId } }));
-    out.writes.push(
-      prisma.setHistoryEvent.create({
-        data: {
-          setId,
-          role: was.role,
-          actorId,
-          targetUserId: was.userId,
-          type: "REMOVED",
-        },
-      })
-    );
+    out.deletes.push(assignmentId);
+    out.history.push({
+      setId,
+      role: was.role,
+      actorId,
+      targetUserId: was.userId,
+      type: "REMOVED",
+    });
     out.changes.push({ kind: "removed", role: was.role, name: was.user.name });
     out.dms.push({
       userId: was.userId,
@@ -397,31 +411,22 @@ export async function prepareRosterDiff(
   // Ahead of the updates: dropping the cycle's one seat is what frees the key
   // the rest of the rotation moves into.
   for (const b of collapsed.rebuilt) {
-    out.writes.push(prisma.assignment.delete({ where: { id: b.seatId } }));
+    out.deletes.push(b.seatId);
   }
 
   for (const r of collapsed.reassigned) {
     const was = rosterById.get(r.id)!;
     // A reassignment always resets to PENDING: the new person hasn't agreed yet,
     // even if the seat was confirmed by whoever held it.
-    out.writes.push(
-      prisma.assignment.update({
-        where: { id: r.id },
-        data: { userId: r.userId, status: "PENDING" },
-      })
-    );
-    out.writes.push(
-      prisma.setHistoryEvent.create({
-        data: {
-          setId,
-          role: was.role,
-          actorId,
-          targetUserId: r.userId,
-          previousUserId: was.userId,
-          type: "REASSIGNED",
-        },
-      })
-    );
+    out.updates.push({ id: r.id, userId: r.userId });
+    out.history.push({
+      setId,
+      role: was.role,
+      actorId,
+      targetUserId: r.userId,
+      previousUserId: was.userId,
+      type: "REASSIGNED",
+    });
     out.changes.push({
       kind: "reassigned",
       role: was.role,
@@ -451,18 +456,14 @@ export async function prepareRosterDiff(
   // insert with the insertions below, which is what frees the key in between.
   for (const b of collapsed.rebuilt) {
     const was = rosterById.get(b.seatId)!;
-    out.writes.push(
-      prisma.setHistoryEvent.create({
-        data: {
-          setId,
-          role: b.role,
-          actorId,
-          targetUserId: b.userId,
-          previousUserId: was.userId,
-          type: "REASSIGNED",
-        },
-      })
-    );
+    out.history.push({
+      setId,
+      role: b.role,
+      actorId,
+      targetUserId: b.userId,
+      previousUserId: was.userId,
+      type: "REASSIGNED",
+    });
     out.changes.push({
       kind: "reassigned",
       role: b.role,
@@ -481,42 +482,30 @@ export async function prepareRosterDiff(
       role: b.role,
       catalog: ownCatalog,
     });
-    out.writes.push(
-      prisma.assignment.create({
-        data: {
-          setId,
-          userId: b.userId,
-          role: b.role,
-          guestTeamId: b.guestTeamId,
-          status: "PENDING",
-        },
-      })
-    );
+    out.inserts.push({
+      setId,
+      userId: b.userId,
+      role: b.role,
+      guestTeamId: b.guestTeamId,
+      status: "PENDING",
+    });
   }
 
   for (const a of collapsed.added) {
-    out.writes.push(
-      prisma.assignment.create({
-        data: {
-          setId,
-          userId: a.userId,
-          role: a.role,
-          guestTeamId: a.guestTeamId ?? null,
-          status: "PENDING",
-        },
-      })
-    );
-    out.writes.push(
-      prisma.setHistoryEvent.create({
-        data: {
-          setId,
-          role: a.role,
-          actorId,
-          targetUserId: a.userId,
-          type: "ADDED",
-        },
-      })
-    );
+    out.inserts.push({
+      setId,
+      userId: a.userId,
+      role: a.role,
+      guestTeamId: a.guestTeamId ?? null,
+      status: "PENDING",
+    });
+    out.history.push({
+      setId,
+      role: a.role,
+      actorId,
+      targetUserId: a.userId,
+      type: "ADDED",
+    });
     out.changes.push({
       kind: "added",
       role: a.role,
@@ -533,6 +522,78 @@ export async function prepareRosterDiff(
 
   return out;
 }
+
+/**
+ * One or many prepared rosters as the statements a $transaction runs — folded
+ * across the whole batch, so a month of sets costs the same handful of round
+ * trips as one set does.
+ *
+ * The order is the one `collapseByPersonRole` assumes, and it holds across sets
+ * because `@@unique([setId, userId, role])` is per set: every delete first (a
+ * deleted seat frees its key), then each reassignment in its set's own order,
+ * then the new seats, then the history. History rows reference nothing the
+ * roster writes create, so they go last as one insert.
+ */
+export function rosterWrites(
+  prepared: PreparedRoster[]
+): Prisma.PrismaPromise<unknown>[] {
+  const deletes = prepared.flatMap((p) => p.deletes);
+  const inserts = prepared.flatMap((p) => p.inserts);
+  const history = prepared.flatMap((p) => p.history);
+  const writes: Prisma.PrismaPromise<unknown>[] = [];
+  if (deletes.length > 0) {
+    writes.push(prisma.assignment.deleteMany({ where: { id: { in: deletes } } }));
+  }
+  for (const p of prepared) {
+    for (const u of p.updates) {
+      // A reassignment always resets to PENDING: the new person hasn't agreed
+      // yet, even if the seat was confirmed by whoever held it. Each needs its
+      // own statement — the rows don't share a `data`.
+      writes.push(
+        prisma.assignment.update({
+          where: { id: u.id },
+          data: { userId: u.userId, status: "PENDING" },
+        })
+      );
+    }
+  }
+  if (inserts.length > 0) {
+    writes.push(prisma.assignment.createMany({ data: inserts }));
+  }
+  if (history.length > 0) {
+    writes.push(prisma.setHistoryEvent.createMany({ data: history }));
+  }
+  return writes;
+}
+
+/**
+ * How long a roster transaction may take. Prisma's own default is 5 SECONDS,
+ * which a big Preview Mode save used to exceed — and exceed silently, since
+ * the timeout surfaced as a write error the route blamed on a duplicate seat.
+ * The save is a handful of statements now and finishes in well under a second,
+ * so this is headroom for a slow moment rather than something to plan around;
+ * it stays under a serverless function's own limit so the request can answer
+ * for itself rather than being cut off mid-flight.
+ */
+export const ROSTER_TX_TIMEOUT_MS = 20_000;
+
+/**
+ * What to tell an admin when the transaction itself failed.
+ *
+ * Only `P2002` — the unique [setId, userId, role] — is something they did and
+ * can act on. Everything else (a timeout, a dropped connection) is ours, and
+ * reporting it as "already in this role" is worse than saying nothing: it
+ * sends whoever reads it looking for a duplicate that isn't there, twice now.
+ */
+export function rosterSaveError(err: unknown): RosterError {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === "P2002" ? DUPLICATE_SEAT : SAVE_FAILED;
+}
+
+export const SAVE_FAILED: RosterError = {
+  error: "That didn't save. Nothing was changed — please try again.",
+  status: 500,
+};
 
 export async function rosterAftermath(
   p: PreparedRoster,
@@ -571,8 +632,10 @@ export function isRosterError(
   return "error" in r;
 }
 
-// The realistic transaction failure is the unique [setId, userId, role] — the
-// diff would seat someone twice in one role. Nothing was written.
+// The one transaction failure with a sentence an admin can act on: the unique
+// [setId, userId, role], where the diff would seat someone twice in one role.
+// `rosterSaveError` decides when it applies — it was the catch-all once, which
+// is how a transaction timeout came back as a duplicate. Nothing was written.
 export const DUPLICATE_SEAT: RosterError = {
   error: "That person is already in this role on this set.",
   status: 400,
