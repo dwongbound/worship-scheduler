@@ -177,9 +177,28 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 ## Pages (`app/*/page.tsx`)
 
-`login` · `page.tsx` (home) · `calendar` · `schedule` · `set-manager` · `profile` ·
-`create` (admin) · `users` (admin team mgmt — grant/revoke admin, instruments).
+`page.tsx` (the PUBLIC home page) · `login` · `calendar` · `schedule` ·
+`set-manager` · `profile` · `create` (admin) · `users` (admin team mgmt —
+grant/revoke admin, instruments).
 `layout.tsx` = pre-hydration theme script; `loading.tsx` = splash; `providers.tsx`.
+
+`/` has TWO answers. Signed out it's the marketing page — the mark, the name
+**TapWorship** and what the app does, which is what Google's OAuth verification
+fetches and judges the app's name and logo by; it failed review as a login wall.
+Its hero is an EXAMPLE set roster (invented people — the page is public), its
+four steps are numbered because they're a real sequence, and its one CTA is
+**Get started** → `/login`. The closing block asks people with no account to
+write in: the address is `CONTACT_EMAIL` (`lib/legal.ts`, overridable with
+`NEXT_PUBLIC_CONTACT_EMAIL`), shown as selectable text AND behind
+`components/CopyEmailButton.tsx` — never only a `mailto:`, since a clipboard
+write can be refused and the page can't tell. Archivo + IBM Plex Mono are
+loaded by this page alone (next/font), so the app never pays for them.
+Signed in it's still the app: `proxy.ts` redirects a session holder to
+`/calendar` at the edge, because Google's sign-in callback lands on `/` and
+marketing copy after signing in reads as broken. That redirect can't live in
+`next.config.js` (a config redirect can't see the session) or as an RSC
+`redirect()` in the page (React #310 in production for an AUTHENTICATED
+visitor — vercel/next.js#63121), which is why it's in the middleware.
 
 ## API (`app/api/**/route.ts`)
 
@@ -448,6 +467,16 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   window and switches org, the set-manager widens its horizon (or says why it
   can't). Roster DMs, digest bullets and the Approvals tab use the calendar
   form. ✅tested
+- `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
+  PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
+  render bare (those plus `/join`). Four places used to carry their own copy of
+  that list — `proxy.ts` at the edge, `AuthGate` (render or bounce to /login?),
+  `Navbar` and `SwipePager` (any chrome here?) — and they drifted the moment the
+  public home page arrived: the edge let `/` through and the client still
+  bounced it to /login, which is the very login wall the page exists to remove,
+  and a bounce like that only shows in a browser. Three of them now share this;
+  `proxy.ts` is the one copy left, because its imports can't follow it to the
+  edge. ✅tested
 - `slackStatus.ts` — the client-side cache in front of `GET /api/slack/status`.
   Four surfaces ask "has this org connected Slack?" (Team, Create, the team
   members modal, and the set detail modal on every open); caching the PROMISE

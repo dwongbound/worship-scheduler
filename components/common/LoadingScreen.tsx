@@ -4,7 +4,7 @@
 // bars, framed by radiating rings of light. Wired into app/loading.tsx so
 // Next.js shows it during route-level Suspense.
 
-const APP_NAME = "Worship Scheduler";
+const APP_NAME = "TapWorship";
 // Fixed subtext — the same on every full-screen loader, by design.
 const SUBTEXT = "\"Let's give a clap offering!\" — Joe Lee";
 
