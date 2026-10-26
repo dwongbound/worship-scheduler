@@ -185,6 +185,14 @@ grant/revoke admin, instruments).
 `/` has TWO answers. Signed out it's the marketing page — the mark, the name
 **TapWorship** and what the app does, which is what Google's OAuth verification
 fetches and judges the app's name and logo by; it failed review as a login wall.
+Its hero is an EXAMPLE set roster (invented people — the page is public), its
+four steps are numbered because they're a real sequence, and its one CTA is
+**Get started** → `/login`. The closing block asks people with no account to
+write in: the address is `CONTACT_EMAIL` (`lib/legal.ts`, overridable with
+`NEXT_PUBLIC_CONTACT_EMAIL`), shown as selectable text AND behind
+`components/CopyEmailButton.tsx` — never only a `mailto:`, since a clipboard
+write can be refused and the page can't tell. Archivo + IBM Plex Mono are
+loaded by this page alone (next/font), so the app never pays for them.
 Signed in it's still the app: `proxy.ts` redirects a session holder to
 `/calendar` at the edge, because Google's sign-in callback lands on `/` and
 marketing copy after signing in reads as broken. That redirect can't live in

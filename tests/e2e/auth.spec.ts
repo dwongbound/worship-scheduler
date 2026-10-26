@@ -1,6 +1,7 @@
 // E2E: login flow + route protection.
 import { type Page, expect, test } from "@playwright/test";
 import { attemptTag, login, orgKey } from "./helpers";
+import { CONTACT_EMAIL } from "../../lib/legal";
 
 test("redirects unauthenticated visitors to the login page", async ({ page }) => {
   await page.goto("/calendar");
@@ -253,7 +254,7 @@ test("the home page is readable signed out, naming TapWorship", async ({ page })
   await page.goto("/");
   await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByRole("heading", { name: /Scheduling for teams/ })
+    page.getByRole("heading", { name: /playing Sunday/ })
   ).toBeVisible();
   // The name as the consent screen spells it, and the mark beside it — the
   // two things the review compares.
@@ -262,8 +263,28 @@ test("the home page is readable signed out, naming TapWorship", async ({ page })
   // And a way on to each of the pages a review expects to find linked.
   await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Terms of Service" })).toBeVisible();
-  await page.getByRole("link", { name: "Sign in" }).click();
+  await page.getByRole("link", { name: "Get started" }).first().click();
   await expect(page).toHaveURL(/\/login/);
+});
+
+// The page's one call to action for someone with NO account: the address is
+// on the page as text (a copy can be refused and the page can't tell), and the
+// button reports what it did in its own label.
+test("the home page offers the contact address as text and as a copy button", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  await expect(page.getByText(CONTACT_EMAIL, { exact: true })).toBeVisible();
+
+  const copy = page.getByRole("button", { name: "Copy email" });
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    CONTACT_EMAIL
+  );
 });
 
 // Signed in, "/" still means "the app" — Google's own sign-in callback lands
