@@ -395,7 +395,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   row ids, so `previewSaves` folds them into reassignments of the live rows,
   and sets the draft names that no longer exist come back as `missing` for the
   caller to say out loud. The draft is deleted once its rosters really save,
-  so a spent plan can't be re-imposed later). ✅tested
+  so a spent plan can't be re-imposed later).
+  **The overlaid sets are the EDITS, never the base**: `app/calendar/page.tsx`
+  keeps the un-overlaid calendar in `previewBase` and that is what
+  `previewSaves` diffs against, because the draft's seats carry no row ids —
+  diffed against themselves every seat reads as an addition and whoever the
+  draft replaced stays seated beside their replacement. ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
   (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.

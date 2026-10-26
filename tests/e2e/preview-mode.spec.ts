@@ -327,3 +327,106 @@ test("preview mode parks a roster as a draft and lays it back on", async ({
     .click();
   await expect(cleanup.getByText("Rehearsal crew")).toHaveCount(0);
 });
+
+// The reopened draft's save must diff against the CALENDAR, not against the
+// draft. A draft's seats come back without their row ids, so if the workspace
+// treats the draft as the base, every seat reads as an addition: the people it
+// replaced are never removed and end up double-booked beside their
+// replacements. Driven with copy/paste because it is the one deterministic
+// replacement in the seed — the baptism "Sunday Morning" has Ruth on drums,
+// "Private Rehearsal" has Bob, so pasting one onto the other must come back as
+// a REASSIGNMENT of Bob's row, never an addition of Ruth alongside him.
+test("a reopened draft replaces people instead of doubling them up", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await page.goto("/calendar");
+
+  await page.getByRole("button", { name: "Preview Mode" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "See preview" }).click();
+  const review = page.getByRole("dialog").filter({ hasText: "Schedule preview" });
+  await expect(
+    review.getByRole("heading", { name: "Schedule preview" })
+  ).toBeVisible();
+
+  const source = review
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Sunday Morning" })
+    .filter({ hasText: "Ruth Rivera" })
+    .first();
+  const target = review
+    .getByTestId("staged-set-card")
+    .filter({ hasText: "Private Rehearsal" })
+    .first();
+  await source.scrollIntoViewIfNeeded();
+  await expect(target.getByText("Bob Baker")).toBeVisible();
+
+  await source.getByText("Sunday Morning").first().click();
+  await page.keyboard.press("ControlOrMeta+c");
+  await target.getByText("Private Rehearsal").first().click();
+  await page.keyboard.press("ControlOrMeta+v");
+  await expect(target.getByText("Pasted!")).toBeVisible();
+  // Ruth took the drum seat Bob was in — the replacement this test is about.
+  await expect(target.getByText("Ruth Rivera")).toBeVisible();
+  await expect(target.getByText("Bob Baker")).toHaveCount(0);
+
+  await review.getByRole("button", { name: "Save Draft" }).click();
+  const saveDialog = page
+    .getByRole("dialog")
+    .filter({ hasText: "Save this preview as a draft?" });
+  await saveDialog.getByLabel("Name (optional)").fill("Drummer swap");
+  await saveDialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(review).toBeHidden();
+
+  await page.getByRole("button", { name: "Preview Mode" }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Set types to show" })
+    .getByRole("button", { name: "Drafts" })
+    .click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Drafts" })
+    .getByRole("button", { name: "Open Drummer swap" })
+    .click();
+
+  const reopened = page
+    .getByRole("dialog")
+    .filter({ hasText: "Schedule preview" });
+  await expect(
+    reopened
+      .getByTestId("staged-set-card")
+      .filter({ hasText: "Private Rehearsal" })
+      .first()
+      .getByText("Ruth Rivera")
+  ).toBeVisible();
+
+  // Intercepted so the shared seed stays as the other specs expect it.
+  type Ops = {
+    setId: string;
+    added?: { role: string; userId: string }[];
+    removed?: string[];
+    reassigned?: { id: string; userId: string }[];
+  };
+  let sent: { sets: Ops[] } | null = null;
+  await page.route("**/api/admin/sets/roster", async (route) => {
+    sent = route.request().postDataJSON();
+    await route.fulfill({ json: { ok: true, applied: 1 } });
+  });
+
+  await reopened.getByRole("button", { name: "Save Changes" }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Save these changes?" })
+    .getByRole("button", { name: /^Save (Changes|anyway)$/ })
+    .click();
+  await expect(reopened).not.toBeVisible();
+
+  expect(sent).not.toBeNull();
+  // The whole point: Bob's seat MOVED. A batch of nothing but additions is the
+  // bug this test exists for, however many people it names.
+  const moved = sent!.sets.some(
+    (s) => (s.reassigned?.length ?? 0) > 0 || (s.removed?.length ?? 0) > 0
+  );
+  expect(moved).toBe(true);
+});
