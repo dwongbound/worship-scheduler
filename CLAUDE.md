@@ -253,7 +253,14 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   sets' diffs + optional `mdUserId` each, one org, every set validated before
   ONE transaction — the calendar Preview Mode's Save; an MD the new roster
   can't hold comes back in `mdRejected`. Both share `lib/rosterDiff.ts`
-  `prepareRosterDiff`/`rosterAftermath`; DMs go out ONCE per person across the
+  `prepareRosterDiff`/`rosterAftermath`; a prepared roster carries its writes as
+  GROUPS (deletes/updates/inserts/history) and **`rosterWrites`** folds the whole
+  batch into one deleteMany + the reassignments + two createManys, because a
+  quarter of Sunday rosters written a seat at a time was 428 statements and ran
+  past Prisma's 5s transaction limit — the save died of the timeout and the
+  route called it a duplicate seat. `ROSTER_TX_TIMEOUT_MS` is the headroom and
+  **`rosterSaveError`** is what keeps the message honest: only `P2002` says
+  "already in this role", anything else says nothing was saved. DMs go out ONCE per person across the
   whole batch via `lib/slack.ts notifyRosterChanges`/`rosterDmText`, so a month
   of one role is one message, not one per set; a multi-set DM lists sets as
   plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
