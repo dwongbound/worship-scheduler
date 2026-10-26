@@ -2,7 +2,12 @@
 // read it — the bottom nav's `lg:` classes, the tab-swipe pager, and
 // pull-to-refresh — so the boundary itself is worth pinning down.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BOTTOM_NAV_MAX_WIDTH, isBottomNavWidth } from "@/lib/layout";
+import {
+  BOTTOM_NAV_MAX_WIDTH,
+  PREVIEW_MIN_WIDTH,
+  isBottomNavWidth,
+  isPreviewWidth,
+} from "@/lib/layout";
 import {
   CALENDAR_WINDOW_AHEAD_DAYS,
   SETS_WINDOW_MAX_DAYS,
@@ -55,5 +60,37 @@ describe("the calendar's opening window", () => {
 
   it("is three months, the horizon the UI promises", () => {
     expect(CALENDAR_WINDOW_AHEAD_DAYS).toBe(92);
+  });
+});
+
+describe("isPreviewWidth", () => {
+  it("matches Tailwind's md, the breakpoint the calendar's month grid uses", () => {
+    // The Preview Mode button lives in the month-grid toolbar, which is
+    // `md:` and up. If this moves away from 768 the button and the ?draft=
+    // link would disagree about who may open the workspace.
+    expect(PREVIEW_MIN_WIDTH).toBe(768);
+  });
+
+  it("turns a phone away and lets a tablet through", () => {
+    atWidth(390); // iPhone
+    expect(isPreviewWidth()).toBe(false);
+    atWidth(430); // the widest iPhone
+    expect(isPreviewWidth()).toBe(false);
+
+    // A tablet in portrait is exactly at the breakpoint, and `md:` applies at
+    // min-width 768 — so the one width that matters most is the boundary
+    // itself, which has to count as wide enough.
+    atWidth(PREVIEW_MIN_WIDTH);
+    expect(isPreviewWidth()).toBe(true);
+    atWidth(820); // iPad portrait
+    expect(isPreviewWidth()).toBe(true);
+    atWidth(1440); // laptop
+    expect(isPreviewWidth()).toBe(true);
+  });
+
+  it("is narrower than the bottom-nav width, so tablets keep both", () => {
+    // A tablet gets the app-style bottom bar AND the review workspace. Were
+    // these the same number, "no phones" would have cost every tablet too.
+    expect(PREVIEW_MIN_WIDTH).toBeLessThan(BOTTOM_NAV_MAX_WIDTH);
   });
 });

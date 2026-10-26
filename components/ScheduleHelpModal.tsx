@@ -230,6 +230,24 @@ function StepArt({ art, preview }: { art: TourArt; preview: boolean }) {
         </div>
       )}
 
+      {/* The plan-wide action bar in miniature. Drawn as the real buttons
+          rather than as cards, because the step is about WHERE they are: the
+          row that sits above every card and acts on all of them at once. */}
+      {art === "actions" && (
+        <div className="flex max-w-[15rem] flex-wrap items-center justify-center gap-1.5">
+          {["Auto schedule", "Clear all people", "🔒 Lock all", "Scheduling rules"].map(
+            (label) => (
+              <span
+                key={label}
+                className="rounded-md border border-gray-300 bg-white px-2 py-1 text-[10px] whitespace-nowrap text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+              >
+                {label}
+              </span>
+            )
+          )}
+        </div>
+      )}
+
       {art === "lock" && (
         <div className="w-44 space-y-1.5">
           <SlotRow label="Carol Chen" locked />
@@ -269,6 +287,11 @@ function StepArt({ art, preview }: { art: TourArt; preview: boolean }) {
           </span>
           <span className="block rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-800 dark:text-amber-300">
             Bob Baker · unavailable
+          </span>
+          {/* The rule-break box, with the same circled "!" the banner leads
+              with — the step tells you to hover it, so it has to be here. */}
+          <span className="block rounded border border-yellow-500/50 bg-yellow-500/10 px-2 py-1 text-[11px] text-yellow-800 dark:text-yellow-200">
+            Carol Chen · ! breaks a rule
           </span>
         </div>
       )}

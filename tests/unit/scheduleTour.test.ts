@@ -40,6 +40,7 @@ describe("tourSteps", () => {
       "load",
       "filter",
       "hover",
+      "actions",
       "lock",
       "card",
       "clipboard",
@@ -81,6 +82,52 @@ describe("tourSteps", () => {
     // Preview drafts are the one kind that can go stale — the sets they name
     // keep living — so the tour has to say what reopening one does about that.
     expect(text(preview)).toMatch(/as it stands/);
+  });
+
+  it("names every plan-wide button above the cards, in both modes", () => {
+    // These act on the WHOLE plan, which is exactly why they need explaining:
+    // "Clear all people" on a season of rosters is not a button to discover by
+    // pressing it.
+    for (const steps of [generate, preview]) {
+      const actions = steps.find((s) => s.id === "actions")!.body.join(" ");
+      expect(actions).toMatch(/Auto schedule/);
+      expect(actions).toMatch(/Clear all people/);
+      expect(actions).toMatch(/Lock all/);
+      expect(actions).toMatch(/Unlock all/);
+      expect(actions).toMatch(/Scheduling rules/);
+    }
+  });
+
+  it("warns that the person highlight waits before it fires", () => {
+    // The delay is deliberate (HOVER_HIGHLIGHT_DELAY_MS), so a hover that
+    // seems to do nothing for a moment is the feature working. Unsaid, it
+    // reads as broken.
+    for (const steps of [generate, preview]) {
+      const hover = steps.find((s) => s.id === "hover")!.body.join(" ");
+      expect(hover).toMatch(/two seconds/);
+    }
+  });
+
+  it("covers all four warning colours, in both modes", () => {
+    for (const steps of [generate, preview]) {
+      const warnings = steps.find((s) => s.id === "warnings")!.body.join(" ");
+      expect(warnings).toMatch(/red/);
+      expect(warnings).toMatch(/amber/);
+      expect(warnings).toMatch(/indigo/);
+      // The yellow rule-BREAK box is the one you can save straight through,
+      // which is the part worth saying out loud.
+      expect(warnings).toMatch(/yellow/);
+      expect(warnings).toMatch(/Nothing here is refused/);
+    }
+  });
+
+  it("tells Preview Mode where its drafts live and who can open one", () => {
+    const text = preview.flatMap((s) => s.body).join(" ");
+    expect(text).toMatch(/Drafts button/);
+    // The shareable link and the one screen it will not open on.
+    expect(text).toMatch(/address bar/);
+    expect(text).toMatch(/phone/);
+    expect(text).toMatch(/tablet/);
   });
 
   it("names the commit button each mode actually shows", () => {
