@@ -92,6 +92,9 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
   await expect(
     page.getByRole("dialog").getByRole("heading", { name: "Review generated schedule" })
   ).toBeVisible();
+  // And the URL now names the plan, by its NAME rather than its id, so the
+  // workspace someone is looking at can be sent to someone else.
+  await expect(page).toHaveURL(/\?draft=advent-plan$/);
 
   // Re-saving an opened draft prefills its name, and says it replaces it.
   await page.getByRole("button", { name: "Save Draft" }).click();
@@ -109,6 +112,25 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
     .filter({ hasText: "Discard this preview?" })
     .getByRole("button", { name: "Discard" })
     .click();
+  // Leaving takes the link with it, and following it cold brings the plan
+  // straight back — which is the whole point of having one.
+  await expect(page).toHaveURL(/\/create$/);
+  await page.goto("/create?draft=advent-plan");
+  await expect(
+    page.getByRole("dialog").getByRole("heading", { name: "Review generated schedule" })
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Discard" }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard this preview?" })
+    .getByRole("button", { name: "Discard" })
+    .click();
+
+  // A link naming no draft says so rather than opening the wrong plan.
+  await page.goto("/create?draft=no-such-plan");
+  await expect(page.getByText(/doesn't match a saved plan/)).toBeVisible();
+
+  await page.goto("/create");
   await page.getByRole("button", { name: "Drafts" }).click();
   await page.getByRole("button", { name: "Delete Advent plan" }).click();
 
