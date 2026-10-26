@@ -245,3 +245,34 @@ test("the privacy policy and terms are readable signed out, and linked from sign
   await page.goto("/privacy");
   await expect(page).toHaveURL(/\/privacy$/);
 });
+
+// The home page is the third public page, and the one Google's verification
+// judges the app's name and logo by. It failed review as a login wall, so
+// what matters here is that a stranger reaching "/" is NOT bounced.
+test("the home page is readable signed out, naming TapWorship", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("heading", { name: /Scheduling for teams/ })
+  ).toBeVisible();
+  // The name as the consent screen spells it, and the mark beside it — the
+  // two things the review compares.
+  await expect(page.getByText("TapWorship", { exact: true }).first()).toBeVisible();
+  await expect(page.getByAltText("TapWorship").first()).toBeVisible();
+  // And a way on to each of the pages a review expects to find linked.
+  await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Terms of Service" })).toBeVisible();
+  await page.getByRole("link", { name: "Sign in" }).click();
+  await expect(page).toHaveURL(/\/login/);
+});
+
+// Signed in, "/" still means "the app" — Google's own sign-in callback lands
+// there, and landing on marketing copy after signing in would read as broken.
+test("a signed-in visitor to the home page gets the app, not the marketing page", async ({
+  page,
+}) => {
+  await login(page, "bob");
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/calendar/);
+  await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
+});
