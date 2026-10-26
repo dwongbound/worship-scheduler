@@ -120,6 +120,12 @@ function CalendarView() {
   } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewPlan, setPreviewPlan] = useState<StagedPlan | null>(null);
+  // The calendar as it stands, which "Save Changes" diffs against. Normally
+  // identical to the plan's own sets, but a REOPENED draft starts the
+  // workspace from rosters that are already edits — diffing those against
+  // themselves would read every seat as an addition and leave the people the
+  // draft replaced sitting where they were.
+  const [previewBase, setPreviewBase] = useState<StagedSet[] | null>(null);
   const [previewColors, setPreviewColors] = useState<SetTypeColors>({});
   // A "Save Changes" from the preview is in flight.
   const [previewSaving, setPreviewSaving] = useState(false);
@@ -545,7 +551,7 @@ function CalendarView() {
   // its roster, which re-derives the MD as a side effect.
   const savePreview = async (edited: StagedSet[]) => {
     if (!previewPlan) return;
-    const saves = previewSaves(previewPlan.sets, edited);
+    const saves = previewSaves(previewBase ?? previewPlan.sets, edited);
     if (saves.length === 0) return;
     setPreviewSaving(true);
     setPreviewError("");
@@ -568,6 +574,7 @@ function CalendarView() {
       // people have moved on from.
       if (openedDraft) await deleteDraft(openedDraft.id);
       setPreviewPlan(null);
+      setPreviewBase(null);
       setOpenedDraft(null);
       await refetchSets();
     } catch {
@@ -620,6 +627,7 @@ function CalendarView() {
     );
     const baseline = await fetchBaseline(staged.sets);
     setOpenedDraft(null);
+    setPreviewBase(staged.sets);
     setPreviewPlan(baseline ? { ...staged, baseline } : staged);
     setPreviewColors(colors);
     setPreviewOpen(false);
@@ -702,6 +710,9 @@ function CalendarView() {
       const baseline = await fetchBaseline(merged);
       setOpenedDraft({ id: data.id, name: data.name });
       setDraftMissing(missing.length);
+      // The LIVE rosters stay the save diff's base — `merged` is where the
+      // admin starts editing, not what the calendar currently holds.
+      setPreviewBase(current.sets);
       setPreviewPlan({ ...current, sets: merged, ...(baseline ? { baseline } : {}) });
       setDraftsOpen(false);
       setPreviewOpen(false);
@@ -946,6 +957,7 @@ function CalendarView() {
         onDeleteDraft={deleteDraft}
         onClose={() => {
           setPreviewPlan(null);
+          setPreviewBase(null);
           setPreviewError("");
           setOpenedDraft(null);
         }}
