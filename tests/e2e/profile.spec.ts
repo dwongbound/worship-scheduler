@@ -163,10 +163,48 @@ test("with Google Calendar connected, a member with no email is asked for one on
   await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
   await expect(banner).toHaveCount(0);
-  await expect(page.getByText("Calendar invites for your sets go here.")).toBeVisible();
 
-  // Clearing it brings the banner back; this also restores the seed state.
+  // With an address to invite, the switch takes the banner's place: on by
+  // default, and saying where the invites go.
+  const invites = page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets");
+  await expect(invites).toBeChecked();
+  await expect(page.getByText("arrives as an invite at the email above")).toBeVisible();
+
+  // Opting out asks about the invites already on their calendar. The
+  // preference saves either way, so dismissing the question can't leave the
+  // box disagreeing with the db.
+  await invites.uncheck();
+  const withdraw = page.getByRole("dialog");
+  await expect(withdraw).toContainText("already sent");
+  await withdraw.getByRole("button", { name: "Leave them" }).click();
+  await expect(withdraw).toHaveCount(0);
+  await expect(page.getByText("You're still on the roster")).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByTestId("profile-calendar-invites").getByLabel("Calendar invites for my sets")
+  ).not.toBeChecked();
+
+  // And the other answer: re-opting in, then out again with a yes, which is
+  // what asks the server to drop them from those events.
+  const again = page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets");
+  await again.check();
+  await again.uncheck();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove me" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(again).not.toBeChecked();
+
+  // Back on, then clear the email — which restores the seed state and brings
+  // the banner back, the switch having nowhere to send anything.
+  await page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets")
+    .check();
   await email.fill(original);
   await email.blur();
+  await expect(page.getByTestId("profile-calendar-invites")).toHaveCount(0);
   if (!original) await expect(banner).toBeVisible();
 });

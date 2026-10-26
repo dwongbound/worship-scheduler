@@ -520,6 +520,9 @@ export interface ApiMe {
   hasPassword: boolean;
   // Opt-in (default on) to the daily 6:30 AM Slack digest — see lib/digest.ts.
   dailyDigest: boolean;
+  // Opt-in (default on) to being a guest on their sets' Google Calendar
+  // events. Off keeps them off the guest list only — see lib/calendarEvent.ts.
+  calendarInvites: boolean;
   memberships: ApiMeMembership[];
   // Teams this person serves on, each with the roles they've picked there and
   // the owning org (roles are per-team; the profile page edits them).
