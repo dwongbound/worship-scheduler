@@ -263,8 +263,28 @@ test("the home page is readable signed out, naming TapWorship", async ({ page })
   // And a way on to each of the pages a review expects to find linked.
   await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Terms of Service" })).toBeVisible();
-  await page.getByRole("link", { name: "Get started" }).first().click();
+  // The header's Sign in is the way IN for someone who already has an account.
+  await page.getByRole("link", { name: "Sign in" }).first().click();
   await expect(page).toHaveURL(/\/login/);
+});
+
+// The two call-to-action buttons point at different people, and swapping them
+// is the easy mistake: there is no self-serve sign-up, so "Get started" that
+// lands on /login strands the very person it is for.
+test("the home page's Get started goes to the contact block, not the login", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: "Get started" }).click();
+  // Still on the home page, and at the section that tells them what to do.
+  await expect(page).toHaveURL(/\/#contact$/);
+  await expect(
+    page.getByRole("heading", { name: "Get your organization started" })
+  ).toBeInViewport();
+  // The sign-in route stays available beside it, for someone who has an account.
+  await expect(
+    page.getByRole("link", { name: "Sign in" }).first()
+  ).toHaveAttribute("href", "/login");
 });
 
 // The page's one call to action for someone with NO account: the address is
