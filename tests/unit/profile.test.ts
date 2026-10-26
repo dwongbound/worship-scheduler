@@ -70,6 +70,35 @@ describe("calendarResyncNeeded", () => {
     expect(calendarResyncNeeded(was, was, true)).toBe(false);
   });
 
+  // The override is where the invites actually go, so moving it withdraws
+  // them from the old address and sends them to the new one.
+  it("re-syncs when the invites are pointed at another calendar", () => {
+    expect(
+      calendarResyncNeeded(was, { ...was, calendarInviteEmail: "sets@group.calendar.google.com" })
+    ).toBe(true);
+    expect(
+      calendarResyncNeeded({ ...was, calendarInviteEmail: "sets@group.calendar.google.com" }, was)
+    ).toBe(true);
+  });
+
+  // It's the RESOLVED address that matters: an override naming the address
+  // already in use changes nothing Google holds, and a re-sync emails the
+  // whole team.
+  it("ignores an override that resolves to the address already in use", () => {
+    expect(
+      calendarResyncNeeded(was, { ...was, calendarInviteEmail: "ME@x.com" })
+    ).toBe(false);
+  });
+
+  // And with an override set, the account email underneath it is no longer
+  // where anything is sent.
+  it("ignores the account email while an override is in force", () => {
+    const pointed = { ...was, calendarInviteEmail: "sets@group.calendar.google.com" };
+    expect(calendarResyncNeeded(pointed, { ...pointed, email: "other@x.com" })).toBe(
+      false
+    );
+  });
+
   it("stays quiet when neither changed — a re-sync emails the whole team", () => {
     expect(calendarResyncNeeded(was, { ...was })).toBe(false);
     expect(

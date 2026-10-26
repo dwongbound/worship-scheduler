@@ -39,6 +39,7 @@ import {
   eventDescription,
   eventTimes,
   eventTitle,
+  inviteAddress,
   seatsToConfirm,
   type CalendarAttendee,
 } from "./calendarEvent";
@@ -529,7 +530,14 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             status: true,
             pendingCoverFromUserId: true,
             userId: true,
-            user: { select: { name: true, email: true, calendarInvites: true } },
+            user: {
+              select: {
+                name: true,
+                email: true,
+                calendarInviteEmail: true,
+                calendarInvites: true,
+              },
+            },
           },
         },
       },
@@ -546,7 +554,12 @@ export async function syncSetCalendar(setId: string): Promise<void> {
       (
         await prisma.user.findMany({
           where: { id: { in: [...owners.values()].map((o) => o.id) } },
-          select: { id: true, email: true, calendarInvites: true },
+          select: {
+            id: true,
+            email: true,
+            calendarInviteEmail: true,
+            calendarInvites: true,
+          },
         })
       ).map((u) => [u.id, u] as const)
     );
@@ -560,14 +573,14 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             role: a.role,
             userId: owner.id,
             name: owner.name,
-            email: held?.email ?? null,
+            email: held ? inviteAddress(held) : null,
             calendarInvites: held?.calendarInvites ?? true,
           }
         : {
             role: a.role,
             userId: a.userId,
             name: a.user.name,
-            email: a.user.email,
+            email: inviteAddress(a.user),
             calendarInvites: a.user.calendarInvites,
           };
     });
@@ -766,7 +779,9 @@ async function applyRsvps(ev: GoogleEvent): Promise<void> {
       role: true,
       status: true,
       userId: true,
-      user: { select: { email: true, calendarInvites: true } },
+      user: {
+        select: { email: true, calendarInviteEmail: true, calendarInvites: true },
+      },
     },
   });
   const ids = seatsToConfirm(
@@ -774,7 +789,9 @@ async function applyRsvps(ev: GoogleEvent): Promise<void> {
     seats.map((s) => ({
       id: s.id,
       status: s.status,
-      email: s.user.email,
+      // The RSVP comes back from whatever address we invited, so the seat is
+      // matched on that same reading.
+      email: inviteAddress(s.user),
       calendarInvites: s.user.calendarInvites,
     }))
   );
