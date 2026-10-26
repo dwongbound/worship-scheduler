@@ -15,6 +15,7 @@ import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
+import Logo from "@/components/Logo";
 import { LEGAL_LINKS } from "@/lib/legal";
 import {
   type NameConflict,
@@ -247,8 +248,13 @@ function LoginForm() {
   return (
     <div className="flex min-h-[70vh] items-center justify-center">
       <Card className="w-full max-w-sm">
+        {/* The mark above the name: this is the page Google's OAuth review
+            lands on from the consent screen, and the two have to match. */}
+        <div className="mb-3 flex justify-center">
+          <Logo className="h-12 w-12" />
+        </div>
         <h1 className="mb-1 text-center text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-          Worship Scheduler
+          TapWorship
         </h1>
         <p className="mb-6 text-center text-sm text-gray-500">
           {mode === "signin" ? "Sign in to your account" : "Create your account"}
