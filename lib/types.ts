@@ -523,6 +523,10 @@ export interface ApiMe {
   // Opt-in (default on) to being a guest on their sets' Google Calendar
   // events. Off keeps them off the guest list only — see lib/calendarEvent.ts.
   calendarInvites: boolean;
+  // Where those invites are sent instead of `email` — usually a secondary
+  // calendar's own address, so the sets land on their own calendar. Null =
+  // use `email` (lib/calendarEvent.ts inviteAddress).
+  calendarInviteEmail: string | null;
   memberships: ApiMeMembership[];
   // Teams this person serves on, each with the roles they've picked there and
   // the owning org (roles are per-team; the profile page edits them).

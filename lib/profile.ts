@@ -1,4 +1,12 @@
 // Pure profile-editing rules (unit-tested in tests/unit/profile.test.ts).
+import { inviteAddress } from "./calendarEvent";
+
+/** The /profile fields that decide a person's place on their sets' events. */
+export interface CalendarProfile {
+  email: string | null;
+  calendarInviteEmail?: string | null;
+  calendarInvites: boolean;
+}
 
 /**
  * The email to persist when a user saves their profile.
@@ -23,8 +31,13 @@ export function resolveProfileEmail(
  * Whether saving a profile has to re-sync the person's upcoming sets on the
  * org's Google Calendar.
  *
- * Two fields reach the guest list. The EMAIL is the address an invite goes to,
- * so a new one has to be invited and a cleared one dropped. The INVITES switch
+ * Three fields reach the guest list. The EMAIL is the address an invite goes
+ * to, so a new one has to be invited and a cleared one dropped — and so does a
+ * new INVITE ADDRESS, which overrides it (`inviteAddress`), since changing
+ * where the invites go means withdrawing the old ones and sending them again.
+ * Comparing the resolved address rather than the two fields is what keeps a
+ * no-op out: setting the override to the same address it already resolved to
+ * changes nothing Google holds. The INVITES switch
  * is the person asking to be a guest or not: switching it back ON is how the
  * invites arrive, so that always re-syncs.
  *
@@ -38,11 +51,11 @@ export function resolveProfileEmail(
  * holds, and a re-sync emails the whole team, so it is not run for them.
  */
 export function calendarResyncNeeded(
-  before: { email: string | null; calendarInvites: boolean },
-  after: { email: string | null; calendarInvites: boolean },
+  before: CalendarProfile,
+  after: CalendarProfile,
   withdrawInvites = false
 ): boolean {
-  if (before.email !== after.email) return true;
+  if (inviteAddress(before) !== inviteAddress(after)) return true;
   if (!before.calendarInvites && after.calendarInvites) return true;
   // The withdrawal arrives as its own save, so by then the switch is already
   // off and unchanged — it's the request that matters, not a flip.

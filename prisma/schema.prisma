@@ -414,6 +414,15 @@ model User {
   // the GUEST LIST — they still hold their seats and still appear in the
   // event's roster, so the rest of the team sees who is playing.
   calendarInvites Boolean @default(true)
+  // Where those invites are sent, when the account email isn't the right
+  // place. Google decides which of your calendars an invite lands on — the
+  // default one of whatever account it was addressed to — and an attendee
+  // can't move an invited event afterwards. A Google calendar has its own
+  // address, though, so pointing this at a secondary calendar's address puts
+  // the sets on that calendar, where they can be coloured and hidden like any
+  // other. Null = use `email`; `lib/calendarEvent.ts inviteAddress` is the
+  // one reading of it, and the RSVP comes back from the same address.
+  calendarInviteEmail String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

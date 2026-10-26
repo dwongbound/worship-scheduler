@@ -66,6 +66,11 @@ export default function ProfilePage() {
   // Being a guest on my sets' Google Calendar events, on by default. Off takes
   // me off the guest list only — the seat and the event's roster are unchanged.
   const [calendarInvites, setCalendarInvites] = useState(true);
+  // Where the invites are sent, when the account email isn't the place for
+  // them. Saved on blur like the email above; the saved copy is what a failed
+  // save is rolled back to.
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [savedInviteEmail, setSavedInviteEmail] = useState("");
   // The "and the ones already sent?" question, asked only on switching off.
   const [withdrawCalendarOpen, setWithdrawCalendarOpen] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);
@@ -115,6 +120,8 @@ export default function ProfilePage() {
     setHasPassword(me.hasPassword);
     setDailyDigest(me.dailyDigest);
     setCalendarInvites(me.calendarInvites);
+    setInviteEmail(me.calendarInviteEmail ?? "");
+    setSavedInviteEmail(me.calendarInviteEmail ?? "");
     savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
     setLoaded(true);
   }, [me]);
@@ -194,6 +201,39 @@ export default function ProfilePage() {
       setCalendarInvites(prev);
       setMessage("Error: could not save that");
       return false;
+    }
+  }
+
+  // Save the invite address. A re-sync withdraws the invites from the old
+  // address and sends them to the new one, so an unchanged value is skipped
+  // rather than mailing the whole team for nothing.
+  async function saveInviteEmail() {
+    const next = inviteEmail.trim();
+    if (next === savedInviteEmail) return;
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          email: email || null,
+          calendarInviteEmail: next,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || "could not save that");
+      }
+      setSavedInviteEmail(next);
+      setInviteEmail(next);
+      // The same ✓ by the heading every other autosaved field flashes.
+      setSaved(true);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 2000);
+      setMessage("");
+    } catch (err) {
+      setInviteEmail(savedInviteEmail);
+      setMessage(`Error: ${err instanceof Error ? err.message : "could not save that"}`);
     }
   }
 
@@ -381,11 +421,35 @@ export default function ProfilePage() {
                   checked={calendarInvites}
                   onChange={(e) => toggleCalendarInvites(e.target.checked)}
                 />
-                <p className="mt-1 text-xs text-gray-500">
-                  {calendarInvites
-                    ? "Each set you're on arrives as an invite at the email above. Accepting it confirms you here."
-                    : "You won't be added to your sets' calendar events. You're still on the roster, and the team still sees you there."}
-                </p>
+                {calendarInvites ? (
+                  <div className="mt-2">
+                    <Input
+                      label="Send invites to"
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      onBlur={saveInviteEmail}
+                      placeholder={savedEmail}
+                    />
+                    {/* Google puts an invite on the default calendar of
+                        whatever address it was sent to, and you can't move an
+                        invited event afterwards — so a calendar of your own is
+                        something you choose here, by address, or not at all. */}
+                    <p className="mt-1 text-xs text-gray-500">
+                      Leave this blank to use the email above. To keep your sets
+                      on a calendar of their own, one you can colour or hide:
+                      make a calendar in Google Calendar, open its settings, and
+                      paste the address under &ldquo;Integrate calendar&rdquo;
+                      here. Accepting an invite still confirms you.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-1 text-xs text-gray-500">
+                    You won&apos;t be added to your sets&apos; calendar events.
+                    You&apos;re still on the roster, and the team still sees you
+                    there.
+                  </p>
+                )}
               </div>
             )}
           </div>
