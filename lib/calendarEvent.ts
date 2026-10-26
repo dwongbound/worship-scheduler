@@ -58,6 +58,23 @@ export function normalizeEmail(email: string | null | undefined): string | null 
 }
 
 /**
+ * The address a person's set invites go to.
+ *
+ * Google puts an invite on the default calendar of whatever account it was
+ * addressed to, and an attendee can't move an invited event afterwards — so
+ * the only way to choose where these land is to choose the address. A Google
+ * calendar has an address of its own, so someone who wants their sets on a
+ * separate, colour-coded calendar points `calendarInviteEmail` at it. The
+ * RSVP then comes back from that same address, which is why `seatsToConfirm`
+ * matches on this reading too and not on the account email.
+ */
+export function inviteAddress(
+  user: { email: string | null; calendarInviteEmail?: string | null }
+): string | null {
+  return normalizeEmail(user.calendarInviteEmail) ?? normalizeEmail(user.email);
+}
+
+/**
  * The description: roster in the team's role order (a person in two roles
  * appears under both), then the setlist when there is one, then the link.
  */

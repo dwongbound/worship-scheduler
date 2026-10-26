@@ -7,6 +7,7 @@ import {
   eventDescription,
   eventTimes,
   eventTitle,
+  inviteAddress,
   normalizeEmail,
   seatsToConfirm,
   type CalendarSeat,
@@ -198,6 +199,41 @@ describe("seatsToConfirm", () => {
         { id: "choir", status: "PENDING", email: "kate@example.com" },
       ])
     ).toEqual(["keys", "choir"]);
+  });
+});
+
+describe("inviteAddress", () => {
+  it("prefers the calendar address someone nominated over their account email", () => {
+    expect(
+      inviteAddress({
+        email: "kate@example.com",
+        calendarInviteEmail: "Sets@group.calendar.google.com",
+      })
+    ).toBe("sets@group.calendar.google.com");
+  });
+
+  it("falls back to the account email when none is nominated", () => {
+    expect(inviteAddress({ email: "kate@example.com" })).toBe("kate@example.com");
+    expect(
+      inviteAddress({ email: "kate@example.com", calendarInviteEmail: null })
+    ).toBe("kate@example.com");
+    // A blank override is not an address — it reads as "use my email".
+    expect(
+      inviteAddress({ email: "kate@example.com", calendarInviteEmail: "  " })
+    ).toBe("kate@example.com");
+  });
+
+  it("is nobody to invite when there is neither", () => {
+    expect(inviteAddress({ email: null })).toBeNull();
+    expect(inviteAddress({ email: null, calendarInviteEmail: "" })).toBeNull();
+  });
+
+  // A nominated calendar is a place to send to, with or without an account
+  // email: the RSVP comes back from it just the same.
+  it("stands on its own when there's no account email", () => {
+    expect(
+      inviteAddress({ email: null, calendarInviteEmail: "sets@group.calendar.google.com" })
+    ).toBe("sets@group.calendar.google.com");
   });
 });
 

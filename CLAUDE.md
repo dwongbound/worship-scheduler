@@ -79,6 +79,14 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   event's roster, so the team still sees who is playing. Switched on /profile,
   honoured by `lib/calendarEvent.ts` (`eventAttendees` skips them;
   `seatsToConfirm` ignores an RSVP that crossed with the opt-out).
+  `calendarInviteEmail` is WHERE those invites go, null = `email`. Google puts
+  an invite on the default calendar of whatever address it was sent to and an
+  attendee can't move an invited event afterwards, so the address IS the only
+  choice of calendar — point this at a secondary calendar's own address
+  (`…@group.calendar.google.com`) and the sets land there, colourable and
+  hideable. `lib/calendarEvent.ts inviteAddress()` is the ONE reading of the
+  pair, used for the guest list AND for `seatsToConfirm`, since the RSVP comes
+  back from whatever address was invited.
 - **SetHistoryEvent** — the per-set activity log. `role` is null only for
   `SETLIST_CHANGED` (song added/removed/re-keyed/reordered), whose summary
   lives in `detail`. Roster + setlist changes also ping the set's Slack group
@@ -605,7 +613,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   OAuth-only account's email is not its own to change) and
   **`calendarResyncNeeded`** — whether saving a profile has to re-sync that
   person's upcoming sets, which is the write that actually sends or withdraws
-  their invites. A changed email re-syncs, and so does switching invites back
+  their invites. It compares the RESOLVED `inviteAddress`, not the two fields,
+  so pointing the override at the address already in use is not a re-sync (and
+  a re-sync emails the whole team). A changed address re-syncs, and so does
+  switching invites back
   ON (that is how they arrive). Switching them OFF is the one case that asks:
   it could mean "no more of these" or "and take me off the ones I have", so
   /profile puts that question in a modal and only a yes (`withdrawInvites` in

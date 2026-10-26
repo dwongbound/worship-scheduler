@@ -170,7 +170,31 @@ test("with Google Calendar connected, a member with no email is asked for one on
     .getByTestId("profile-calendar-invites")
     .getByLabel("Calendar invites for my sets");
   await expect(invites).toBeChecked();
-  await expect(page.getByText("arrives as an invite at the email above")).toBeVisible();
+
+  // Where they go is the person's to choose, because Google decides which
+  // calendar an invite lands on from the address it was sent to. Blank means
+  // the email above; an address moves the sets onto that calendar.
+  const sendTo = page.getByLabel("Send invites to");
+  await expect(sendTo).toHaveValue("");
+  await expect(sendTo).toHaveAttribute("placeholder", "carol.cal@example.com");
+  await sendTo.fill("not an address");
+  await sendTo.blur();
+  await expect(page.getByText(/doesn’t|doesn't/)).toBeVisible();
+  // A refused address is rolled back, so the field never shows something the
+  // server didn't take.
+  await expect(sendTo).toHaveValue("");
+
+  await sendTo.fill("sets@group.calendar.google.com");
+  await sendTo.blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Send invites to")).toHaveValue(
+    "sets@group.calendar.google.com"
+  );
+  // Clearing it hands the invites back to the account email.
+  await page.getByLabel("Send invites to").fill("");
+  await page.getByLabel("Send invites to").blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
 
   // Opting out asks about the invites already on their calendar. The
   // preference saves either way, so dismissing the question can't leave the
