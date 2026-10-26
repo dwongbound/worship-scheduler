@@ -362,3 +362,59 @@ export function describePreviewSaves(saves: PreviewSetSave[]): string {
     saves.length === 1 ? "" : "s"
   }`;
 }
+
+/**
+ * Lay a saved preview draft back over the calendar as it stands NOW.
+ *
+ * A preview draft is one roster per EXISTING set, so it can't simply be
+ * reopened the way a generate plan is: the sets it names have gone on living —
+ * someone may have taken a cover, an admin may have deleted the set outright —
+ * and a draft reopened against stale rows would save a diff computed from a
+ * calendar that no longer exists. So the current sets are the ground truth and
+ * the draft supplies only what the admin changed: the roster, the MD and the
+ * set's shape.
+ *
+ * The seats come back WITHOUT their row ids on purpose. Ids from the draft may
+ * name rows that are gone, and `previewSaves` already folds an id-less roster
+ * into the right diff (same person, same role = no change; a different person
+ * in that role = a reassignment of the live row, keeping its history) — the
+ * same path Clear all and Auto schedule take. Everything is LOCKED, as it is
+ * everywhere else in Preview Mode, so a later Auto schedule fills gaps around
+ * the restored roster rather than through it.
+ *
+ * `missing` is the draft's sets that no longer exist. Nothing can be done with
+ * them, and silently dropping them would let an admin think a set was restored
+ * when it wasn't, so they come back for the caller to name.
+ */
+export function applyDraftSets(
+  current: StagedSet[],
+  draft: StagedSet[]
+): { sets: StagedSet[]; missing: StagedSet[] } {
+  const byId = new Map(
+    draft.flatMap((s) => (s.stagingId ? [[s.stagingId, s] as const] : []))
+  );
+  const seen = new Set<string>();
+
+  const sets = current.map((set) => {
+    const saved = set.stagingId ? byId.get(set.stagingId) : undefined;
+    if (!saved) return set;
+    seen.add(set.stagingId!);
+    return {
+      ...set,
+      // The set's own identity — time, label, team, type — belongs to the
+      // calendar, never to the draft (same rule as pasteSet).
+      mdUserId: saved.mdUserId ?? null,
+      slotCapacities: saved.slotCapacities ?? null,
+      assignments: saved.assignments.map((a) => ({
+        userId: a.userId,
+        role: a.role,
+        locked: true,
+      })),
+    };
+  });
+
+  return {
+    sets,
+    missing: draft.filter((s) => !s.stagingId || !seen.has(s.stagingId)),
+  };
+}

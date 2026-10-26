@@ -274,14 +274,17 @@ function StepArt({ art, preview }: { art: TourArt; preview: boolean }) {
       )}
 
       {/* The real action bar, in miniature — so it has to be the bar this mode
-          actually shows. Drawing a Save Draft button for Preview Mode would be
-          pointing at something that isn't there. */}
+          actually shows: both park a plan, and the difference is what the back-
+          out and the commit are called. */}
       {art === "commit" && (
         <div className="flex items-center gap-2">
           {preview ? (
             <>
               <span className="rounded-md border border-gray-300 bg-white px-2 py-1 text-[10px] text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200">
                 Close
+              </span>
+              <span className="rounded-md border border-gray-300 bg-white px-2 py-1 text-[10px] text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200">
+                Save Draft
               </span>
               <span className="rounded-md bg-indigo-600 px-2 py-1 text-[10px] text-white">
                 Save Changes
