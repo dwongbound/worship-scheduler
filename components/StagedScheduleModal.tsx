@@ -122,6 +122,7 @@ import {
   lockedCounts,
   copySet,
   designateMDs,
+  HOVER_HIGHLIGHT_DELAY_MS,
   maxLoad,
   pasteSet,
   popUndo,
@@ -335,6 +336,27 @@ export default function StagedScheduleModal({
   // behind `lg:` in PlayerSelect, since it needs a pointer and a screen wide
   // enough to show several sets at once.
   const [hoveredUserId, setHoveredUserId] = useState<string | null>(null);
+  // The highlight waits for the pointer to SETTLE (HOVER_HIGHLIGHT_DELAY_MS).
+  // Arriving on a name starts the clock and clears whoever was lit, so the
+  // grid can't flicker through every name the cursor crosses on its way
+  // somewhere else; leaving (null) clears immediately and cancels the clock.
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverUser = useCallback((userId: string | null) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setHoveredUserId(null);
+    if (!userId) return;
+    hoverTimer.current = setTimeout(
+      () => setHoveredUserId(userId),
+      HOVER_HIGHLIGHT_DELAY_MS
+    );
+  }, []);
+  // A pending highlight outliving the modal would set state on a dead tree.
+  useEffect(
+    () => () => {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    },
+    []
+  );
   // Copy/paste: which card is selected, and what's on the clipboard. Selection
   // is by index into `sets` — the same handle every edit here already uses.
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
@@ -1615,7 +1637,8 @@ export default function StagedScheduleModal({
           the plan obeying an instruction, not a problem with the roster. */}
       {ruleHeld > 0 && (
         <p className="mt-3 rounded-md bg-indigo-50 px-3 py-2 text-sm text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
-          ! {ruleHeld} slot{ruleHeld === 1 ? "" : "s"} left open by a required
+          <RuleAlertIcon />
+          {ruleHeld} slot{ruleHeld === 1 ? "" : "s"} left open by a required
           scheduling rule — look for the “!” marks below. Edit the rules in Org
           settings → Scheduling, or fill {ruleHeld === 1 ? "it" : "them"} by hand.
         </p>
@@ -1637,7 +1660,8 @@ export default function StagedScheduleModal({
           someone somewhere on purpose outranks them. */}
       {planWarnings.total > 0 && (
         <p className="mt-3 rounded-md bg-yellow-50 px-3 py-2 text-sm text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200">
-          ! {planWarnings.total} seat{planWarnings.total === 1 ? "" : "s"} break
+          <RuleAlertIcon />
+          {planWarnings.total} seat{planWarnings.total === 1 ? "" : "s"} break
           {planWarnings.total === 1 ? "s" : ""} a scheduling rule — look for the
           yellow boxes below, and hover the “!” for which rule. You can still
           {preview ? " save" : " apply"}: rules only steer Auto schedule.
@@ -2171,7 +2195,8 @@ export default function StagedScheduleModal({
                                 // fires the old element's mouseleave before the
                                 // new one's mouseenter, so a clear can't land on
                                 // top of a highlight that just started.
-                                onHoverChange={setHoveredUserId}
+                                // Debounced — see `hoverUser` above.
+                                onHoverChange={hoverUser}
                                 widthClass="w-full min-w-0 flex-1"
                                 onChange={(userId) =>
                                   userId
@@ -3040,5 +3065,30 @@ function LoadCell({ count }: { count?: number }) {
     >
       {count === undefined ? "" : `×${count}`}
     </span>
+  );
+}
+
+// The banner glyph for the two rule chips. A drawn circled "!" rather than a
+// bare "!" character: beside the "⚠" the other two banners lead with, a lone
+// exclamation mark reads as punctuation that lost its sentence rather than as
+// the mark it is naming. The seats themselves still carry a plain "!" — that
+// one sits inside a badge, which gives it the frame this one has to draw.
+function RuleAlertIcon() {
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      aria-hidden="true"
+      className="mr-1 inline-block h-4 w-4 shrink-0 align-[-0.1875rem]"
+    >
+      <circle cx="10" cy="10" r="7.25" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M10 6.25v4.5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+      <circle cx="10" cy="13.75" r="0.9" fill="currentColor" />
+    </svg>
   );
 }

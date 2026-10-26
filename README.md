@@ -158,6 +158,7 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
 | `CRON_SECRET` | optional⁶ | `openssl rand -base64 24` (unique) | `openssl rand -base64 24` (unique, ≠ staging)⁶ |
 | `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | optional⁸ | optional⁸ | the address on /privacy + /terms⁸ |
+| `NEXT_PUBLIC_CONTACT_EMAIL` | optional⁹ | optional⁹ | the address on the home page⁹ |
 | `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
@@ -184,6 +185,12 @@ verification asks for both URLs and fetches them with no account). It must be a
 mailbox someone actually reads, since it's where deletion requests go; unset it
 falls back to `privacy@tapworship.com`. Inlined at build, so a change needs a
 redeploy. Wording lives in `lib/legal.ts` + `app/{privacy,terms}/page.tsx`.
+
+⁹ The address the public home page (`app/page.tsx`) asks people to write to so
+their organization can be set up — deliberately a different mailbox from ⁸,
+which is quoted in the privacy policy as where deletion requests go. Shown as
+selectable text beside a copy button; unset it falls back to the maintainer's
+own address in `lib/legal.ts`. Inlined at build, so a change needs a redeploy.
 
 ⁷ Google Calendar is a **per-org integration** riding on the same Google OAuth
 client as "Continue with Google" — see [Google Calendar](#google-calendar).

@@ -199,14 +199,14 @@ export function escapeIcsText(text: string): string {
  */
 export function buildIcs(
   events: IcsEvent[],
-  calendarName = "Worship Scheduler",
+  calendarName = "TapWorship",
   timeZone: string = appTimeZone()
 ): string {
   const now = new Date();
   const lines: string[] = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Worship Scheduler//EN",
+    "PRODID:-//TapWorship//EN",
     `X-WR-CALNAME:${escapeIcsText(calendarName)}`,
     `X-WR-TIMEZONE:${timeZone}`,
   ];

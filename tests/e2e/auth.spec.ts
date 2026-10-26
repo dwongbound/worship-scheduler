@@ -1,6 +1,7 @@
 // E2E: login flow + route protection.
 import { type Page, expect, test } from "@playwright/test";
 import { attemptTag, login, orgKey } from "./helpers";
+import { CONTACT_EMAIL } from "../../lib/legal";
 
 test("redirects unauthenticated visitors to the login page", async ({ page }) => {
   await page.goto("/calendar");
@@ -244,4 +245,75 @@ test("the privacy policy and terms are readable signed out, and linked from sign
   // And straight to the URL, as Google fetches it: no bounce to /login.
   await page.goto("/privacy");
   await expect(page).toHaveURL(/\/privacy$/);
+});
+
+// The home page is the third public page, and the one Google's verification
+// judges the app's name and logo by. It failed review as a login wall, so
+// what matters here is that a stranger reaching "/" is NOT bounced.
+test("the home page is readable signed out, naming TapWorship", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/$/);
+  await expect(
+    page.getByRole("heading", { name: /playing Sunday/ })
+  ).toBeVisible();
+  // The name as the consent screen spells it, and the mark beside it — the
+  // two things the review compares.
+  await expect(page.getByText("TapWorship", { exact: true }).first()).toBeVisible();
+  await expect(page.getByAltText("TapWorship").first()).toBeVisible();
+  // And a way on to each of the pages a review expects to find linked.
+  await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Terms of Service" })).toBeVisible();
+  // The header's Sign in is the way IN for someone who already has an account.
+  await page.getByRole("link", { name: "Sign in" }).first().click();
+  await expect(page).toHaveURL(/\/login/);
+});
+
+// The two call-to-action buttons point at different people, and swapping them
+// is the easy mistake: there is no self-serve sign-up, so "Get started" that
+// lands on /login strands the very person it is for.
+test("the home page's Get started goes to the contact block, not the login", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: "Get started" }).click();
+  // Still on the home page, and at the section that tells them what to do.
+  await expect(page).toHaveURL(/\/#contact$/);
+  await expect(
+    page.getByRole("heading", { name: "Get your organization started" })
+  ).toBeInViewport();
+  // The sign-in route stays available beside it, for someone who has an account.
+  await expect(
+    page.getByRole("link", { name: "Sign in" }).first()
+  ).toHaveAttribute("href", "/login");
+});
+
+// The page's one call to action for someone with NO account: the address is
+// on the page as text (a copy can be refused and the page can't tell), and the
+// button reports what it did in its own label.
+test("the home page offers the contact address as text and as a copy button", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto("/");
+  await expect(page.getByText(CONTACT_EMAIL, { exact: true })).toBeVisible();
+
+  const copy = page.getByRole("button", { name: "Copy email" });
+  await expect(copy).toBeVisible();
+  await copy.click();
+  await expect(page.getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    CONTACT_EMAIL
+  );
+});
+
+// Signed in, "/" still means "the app" — Google's own sign-in callback lands
+// there, and landing on marketing copy after signing in would read as broken.
+test("a signed-in visitor to the home page gets the app, not the marketing page", async ({
+  page,
+}) => {
+  await login(page, "bob");
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/calendar/);
+  await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
 });

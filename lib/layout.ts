@@ -24,3 +24,25 @@ export const BOTTOM_NAV_MAX_WIDTH = 1024;
 export function isBottomNavWidth(): boolean {
   return window.innerWidth < BOTTOM_NAV_MAX_WIDTH;
 }
+
+/**
+ * The narrowest viewport the schedule review workspace (the Create tab's
+ * generate preview, and the calendar's Preview Mode) is usable at.
+ *
+ * 768 = Tailwind's `md`, which is the breakpoint the calendar's month grid and
+ * its admin toolbar already use: below it the calendar drops to the "My sets"
+ * list and the Preview Mode button isn't rendered at all. The workspace is a
+ * wide grid of roster cards with drag, hover and keyboard shortcuts, so a
+ * phone can't show it — but a tablet (768 in portrait) can, which is why this
+ * is `md` and not BOTTOM_NAV_MAX_WIDTH.
+ *
+ * The button being absent is enough for someone browsing, but a `?draft=` link
+ * is made to be pasted into a message and will be opened on a phone. That is
+ * the one way in that has to say no for itself.
+ */
+export const PREVIEW_MIN_WIDTH = 768;
+
+/** True when the viewport is wide enough for the review workspace. */
+export function isPreviewWidth(): boolean {
+  return window.innerWidth >= PREVIEW_MIN_WIDTH;
+}

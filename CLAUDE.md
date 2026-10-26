@@ -177,9 +177,32 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 
 ## Pages (`app/*/page.tsx`)
 
-`login` · `page.tsx` (home) · `calendar` · `schedule` · `set-manager` · `profile` ·
-`create` (admin) · `users` (admin team mgmt — grant/revoke admin, instruments).
+`page.tsx` (the PUBLIC home page) · `login` · `calendar` · `schedule` ·
+`set-manager` · `profile` · `create` (admin) · `users` (admin team mgmt —
+grant/revoke admin, instruments).
 `layout.tsx` = pre-hydration theme script; `loading.tsx` = splash; `providers.tsx`.
+
+`/` has TWO answers. Signed out it's the marketing page — the mark, the name
+**TapWorship** and what the app does, which is what Google's OAuth verification
+fetches and judges the app's name and logo by; it failed review as a login wall.
+Its hero is an EXAMPLE set roster (invented people — the page is public), its
+four steps are numbered because they're a real sequence, and it carries TWO
+buttons for two different people: the header's **Sign in** → `/login` for
+someone who already has an account, and the hero's **Get started** → `#contact`
+for someone who doesn't. They are NOT interchangeable — there is no self-serve
+sign-up, so a "Get started" landing on /login strands the very person it's for.
+The closing block asks people with no account to
+write in: the address is `CONTACT_EMAIL` (`lib/legal.ts`, overridable with
+`NEXT_PUBLIC_CONTACT_EMAIL`), shown as selectable text AND behind
+`components/CopyEmailButton.tsx` — never only a `mailto:`, since a clipboard
+write can be refused and the page can't tell. Archivo + IBM Plex Mono are
+loaded by this page alone (next/font), so the app never pays for them.
+Signed in it's still the app: `proxy.ts` redirects a session holder to
+`/calendar` at the edge, because Google's sign-in callback lands on `/` and
+marketing copy after signing in reads as broken. That redirect can't live in
+`next.config.js` (a config redirect can't see the session) or as an RSC
+`redirect()` in the page (React #310 in production for an AUTHENTICATED
+visitor — vercel/next.js#63121), which is why it's in the middleware.
 
 ## API (`app/api/**/route.ts`)
 
@@ -230,7 +253,14 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   sets' diffs + optional `mdUserId` each, one org, every set validated before
   ONE transaction — the calendar Preview Mode's Save; an MD the new roster
   can't hold comes back in `mdRejected`. Both share `lib/rosterDiff.ts`
-  `prepareRosterDiff`/`rosterAftermath`; DMs go out ONCE per person across the
+  `prepareRosterDiff`/`rosterAftermath`; a prepared roster carries its writes as
+  GROUPS (deletes/updates/inserts/history) and **`rosterWrites`** folds the whole
+  batch into one deleteMany + the reassignments + two createManys, because a
+  quarter of Sunday rosters written a seat at a time was 428 statements and ran
+  past Prisma's 5s transaction limit — the save died of the timeout and the
+  route called it a duplicate seat. `ROSTER_TX_TIMEOUT_MS` is the headroom and
+  **`rosterSaveError`** is what keeps the message honest: only `P2002` says
+  "already in this role", anything else says nothing was saved. DMs go out ONCE per person across the
   whole batch via `lib/slack.ts notifyRosterChanges`/`rosterDmText`, so a month
   of one role is one message, not one per set; a multi-set DM lists sets as
   plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
@@ -338,6 +368,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   month/3/6/12 months. Only "this plan" is counted client-side; every window is
   ONE on-demand query to `GET /api/admin/team-load?metric=…`, cached per window
   in the modal — the plan itself never carries a year of assignments. ✅tested
+  `HOVER_HIGHLIGHT_DELAY_MS` (2000) is how long the pointer must REST on a
+  name before every other seat that person holds lights up. `StagedScheduleModal`'s
+  `hoverUser` is the debounce: arriving clears the current highlight and starts
+  the clock, leaving (null) clears and cancels at once — undelayed, the grid
+  flickered through every name the cursor crossed. The tour says "about two
+  seconds" in words, so the number and the copy are pinned to each other. ✅tested
   `ruleHeldRoles`/`totalRuleHeld` are the "!" marks: which open slots a
   REQUIRED scheduling rule is what's holding empty (a SAME_PLAYER seat reserved
   for someone who can't take it, a role every candidate is refused for). Found
@@ -384,11 +420,19 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   stands. A slug nothing answers to says so instead of opening the wrong plan.
   ✅tested
 - `scheduleTour.ts` — the words of the review workspace's guided tour, as data:
-  `tourSteps({preview})` → one step per quirk (views · team load · hover ·
-  locking · the card's ↻/✕ · copy-paste-undo · the warnings · committing), with
+  `tourSteps({preview})` → one step per quirk (views · team load · the person
+  filter · hover · **the plan-wide action row** · locking · the card's ↻/✕ ·
+  copy-paste-undo · the warnings · committing), with
   the last step forked per mode (Preview Mode commits with Save Changes, and
   its drafts can go stale, so its step says reopening lays one back over the
-  calendar as it stands). It is the ONLY explanation of that screen — the paragraph
+  calendar as it stands; it also names the Drafts button on the step-1 modal,
+  the `?draft=` link in the address bar, and that the screen won't open on a
+  phone). `actions` covers the four buttons that act on the WHOLE plan — Auto
+  schedule, Clear all people, Lock all/Unlock all, Scheduling rules — and
+  `warnings` covers all FOUR colours, the yellow rule-BREAK box included. Every
+  step's art lives in `ScheduleHelpModal.StepArt`, so a new `TourArt` needs a
+  branch there or the step draws an empty box.
+  It is the ONLY explanation of that screen — the paragraph
   of instructions that used to head the modal and the shortcut hint under it
   were deleted in its favour, so a missing step = an undiscoverable feature.
   ✅tested
@@ -448,6 +492,16 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   window and switches org, the set-manager widens its horizon (or says why it
   can't). Roster DMs, digest bullets and the Approvals tab use the calendar
   form. ✅tested
+- `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
+  PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
+  render bare (those plus `/join`). Four places used to carry their own copy of
+  that list — `proxy.ts` at the edge, `AuthGate` (render or bounce to /login?),
+  `Navbar` and `SwipePager` (any chrome here?) — and they drifted the moment the
+  public home page arrived: the edge let `/` through and the client still
+  bounced it to /login, which is the very login wall the page exists to remove,
+  and a bounce like that only shows in a browser. Three of them now share this;
+  `proxy.ts` is the one copy left, because its imports can't follow it to the
+  edge. ✅tested
 - `slackStatus.ts` — the client-side cache in front of `GET /api/slack/status`.
   Four surfaces ask "has this org connected Slack?" (Team, Create, the team
   members modal, and the set detail modal on every open); caching the PROMISE
@@ -456,7 +510,15 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   Disconnect on Org settings, calls `invalidateSlackStatus(orgId)`. ✅tested
 - `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
   behind "is this the app-style layout?", shared by the bottom bar's `lg:`
-  classes, SwipePager and PullToRefresh.
+  classes, SwipePager and PullToRefresh. Plus `PREVIEW_MIN_WIDTH` (768 = `md`)
+  + `isPreviewWidth()`: the narrowest screen the review workspace is usable at.
+  The Preview Mode button is already absent below it (it lives in the month
+  grid's `md:` toolbar), so the one way in a phone still has is a `?draft=`
+  link — which is made to be pasted into a message. `app/calendar/page.tsx`
+  checks this BEFORE the link's three fetches and says "too wide for a phone
+  screen … computer or tablet" in the same `linkError` banner a dead `?set=`
+  link uses. Deliberately `md` and not `BOTTOM_NAV_MAX_WIDTH`: a tablet gets
+  the bottom bar AND the workspace. ✅tested
 - `swipeNav.ts` — the tab-swipe gesture's math: `gestureAxis` (a move is a
   swipe only if it's `AXIS_RATIO`× more horizontal than vertical — a scroll
   that drifts sideways stays a scroll, and once vertical wins the touch is the
@@ -592,7 +654,12 @@ preview save persist, the same edit `SetDetailModal.deleteSlot` makes — and a
 role emptied of slots comes back via the card's "+ role" chips; the unfillable
 (red) and conflict (amber) banners ride ON the footer's action bar, bled to the
 modal's edges — the body scrolls for a long plan, so at the top they were gone
-by the time you were looking at the roles they named; clicking a
+by the time you were looking at the roles they named. The two RULE banners
+(indigo "left open by a required rule", yellow "break a scheduling rule") lead
+with `RuleAlertIcon`, a drawn circled "!", not a bare "!" character — beside
+the "⚠" the other two lead with, a lone exclamation mark read as stray
+punctuation. The per-seat marks stay a plain "!": those sit in a `Badge`,
+which gives them the frame this icon has to draw. Clicking a
 card's own space SELECTS it — ⌘/Ctrl+C then copies its shape + people and
 ⌘/Ctrl+V stamps them onto another selected card, ⌘/Ctrl+Z takes the last paste
 back (an undo entry snapshots the WHOLE set list, since `designateMDs` re-settles
