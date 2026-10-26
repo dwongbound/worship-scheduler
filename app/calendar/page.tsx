@@ -57,6 +57,7 @@ import {
   draftSearch,
   draftSlug,
 } from "@/lib/draftLink";
+import { isPreviewWidth } from "@/lib/layout";
 import type {
   ApiAdminUser,
   ApiSet,
@@ -557,6 +558,20 @@ function CalendarView() {
     const slug = linkedDraftSlug;
     if (!slug || !previewOrgId || sets === null) return;
     if (followedDraftLinks.current.has(slug)) return;
+    // A draft link exists to be pasted into a message, so it WILL be opened on
+    // a phone. The workspace can't be shown there (see PREVIEW_MIN_WIDTH), and
+    // the Preview Mode button is simply absent at this width, so this is the
+    // one way in that has to turn someone away itself — silently ignoring the
+    // link would look like the link was broken. Checked BEFORE the three
+    // fetches below, which are only worth making for a screen that can show
+    // what they're for.
+    if (!isPreviewWidth()) {
+      followedDraftLinks.current.add(slug);
+      setLinkError(
+        "This plan is too wide for a phone screen. Open the link on a computer or tablet to see it."
+      );
+      return;
+    }
     if (previewRefs?.orgId !== previewOrgId) {
       if (askedPreviewRefs.current) return;
       askedPreviewRefs.current = true;

@@ -661,3 +661,19 @@ test("phone availability: the week view fits the screen", async ({ page }) => {
     viewport.width
   );
 });
+
+test("phone turns away a Preview Mode draft link", async ({ page }) => {
+  // The Preview Mode button isn't rendered at this width, so a ?draft= link
+  // is the only way the review workspace could be reached on a phone — and
+  // it's the form of it made to be pasted into a message. It has to say why
+  // it won't open rather than look broken.
+  await login(page, "admin");
+  await page.goto("/calendar?draft=some-saved-plan");
+
+  await expect(
+    page.getByText(/too wide for a phone screen/i)
+  ).toBeVisible();
+  // And nothing of the workspace itself: no dialog, and no sign it tried.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText(/doesn't match a saved plan/i)).toHaveCount(0);
+});

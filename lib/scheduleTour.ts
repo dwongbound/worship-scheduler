@@ -18,6 +18,7 @@ export type TourArt =
   | "load"
   | "filter"
   | "hover"
+  | "actions"
   | "lock"
   | "card"
   | "clipboard"
@@ -85,8 +86,19 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
       art: "hover",
       title: "Follow one person through the plan",
       body: [
-        "Hover a name — in the load list or in any card — and every slot that person holds lights up across the whole plan at once.",
+        "Rest on a name — in the load list or in any card — and every slot that person holds lights up across the whole plan at once.",
+        "It waits about two seconds before it does. A plan is a wall of names, and without that pause the grid would flicker through every name your cursor crossed on its way somewhere else. Moving off clears it straight away.",
         "It needs a pointer and a screen wide enough to show several sets, so there is nothing to hover on a phone.",
+      ],
+    },
+    {
+      id: "actions",
+      art: "actions",
+      title: "The buttons above the cards",
+      body: [
+        "Auto schedule runs the scheduler over the whole plan at once. It leaves every locked seat where it is and re-proposes the rest, so it is safe to run again after you have settled a few sets.",
+        "Clear all people empties every roster here, for when the dates and shapes are what you wanted and the people can come later. Lock all and Unlock all flip the whole plan between \u201ckeep what is here\u201d and \u201cpropose anyone\u201d.",
+        "Scheduling rules opens the same rules Auto schedule obeys, right here rather than two pages away \u2014 because the place you notice a wrong rule is in the plan it produced. Edit one and the next run uses it.",
       ],
     },
     {
@@ -128,6 +140,7 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
         "A red “no one available” role has a seat nobody can fill — either nobody plays it, or everyone who does is busy at that time.",
         "An amber “unavailable” mark is someone placed on a set they are not free for. It never blocks you; it is flagged so that it stays a deliberate choice.",
         "An indigo “! held by a rule” role has a seat somebody could fill, but one of your org's required scheduling rules says they must not — so the fill left it open rather than break the rule. Fill it by hand, or change the rule in Org settings → Scheduling.",
+        "A yellow box around a seat is the other half of that: a pick that breaks one of those rules. Hover its “!” to read which rule, and the card’s own “!” count says how many it holds. Nothing here is refused — the rules steer Auto schedule, and putting someone somewhere on purpose outranks them — so a banner at the top only counts them and the plan still goes through.",
       ],
     },
     preview
@@ -138,7 +151,9 @@ export function tourSteps({ preview }: { preview: boolean }): TourStep[] {
           body: [
             "Save Changes is the only thing that writes to the calendar, and the only thing that messages anyone. It shows how many changes you are about to save first, then saves them all together.",
             "Save Draft parks your edits without touching the calendar, to come back to another day; you can keep five, and the workspace also autosaves into a separate recovery slot once a minute so a closed tab costs you nothing. Reopening a draft lays it back over the calendar as it stands then, and says so if any of its sets have gone.",
+            "Your saved drafts are behind the Drafts button on the screen that opened this one, and an open draft puts itself in the address bar \u2014 that link is worth pasting to someone else, as long as the draft keeps its name.",
             "Close backs out. If you have made changes it asks first, and lists what it is about to throw away.",
+            "One thing this screen cannot do is fit on a phone. Following a draft link on one says so rather than opening; use a computer or a tablet.",
           ],
         }
       : {
