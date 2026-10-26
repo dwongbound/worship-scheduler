@@ -90,9 +90,12 @@ export default function GoogleImportModal({
         }
         const list: ImportCalendar[] = data.calendars ?? [];
         setCalendars(list);
-        // All of them to begin with: the common case is "everything I keep my
-        // life in", and un-ticking is easier than hunting for the right one.
-        setPicked(new Set(list.map((c) => c.id)));
+        // NOTHING ticked to begin with. An import writes blocks onto someone's
+        // availability, so the calendars it reads are a deliberate choice —
+        // pre-ticking them all means a hurried Preview imports a diary nobody
+        // meant to share. "Select all" in the header is one tap for the people
+        // who did want everything.
+        setPicked(new Set());
         setBusy(null);
         setPhase("picking");
       } catch {
@@ -170,6 +173,23 @@ export default function GoogleImportModal({
     }
   };
 
+  // One button, not two: it offers whichever way the list isn't already. With
+  // nothing ticked it selects all, and with ANY tick it clears them — so the
+  // way back out of a half-made selection is always the same button.
+  const headerActions =
+    phase === "picking" && calendars.length > 0 ? (
+      <Button
+        variant="secondary"
+        size="sm"
+        disabled={!!busy}
+        onClick={() =>
+          setPicked(picked.size === 0 ? new Set(calendars.map((c) => c.id)) : new Set())
+        }
+      >
+        {picked.size === 0 ? "Select all" : "Deselect all"}
+      </Button>
+    ) : undefined;
+
   const count = windows.length;
   const footer =
     phase === "previewing" ? (
@@ -230,6 +250,7 @@ export default function GoogleImportModal({
           : "Which calendars should it read?"
       }
       size="xl"
+      headerActions={headerActions}
       footer={footer}
     >
       <div className="relative">

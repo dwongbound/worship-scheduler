@@ -467,16 +467,32 @@ test("the import modal picks calendars, previews them, then imports", async ({ p
 
   await page.getByTestId("import-google").click();
 
-  // The picker: their own calendars, all ticked to begin with.
+  // The picker: their own calendars, and NOTHING ticked. An import writes
+  // onto someone's availability, so which calendars it reads is a deliberate
+  // choice — there is nothing to preview until one is picked.
   const main = page.getByRole("checkbox", { name: /carol@example.com/ });
   const work = page.getByRole("checkbox", { name: "Work" });
-  await expect(main).toBeChecked();
-  await expect(work).toBeChecked();
+  await expect(main).not.toBeChecked();
+  await expect(work).not.toBeChecked();
+  const previewButton = page.getByRole("button", { name: "Preview", exact: true });
+  await expect(previewButton).toBeDisabled();
   expect(calls[0]).toMatch(/\/calendars\?requestId=\w+/);
 
-  // Untick one and preview: only the ticked one is read.
-  await work.uncheck();
-  await page.getByRole("button", { name: "Preview", exact: true }).click();
+  // The header's one button offers whichever way the list isn't: it reads
+  // "Select all" with nothing ticked, and "Deselect all" the moment any is.
+  const selectAll = page.getByRole("button", { name: "Select all" });
+  await selectAll.click();
+  await expect(main).toBeChecked();
+  await expect(work).toBeChecked();
+  await page.getByRole("button", { name: "Deselect all" }).click();
+  await expect(main).not.toBeChecked();
+  await expect(work).not.toBeChecked();
+  await expect(selectAll).toBeVisible();
+
+  // Tick one and preview: only that one is read.
+  await main.check();
+  await expect(page.getByRole("button", { name: "Deselect all" })).toBeVisible();
+  await previewButton.click();
   await expect.poll(() => calls.find((c) => c.includes("/preview"))).toMatch(
     /calendarIds=primary(?!%2C)/
   );

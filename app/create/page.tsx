@@ -2,7 +2,8 @@
 // Create tab (admins only): define weekly set templates, run the
 // auto-scheduler, and see who has finished entering availability.
 import { useSession } from "next-auth/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -24,6 +25,12 @@ import GenerateModal, {
 import StagedScheduleModal from "@/components/StagedScheduleModal";
 import DraftsModal from "@/components/DraftsModal";
 import type { DraftSummary } from "@/lib/drafts";
+import {
+  DRAFT_PARAM,
+  draftForSlug,
+  draftSearch,
+  draftSlug,
+} from "@/lib/draftLink";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
@@ -69,7 +76,25 @@ function capacitiesSummary(
 
 type AdminUnavailabilityEntry = ApiAdminUser["unavailability"][number];
 
+// useSearchParams() must sit under a Suspense boundary, so the page export
+// just wraps the real component in one (see app/calendar/page.tsx).
 export default function CreatePage() {
+  return (
+    <Suspense>
+      <CreateView />
+    </Suspense>
+  );
+}
+
+function CreateView() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  // ?draft=<slug>: the plan a link names, and the slugs already followed — a
+  // second run would discard whatever has been edited since.
+  const linkedDraftSlug = searchParams.get(DRAFT_PARAM);
+  const followedDraftLinks = useRef<Set<string>>(new Set());
+  const [draftLinkError, setDraftLinkError] = useState("");
   const { status } = useSession();
   const [templates, setTemplates] = useState<ApiSetTemplate[] | null>(null);
   const [users, setUsers] = useState<ApiAdminUser[] | null>(null);
@@ -100,6 +125,10 @@ export default function CreatePage() {
   // knows whether to exist at all — it's hidden when there are none, since an
   // empty list is a dead end rather than a feature.
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  // Whether that list has been read yet. An empty list is a real answer ("no
+  // saved plans"), so it can't double as "not asked" — and a ?draft= link has
+  // to know the difference before it calls a slug dead.
+  const [draftsLoaded, setDraftsLoaded] = useState(false);
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [draftBusyId, setDraftBusyId] = useState<string | null>(null);
   // Which draft the open preview came from, so Save Draft prefills its name and
@@ -159,6 +188,7 @@ export default function CreatePage() {
       headers: orgHeaders(adminOrgId),
     }).catch(() => null);
     setDrafts(res?.ok ? await res.json() : []);
+    setDraftsLoaded(true);
   }, [adminOrgId]);
   useEffect(() => {
     void reloadDrafts();
@@ -170,6 +200,17 @@ export default function CreatePage() {
   const mergeDraft = useCallback((saved: DraftSummary) => {
     setDrafts((current) => [saved, ...current.filter((d) => d.id !== saved.id)]);
   }, []);
+
+  // Mirror the open draft into ?draft=<slug>, or clear it. Through
+  // `draftSearch` so any other param this page carries survives either way.
+  const setDraftParam = useCallback(
+    (slug: string | null) => {
+      router.replace(`${pathname}${draftSearch(searchParams.toString(), slug)}`, {
+        scroll: false,
+      });
+    },
+    [router, pathname, searchParams]
+  );
 
   /**
    * Save the open preview. `silent` marks the once-a-minute autosave, which must
@@ -214,7 +255,14 @@ export default function CreatePage() {
       // A deliberate save of a fresh preview becomes the draft we're now in, so
       // a second Save Draft replaces it rather than spending another slot.
       const saved = await res.json().catch(() => null);
-      if (!silent && saved?.id) setOpenedDraft({ id: saved.id, name: saved.name });
+      if (!silent && saved?.id) {
+        setOpenedDraft({ id: saved.id, name: saved.name });
+        // Naming a plan names its link. An autosave doesn't re-point it: the
+        // recovery slot is a safety net, not a plan anyone would send on.
+        setDraftParam(
+          draftSlug(saved, [saved, ...drafts.filter((d) => d.id !== saved.id)])
+        );
+      }
       // Merge the row the write handed back rather than re-reading the list.
       // The autosave calls this once a minute for as long as a preview is open,
       // and refetching there spent a request a minute refreshing a list nobody
@@ -222,7 +270,7 @@ export default function CreatePage() {
       if (saved?.id) mergeDraft(saved);
       return true;
     },
-    [adminOrgId, openedDraft, mergeDraft]
+    [adminOrgId, openedDraft, mergeDraft, drafts, setDraftParam]
   );
 
   // Open a saved draft back into the review modal.
@@ -239,11 +287,18 @@ export default function CreatePage() {
         setOpenedDraft({ id: data.id, name: data.name });
         setStagedPlan(data.plan as StagedPlan);
         setDraftsOpen(false);
+        // The URL now names this plan, so the workspace can be linked to.
+        setDraftParam(
+          draftSlug(
+            { id: data.id, name: data.name, isRecovery: data.isRecovery },
+            drafts
+          )
+        );
       } finally {
         setDraftBusyId(null);
       }
     },
-    [adminOrgId]
+    [adminOrgId, drafts, setDraftParam]
   );
 
   const deleteDraft = useCallback(
@@ -253,12 +308,14 @@ export default function CreatePage() {
         method: "DELETE",
         headers: orgHeaders(adminOrgId),
       });
-      // The draft we're editing just went away — stop writing back into it.
+      // The draft we're editing just went away — stop writing back into it,
+      // and drop the link that named it.
+      if (openedDraft?.id === id) setDraftParam(null);
       setOpenedDraft((current) => (current?.id === id ? null : current));
       // Drop it locally; there is nothing to learn from re-reading the list.
       setDrafts((current) => current.filter((draft) => draft.id !== id));
     },
-    [adminOrgId]
+    [adminOrgId, openedDraft, setDraftParam]
   );
 
   // Open the Drafts list, refreshing it first. This is the one moment accuracy
@@ -268,6 +325,30 @@ export default function CreatePage() {
     setDraftsOpen(true);
     void reloadDrafts();
   }, [reloadDrafts]);
+
+  // ── ?draft=<slug> deep links ──────────────────────────────────────────
+  // A draft's link is a slug of its NAME, so it reads as something in a
+  // message rather than a cuid. The list is loaded with the page here, so
+  // following one is just a lookup — but `drafts` starting empty is also what
+  // "not read yet" looks like, so the effect only calls a slug dead once the
+  // list has actually arrived.
+  useEffect(() => {
+    if (!linkedDraftSlug || !adminOrgId) return;
+    if (followedDraftLinks.current.has(linkedDraftSlug)) return;
+    const match = draftForSlug(linkedDraftSlug, drafts);
+    if (!match) {
+      if (draftsLoaded) {
+        followedDraftLinks.current.add(linkedDraftSlug);
+        setDraftLinkError(
+          "That draft link doesn't match a saved plan — it may have been renamed or deleted."
+        );
+      }
+      return;
+    }
+    followedDraftLinks.current.add(linkedDraftSlug);
+    void openDraft(match.id);
+  }, [linkedDraftSlug, adminOrgId, drafts, draftsLoaded, openDraft]);
+
 
   const reload = useCallback(async () => {
     if (!adminOrgId) return;
@@ -486,7 +567,10 @@ export default function CreatePage() {
           ? `Created ${data.setsCreated} sets and ${data.assignmentsCreated} assignments.`
           : `Error: ${data.error ?? "unknown"}`
       );
-      if (res.ok) setStagedPlan(null);
+      if (res.ok) {
+        setStagedPlan(null);
+        setDraftParam(null);
+      }
       await reload();
     } finally {
       setBusyAction(null);
@@ -666,6 +750,13 @@ export default function CreatePage() {
               )}
             </div>
           </div>
+          {/* A ?draft= link that names nothing says so here, by the Drafts
+              button — the plan it promised simply never opens otherwise. */}
+          {draftLinkError && (
+            <p className="mb-3 text-sm font-medium text-red-600 dark:text-red-400">
+              {draftLinkError}
+            </p>
+          )}
           {/* A failed run reports here, next to the button that started it. */}
           {generateResult && !generateOpen && (
             <p className="mb-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">
@@ -1241,6 +1332,7 @@ export default function CreatePage() {
           // The next preview is its own thing — don't keep writing into the
           // draft this one came from.
           setOpenedDraft(null);
+          setDraftParam(null);
         }}
       />
 
