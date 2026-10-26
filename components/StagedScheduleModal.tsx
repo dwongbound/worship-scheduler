@@ -48,7 +48,7 @@
 // opens this same workspace over the sets that ALREADY exist, so a whole
 // season's rosters read and edit as one screen. Same layout, same cards, same
 // load panel, same staged-until-you-commit rule — the differences are:
-//   • the footer is Close / Save Changes, and Save first CONFIRMS the batch
+//   • the footer is Close / Save Draft / Save Changes, and Save first CONFIRMS the batch
 //     (how many seat and MD changes across how many sets), then hands the
 //     edited sets back for the caller to diff (lib/calendarPreview.previewSaves)
 //     and save in one PUT /api/admin/sets/roster;
@@ -58,7 +58,11 @@
 //     schedule fills only the gaps until the admin unlocks seats — one at a
 //     time with a card's 🔒, or all at once with Unlock all (Lock all puts
 //     them back);
-//   • "Already exists" on every card would be noise, so that badge sits out.
+//   • "Already exists" on every card would be noise, so that badge sits out;
+//   • a draft parked here holds one roster per EXISTING set, so it is kept
+//     apart from the generate flow's drafts (its own five slots, its own
+//     recovery slot) and is reopened by laying it back over the calendar as
+//     it stands — see lib/calendarPreview.applyDraftSets.
 import {
   useCallback,
   useEffect,
@@ -183,8 +187,7 @@ interface StagedScheduleModalProps {
   // admin tabs' org, which is the one the Create tab generates under.
   orgId?: string;
   // Commit: "Apply schedule" in the generate flow, "Save Changes" in a
-  // Save this plan as a draft. Generate flow only — the calendar's Preview Mode
-  // mirrors real sets, so there is nothing to park. `name` is null for the
+  // Save this plan as a draft, in either workspace. `name` is null for the
   // once-a-minute autosave and for a deliberate save left unnamed; `silent` marks
   // the autosave, which must never surface an error or a spinner.
   // Resolves to whether the plan actually reached the server — the autosave
@@ -504,15 +507,23 @@ export default function StagedScheduleModal({
   saveDraftRef.current = onSaveDraft;
   const autosavePlanRef = useRef<StagedPlan | null>(null);
   autosavePlanRef.current = plan ? { ...plan, sets } : null;
+  // Preview Mode only: whether anything has actually been edited. Assigned
+  // further down, where `dirty` is computed — the interval reads it at the
+  // moment it fires, so order in the render doesn't matter.
+  const dirtyRef = useRef(false);
 
   // Only whether autosaving is possible, so the timer isn't restarted by the
   // caller handing down a new function identity.
-  const canAutosave = !preview && !!onSaveDraft;
+  const canAutosave = !!onSaveDraft;
   useEffect(() => {
     if (!plan || !canAutosave) return;
     const timer = setInterval(() => {
       const snapshot = autosavePlanRef.current;
       if (!snapshot) return;
+      // An untouched preview is a copy of the calendar: autosaving it would
+      // park a recovery draft nobody asked for and put a Drafts button on the
+      // screen of someone who only ever looked.
+      if (preview && !dirtyRef.current) return;
       void saveDraftRef.current
         ?.(snapshot, null, true)
         .then((landed) => {
@@ -521,7 +532,7 @@ export default function StagedScheduleModal({
         .catch(() => {});
     }, AUTOSAVE_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [plan, canAutosave]);
+  }, [plan, canAutosave, preview]);
 
   // Every user's unavailability flattened into scheduler rules once, so both the
   // dropdowns and the conflict markers can tell who can't serve at a set's time.
@@ -1392,6 +1403,7 @@ export default function StagedScheduleModal({
   // one entry per set that actually differs from what the preview opened with.
   const pendingSaves = preview ? previewSaves(plan.sets, sets) : [];
   const dirty = pendingSaves.length > 0;
+  dirtyRef.current = dirty;
   // Leaving the generate flow always destroys a proposal that exists nowhere
   // else, so it asks first. A preview asks only once it has edits to lose.
   const requestClose = () =>
@@ -1466,10 +1478,10 @@ export default function StagedScheduleModal({
       footer={
         <div className="w-full">
           <div className="flex items-center justify-end gap-2">
-            {/* Preview mode has nothing to park, so its footer is the plain
-                back-out/commit pair; the generate flow adds Save Draft and pushes
-                Discard away to the far left. Help sits immediately before the
-                commit button in both. */}
+            {/* Both footers are back-out, Save Draft, Help, commit. The
+                generate flow's back-out is a red Discard banished to the far
+                left, because it throws the whole proposal away; Preview Mode's
+                is a plain Close, since the calendar it mirrors is still there. */}
             {preview ? (
               // Same two-button shape as the generate flow: back out, or commit.
               // Save is dead until something has actually changed, so a preview
@@ -1478,6 +1490,34 @@ export default function StagedScheduleModal({
                 <Button variant="secondary" onClick={requestClose} disabled={busy}>
                   Close
                 </Button>
+                {/* Parking the roster is a different act from committing it, so
+                    it sits apart from Save Changes — and it is the whole reason
+                    a crash or a failed save no longer costs an evening's work. */}
+                {onSaveDraft && (
+                  <>
+                    {draftSavedAt && (
+                      <span className="whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                        Draft last saved at {draftSavedAt}
+                      </span>
+                    )}
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setDraftName(openedDraft?.name ?? "");
+                        setDraftError(null);
+                        setConfirmingDraftId(null);
+                        setSavingDraft(true);
+                      }}
+                      // Dead until something has changed, like Save Changes:
+                      // a preview opens as an exact mirror of the calendar, so
+                      // parking one unedited would spend a slot on nothing.
+                      disabled={busy || !dirty}
+                      title={dirty ? undefined : "Nothing has been changed yet"}
+                    >
+                      Save Draft
+                    </Button>
+                  </>
+                )}
                 <HelpButton onClick={() => setHelpOpen(true)} />
                 <Button
                   onClick={() => setConfirmSave(true)}

@@ -235,8 +235,14 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   of one role is one message, not one per set; a multi-set DM lists sets as
   plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
   `admin/generate(+/apply)`, `admin/availability-request`,
-  `admin/drafts(+/[id])` (saved generate previews — GET lists them WITHOUT
-  their plan payloads, `[id]` GET is what carries one back).
+  `admin/drafts(+/[id])` (saved previews — GET lists them WITHOUT
+  their plan payloads, `[id]` GET is what carries one back. `?mode=` /
+  `mode` in the body picks the WORKSPACE: `generate` (default, and what every
+  legacy row is) or `preview`. Lists, the five keep-slots and the recovery slot
+  are all per mode, so the two piles never mix — a generate plan only ADDS
+  people on apply, a preview plan is one roster per existing set saved as a
+  diff, and either opened in the other's workspace would quietly do the wrong
+  thing).
   (`admin/users/[id]` PATCH also renames a member — `name` is global to the
   person, and the Team tab's cog → "Edit details" is its only caller.)
   (No `sets/[id]/autofill` — "Auto schedule" in the set detail modal runs
@@ -352,8 +358,10 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   both onto another set — which keeps its own identity (time, label, team) and
   takes the source's form, every pasted seat LOCKED so a later auto-fill treats
   it as a constraint. ✅tested
-- `drafts.ts` — saved generate previews: `MAX_DRAFTS` (5 per org),
-  `AUTOSAVE_INTERVAL_MS`, `canSaveDraft` (its `replacingId` is what makes
+- `drafts.ts` — saved previews: `MAX_DRAFTS` (5 per org PER MODE),
+  `AUTOSAVE_INTERVAL_MS`, `DraftMode`/`parseDraftMode` (`generate` | `preview`,
+  the `ScheduleDraft.mode` column — anything unrecognised reads as `generate`,
+  which is what rows predating the column are), `canSaveDraft` (its `replacingId` is what makes
   re-saving an existing draft free, and promoting the recovery row NOT free),
   `draftLabel`, `normalizeDraftName`. Two kinds of `ScheduleDraft` row, told
   apart by `isRecovery`: DELIBERATE ones (the Save Draft button, capped, may be
@@ -361,11 +369,26 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   autosave), which never counts against the cap — a full set of keep-slots is
   exactly when you most need the safety net. Both the POST and the promoting
   PATCH re-check the cap against the db. ✅tested
+- `draftLink.ts` — the ONE spelling of a link to a saved draft:
+  `DRAFT_PARAM` (`?draft=`), `slugifyDraftName`, `draftSlugs`, `draftSlug`,
+  `draftForSlug`, `draftSearch`. The link carries a slug of the draft's NAME,
+  never its cuid, because its whole point is being pasted into a message — so
+  renaming a draft changes its link, which is the trade. Slugs are resolved
+  against a LIST, not looked up: two drafts in one org and mode may share a
+  name, so `draftSlugs` numbers the duplicates in list order (`-2`, `-3`) and
+  the first keeps the bare slug. BOTH workspaces mirror the open draft into the
+  URL and clear it on the way out (`app/calendar/page.tsx` Preview Mode,
+  `app/create/page.tsx` generate), and following a link opens that draft
+  directly — on the calendar that means waiting for the preview refs, the draft
+  list and the sets themselves, since a draft is laid over the calendar as it
+  stands. A slug nothing answers to says so instead of opening the wrong plan.
+  ✅tested
 - `scheduleTour.ts` — the words of the review workspace's guided tour, as data:
   `tourSteps({preview})` → one step per quirk (views · team load · hover ·
   locking · the card's ↻/✕ · copy-paste-undo · the warnings · committing), with
-  the last step forked per mode (Preview Mode has no draft to park and commits
-  with Save Changes). It is the ONLY explanation of that screen — the paragraph
+  the last step forked per mode (Preview Mode commits with Save Changes, and
+  its drafts can go stale, so its step says reopening lays one back over the
+  calendar as it stands). It is the ONLY explanation of that screen — the paragraph
   of instructions that used to head the modal and the shortcut hint under it
   were deleted in its favour, so a missing step = an undiscoverable feature.
   ✅tested
@@ -379,8 +402,19 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
   (every real seat opens LOCKED, so Auto schedule only fills gaps until the
   admin unlocks), `previewSaves` (the save diff; re-proposed seats are matched
   back to their rows — same person+role = no change, same role = reassignment —
-  so a Clear all + Auto schedule doesn't delete and re-add people), and
-  `describePreviewSaves` (the batch confirm's sentence). ✅tested
+  so a Clear all + Auto schedule doesn't delete and re-add people),
+  `describePreviewSaves` (the batch confirm's sentence), and `applyDraftSets`
+  (reopening a saved preview draft: the CURRENT sets are the ground truth and
+  the draft supplies only roster, MD and shape — its seats come back WITHOUT
+  row ids, so `previewSaves` folds them into reassignments of the live rows,
+  and sets the draft names that no longer exist come back as `missing` for the
+  caller to say out loud. The draft is deleted once its rosters really save,
+  so a spent plan can't be re-imposed later).
+  **The overlaid sets are the EDITS, never the base**: `app/calendar/page.tsx`
+  keeps the un-overlaid calendar in `previewBase` and that is what
+  `previewSaves` diffs against, because the draft's seats carry no row ids —
+  diffed against themselves every seat reads as an addition and whoever the
+  draft replaced stays seated beside their replacement. ✅tested
 - `setDraft.ts` — the set detail modal's STAGED edits: `describeSetChanges()`
   (what changed, in words, for the discard warning) + `diffAssignments()`
   (the roster diff, as the body `admin/sets/[id]/roster` takes) + `newLocalId()`.
@@ -523,8 +557,12 @@ just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 ## Components
 
 Feature: `CalendarMonth`, `GoogleImportModal` (Import from Google Calendar as a
-screen: pick which of your own calendars to read, preview what they'd block in
-the page's own week grid — only the import's blocks, no weekly repeats and
+screen: pick which of your own calendars to read — NOTHING is ticked to begin
+with, since an import writes onto someone's availability and which diary it
+reads is a deliberate choice; the header's one button offers whichever way the
+list isn't ("Select all" with nothing ticked, "Deselect all" with any), so the
+way out of a half-made selection is always the same button — preview what
+they'd block in the page's own week grid — only the import's blocks, no weekly repeats and
 nothing already on your availability — then import. Every Google call draws a
 BLOCKING overlay over the body with what it's doing, and the footer's buttons
 are disabled to match; the consent screen is the one step that leaves the page
@@ -562,11 +600,14 @@ directors across the plan, and a snapshot whose `after` no longer matches `sets`
 means something else edited since — the history is dropped rather than rewinding
 over that work); all three are bound on the document so cards needn't enter the
 tab order, and each flashes a pill on the card it happened to
-(`animate-flash-fade`); in the generate flow only, Save Draft parks the
+(`animate-flash-fade`); in BOTH modes Save Draft parks the
 plan via `lib/drafts.ts` and a once-a-minute autosave writes the same plan into the
-org's recovery slot),
+org's recovery slot — in Preview Mode it's dead until something has changed,
+since an unedited preview is just a copy of the calendar),
 `DraftsModal` (the saved-preview list — open or delete, the delete confirm
-stacked over it so you stay in the list, which is where making room happens),
+stacked over it so you stay in the list, which is where making room happens;
+shared by the Create tab and `PreviewModeModal`'s own Drafts button, each
+reading its own mode's rows),
 `ScheduleHelpModal` (the review workspace's guided tour: a STEPPED modal, not
 spotlights — that screen scrolls two ways and regroups itself, so anything
 anchored to a live element would point at empty space half the time; each step
