@@ -63,6 +63,12 @@ export default function ProfilePage() {
   // Daily morning Slack digest, on by default. The send time is fixed, so this
   // on/off switch is the whole setting (see lib/digest.ts).
   const [dailyDigest, setDailyDigest] = useState(true);
+  // Being a guest on my sets' Google Calendar events, on by default. Off takes
+  // me off the guest list only — the seat and the event's roster are unchanged.
+  const [calendarInvites, setCalendarInvites] = useState(true);
+  // The "and the ones already sent?" question, asked only on switching off.
+  const [withdrawCalendarOpen, setWithdrawCalendarOpen] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   // Briefly true right after a successful save so the status line can flash a
@@ -108,6 +114,7 @@ export default function ProfilePage() {
     setTeams(me.teams ?? []);
     setHasPassword(me.hasPassword);
     setDailyDigest(me.dailyDigest);
+    setCalendarInvites(me.calendarInvites);
     savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
     setLoaded(true);
   }, [me]);
@@ -156,6 +163,54 @@ export default function ProfilePage() {
       setDailyDigest(prev);
       setMessage("Error: could not save that");
     }
+  }
+
+  // Flip the calendar-invite preference. Same shape as the digest toggle:
+  // optimistic, reverted if the PUT fails. Turning it ON re-syncs every
+  // upcoming set, which is what sends the invites.
+  //
+  // Turning it OFF saves straight away and THEN asks about the events already
+  // out (withdrawCalendarOpen below) — the preference must land whatever the
+  // person does with that modal, since a dismissed question would otherwise
+  // leave the ticked box disagreeing with the db.
+  async function saveCalendarInvites(next: boolean, withdraw = false) {
+    const prev = calendarInvites;
+    setCalendarInvites(next);
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // name is required by the endpoint, so send the current one through.
+        body: JSON.stringify({
+          name,
+          email: email || null,
+          calendarInvites: next,
+          ...(withdraw ? { withdrawInvites: true } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error();
+      return true;
+    } catch {
+      setCalendarInvites(prev);
+      setMessage("Error: could not save that");
+      return false;
+    }
+  }
+
+  // The switch itself: off opens the withdrawal question, on just saves.
+  async function toggleCalendarInvites(next: boolean) {
+    const saved = await saveCalendarInvites(next);
+    if (saved && !next) setWithdrawCalendarOpen(true);
+  }
+
+  // "Yes, take me off them" — the same preference saved again, this time
+  // asking the endpoint to re-sync, which is what drops me from the guest
+  // lists of the sets I'm already invited to.
+  async function withdrawCalendarInvites() {
+    setWithdrawing(true);
+    await saveCalendarInvites(false, true);
+    setWithdrawing(false);
+    setWithdrawCalendarOpen(false);
   }
 
   // Stable identity for the name/email fields, to detect no-op saves.
@@ -316,11 +371,22 @@ export default function ProfilePage() {
               </p>
             )}
             {/* With no email the banner above says why to add one; once
-                there is one, say what it's used for. */}
+                there is one, this is where the invites go — and whether they
+                are wanted at all. The switch is hidden until there is an
+                email, since with none there is nothing for it to change. */}
             {calendarOrgs && savedEmail && (
-              <p className="mt-1 text-xs text-gray-500">
-                Calendar invites for your sets go here.
-              </p>
+              <div className="mt-2" data-testid="profile-calendar-invites">
+                <Checkbox
+                  label="Calendar invites for my sets"
+                  checked={calendarInvites}
+                  onChange={(e) => toggleCalendarInvites(e.target.checked)}
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  {calendarInvites
+                    ? "Each set you're on arrives as an invite at the email above. Accepting it confirms you here."
+                    : "You won't be added to your sets' calendar events. You're still on the roster, and the team still sees you there."}
+                </p>
+              </div>
             )}
           </div>
           <div>
@@ -473,6 +539,42 @@ export default function ProfilePage() {
         dailyDigest={dailyDigest}
         onDailyDigestChange={saveDailyDigest}
       />
+
+      {/* Switching invites off settles future sets on its own; the events
+          already on someone's calendar are a separate question, and only a
+          yes here touches them. Closing leaves them exactly as they are. */}
+      <Modal
+        open={withdrawCalendarOpen}
+        onClose={() => setWithdrawCalendarOpen(false)}
+        title="Remove you from the invites already sent?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            You won&apos;t be invited to any new sets. You&apos;re already a
+            guest on the events for your upcoming sets — shall I take you off
+            those too? They&apos;ll disappear from your calendar, and you keep
+            your seats either way.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setWithdrawCalendarOpen(false)}
+              disabled={withdrawing}
+            >
+              Leave them
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={withdrawCalendarInvites}
+              loading={withdrawing}
+            >
+              Remove me
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={pwOpen} onClose={() => setPwOpen(false)} title="Change password">
         <form onSubmit={changePassword} className="space-y-4">

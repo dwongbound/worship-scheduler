@@ -72,6 +72,13 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).
+  `calendarInvites` (default true) is the person's own opt-out from being a
+  GUEST on their sets' Google Calendar events — global to them like
+  `dailyDigest`, since the calendar it lands on is theirs. Opting out drops
+  them from the guest list ONLY: they keep their seats and still appear in the
+  event's roster, so the team still sees who is playing. Switched on /profile,
+  honoured by `lib/calendarEvent.ts` (`eventAttendees` skips them;
+  `seatsToConfirm` ignores an RSVP that crossed with the opt-out).
 - **SetHistoryEvent** — the per-set activity log. `role` is null only for
   `SETLIST_CHANGED` (song added/removed/re-keyed/reordered), whose summary
   lives in `detail`. Roster + setlist changes also ping the set's Slack group
@@ -594,6 +601,17 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   mid-handoff stays on the old owner's invite until approved. Never throws.
   The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
   `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
+- `profile.ts` — the /profile save rules, pure: `resolveProfileEmail` (an
+  OAuth-only account's email is not its own to change) and
+  **`calendarResyncNeeded`** — whether saving a profile has to re-sync that
+  person's upcoming sets, which is the write that actually sends or withdraws
+  their invites. A changed email re-syncs, and so does switching invites back
+  ON (that is how they arrive). Switching them OFF is the one case that asks:
+  it could mean "no more of these" or "and take me off the ones I have", so
+  /profile puts that question in a modal and only a yes (`withdrawInvites` in
+  the PUT body) touches events already sent. The opt-out itself saves either
+  way, BEFORE the modal opens, so a dismissed question can't leave the ticked
+  box disagreeing with the db. ✅tested
 - `pendingHandoff.ts` — who a seat mid-handoff STILL belongs to (cover-take →
   `Assignment.pendingCoverFromUserId`; accepted swap → the SwapProposal). Feeds
   `pendingFromUser` on the wire and the MD rules, so a pending cover can't

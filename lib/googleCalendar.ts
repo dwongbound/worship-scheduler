@@ -529,7 +529,7 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             status: true,
             pendingCoverFromUserId: true,
             userId: true,
-            user: { select: { name: true, email: true } },
+            user: { select: { name: true, email: true, calendarInvites: true } },
           },
         },
       },
@@ -542,19 +542,34 @@ export async function syncSetCalendar(setId: string): Promise<void> {
     // the person handing it over, so the invite stays theirs until an admin
     // approves — a rejected handoff then never bounced anyone's invite.
     const owners = await pendingOwners(set.assignments);
-    const ownerEmails = new Map(
+    const ownerById = new Map(
       (
         await prisma.user.findMany({
           where: { id: { in: [...owners.values()].map((o) => o.id) } },
-          select: { id: true, email: true },
+          select: { id: true, email: true, calendarInvites: true },
         })
-      ).map((u) => [u.id, u.email])
+      ).map((u) => [u.id, u] as const)
     );
     const seats = set.assignments.map((a) => {
       const owner = owners.get(a.id);
+      // A seat mid-handoff is invited in its OLD owner's name, so it's their
+      // preference that decides, not the taker's.
+      const held = owner ? ownerById.get(owner.id) : null;
       return owner
-        ? { role: a.role, userId: owner.id, name: owner.name, email: ownerEmails.get(owner.id) ?? null }
-        : { role: a.role, userId: a.userId, name: a.user.name, email: a.user.email };
+        ? {
+            role: a.role,
+            userId: owner.id,
+            name: owner.name,
+            email: held?.email ?? null,
+            calendarInvites: held?.calendarInvites ?? true,
+          }
+        : {
+            role: a.role,
+            userId: a.userId,
+            name: a.user.name,
+            email: a.user.email,
+            calendarInvites: a.user.calendarInvites,
+          };
     });
     const catalog = await getTeamCatalog(set.teamId);
     const description = eventDescription(seats, set.songs, catalog, `${baseUrl()}${setLinkPath(set.id)}`);
@@ -746,11 +761,22 @@ async function applyRsvps(ev: GoogleEvent): Promise<void> {
   if (!setId || ev.status === "cancelled" || !ev.attendees?.length) return;
   const seats = await prisma.assignment.findMany({
     where: { setId, status: "PENDING" },
-    select: { id: true, role: true, status: true, userId: true, user: { select: { email: true } } },
+    select: {
+      id: true,
+      role: true,
+      status: true,
+      userId: true,
+      user: { select: { email: true, calendarInvites: true } },
+    },
   });
   const ids = seatsToConfirm(
     ev.attendees,
-    seats.map((s) => ({ id: s.id, status: s.status, email: s.user.email }))
+    seats.map((s) => ({
+      id: s.id,
+      status: s.status,
+      email: s.user.email,
+      calendarInvites: s.user.calendarInvites,
+    }))
   );
   if (ids.length === 0) return;
   const confirmed = seats.filter((s) => ids.includes(s.id));

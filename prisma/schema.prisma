@@ -407,6 +407,14 @@ model User {
   // the whole setting. Global to the person, like isMD.
   dailyDigest Boolean @default(true)
 
+  // Whether this person is invited to their sets' events on the org's Google
+  // Calendar (lib/googleCalendar.ts). Opt-out only, and global to the person
+  // like dailyDigest: someone who keeps their own calendar another way can
+  // switch it off and stop being added as a guest. It only removes them from
+  // the GUEST LIST — they still hold their seats and still appear in the
+  // event's roster, so the rest of the team sees who is playing.
+  calendarInvites Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
