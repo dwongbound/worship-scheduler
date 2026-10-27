@@ -532,6 +532,7 @@ export default function ProfilePage() {
                     {myCalendars ? (
                       <Select
                         label="Send invites to"
+                        data-testid="invite-calendar"
                         value={pickerValue}
                         onChange={(e) => pickInviteCalendar(e.target.value)}
                       >
@@ -546,6 +547,7 @@ export default function ProfilePage() {
                       <div className={myCalendars ? "mt-2" : undefined}>
                         <Input
                           label={myCalendars ? "Address" : "Send invites to"}
+                          data-testid="invite-address"
                           type="email"
                           value={inviteEmail}
                           onChange={(e) => setInviteEmail(e.target.value)}
