@@ -318,3 +318,45 @@ test("the invite address can be picked from your own Google calendars", async ({
   await email.fill(original);
   await email.blur();
 });
+
+test("the invite settings are mine to set before any org connects a calendar", async ({
+  page,
+}) => {
+  // No /api/me mock here, deliberately: no test org has connected Google
+  // Calendar, which is the state under test. Whether I want these invites, and
+  // which of my own calendars they land on, is my answer to give — waiting on
+  // an admin to connect would mean the first invite could arrive before I had
+  // the chance to say no to it.
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  await email.fill("carol.nogcal@example.com");
+  await email.blur();
+
+  const invites = page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets");
+  await expect(invites).toBeVisible();
+  await expect(invites).toBeChecked();
+  // And it says why nothing is arriving yet, rather than looking broken.
+  await expect(page.getByText("sends calendar invites yet")).toBeVisible();
+
+  // The answer sticks, so it's in force the moment an org does connect.
+  await invites.uncheck();
+  await page.getByRole("dialog").getByRole("button", { name: "Leave them" }).click();
+  await page.reload();
+  await expect(
+    page.getByTestId("profile-calendar-invites").getByLabel("Calendar invites for my sets")
+  ).not.toBeChecked();
+
+  // Put the seed state back.
+  await page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets")
+    .check();
+  await email.fill(original);
+  await email.blur();
+});

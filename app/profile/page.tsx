@@ -151,7 +151,7 @@ export default function ProfilePage() {
   // api/google-calendar/callback sends it here when no availability request is
   // in play), and a `connected` means the list is now readable.
   useEffect(() => {
-    if (!loaded || !calendarOrgs || !savedEmail || !calendarInvites) return;
+    if (!loaded || !savedEmail || !calendarInvites) return;
     const status = new URLSearchParams(window.location.search).get("gcalPicker");
     if (status && status !== "connected") {
       setMessage(
@@ -170,7 +170,7 @@ export default function ProfilePage() {
     // Deliberately once the section exists, and again when a consent trip
     // lands back here — not on every keystroke in the address box.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, calendarOrgs, savedEmail, calendarInvites]);
+  }, [loaded, savedEmail, calendarInvites]);
 
   // Always have a team selected: pick the first one, and re-point at it if the
   // selected team disappears (e.g. after leaving it).
@@ -513,8 +513,17 @@ export default function ProfilePage() {
             {/* With no email the banner above says why to add one; once
                 there is one, this is where the invites go — and whether they
                 are wanted at all. The switch is hidden until there is an
-                email, since with none there is nothing for it to change. */}
-            {calendarOrgs && savedEmail && (
+                email, since with none there is nothing for it to change.
+
+                Deliberately NOT gated on an org having connected Google
+                Calendar. Which calendar my sets land on, and whether I want
+                them at all, is MINE to answer — and the calendars the
+                picker lists are read with my own permission, nothing to do
+                with the org's connection. Gating it meant the answer could
+                only be given after an admin acted, so an invite could arrive
+                before anyone had the chance to say no to it. A line below
+                says so when no org is sending any yet. */}
+            {savedEmail && (
               <div className="mt-2" data-testid="profile-calendar-invites">
                 <Checkbox
                   label="Calendar invites for my sets"
@@ -586,6 +595,12 @@ export default function ProfilePage() {
                     You won&apos;t be added to your sets&apos; calendar events.
                     You&apos;re still on the roster, and the team still sees you
                     there.
+                  </p>
+                )}
+                {!calendarOrgs && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    None of your organizations sends calendar invites yet, so
+                    this is what will happen once one does.
                   </p>
                 )}
               </div>
