@@ -3,6 +3,7 @@
 // nobody — member or admin — gets a join/leave control here.
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
+import { INVITE_OTHER_VALUE } from "@/lib/invitePicker";
 
 test("a user sees their per-team roles but can't change them", async ({ page }) => {
   await login(page, "carol");
@@ -231,4 +232,89 @@ test("with Google Calendar connected, a member with no email is asked for one on
   await email.blur();
   await expect(page.getByTestId("profile-calendar-invites")).toHaveCount(0);
   if (!original) await expect(banner).toBeVisible();
+});
+
+test("the invite address can be picked from your own Google calendars", async ({
+  page,
+}) => {
+  // Same trick as the test above: no test org has a real Google account, so
+  // mark Carol's orgs connected on the way out of GET /api/me.
+  await page.route("**/api/me", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const m of body.memberships ?? []) m.orgGoogleCalendarConnected = true;
+    await route.fulfill({ response: res, json: body });
+  });
+  // And no test account has given Google permission to list its calendars, so
+  // stand in for that list. The picker's own shape is what's under test here;
+  // reading it from Google is lib/googleAvailability's job.
+  await page.route("**/api/google-calendar/my-calendars", async (route) => {
+    await route.fulfill({
+      json: {
+        calendars: [
+          { id: "carol.pick@example.com", name: "carol.pick@example.com", primary: true },
+          { id: "sets@group.calendar.google.com", name: "Worship sets", primary: false },
+        ],
+      },
+    });
+  });
+
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  // The invite settings only exist once there's an address to invite. Waiting
+  // on the section rather than the "Saved" flash keeps this step honest on a
+  // re-run, where the email may already be what we're setting it to.
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  await email.fill("carol.pick@example.com");
+  await email.blur();
+  await expect(page.getByTestId("profile-calendar-invites")).toBeVisible();
+
+  // With a list to offer, "Send invites to" is a picker rather than a box.
+  // Located by test id: the select's accessible name takes in its option text,
+  // one of which is "Another address…", so a label lookup for the box below
+  // would match the select too.
+  const picker = page.getByTestId("invite-calendar");
+  await expect(picker).toBeVisible();
+  // The account's own calendar leads; the primary calendar is NOT listed again
+  // under its own name, since its address IS that email.
+  await expect(picker).toContainText("carol.pick@example.com");
+  await expect(picker).toContainText("Worship sets");
+  // Start from the default however an earlier run left it.
+  await picker.selectOption({ value: "" });
+  await page.reload();
+  await expect(page.getByTestId("invite-calendar")).toHaveValue("");
+
+  // Picking a calendar saves its address — which is how Google is told where
+  // to put the event, there being no other way to choose a calendar.
+  await page.getByTestId("invite-calendar").selectOption({ label: "Worship sets" });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("invite-calendar")).toHaveValue(
+    "sets@group.calendar.google.com"
+  );
+
+  // The address box is still there as the way out of the list — a calendar
+  // someone else owns, or another account's, is never in it.
+  await page.getByTestId("invite-calendar").selectOption({ value: INVITE_OTHER_VALUE });
+  const box = page.getByTestId("invite-address");
+  await expect(box).toBeVisible();
+  await box.fill("elsewhere@example.com");
+  await box.blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await page.reload();
+  // A saved address the list can't offer keeps its own option, so the picker
+  // shows what is actually in force rather than quietly reading as the default.
+  await expect(page.getByTestId("invite-calendar")).toHaveValue(
+    "elsewhere@example.com"
+  );
+
+  // Back to the default, and restore the seed state.
+  await page.getByTestId("invite-calendar").selectOption({ value: "" });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await email.fill(original);
+  await email.blur();
 });
