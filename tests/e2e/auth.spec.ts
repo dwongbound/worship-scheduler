@@ -268,6 +268,35 @@ test("the home page is readable signed out, naming TapWorship", async ({ page })
   await expect(page).toHaveURL(/\/login/);
 });
 
+// With the script, the sections below the fold start hidden and arrive as you
+// reach them. Anything that reaches the bottom of the page must end up visible
+// — a reveal that never fires is content nobody can read.
+test("the home page's sections arrive as you scroll, and all of them arrive", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const contact = page.getByRole("heading", { name: "Get your organization started" });
+
+  await page.getByRole("link", { name: "Get started" }).click();
+  await expect(contact).toBeVisible();
+  await expect(contact).toHaveCSS("opacity", "1");
+
+  // The roster card's rows stagger in from the card's own reveal rather than
+  // one of their own — so they are the rows most easily left hidden, which is
+  // an empty card beside the headline.
+  await expect(page.getByText("Lena Okafor")).toHaveCSS("opacity", "1");
+  await expect(page.getByText("Nobody yet")).toHaveCSS("opacity", "1");
+
+  // Every revealed block on the page, once it has been scrolled past.
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const revealed = page.locator(".reveal");
+  const count = await revealed.count();
+  expect(count).toBeGreaterThan(5);
+  for (let i = 0; i < count; i++) {
+    await expect(revealed.nth(i)).toHaveClass(/is-in/);
+  }
+});
+
 // The two call-to-action buttons point at different people, and swapping them
 // is the easy mistake: there is no self-serve sign-up, so "Get started" that
 // lands on /login strands the very person it is for.
