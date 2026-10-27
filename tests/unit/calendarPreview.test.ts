@@ -35,6 +35,7 @@ const sundayTemplate: ApiSetTemplate = {
   slotCapacities: null,
   teamId: sundayTeam.id,
   team: sundayTeam,
+  practices: [],
 };
 
 // Tuesdays 7:00 PM on the Prayer Room Team.
@@ -49,6 +50,7 @@ const prayerTemplate: ApiSetTemplate = {
   slotCapacities: null,
   teamId: prayerTeam.id,
   team: prayerTeam,
+  practices: [],
 };
 
 const templates = [sundayTemplate, prayerTemplate];
