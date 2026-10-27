@@ -9,6 +9,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
+import { validateTemplatePractices } from "@/lib/practices";
 
 export async function GET(req: NextRequest) {
   const admin = await requireOrgAdmin(req);
@@ -18,7 +19,16 @@ export async function GET(req: NextRequest) {
 
   const templates = await prisma.setTemplate.findMany({
     where: { orgId: admin.orgId },
-    include: { team: { select: { id: true, name: true } } },
+    include: {
+      team: { select: { id: true, name: true } },
+      // The practices this time hands down. The Create tab's list reads the
+      // COUNT off these (the "+2" after the time), and the editor reads the
+      // rows themselves, so one request serves both.
+      practices: {
+        select: { id: true, dayOfWeek: true, startMinute: true, endMinute: true },
+        orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
+      },
+    },
     orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
   });
   return NextResponse.json(templates);
@@ -40,6 +50,7 @@ export async function POST(req: NextRequest) {
     requiresMD,
     groupChatLeadDays,
     teamId,
+    practices,
   } = await req.json();
   // One day or several — the batch form is the only difference between them.
   const isBatch = Array.isArray(daysOfWeek);
@@ -67,6 +78,14 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Practices are optional; when present they're an offset from the set each
+  // generated occurrence becomes (lib/practices.ts). Validated before the
+  // write, so a bad one can't create the template and lose its practices.
+  const practiceCheck = validateTemplatePractices(practices);
+  if ("error" in practiceCheck) {
+    return NextResponse.json({ error: practiceCheck.error }, { status: 400 });
+  }
+
   // Every template targets a team in THIS org; its generated sets inherit it.
   if (typeof teamId !== "string" || teamId.length === 0) {
     return NextResponse.json({ error: "Team is required" }, { status: 400 });
@@ -87,15 +106,36 @@ export async function POST(req: NextRequest) {
     orgId: admin.orgId,
   };
 
+  // Nested creates rather than a createMany + a second write: a template and
+  // its practices arrive as one gesture, so they commit as one.
+  const withPractices =
+    practiceCheck.practices.length > 0
+      ? { practices: { create: practiceCheck.practices } }
+      : {};
+  const include = {
+    practices: {
+      select: { id: true, dayOfWeek: true, startMinute: true, endMinute: true },
+      orderBy: [{ dayOfWeek: "asc" as const }, { startMinute: "asc" as const }],
+    },
+  };
+
   // The single-day form answers with the row it created, as it always has.
   if (!isBatch) {
     const template = await prisma.setTemplate.create({
-      data: { ...shared, dayOfWeek: days[0] as number },
+      data: { ...shared, ...withPractices, dayOfWeek: days[0] as number },
+      include,
     });
     return NextResponse.json(template, { status: 201 });
   }
-  const templates = await prisma.setTemplate.createManyAndReturn({
-    data: (days as number[]).map((day) => ({ ...shared, dayOfWeek: day })),
-  });
+  // One row per checked day, each with its own copy of the practices, in one
+  // transaction — the same all-or-nothing the multi-day form already had.
+  const templates = await prisma.$transaction(
+    (days as number[]).map((day) =>
+      prisma.setTemplate.create({
+        data: { ...shared, ...withPractices, dayOfWeek: day },
+        include,
+      })
+    )
+  );
   return NextResponse.json(templates, { status: 201 });
 }

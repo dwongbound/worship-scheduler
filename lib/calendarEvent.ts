@@ -47,8 +47,24 @@ export interface CalendarAttendee {
 /** The private extended property every app-made event carries. */
 export const SET_ID_PROPERTY = "tapworshipSetId";
 
+/**
+ * A practice's event carries its own id as well as its set's, so a webhook can
+ * tell "the Sunday service" from "the Wednesday rehearsal for it" without
+ * guessing from the title.
+ */
+export const PRACTICE_ID_PROPERTY = "tapworshipPracticeId";
+
 export function eventTitle(set: Pick<CalendarSet, "label">): string {
   return set.label?.trim() || "Worship set";
+}
+
+/**
+ * A practice's event title. Named after its set, because that is the only
+ * thing that tells two of them apart in a month of calendar entries — and
+ * prefixed, so the rehearsal never reads as the service itself.
+ */
+export function practiceTitle(set: Pick<CalendarSet, "label">): string {
+  return `Practice: ${eventTitle(set)}`;
 }
 
 /** Lower-cased and trimmed: Google compares attendee emails case-insensitively. */
@@ -166,6 +182,21 @@ export function eventTimes(set: Pick<CalendarSet, "startsAt" | "durationMinutes"
   return {
     start: { dateTime: set.startsAt.toISOString(), timeZone },
     end: { dateTime: end.toISOString(), timeZone },
+  };
+}
+
+/**
+ * A practice's start/end in the app's zone. Its own function because a
+ * practice stores two instants rather than a start and a length — there is no
+ * duration to add, which is the whole point.
+ */
+export function practiceTimes(
+  practice: { startsAt: Date; endsAt: Date },
+  timeZone: string
+) {
+  return {
+    start: { dateTime: practice.startsAt.toISOString(), timeZone },
+    end: { dateTime: practice.endsAt.toISOString(), timeZone },
   };
 }
 

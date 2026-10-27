@@ -50,6 +50,7 @@ import Checkbox from "./common/Checkbox";
 import Select from "./common/Select";
 import SlackIcon from "./common/SlackIcon";
 import AttentionDot from "./common/AttentionDot";
+import SetPractices from "./SetPractices";
 import Toast, { type ToastMessage } from "./common/Toast";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
@@ -2110,6 +2111,19 @@ export default function SetDetailModal({
           </div>
         )}
       </div>
+
+      {/* Practices: extra calendar events for this set's roster. Under Songs
+          because that's the rest of "what this set is", and NOT part of the
+          staged draft — each add or delete sends or cancels a real invite, so
+          it acts immediately, like Delete set and sending a note. */}
+      <SetPractices
+        setId={set.id}
+        practices={set.practices ?? []}
+        isAdmin={isAdmin}
+        onChanged={async () => {
+          await onChanged?.();
+        }}
+      />
 
       {/* Notes (bottom): editable by admins + the worship leader. */}
       <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
