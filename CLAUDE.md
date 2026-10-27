@@ -73,7 +73,12 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).
   `calendarInvites` (default true) is the person's own opt-out from being a
-  GUEST on their sets' Google Calendar events — global to them like
+  GUEST on their sets' Google Calendar events. It and the picker below show on
+  /profile as soon as the person has an EMAIL, whether or not any org has
+  connected Google Calendar — the answer is theirs, and the calendars the
+  picker lists are read with their own permission, nothing to do with the
+  org's connection; gating it meant an invite could arrive before they'd had
+  the chance to say no. A line says so while no org is sending any — global to them like
   `dailyDigest`, since the calendar it lands on is theirs. Opting out drops
   them from the guest list ONLY: they keep their seats and still appear in the
   event's roster, so the team still sees who is playing. Switched on /profile,
