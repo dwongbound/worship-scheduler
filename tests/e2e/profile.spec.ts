@@ -360,3 +360,72 @@ test("the invite settings are mine to set before any org connects a calendar", a
   await email.fill(original);
   await email.blur();
 });
+
+test("calendar invites are their own section under Slack, and a long calendar name can't widen the page", async ({
+  page,
+}) => {
+  // A calendar can be named anything its owner likes, and a secondary
+  // calendar's address runs to forty-odd characters. The picker is `w-full`
+  // inside the card, so the box can only be as wide as the card — this pins
+  // that, because a native select is one of the few controls whose intrinsic
+  // width is its widest option.
+  const LONG =
+    "Tapestry LA — Sunday Morning Worship Team Rehearsals, Services and Soundcheck";
+  await page.route("**/api/google-calendar/my-calendars", async (route) => {
+    await route.fulfill({
+      json: {
+        calendars: [
+          { id: "carol.wide@example.com", name: "carol.wide@example.com", primary: true },
+          { id: "verylongcalendarid000111222@group.calendar.google.com", name: LONG, primary: false },
+        ],
+      },
+    });
+  });
+
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  await email.fill("carol.wide@example.com");
+  await email.blur();
+
+  // Its own section, below Slack — it used to hang off the Email field in the
+  // Account card, where a switch and a picker read as footnotes to a text box.
+  const heading = page.getByRole("heading", { name: "Google Calendar" });
+  await expect(heading).toBeVisible();
+  const slack = await page.getByRole("heading", { name: "Slack" }).boundingBox();
+  const gcal = await heading.boundingBox();
+  expect(gcal!.y).toBeGreaterThan(slack!.y);
+
+  const picker = page.getByTestId("invite-calendar");
+  await expect(picker).toBeVisible();
+  await picker.selectOption({ label: LONG });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+
+  // Nothing sideways to scroll, at whatever width this project runs.
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+
+  // And the select itself still sits inside the card that holds it.
+  const box = (await picker.boundingBox())!;
+  const card = (await page
+    .locator("div", { has: page.getByRole("heading", { name: "Google Calendar" }) })
+    .last()
+    .boundingBox())!;
+  expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+
+  // Truncation can't hide where the invites go: the line below names it.
+  await expect(
+    page.getByText(/Invites go to verylongcalendarid/).first()
+  ).toBeVisible();
+
+  // Put the seed state back.
+  await picker.selectOption({ value: "" });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await email.fill(original);
+  await email.blur();
+});

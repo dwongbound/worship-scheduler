@@ -73,8 +73,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).
   `calendarInvites` (default true) is the person's own opt-out from being a
-  GUEST on their sets' Google Calendar events. It and the picker below show on
-  /profile as soon as the person has an EMAIL, whether or not any org has
+  GUEST on their sets' Google Calendar events. It and the picker below are
+  /profile's own **Google Calendar** section, below Slack and shaped like it
+  (they used to hang off the Email field in the Account card, where a switch
+  and a picker read as footnotes to a text box). They show as soon as the
+  person has an EMAIL, whether or not any org has
   connected Google Calendar — the answer is theirs, and the calendars the
   picker lists are read with their own permission, nothing to do with the
   org's connection; gating it meant an invite could arrive before they'd had
@@ -104,7 +107,12 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   is the pure half (`inviteOptions` — the primary calendar is NOT listed
   again, its address being the account email, and a saved address the list
   can't offer keeps its own option so the picker never reads as the default
-  while something else is in force). ✅tested
+  while something else is in force). ✅tested A calendar is named whatever
+  its owner likes and a secondary one's address runs to fifty-odd characters,
+  so the `Select` is `truncate` (`w-full`, so the box can only ever be as wide
+  as the card) and the line under it names the resolved address with
+  `break-words` — a browser breaks at no "@" or "." of its own, so unwrapped
+  that line is what would run off a phone.
 - **SetHistoryEvent** — the per-set activity log. `role` is null only for
   `SETLIST_CHANGED` (song added/removed/re-keyed/reordered), whose summary
   lives in `detail`. Roster + setlist changes also ping the set's Slack group

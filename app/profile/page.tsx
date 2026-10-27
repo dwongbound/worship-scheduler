@@ -510,101 +510,6 @@ export default function ProfilePage() {
                 Managed by your Google account.
               </p>
             )}
-            {/* With no email the banner above says why to add one; once
-                there is one, this is where the invites go — and whether they
-                are wanted at all. The switch is hidden until there is an
-                email, since with none there is nothing for it to change.
-
-                Deliberately NOT gated on an org having connected Google
-                Calendar. Which calendar my sets land on, and whether I want
-                them at all, is MINE to answer — and the calendars the
-                picker lists are read with my own permission, nothing to do
-                with the org's connection. Gating it meant the answer could
-                only be given after an admin acted, so an invite could arrive
-                before anyone had the chance to say no to it. A line below
-                says so when no org is sending any yet. */}
-            {savedEmail && (
-              <div className="mt-2" data-testid="profile-calendar-invites">
-                <Checkbox
-                  label="Calendar invites for my sets"
-                  checked={calendarInvites}
-                  onChange={(e) => toggleCalendarInvites(e.target.checked)}
-                />
-                {calendarInvites ? (
-                  <div className="mt-2">
-                    {/* Google puts an invite on the default calendar of
-                        whatever address it was sent to, and you can't move an
-                        invited event afterwards — so which calendar your sets
-                        land on is this one choice, made by address. The list is
-                        your own calendars, read with your permission; the box
-                        below it is for an address the list can't offer. */}
-                    {myCalendars ? (
-                      <Select
-                        label="Send invites to"
-                        data-testid="invite-calendar"
-                        value={pickerValue}
-                        onChange={(e) => pickInviteCalendar(e.target.value)}
-                      >
-                        {pickerOptions.map((o) => (
-                          <option key={o.value || "default"} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </Select>
-                    ) : null}
-                    {(!myCalendars || inviteOther) && (
-                      <div className={myCalendars ? "mt-2" : undefined}>
-                        <Input
-                          label={myCalendars ? "Address" : "Send invites to"}
-                          data-testid="invite-address"
-                          type="email"
-                          value={inviteEmail}
-                          onChange={(e) => setInviteEmail(e.target.value)}
-                          onBlur={() => saveInviteEmail()}
-                          placeholder={savedEmail}
-                        />
-                      </div>
-                    )}
-                    {!myCalendars && (
-                      <div className="mt-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          loading={loadingCalendars}
-                          onClick={() => {
-                            if (calendarsNeedConsent) {
-                              window.location.href =
-                                "/api/google-calendar/my-calendars?connect=1";
-                            } else {
-                              void loadMyCalendars();
-                            }
-                          }}
-                        >
-                          Choose from my calendars
-                        </Button>
-                      </div>
-                    )}
-                    <p className="mt-1 text-xs text-gray-500">
-                      {myCalendars
-                        ? "Your main calendar is where they go unless you pick another one. A calendar of its own can be coloured or hidden in Google Calendar. Accepting an invite still confirms you."
-                        : "Leave this blank to use the email above, or pick one of your own calendars — one you can colour or hide — which asks Google for permission to list them. Accepting an invite still confirms you."}
-                    </p>
-                  </div>
-                ) : (
-                  <p className="mt-1 text-xs text-gray-500">
-                    You won&apos;t be added to your sets&apos; calendar events.
-                    You&apos;re still on the roster, and the team still sees you
-                    there.
-                  </p>
-                )}
-                {!calendarOrgs && (
-                  <p className="mt-1 text-xs text-gray-500">
-                    None of your organizations sends calendar invites yet, so
-                    this is what will happen once one does.
-                  </p>
-                )}
-              </div>
-            )}
           </div>
           <div>
             <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -756,6 +661,123 @@ export default function ProfilePage() {
         dailyDigest={dailyDigest}
         onDailyDigestChange={saveDailyDigest}
       />
+
+      {/* Google Calendar — its own section, the way Slack is, because it is
+          its own integration and these are the person's answers about their
+          own calendar. It sat inside the Account card under Email, where a
+          switch and a picker read as footnotes to a text field.
+
+          Deliberately NOT gated on an org having connected Google Calendar.
+          Which calendar my sets land on, and whether I want them at all, is
+          MINE to answer — and the calendars the picker lists are read with my
+          own permission, nothing to do with the org's connection. Gating it
+          meant the answer could only be given after an admin acted, so an
+          invite could arrive before anyone had the chance to say no to it. A
+          line at the end says so while no org is sending any yet. */}
+      <Card>
+        <h2 className="mb-1 text-lg font-semibold">Google Calendar</h2>
+        <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
+          Get every set you&rsquo;re on as a calendar invite, and choose which
+          of your calendars they land on. Accepting an invite confirms you here.
+        </p>
+        {!savedEmail && (
+          <p className="text-sm text-gray-500">
+            Add your email above first — an invite needs an address to go to.
+          </p>
+        )}
+        {savedEmail && (
+          <div className="mt-2" data-testid="profile-calendar-invites">
+            <Checkbox
+              label="Calendar invites for my sets"
+              checked={calendarInvites}
+              onChange={(e) => toggleCalendarInvites(e.target.checked)}
+            />
+            {calendarInvites ? (
+              <div className="mt-2">
+                {/* Google puts an invite on the default calendar of
+                    whatever address it was sent to, and you can't move an
+                    invited event afterwards — so which calendar your sets
+                    land on is this one choice, made by address. The list is
+                    your own calendars, read with your permission; the box
+                    below it is for an address the list can't offer. */}
+                {myCalendars ? (
+                  <Select
+                    label="Send invites to"
+                    data-testid="invite-calendar"
+                    // A calendar can be named anything, and a secondary
+                    // calendar's address is 40-odd characters, so the closed
+                    // box ellipsizes rather than running its text under the
+                    // chevron. Nothing is lost: the line below names the
+                    // address the invites are actually going to, and it wraps.
+                    className="truncate"
+                    value={pickerValue}
+                    onChange={(e) => pickInviteCalendar(e.target.value)}
+                  >
+                    {pickerOptions.map((o) => (
+                      <option key={o.value || "default"} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+                {(!myCalendars || inviteOther) && (
+                  <div className={myCalendars ? "mt-2" : undefined}>
+                    <Input
+                      label={myCalendars ? "Address" : "Send invites to"}
+                      data-testid="invite-address"
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      onBlur={() => saveInviteEmail()}
+                      placeholder={savedEmail}
+                    />
+                  </div>
+                )}
+                {!myCalendars && (
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      loading={loadingCalendars}
+                      onClick={() => {
+                        if (calendarsNeedConsent) {
+                          window.location.href =
+                            "/api/google-calendar/my-calendars?connect=1";
+                        } else {
+                          void loadMyCalendars();
+                        }
+                      }}
+                    >
+                      Choose from my calendars
+                    </Button>
+                  </div>
+                )}
+                {/* `break-words` because the address this names can be a
+                    calendar id of fifty-odd characters with no space in it,
+                    and a browser won't break at an "@" or a "." on its own —
+                    so on a phone the line would run off the card. */}
+                <p className="mt-1 break-words text-xs text-gray-500">
+                  {myCalendars
+                    ? `Invites go to ${savedInviteEmail || savedEmail}. A calendar of its own can be coloured or hidden in Google Calendar.`
+                    : "Leave this blank to use the email above, or pick one of your own calendars — one you can colour or hide — which asks Google for permission to list them."}
+                </p>
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-gray-500">
+                You won&apos;t be added to your sets&apos; calendar events.
+                You&apos;re still on the roster, and the team still sees you
+                there.
+              </p>
+            )}
+            {!calendarOrgs && (
+              <p className="mt-1 text-xs text-gray-500">
+                None of your organizations sends calendar invites yet, so
+                this is what will happen once one does.
+              </p>
+            )}
+          </div>
+        )}
+      </Card>
 
       {/* Switching invites off settles future sets on its own; the events
           already on someone's calendar are a separate question, and only a
