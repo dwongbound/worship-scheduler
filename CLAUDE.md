@@ -795,6 +795,19 @@ exit with changes hits a confirm that lists them — Delete-set, Slack messaging
 and sending a note act immediately; the Notes box is a composer with a send
 arrow, empty on every open, its log below holding what's been written; there's
 no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFields`,
+`SetPractices` (a set's practices, under Songs in the detail modal — a
+practice's ONE home, since it's deliberately off the calendar. Everyone on the
+set reads them and can click one to see who's free; adding and deleting is
+admin-only, and unlike the rest of that modal it acts IMMEDIATELY rather than
+staging, because each one sends or cancels a real calendar invite — the same
+reason Delete set and sending a note do. The free/busy modal fetches on the
+CLICK, never on the set opening. Deleting asks first: it emails the whole
+roster a cancellation),
+`TemplatePracticesEditor` (the same thing for a weekly set time: a weekday +
+from/to per row, since a weekly time has no date. Deliberately NOT in
+`SetFormFields`, which `CreateSetModal` shares — a practice on a concrete set
+is a date, not a weekday. It runs `validateTemplatePractices` as you type, so
+the form can't offer a save the API would 400),
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
 `GenerateModal` (the "Generate New Schedule" options — window, which recurring sets, and an
 optional per-set-type color) → `StagedScheduleModal` (the preview — and, as

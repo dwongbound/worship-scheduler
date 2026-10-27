@@ -10,6 +10,11 @@ import Button from "./common/Button";
 import Checkbox from "./common/Checkbox";
 import LoadingDots from "./common/LoadingDots";
 import SetFormFields, { SetFormState, emptySetForm } from "./SetFormFields";
+import TemplatePracticesEditor, {
+  practicesPayload,
+  toPracticeDrafts,
+  type PracticeDraft,
+} from "./TemplatePracticesEditor";
 import { useOrgs } from "./OrgProvider";
 import { DAY_LABELS } from "@/lib/constants";
 import { minutesToTimeInput, timeStringToMinutes } from "@/lib/dates";
@@ -39,6 +44,10 @@ export default function TemplateModal({
   // created per checked day, so an admin can add e.g. Sun + Wed in one go.
   const [days, setDays] = useState<number[]>([]);
   const [form, setForm] = useState<SetFormState>(emptySetForm);
+  // The practices every set generated from this time starts with. Its own
+  // state rather than part of SetFormState, which CreateSetModal shares — a
+  // practice on a concrete set is a date, not a weekday.
+  const [practices, setPractices] = useState<PracticeDraft[]>([]);
   const [busy, setBusy] = useState(false);
   // Reset each time the modal opens — to the edited row's values, or to a
   // blank form, with the team picker defaulting to the first team.
@@ -47,6 +56,7 @@ export default function TemplateModal({
   useEffect(() => {
     if (!open || !adminOrgId) return;
     setDays(template ? [template.dayOfWeek] : []);
+    setPractices(toPracticeDrafts(template?.practices));
     setForm(
       template
         ? {
@@ -89,6 +99,11 @@ export default function TemplateModal({
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (days.length === 0) return;
+    // The same validator the API runs. The editor already shows the sentence,
+    // so this just stops a save that would 400.
+    const payload = practicesPayload(practices);
+    if ("error" in payload) return;
+
     setBusy(true);
     try {
       // One template row per checked day — the rest of the body is shared.
@@ -101,6 +116,10 @@ export default function TemplateModal({
         // null capacities → the template uses the global default team shape.
         slotCapacities: form.capacities ?? undefined,
         teamId: form.teamId,
+        // Always sent, even when empty: an empty list is how the last practice
+        // is removed. (The API only leaves them alone when the field is absent
+        // entirely, which is for callers that predate practices.)
+        practices: payload.practices,
       };
       if (template) {
         // Edit: one row, one day. `slotCapacities: null` is sent explicitly so
@@ -172,6 +191,12 @@ export default function TemplateModal({
           }
         />
 
+        <TemplatePracticesEditor
+          practices={practices}
+          onChange={setPractices}
+          disabled={busy}
+        />
+
         <div className="flex justify-end gap-2 pt-1">
           <Button
             type="button"
@@ -182,7 +207,10 @@ export default function TemplateModal({
             Close
           </Button>
           {/* Blocked until the teams list loads — every template needs a team. */}
-          <Button type="submit" disabled={busy || !form.teamId}>
+          <Button
+            type="submit"
+            disabled={busy || !form.teamId || "error" in practicesPayload(practices)}
+          >
             {busy ? (
               <LoadingDots size="sm" />
             ) : template ? (
