@@ -212,6 +212,19 @@ write in: the address is `CONTACT_EMAIL` (`lib/legal.ts`, overridable with
 `components/CopyEmailButton.tsx` — never only a `mailto:`, since a clipboard
 write can be refused and the page can't tell. Archivo + IBM Plex Mono are
 loaded by this page alone (next/font), so the app never pays for them.
+It also FADES IN and reveals each block as you scroll (`lib/reveal.ts` +
+`components/Reveal.tsx`), and the one rule that governs that: **the page must
+read with the motion off.** The markup is visible as it stands; a pre-paint
+inline script sets `data-reveal="on"` on `<html>` and only that arms the
+hidden-then-revealed CSS. No script (a crawler, the OAuth review, a blocked
+bundle) or "reduce motion" set = no attribute = nothing is ever hidden. An
+animation that started at opacity 0 and waited for JS would hand the review a
+blank page, which is the same failure the login wall was. `REVEAL_STAGGER_CLASS`
+on a container staggers its CHILDREN off the nearest revealed ancestor — one
+observer for the roster card, the stagger being pure CSS — and it may sit on
+the revealed element itself or inside it, which is why there are two selectors.
+`tests/unit/reveal.test.ts` parses the sheet and fails if any hiding rule
+escapes that scoping.
 Signed in it's still the app: `proxy.ts` redirects a session holder to
 `/calendar` at the edge, because Google's sign-in callback lands on `/` and
 marketing copy after signing in reads as broken. That redirect can't live in
