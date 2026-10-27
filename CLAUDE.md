@@ -249,7 +249,15 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   by a per-org HMAC token, reads changes AFTER responding).
 - Rules: `orgs/[id]/rules` (org admin) — GET the list + dropdown options (or,
   with `?forSet=`, what one set's Auto schedule needs); PUT replaces the whole
-  ordered list, refusing a contradiction with `{ error, index }`.
+  ordered list, refusing a contradiction with `{ error, index }`. Both answers
+  carry a `version` — the fingerprint of the list as stored
+  (`rulesVersion`) — and the PUT takes it back. Rules are ORG-wide and a save
+  replaces the WHOLE list, so a save built on a copy loaded before another
+  admin's edit would silently revert it; a mismatch is a 409 with
+  `{ stale: true, rules, version }`, nothing is written, and `OrgRules` shows
+  the list the server sent rather than rolling back to its own. The check runs
+  INSIDE the transaction (`saveOrgRules`'s `expectedVersion`), so two
+  simultaneous saves can't both pass.
 - Availability: `availability`, `availability/[id]`, `availability/complete`,
   `availability-request`.
 - Export: `export`, `export/[id]` (ICS).
@@ -347,7 +355,9 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
   `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and
   `templateIdOf` (sets don't store their template, so it's recognised by
-  label + team + weekday + time). `buildSchedule`'s 7th arg `ScheduleOptions`
+  label + team + weekday + time), and `rulesVersion` (the stored list's
+  fingerprint — row ids in order, which change on every save since one
+  deletes and re-inserts the lot). ✅tested `buildSchedule`'s 7th arg `ScheduleOptions`
   feeds them in: REQUIRED never bends (a slot is left open instead — a held
   SAME_PLAYER seat is the `HOLD` case), PREFERENCES rank lexicographically
   above rotation. All three callers pass them; the prisma side is

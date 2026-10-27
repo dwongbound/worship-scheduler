@@ -6,6 +6,7 @@ import type { FixedSet, ExistingAssignment } from "./scheduler";
 import {
   parseStoredRules,
   ruleRefs,
+  rulesVersion,
   templateIdOf,
   type RuleRefs,
   type SchedulingRule,
@@ -70,14 +71,57 @@ export async function loadOrgRules(orgId: string, refs?: RuleRefs): Promise<Sche
   return parseStoredRules(rows).filter((r) => ruleIsLive(r, live));
 }
 
-/** Replace the org's whole list, in order (already validated). */
+/**
+ * The fingerprint of the org's list as stored (see `rulesVersion`).
+ *
+ * Read from the STORED rows, not from `loadOrgRules`, which drops rules
+ * pointing at something deleted: a change to one of those is still a change to
+ * the list, and an editor that didn't see it is still working from a stale copy.
+ */
+export async function orgRulesVersion(orgId: string): Promise<string> {
+  const rows = await prisma.schedulingRule.findMany({
+    where: { orgId },
+    orderBy: { position: "asc" },
+    select: { id: true },
+  });
+  return rulesVersion(rows.map((r) => r.id));
+}
+
+/** Thrown by `saveOrgRules` when the list moved under the save. */
+export class StaleRulesError extends Error {
+  constructor() {
+    super("these rules changed since you opened them");
+    this.name = "StaleRulesError";
+  }
+}
+
+/**
+ * Replace the org's whole list, in order (already validated).
+ *
+ * `expectedVersion` is the fingerprint the saver loaded. Checked INSIDE the
+ * transaction, against the rows about to be deleted, so two admins saving at
+ * the same moment can't both pass: the second one's version no longer matches
+ * and it is refused rather than reverting the first one's work. Omitting it
+ * saves unconditionally, which is what a caller with no earlier read wants.
+ */
 export async function saveOrgRules(
   orgId: string,
-  rules: Omit<SchedulingRule, "id">[]
+  rules: Omit<SchedulingRule, "id">[],
+  expectedVersion?: string
 ): Promise<void> {
-  await prisma.$transaction([
-    prisma.schedulingRule.deleteMany({ where: { orgId } }),
-    prisma.schedulingRule.createMany({
+  await prisma.$transaction(async (tx) => {
+    if (expectedVersion !== undefined) {
+      const rows = await tx.schedulingRule.findMany({
+        where: { orgId },
+        orderBy: { position: "asc" },
+        select: { id: true },
+      });
+      if (rulesVersion(rows.map((r) => r.id)) !== expectedVersion) {
+        throw new StaleRulesError();
+      }
+    }
+    await tx.schedulingRule.deleteMany({ where: { orgId } });
+    await tx.schedulingRule.createMany({
       data: rules.map((r, position) => ({
         orgId,
         position,
@@ -86,8 +130,8 @@ export async function saveOrgRules(
         params: r.params,
         teamId: r.teamId ?? null,
       })),
-    }),
-  ]);
+    });
+  });
 }
 
 /** The names and choices the rules editor draws its dropdowns from. */
