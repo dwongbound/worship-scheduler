@@ -280,3 +280,48 @@ export function describeTemplatePractice(
     spec.endMinute
   )}`;
 }
+
+/**
+ * Who, of a set's roster, is free for one of its practices — and when they
+ * aren't, which of their own blocks says so.
+ *
+ * `blocks` is injected, and the ONLY thing passed in is `isUserAvailable`: the
+ * free/busy answer the modal shows has to be the same answer the scheduler
+ * would give, so this doesn't re-implement the rule matching. Each rule is
+ * tried ALONE — a rule that makes someone unavailable by itself is a reason
+ * worth naming — which is the same leave-one-out trick `ruleHeldRoles` uses,
+ * and it can't drift from the real verdict.
+ *
+ * A practice is turned into a set-shaped window for that call; its length is
+ * the span between its two instants. That synthetic set is never stored and
+ * never reaches the scheduler — practices are not bookings.
+ */
+export function practiceFreeBusy<R>(
+  roster: { userId: string }[],
+  practice: PracticeSpec & { id?: string },
+  rules: R[],
+  blocks: (
+    userId: string,
+    window: { id: string; startsAt: Date; durationMinutes: number },
+    rules: R[]
+  ) => boolean
+): { userId: string; free: boolean; blockedBy: R[] }[] {
+  const window = {
+    // `isUserAvailable` takes a set-shaped thing, and a set has an id. Nothing
+    // reads it, but passing the practice's keeps a stray log honest.
+    id: practice.id ?? "practice",
+    startsAt: practice.startsAt,
+    durationMinutes: practiceMinutes(practice),
+  };
+  // One row per person, however many seats they hold on the set.
+  const userIds = [...new Set(roster.map((r) => r.userId))];
+
+  return userIds.map((userId) => {
+    const free = blocks(userId, window, rules);
+    return {
+      userId,
+      free,
+      blockedBy: free ? [] : rules.filter((rule) => !blocks(userId, window, [rule])),
+    };
+  });
+}

@@ -299,8 +299,11 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
 - Practices: `sets/[id]/practices` (POST, org admin — one ad-hoc practice on
   any set, any date), `sets/[id]/practices/[practiceId]` (DELETE, org admin;
   the practice must belong to THAT set, so an id from elsewhere can't delete
-  across orgs). A set's practices ride along in `SET_INCLUDE`, since the detail
-  modal is the only place they're shown.
+  across orgs), and `.../availability` (GET — who of the set's roster is free
+  for THIS practice, its own endpoint because the detail modal shows practices
+  with no availability at all and this is fetched only when one is clicked).
+  A set's practices ride along in `SET_INCLUDE`, since the detail modal is the
+  only place they're shown.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Google Calendar: `google-calendar/import` — a MEMBER's import, now three
   routes because it's a SCREEN (`components/GoogleImportModal`), not one click:
@@ -480,7 +483,11 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   ad-hoc one — and it names the same-instant clash and the cap ITSELF rather
   than leaving a `@@unique` violation for the route to interpret),
   `practiceCountBadge` ("+2" after a recurring set's time, null for none) and
-  `describeTemplatePractice`. `PRACTICES_ARE_NOT_BOOKINGS` is a note, not a
+  `describeTemplatePractice`, and **`practiceFreeBusy`** — the free/busy modal's
+  answer, with `isUserAvailable` INJECTED so it can't drift from the
+  scheduler's own verdict; each rule is tried alone to name the ones that would
+  block on their own (the same leave-one-out trick `ruleHeldRoles` uses).
+  `PRACTICES_ARE_NOT_BOOKINGS` is a note, not a
   switch: nothing here is wired into `lib/scheduler.ts` and nothing should be —
   auto schedule ignores practices by construction, there being no
   practice-aware branch to forget to turn on. ✅tested
@@ -707,9 +714,17 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   set with the roster invited. On whenever `GOOGLE_CLIENT_ID`/`_SECRET` are
   set — there's deliberately NO enable flag; the UI is an admin-only row in Org
   settings (`components/OrgGoogleCalendar.tsx`). `syncSetCalendar(setId)` is idempotent (create or patch from the
-  db); routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
+  db) and writes the set's event AND one per upcoming PRACTICE from the same
+  load — same guests, same setlist, its own window — so every caller keeps
+  rehearsal invites in step for free; `syncOneEvent` is that shared write.
+  Only the set's own event carries `SET_ID_PROPERTY`; a practice carries
+  `PRACTICE_ID_PROPERTY` instead, because `applyRsvps` keys off the former and
+  accepting a REHEARSAL invite must not confirm a seat on the service.
+  Routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
   roster, swap-approval and setlist change, and DELETE reads
-  `calendarEventOf` before the row goes. Write-back: a watch channel pings
+  `calendarEventsOfSet` before the row goes — plural, since a set's practices
+  have events of their own and cascade away with it (`calendarEventOfPractice`
+  is the same read for one practice). Write-back: a watch channel pings
   `/api/google-calendar/webhook`, the stored sync token reads what changed, and
   an ACCEPTED invite confirms that person's PENDING seats (a No changes
   nothing). The daily cron renews channels (`maintainCalendarWatches`). A seat
