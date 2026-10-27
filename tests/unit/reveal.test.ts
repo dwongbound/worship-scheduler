@@ -5,6 +5,8 @@
 // account and no JavaScript, and the page exists so that review can see the
 // app's name and mark. Several of these tests are there to catch the day
 // someone makes the hidden state the default.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   REVEAL_ATTR,
@@ -101,5 +103,42 @@ describe("the no-JavaScript contract", () => {
     for (let i = 1; i <= REVEAL_CHILD_COUNT; i++) {
       expect(REVEAL_CSS).toContain(`:nth-child(${i})`);
     }
+  });
+});
+
+// The motion has two halves that must travel together: the rules, which HIDE
+// things, and the pre-paint script, which is the only thing that ever reveals
+// them. A page carrying the rules without the script hides its content for
+// good — the exact failure the no-JS design exists to prevent — so both halves
+// live in components/RevealRoot.tsx and every page that animates uses it.
+describe("every animated page arms the motion through RevealRoot", () => {
+  const PAGES = ["app/page.tsx", "app/login/page.tsx"];
+  const source = (f: string) => readFileSync(resolve(__dirname, "../..", f), "utf8");
+
+  it("renders RevealRoot", () => {
+    for (const f of PAGES) {
+      expect(source(f), f).toContain("<RevealRoot />");
+      expect(source(f), f).toContain('from "@/components/RevealRoot"');
+    }
+  });
+
+  it("doesn't inline either half itself", () => {
+    // A page that reaches for REVEAL_CSS or REVEAL_SCRIPT directly is one
+    // refactor away from keeping the rules and dropping the script.
+    for (const f of PAGES) {
+      expect(source(f), f).not.toContain("REVEAL_CSS");
+      expect(source(f), f).not.toContain("REVEAL_SCRIPT");
+    }
+  });
+
+  it("keeps both halves in RevealRoot, in that order", () => {
+    const root = source("components/RevealRoot.tsx");
+    expect(root).toContain("<style>{REVEAL_CSS}</style>");
+    expect(root).toContain("REVEAL_SCRIPT");
+    // The script must not come first: it would arm the rules a tick before
+    // they exist, which on a slow parse is the un-hidden page then hidden.
+    expect(root.indexOf("REVEAL_CSS")).toBeLessThan(
+      root.lastIndexOf("REVEAL_SCRIPT")
+    );
   });
 });
