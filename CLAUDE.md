@@ -86,7 +86,20 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   (`…@group.calendar.google.com`) and the sets land there, colourable and
   hideable. `lib/calendarEvent.ts inviteAddress()` is the ONE reading of the
   pair, used for the guest list AND for `seatsToConfirm`, since the RSVP comes
-  back from whatever address was invited.
+  back from whatever address was invited. /profile asks for it as a PICKER of
+  the person's own Google calendars, not a pasted address: a secondary
+  calendar's id IS its address, so picking one and typing one are the same act
+  — and nobody can find "Integrate calendar" in Google's settings. The list
+  comes from `GET /api/google-calendar/my-calendars`, which reuses the
+  availability import's remembered consent (`lib/googleAvailability.ts`
+  `listImportCalendars`), so whichever of the two the person does first spares
+  the other. The address box is kept as the way out of the list, since a
+  calendar someone else owns or one on another account is never in it; it is
+  also what shows when there is no permission to list. `lib/invitePicker.ts`
+  is the pure half (`inviteOptions` — the primary calendar is NOT listed
+  again, its address being the account email, and a saved address the list
+  can't offer keeps its own option so the picker never reads as the default
+  while something else is in force). ✅tested
 - **SetHistoryEvent** — the per-set activity log. `role` is null only for
   `SETLIST_CHANGED` (song added/removed/re-keyed/reordered), whose summary
   lives in `detail`. Roster + setlist changes also ping the set's Slack group
@@ -238,7 +251,14 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   nothing and lands on `/schedule?gcalImport=connected` to REOPEN the modal;
   POST `{requestId, calendarIds}` = the import, answering `{blocks}`). A denied
   or failed consent still lands on `?gcalImport=denied|error`. Shared guard in
-  `import/guard.ts`.
+  `import/guard.ts`. `google-calendar/my-calendars` is the same consent read
+  for a different reason — /profile's invite picker — so the signed import
+  state's `requestId` is OPTIONAL and the shared callback lands on
+  `/profile?gcalPicker=...` when there is none. `?connect=1` is the consent trip;
+  the plain GET answers `{calendars}` or `{needsConsent:true}`. The consent
+  check is per-trip (`rememberAccessFromCode`'s `needs`): an import must come
+  back with `calendar.events.readonly`, the picker with
+  `calendar.calendarlist.readonly`, since Google lets the two be granted apart.
   `google-calendar/connect` (GET → consent, DELETE →
   disconnect; org admin), `/callback`, `/status` (admin: connected account,
   chosen calendar's NAME, who connected; members with no email get an
@@ -609,6 +629,11 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   mid-handoff stays on the old owner's invite until approved. Never throws.
   The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
   `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
+- `invitePicker.ts` — /profile's "Send invites to" picker, pure:
+  `inviteOptions` / `selectedInviteValue` / `inviteSelectionValue` +
+  `INVITE_OTHER_VALUE` (the option that opens the address box and saves
+  NOTHING, since it isn't an answer yet). See the `calendarInviteEmail` note in
+  the data model. ✅tested
 - `profile.ts` — the /profile save rules, pure: `resolveProfileEmail` (an
   OAuth-only account's email is not its own to change) and
   **`calendarResyncNeeded`** — whether saving a profile has to re-sync that

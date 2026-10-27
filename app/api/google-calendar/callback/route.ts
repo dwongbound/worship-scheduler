@@ -16,18 +16,31 @@ import {
   verifyImportState,
   verifyState,
 } from "@/lib/googleCalendar";
-import { rememberAccessFromCode } from "@/lib/googleAvailability";
+import {
+  CALENDAR_LIST_SCOPE,
+  IMPORT_SCOPE,
+  rememberAccessFromCode,
+} from "@/lib/googleAvailability";
 
-// The member's import comes back here only to have its permission remembered.
-// Nothing is imported: they land on /schedule?gcalImport=connected and the
-// modal they started in reopens with their calendars now readable.
+// The member's trip to Google comes back here only to have its permission
+// remembered. Nothing is read: they land back where they started with their
+// calendars now listable.
+//
+// Two places start it, told apart by whether the state names a request. An
+// IMPORT does (`/schedule?gcalImport=connected`, reopening the modal they
+// began in); /profile's "send my invites to" picker does not
+// (`/profile?gcalPicker=connected`), since it reads the same calendars for a
+// different reason and has no request behind it.
 async function importCallback(
   base: string,
   params: URLSearchParams,
-  imported: { userId: string; requestId: string }
+  imported: { userId: string; requestId: string | null }
 ): Promise<NextResponse> {
   const back = (status: string, detail?: string) => {
     if (detail) console.error(`[gimport] ${status} — ${detail}`);
+    if (!imported.requestId) {
+      return NextResponse.redirect(`${base}/profile?gcalPicker=${status}`);
+    }
     const q = new URLSearchParams({ gcalImport: status, request: imported.requestId });
     return NextResponse.redirect(`${base}/schedule?${q.toString()}`);
   };
@@ -38,7 +51,11 @@ async function importCallback(
   // The state names who started it; whoever finishes it must be them.
   const user = await getSessionUser();
   if (!user || user.id !== imported.userId) return back("error", "signed-in user changed mid-import");
-  const result = await rememberAccessFromCode(imported.userId, code);
+  const result = await rememberAccessFromCode(
+    imported.userId,
+    code,
+    imported.requestId ? IMPORT_SCOPE : CALENDAR_LIST_SCOPE
+  );
   if (!result.ok) return back("error", result.error);
   return back("connected");
 }

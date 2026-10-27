@@ -78,9 +78,16 @@ export async function importableRequest(userId: string, requestId: string) {
   });
 }
 
+/**
+ * The consent screen for reading this person's own calendars.
+ *
+ * `requestId` names the availability request an import is for; null is the
+ * /profile picker, which wants the same permission with no request behind it
+ * and comes back to /profile.
+ */
 export function importAuthorizeUrl(
   userId: string,
-  requestId: string,
+  requestId: string | null,
   email: string | null
 ): string {
   const params = new URLSearchParams({
@@ -421,14 +428,21 @@ export async function runImportFor(
   }
 }
 
+/** Which scope a consent trip had to come back with to have been worth it. */
+export const IMPORT_SCOPE = READ_SCOPE;
+export const CALENDAR_LIST_SCOPE = LIST_SCOPE;
+
 /**
  * The consent trip's only job: swap the callback's code for tokens and
  * remember the refresh token. It imports NOTHING — the person is sent back to
- * the modal they started in, with their calendars now readable.
+ * where they started, with their calendars now readable.
+ *
+ * `needs` is the scope that trip was for; see the check below.
  */
 export async function rememberAccessFromCode(
   userId: string,
-  code: string
+  code: string,
+  needs: string = READ_SCOPE
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch(TOKEN, {
@@ -446,7 +460,11 @@ export async function rememberAccessFromCode(
       return { ok: false, error: `token exchange ${res.status}: ${await res.text()}` };
     }
     const tokens = (await res.json()) as { refresh_token?: string; scope?: string };
-    if (!tokens.scope?.includes(READ_SCOPE)) {
+    // Google's consent screen lets the two scopes be granted separately, so
+    // the check is for the one THIS trip was for: an import needs the events,
+    // the /profile picker needs the calendar list. Granting only the other
+    // one isn't a usable permission for the thing that asked.
+    if (!tokens.scope?.includes(needs)) {
       return { ok: false, error: "calendar access wasn't granted on the consent screen" };
     }
     if (!tokens.refresh_token) {

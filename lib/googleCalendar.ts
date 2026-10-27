@@ -143,9 +143,24 @@ export function verifyState(token: string): { orgId: string; userId: string } | 
 // The member-side "Import from Google Calendar" (lib/googleAvailability.ts)
 // shares this callback, so its state is signed the same way under a purpose of
 // its own: neither flow's state verifies as the other's.
-type ImportState = { p: "gimport"; userId: string; requestId: string; exp: number };
+//
+// `requestId` is the availability request the import is for — and it is
+// OPTIONAL, because the same permission is what /profile's "send my invites
+// to" picker reads the person's calendars with, and that has no request
+// behind it. A state with no request is the profile flow, and the callback
+// returns there instead.
+type ImportState = {
+  p: "gimport";
+  userId: string;
+  requestId?: string | null;
+  exp: number;
+};
 
-export function signImportState(userId: string, requestId: string, ttlSec = 600): string {
+export function signImportState(
+  userId: string,
+  requestId: string | null,
+  ttlSec = 600
+): string {
   const body: ImportState = {
     p: "gimport",
     userId,
@@ -156,13 +171,15 @@ export function signImportState(userId: string, requestId: string, ttlSec = 600)
   return `${payload}.${sign(payload, "gimport-state")}`;
 }
 
-export function verifyImportState(token: string): { userId: string; requestId: string } | null {
+export function verifyImportState(
+  token: string
+): { userId: string; requestId: string | null } | null {
   try {
     const [payload, sig] = token.split(".");
     if (!payload || !sig || !safeEqual(sig, sign(payload, "gimport-state"))) return null;
     const body = JSON.parse(Buffer.from(payload, "base64url").toString()) as ImportState;
     if (body.p !== "gimport" || body.exp < Math.floor(Date.now() / 1000)) return null;
-    return { userId: body.userId, requestId: body.requestId };
+    return { userId: body.userId, requestId: body.requestId ?? null };
   } catch {
     return null;
   }
