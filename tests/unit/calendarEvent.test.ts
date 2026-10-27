@@ -7,6 +7,7 @@ import {
   eventDescription,
   eventTimes,
   eventTitle,
+  inviteAddress,
   normalizeEmail,
   seatsToConfirm,
   type CalendarSeat,
@@ -92,6 +93,28 @@ describe("eventAttendees", () => {
     expect(out).toEqual([{ email: "kate@example.com", displayName: "Kate" }]);
   });
 
+  it("leaves out anyone who switched invites off, and drops them from an event they were on", () => {
+    const seats = [
+      { ...seat("KEYS", "Kate", "kate@example.com"), calendarInvites: false },
+      seat("BASS", "Sam", "sam@example.com"),
+    ];
+    // Kate keeps her seat and stays in the description's roster; she is just
+    // not a guest. Sending this list to Google is what uninvites her.
+    expect(eventAttendees(seats, [{ email: "kate@example.com", responseStatus: "accepted" }])).toEqual([
+      { email: "sam@example.com", displayName: "Sam" },
+    ]);
+    expect(eventDescription(seats, [], DEFAULT_TEAM_ROLES, "https://x")).toContain("Kate");
+  });
+
+  it("invites anyone whose preference isn't given — being invited is the default", () => {
+    expect(eventAttendees([seat("KEYS", "Kate", "kate@example.com")])).toEqual([
+      { email: "kate@example.com", displayName: "Kate" },
+    ]);
+    expect(
+      eventAttendees([{ ...seat("KEYS", "Kate", "kate@example.com"), calendarInvites: true }])
+    ).toEqual([{ email: "kate@example.com", displayName: "Kate" }]);
+  });
+
   it("keeps the answer Google already has for anyone staying on", () => {
     const out = eventAttendees(
       [seat("KEYS", "Kate", "kate@example.com"), seat("BASS", "Sam", "sam@example.com")],
@@ -147,6 +170,18 @@ describe("seatsToConfirm", () => {
     ).toEqual(["a1"]);
   });
 
+  it("ignores a stale accepted answer from someone who has switched invites off", () => {
+    // The write that drops them from the guest list and the notification
+    // carrying their old RSVP can cross; an invite they asked not to have
+    // doesn't get to confirm seats for them.
+    expect(
+      seatsToConfirm(attendees, [
+        { id: "a1", status: "PENDING", email: "kate@example.com", calendarInvites: false },
+        { id: "a2", status: "PENDING", email: "kate@example.com", calendarInvites: true },
+      ])
+    ).toEqual(["a2"]);
+  });
+
   it("leaves a seat that's out for cover, mid-handoff or already confirmed", () => {
     expect(
       seatsToConfirm(attendees, [
@@ -164,6 +199,41 @@ describe("seatsToConfirm", () => {
         { id: "choir", status: "PENDING", email: "kate@example.com" },
       ])
     ).toEqual(["keys", "choir"]);
+  });
+});
+
+describe("inviteAddress", () => {
+  it("prefers the calendar address someone nominated over their account email", () => {
+    expect(
+      inviteAddress({
+        email: "kate@example.com",
+        calendarInviteEmail: "Sets@group.calendar.google.com",
+      })
+    ).toBe("sets@group.calendar.google.com");
+  });
+
+  it("falls back to the account email when none is nominated", () => {
+    expect(inviteAddress({ email: "kate@example.com" })).toBe("kate@example.com");
+    expect(
+      inviteAddress({ email: "kate@example.com", calendarInviteEmail: null })
+    ).toBe("kate@example.com");
+    // A blank override is not an address — it reads as "use my email".
+    expect(
+      inviteAddress({ email: "kate@example.com", calendarInviteEmail: "  " })
+    ).toBe("kate@example.com");
+  });
+
+  it("is nobody to invite when there is neither", () => {
+    expect(inviteAddress({ email: null })).toBeNull();
+    expect(inviteAddress({ email: null, calendarInviteEmail: "" })).toBeNull();
+  });
+
+  // A nominated calendar is a place to send to, with or without an account
+  // email: the RSVP comes back from it just the same.
+  it("stands on its own when there's no account email", () => {
+    expect(
+      inviteAddress({ email: null, calendarInviteEmail: "sets@group.calendar.google.com" })
+    ).toBe("sets@group.calendar.google.com");
   });
 });
 

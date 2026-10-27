@@ -25,6 +25,11 @@ export interface CalendarSeat {
   userId: string;
   name: string;
   email: string | null;
+  // Whether this person wants their sets as calendar invites (User
+  // .calendarInvites, on by default). False keeps them OFF THE GUEST LIST
+  // only: the seat is still theirs and their name is still in the event's
+  // roster, so the team sees who is playing.
+  calendarInvites?: boolean;
 }
 
 export interface CalendarSong {
@@ -50,6 +55,23 @@ export function eventTitle(set: Pick<CalendarSet, "label">): string {
 export function normalizeEmail(email: string | null | undefined): string | null {
   const e = email?.trim().toLowerCase();
   return e ? e : null;
+}
+
+/**
+ * The address a person's set invites go to.
+ *
+ * Google puts an invite on the default calendar of whatever account it was
+ * addressed to, and an attendee can't move an invited event afterwards — so
+ * the only way to choose where these land is to choose the address. A Google
+ * calendar has an address of its own, so someone who wants their sets on a
+ * separate, colour-coded calendar points `calendarInviteEmail` at it. The
+ * RSVP then comes back from that same address, which is why `seatsToConfirm`
+ * matches on this reading too and not on the account email.
+ */
+export function inviteAddress(
+  user: { email: string | null; calendarInviteEmail?: string | null }
+): string | null {
+  return normalizeEmail(user.calendarInviteEmail) ?? normalizeEmail(user.email);
 }
 
 /**
@@ -92,6 +114,12 @@ export function eventDescription(
  * The attendee list for a set: one row per person with an email, however many
  * roles they hold, keeping the RSVP Google already has for anyone staying on —
  * sending an attendee without it resets their answer to "needs action".
+ *
+ * Anyone who has switched invites off is left out, which is also how they get
+ * dropped from an event they were already on: the next sync sends a guest list
+ * without them, and Google uninvites them. The opt-out is read as FALSE only —
+ * an undefined flag (a caller that doesn't track it) still gets invited, since
+ * being invited is the default.
  */
 export function eventAttendees(
   seats: CalendarSeat[],
@@ -106,6 +134,7 @@ export function eventAttendees(
   const seen = new Set<string>();
   const out: CalendarAttendee[] = [];
   for (const s of seats) {
+    if (s.calendarInvites === false) continue;
     const email = normalizeEmail(s.email);
     if (!email || seen.has(email)) continue;
     seen.add(email);
@@ -145,10 +174,20 @@ export function eventTimes(set: Pick<CalendarSet, "startsAt" | "durationMinutes"
  * or a maybe changes nothing in the app (the person still owns their seat and
  * can request cover there) — and only a PENDING seat moves: a seat out for
  * cover or a swap stays as it is.
+ *
+ * Someone who has switched invites off is skipped even if Google still reports
+ * an accepted answer for them: the change that removes them from the guest
+ * list and the notification carrying their old RSVP can cross, and an invite
+ * they asked not to have shouldn't be confirming seats on their behalf.
  */
 export function seatsToConfirm(
   attendees: CalendarAttendee[],
-  seats: { id: string; status: string; email: string | null }[]
+  seats: {
+    id: string;
+    status: string;
+    email: string | null;
+    calendarInvites?: boolean;
+  }[]
 ): string[] {
   const accepted = new Set(
     attendees
@@ -157,6 +196,7 @@ export function seatsToConfirm(
   );
   return seats
     .filter((s) => s.status === "PENDING")
+    .filter((s) => s.calendarInvites !== false)
     .filter((s) => {
       const e = normalizeEmail(s.email);
       return e !== null && accepted.has(e);

@@ -23,6 +23,13 @@ import Modal from "@/components/common/Modal";
 import Select from "@/components/common/Select";
 import { usePageLoading } from "@/components/LoadingProvider";
 import { useMe } from "@/components/MeProvider";
+import {
+  INVITE_OTHER_VALUE,
+  inviteOptions,
+  inviteSelectionValue,
+  selectedInviteValue,
+} from "@/lib/invitePicker";
+import type { PickerCalendar } from "@/lib/invitePicker";
 import { DEFAULT_TEAM_ROLES, orderedRoles } from "@/lib/teamRoles";
 import type { ApiTeamRole } from "@/lib/types";
 
@@ -63,6 +70,27 @@ export default function ProfilePage() {
   // Daily morning Slack digest, on by default. The send time is fixed, so this
   // on/off switch is the whole setting (see lib/digest.ts).
   const [dailyDigest, setDailyDigest] = useState(true);
+  // Being a guest on my sets' Google Calendar events, on by default. Off takes
+  // me off the guest list only — the seat and the event's roster are unchanged.
+  const [calendarInvites, setCalendarInvites] = useState(true);
+  // Where the invites are sent, when the account email isn't the place for
+  // them. Saved on blur like the email above; the saved copy is what a failed
+  // save is rolled back to.
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [savedInviteEmail, setSavedInviteEmail] = useState("");
+  // The person's own Google calendars, for the picker — null until we've
+  // asked, [] when they have none to offer.
+  const [myCalendars, setMyCalendars] = useState<PickerCalendar[] | null>(null);
+  // Google hasn't given us permission to read that list (or has withdrawn it),
+  // so the only way to the picker is one trip through the consent screen.
+  const [calendarsNeedConsent, setCalendarsNeedConsent] = useState(false);
+  const [loadingCalendars, setLoadingCalendars] = useState(false);
+  // "Another address…" picked: the box is open and the list stands aside until
+  // it has an answer.
+  const [inviteOther, setInviteOther] = useState(false);
+  // The "and the ones already sent?" question, asked only on switching off.
+  const [withdrawCalendarOpen, setWithdrawCalendarOpen] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   // Briefly true right after a successful save so the status line can flash a
@@ -108,9 +136,41 @@ export default function ProfilePage() {
     setTeams(me.teams ?? []);
     setHasPassword(me.hasPassword);
     setDailyDigest(me.dailyDigest);
+    setCalendarInvites(me.calendarInvites);
+    setInviteEmail(me.calendarInviteEmail ?? "");
+    setSavedInviteEmail(me.calendarInviteEmail ?? "");
     savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
     setLoaded(true);
   }, [me]);
+
+  // Offer the picker as soon as the invites section is on screen at all: the
+  // list is the answer most people want, and asking for it costs one request
+  // that returns `needsConsent` when there's no permission to spend.
+  //
+  // `?gcalPicker=` is how the consent trip comes back (the shared callback in
+  // api/google-calendar/callback sends it here when no availability request is
+  // in play), and a `connected` means the list is now readable.
+  useEffect(() => {
+    if (!loaded || !savedEmail || !calendarInvites) return;
+    const status = new URLSearchParams(window.location.search).get("gcalPicker");
+    if (status && status !== "connected") {
+      setMessage(
+        status === "denied"
+          ? "Google didn't grant access to your calendar list, so you can paste an address instead."
+          : "Error: couldn't reach Google for your calendar list."
+      );
+    }
+    if (status) {
+      // Don't re-announce it on every later render of this page.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("gcalPicker");
+      window.history.replaceState(null, "", url.toString());
+    }
+    void loadMyCalendars();
+    // Deliberately once the section exists, and again when a consent trip
+    // lands back here — not on every keystroke in the address box.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, savedEmail, calendarInvites]);
 
   // Always have a team selected: pick the first one, and re-point at it if the
   // selected team disappears (e.g. after leaving it).
@@ -157,6 +217,141 @@ export default function ProfilePage() {
       setMessage("Error: could not save that");
     }
   }
+
+  // Flip the calendar-invite preference. Same shape as the digest toggle:
+  // optimistic, reverted if the PUT fails. Turning it ON re-syncs every
+  // upcoming set, which is what sends the invites.
+  //
+  // Turning it OFF saves straight away and THEN asks about the events already
+  // out (withdrawCalendarOpen below) — the preference must land whatever the
+  // person does with that modal, since a dismissed question would otherwise
+  // leave the ticked box disagreeing with the db.
+  async function saveCalendarInvites(next: boolean, withdraw = false) {
+    const prev = calendarInvites;
+    setCalendarInvites(next);
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // name is required by the endpoint, so send the current one through.
+        body: JSON.stringify({
+          name,
+          email: email || null,
+          calendarInvites: next,
+          ...(withdraw ? { withdrawInvites: true } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error();
+      return true;
+    } catch {
+      setCalendarInvites(prev);
+      setMessage("Error: could not save that");
+      return false;
+    }
+  }
+
+  // Save the invite address. A re-sync withdraws the invites from the old
+  // address and sends them to the new one, so an unchanged value is skipped
+  // rather than mailing the whole team for nothing.
+  async function saveInviteEmail(value?: string) {
+    const next = (value ?? inviteEmail).trim();
+    if (next === savedInviteEmail) return;
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          email: email || null,
+          calendarInviteEmail: next,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.error || "could not save that");
+      }
+      setSavedInviteEmail(next);
+      setInviteEmail(next);
+      // The same ✓ by the heading every other autosaved field flashes.
+      setSaved(true);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 2000);
+      setMessage("");
+    } catch (err) {
+      setInviteEmail(savedInviteEmail);
+      setMessage(`Error: ${err instanceof Error ? err.message : "could not save that"}`);
+    }
+  }
+
+  // Ask Google for this person's own calendars, for the picker. A refusal is
+  // not an error here: `needsConsent` is what a never-granted (or withdrawn)
+  // permission looks like, and it just means the page offers the consent trip
+  // instead of a list.
+  async function loadMyCalendars() {
+    setLoadingCalendars(true);
+    try {
+      const res = await fetch("/api/google-calendar/my-calendars");
+      const body = await res.json().catch(() => null);
+      if (body?.needsConsent) {
+        setCalendarsNeedConsent(true);
+        setMyCalendars(null);
+      } else if (res.ok && Array.isArray(body?.calendars)) {
+        setMyCalendars(body.calendars as PickerCalendar[]);
+        setCalendarsNeedConsent(false);
+      } else {
+        // A real failure (Google down, no app credentials) leaves the address
+        // box as the way to set this, which is what it was built to be.
+        setCalendarsNeedConsent(true);
+        setMyCalendars(null);
+      }
+    } catch {
+      setCalendarsNeedConsent(true);
+    } finally {
+      setLoadingCalendars(false);
+    }
+  }
+
+  // Save the address a picked calendar stands for. Shares the address box's
+  // save, so both ways of answering go down the same path — including the
+  // no-op check that keeps an unchanged pick from mailing the whole team.
+  async function pickInviteCalendar(value: string) {
+    const next = inviteSelectionValue(value);
+    if (next === null) {
+      setInviteOther(true);
+      return;
+    }
+    setInviteOther(false);
+    setInviteEmail(next);
+    await saveInviteEmail(next);
+  }
+
+  // The switch itself: off opens the withdrawal question, on just saves.
+  async function toggleCalendarInvites(next: boolean) {
+    const saved = await saveCalendarInvites(next);
+    if (saved && !next) setWithdrawCalendarOpen(true);
+  }
+
+  // "Yes, take me off them" — the same preference saved again, this time
+  // asking the endpoint to re-sync, which is what drops me from the guest
+  // lists of the sets I'm already invited to.
+  async function withdrawCalendarInvites() {
+    setWithdrawing(true);
+    await saveCalendarInvites(false, true);
+    setWithdrawing(false);
+    setWithdrawCalendarOpen(false);
+  }
+
+  // The picker's options and which one is in force. `inviteOther` is the one
+  // state the stored value can't express — the box is open and empty on
+  // purpose — so it wins over the match.
+  const pickerOptions = inviteOptions(
+    myCalendars ?? [],
+    savedEmail,
+    savedInviteEmail || null
+  );
+  const pickerValue = inviteOther
+    ? INVITE_OTHER_VALUE
+    : selectedInviteValue(pickerOptions, savedInviteEmail || null);
 
   // Stable identity for the name/email fields, to detect no-op saves.
   function fieldsKey(n: string, e: string) {
@@ -315,13 +510,6 @@ export default function ProfilePage() {
                 Managed by your Google account.
               </p>
             )}
-            {/* With no email the banner above says why to add one; once
-                there is one, say what it's used for. */}
-            {calendarOrgs && savedEmail && (
-              <p className="mt-1 text-xs text-gray-500">
-                Calendar invites for your sets go here.
-              </p>
-            )}
           </div>
           <div>
             <span className="mb-1 block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -473,6 +661,159 @@ export default function ProfilePage() {
         dailyDigest={dailyDigest}
         onDailyDigestChange={saveDailyDigest}
       />
+
+      {/* Google Calendar — its own section, the way Slack is, because it is
+          its own integration and these are the person's answers about their
+          own calendar. It sat inside the Account card under Email, where a
+          switch and a picker read as footnotes to a text field.
+
+          Deliberately NOT gated on an org having connected Google Calendar.
+          Which calendar my sets land on, and whether I want them at all, is
+          MINE to answer — and the calendars the picker lists are read with my
+          own permission, nothing to do with the org's connection. Gating it
+          meant the answer could only be given after an admin acted, so an
+          invite could arrive before anyone had the chance to say no to it. A
+          line at the end says so while no org is sending any yet. */}
+      <Card>
+        <h2 className="mb-1 text-lg font-semibold">Google Calendar</h2>
+        <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
+          Get every set you&rsquo;re on as a calendar invite, and choose which
+          of your calendars they land on. Accepting an invite confirms you here.
+        </p>
+        {!savedEmail && (
+          <p className="text-sm text-gray-500">
+            Add your email above first — an invite needs an address to go to.
+          </p>
+        )}
+        {savedEmail && (
+          <div className="mt-2" data-testid="profile-calendar-invites">
+            <Checkbox
+              label="Calendar invites for my sets"
+              checked={calendarInvites}
+              onChange={(e) => toggleCalendarInvites(e.target.checked)}
+            />
+            {calendarInvites ? (
+              <div className="mt-2">
+                {/* Google puts an invite on the default calendar of
+                    whatever address it was sent to, and you can't move an
+                    invited event afterwards — so which calendar your sets
+                    land on is this one choice, made by address. The list is
+                    your own calendars, read with your permission; the box
+                    below it is for an address the list can't offer. */}
+                {myCalendars ? (
+                  <Select
+                    label="Send invites to"
+                    data-testid="invite-calendar"
+                    // A calendar can be named anything, and a secondary
+                    // calendar's address is 40-odd characters, so the closed
+                    // box ellipsizes rather than running its text under the
+                    // chevron. Nothing is lost: the line below names the
+                    // address the invites are actually going to, and it wraps.
+                    className="truncate"
+                    value={pickerValue}
+                    onChange={(e) => pickInviteCalendar(e.target.value)}
+                  >
+                    {pickerOptions.map((o) => (
+                      <option key={o.value || "default"} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : null}
+                {(!myCalendars || inviteOther) && (
+                  <div className={myCalendars ? "mt-2" : undefined}>
+                    <Input
+                      label={myCalendars ? "Address" : "Send invites to"}
+                      data-testid="invite-address"
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      onBlur={() => saveInviteEmail()}
+                      placeholder={savedEmail}
+                    />
+                  </div>
+                )}
+                {!myCalendars && (
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      loading={loadingCalendars}
+                      onClick={() => {
+                        if (calendarsNeedConsent) {
+                          window.location.href =
+                            "/api/google-calendar/my-calendars?connect=1";
+                        } else {
+                          void loadMyCalendars();
+                        }
+                      }}
+                    >
+                      Choose from my calendars
+                    </Button>
+                  </div>
+                )}
+                {/* `break-words` because the address this names can be a
+                    calendar id of fifty-odd characters with no space in it,
+                    and a browser won't break at an "@" or a "." on its own —
+                    so on a phone the line would run off the card. */}
+                <p className="mt-1 break-words text-xs text-gray-500">
+                  {myCalendars
+                    ? `Invites go to ${savedInviteEmail || savedEmail}. A calendar of its own can be coloured or hidden in Google Calendar.`
+                    : "Leave this blank to use the email above, or pick one of your own calendars — one you can colour or hide — which asks Google for permission to list them."}
+                </p>
+              </div>
+            ) : (
+              <p className="mt-1 text-xs text-gray-500">
+                You won&apos;t be added to your sets&apos; calendar events.
+                You&apos;re still on the roster, and the team still sees you
+                there.
+              </p>
+            )}
+            {!calendarOrgs && (
+              <p className="mt-1 text-xs text-gray-500">
+                None of your organizations sends calendar invites yet, so
+                this is what will happen once one does.
+              </p>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* Switching invites off settles future sets on its own; the events
+          already on someone's calendar are a separate question, and only a
+          yes here touches them. Closing leaves them exactly as they are. */}
+      <Modal
+        open={withdrawCalendarOpen}
+        onClose={() => setWithdrawCalendarOpen(false)}
+        title="Remove you from the invites already sent?"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            You won&apos;t be invited to any new sets. You&apos;re already a
+            guest on the events for your upcoming sets — shall I take you off
+            those too? They&apos;ll disappear from your calendar, and you keep
+            your seats either way.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setWithdrawCalendarOpen(false)}
+              disabled={withdrawing}
+            >
+              Leave them
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              onClick={withdrawCalendarInvites}
+              loading={withdrawing}
+            >
+              Remove me
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={pwOpen} onClose={() => setPwOpen(false)} title="Change password">
         <form onSubmit={changePassword} className="space-y-4">

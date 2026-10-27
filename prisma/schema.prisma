@@ -407,6 +407,23 @@ model User {
   // the whole setting. Global to the person, like isMD.
   dailyDigest Boolean @default(true)
 
+  // Whether this person is invited to their sets' events on the org's Google
+  // Calendar (lib/googleCalendar.ts). Opt-out only, and global to the person
+  // like dailyDigest: someone who keeps their own calendar another way can
+  // switch it off and stop being added as a guest. It only removes them from
+  // the GUEST LIST — they still hold their seats and still appear in the
+  // event's roster, so the rest of the team sees who is playing.
+  calendarInvites Boolean @default(true)
+  // Where those invites are sent, when the account email isn't the right
+  // place. Google decides which of your calendars an invite lands on — the
+  // default one of whatever account it was addressed to — and an attendee
+  // can't move an invited event afterwards. A Google calendar has its own
+  // address, though, so pointing this at a secondary calendar's address puts
+  // the sets on that calendar, where they can be coloured and hidden like any
+  // other. Null = use `email`; `lib/calendarEvent.ts inviteAddress` is the
+  // one reading of it, and the RSVP comes back from the same address.
+  calendarInviteEmail String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

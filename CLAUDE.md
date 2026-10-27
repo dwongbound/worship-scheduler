@@ -72,6 +72,47 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).
+  `calendarInvites` (default true) is the person's own opt-out from being a
+  GUEST on their sets' Google Calendar events. It and the picker below are
+  /profile's own **Google Calendar** section, below Slack and shaped like it
+  (they used to hang off the Email field in the Account card, where a switch
+  and a picker read as footnotes to a text box). They show as soon as the
+  person has an EMAIL, whether or not any org has
+  connected Google Calendar — the answer is theirs, and the calendars the
+  picker lists are read with their own permission, nothing to do with the
+  org's connection; gating it meant an invite could arrive before they'd had
+  the chance to say no. A line says so while no org is sending any — global to them like
+  `dailyDigest`, since the calendar it lands on is theirs. Opting out drops
+  them from the guest list ONLY: they keep their seats and still appear in the
+  event's roster, so the team still sees who is playing. Switched on /profile,
+  honoured by `lib/calendarEvent.ts` (`eventAttendees` skips them;
+  `seatsToConfirm` ignores an RSVP that crossed with the opt-out).
+  `calendarInviteEmail` is WHERE those invites go, null = `email`. Google puts
+  an invite on the default calendar of whatever address it was sent to and an
+  attendee can't move an invited event afterwards, so the address IS the only
+  choice of calendar — point this at a secondary calendar's own address
+  (`…@group.calendar.google.com`) and the sets land there, colourable and
+  hideable. `lib/calendarEvent.ts inviteAddress()` is the ONE reading of the
+  pair, used for the guest list AND for `seatsToConfirm`, since the RSVP comes
+  back from whatever address was invited. /profile asks for it as a PICKER of
+  the person's own Google calendars, not a pasted address: a secondary
+  calendar's id IS its address, so picking one and typing one are the same act
+  — and nobody can find "Integrate calendar" in Google's settings. The list
+  comes from `GET /api/google-calendar/my-calendars`, which reuses the
+  availability import's remembered consent (`lib/googleAvailability.ts`
+  `listImportCalendars`), so whichever of the two the person does first spares
+  the other. The address box is kept as the way out of the list, since a
+  calendar someone else owns or one on another account is never in it; it is
+  also what shows when there is no permission to list. `lib/invitePicker.ts`
+  is the pure half (`inviteOptions` — the primary calendar is NOT listed
+  again, its address being the account email, and a saved address the list
+  can't offer keeps its own option so the picker never reads as the default
+  while something else is in force). ✅tested A calendar is named whatever
+  its owner likes and a secondary one's address runs to fifty-odd characters,
+  so the `Select` is `truncate` (`w-full`, so the box can only ever be as wide
+  as the card) and the line under it names the resolved address with
+  `break-words` — a browser breaks at no "@" or "." of its own, so unwrapped
+  that line is what would run off a phone.
 - **SetHistoryEvent** — the per-set activity log. `role` is null only for
   `SETLIST_CHANGED` (song added/removed/re-keyed/reordered), whose summary
   lives in `detail`. Roster + setlist changes also ping the set's Slack group
@@ -197,6 +238,28 @@ write in: the address is `CONTACT_EMAIL` (`lib/legal.ts`, overridable with
 `components/CopyEmailButton.tsx` — never only a `mailto:`, since a clipboard
 write can be refused and the page can't tell. Archivo + IBM Plex Mono are
 loaded by this page alone (next/font), so the app never pays for them.
+It also FADES IN and reveals each block as you scroll (`lib/reveal.ts` +
+`components/Reveal.tsx`), and the one rule that governs that: **the page must
+read with the motion off.** The markup is visible as it stands; a pre-paint
+inline script sets `data-reveal="on"` on `<html>` and only that arms the
+hidden-then-revealed CSS. No script (a crawler, the OAuth review, a blocked
+bundle) or "reduce motion" set = no attribute = nothing is ever hidden. An
+animation that started at opacity 0 and waited for JS would hand the review a
+blank page, which is the same failure the login wall was. `REVEAL_STAGGER_CLASS`
+on a container staggers its CHILDREN off the nearest revealed ancestor — one
+observer for the roster card, the stagger being pure CSS — and it may sit on
+the revealed element itself or inside it, which is why there are two selectors.
+`tests/unit/reveal.test.ts` parses the sheet and fails if any hiding rule
+escapes that scoping. **`components/RevealRoot.tsx` is the two halves
+together** — the rules, which HIDE, and the script, which is the only thing
+that ever reveals — because a page carrying one without the other hides its
+content for good; the same test asserts every animated page renders it and
+inlines neither half. **/login arms the same motion**: its card rises in as one
+piece with `REVEAL_STAGGER_CLASS` on the Card so its own rows follow, behind the
+home page's soft wash. `RevealRoot` sits OUTSIDE the `Suspense` boundary there,
+since `useSearchParams` makes the form client-rendered and the attribute has to
+be in the document before the first paint. The no-motion rule is the same, and
+`tests/e2e/auth.spec.ts` covers both paths.
 Signed in it's still the app: `proxy.ts` redirects a session holder to
 `/calendar` at the edge, because Google's sign-in callback lands on `/` and
 marketing copy after signing in reads as broken. That redirect can't live in
@@ -223,7 +286,14 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   nothing and lands on `/schedule?gcalImport=connected` to REOPEN the modal;
   POST `{requestId, calendarIds}` = the import, answering `{blocks}`). A denied
   or failed consent still lands on `?gcalImport=denied|error`. Shared guard in
-  `import/guard.ts`.
+  `import/guard.ts`. `google-calendar/my-calendars` is the same consent read
+  for a different reason — /profile's invite picker — so the signed import
+  state's `requestId` is OPTIONAL and the shared callback lands on
+  `/profile?gcalPicker=...` when there is none. `?connect=1` is the consent trip;
+  the plain GET answers `{calendars}` or `{needsConsent:true}`. The consent
+  check is per-trip (`rememberAccessFromCode`'s `needs`): an import must come
+  back with `calendar.events.readonly`, the picker with
+  `calendar.calendarlist.readonly`, since Google lets the two be granted apart.
   `google-calendar/connect` (GET → consent, DELETE →
   disconnect; org admin), `/callback`, `/status` (admin: connected account,
   chosen calendar's NAME, who connected; members with no email get an
@@ -234,7 +304,15 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   by a per-org HMAC token, reads changes AFTER responding).
 - Rules: `orgs/[id]/rules` (org admin) — GET the list + dropdown options (or,
   with `?forSet=`, what one set's Auto schedule needs); PUT replaces the whole
-  ordered list, refusing a contradiction with `{ error, index }`.
+  ordered list, refusing a contradiction with `{ error, index }`. Both answers
+  carry a `version` — the fingerprint of the list as stored
+  (`rulesVersion`) — and the PUT takes it back. Rules are ORG-wide and a save
+  replaces the WHOLE list, so a save built on a copy loaded before another
+  admin's edit would silently revert it; a mismatch is a 409 with
+  `{ stale: true, rules, version }`, nothing is written, and `OrgRules` shows
+  the list the server sent rather than rolling back to its own. The check runs
+  INSIDE the transaction (`saveOrgRules`'s `expectedVersion`), so two
+  simultaneous saves can't both pass.
 - Availability: `availability`, `availability/[id]`, `availability/complete`,
   `availability-request`.
 - Export: `export`, `export/[id]` (ICS).
@@ -332,7 +410,9 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   REQUIRED rules only; run by the PUT route AND the editor), `describeRule` /
   `explainRule` (the editor's sentences), `weekKey`/`monthKey`, and
   `templateIdOf` (sets don't store their template, so it's recognised by
-  label + team + weekday + time). `buildSchedule`'s 7th arg `ScheduleOptions`
+  label + team + weekday + time), and `rulesVersion` (the stored list's
+  fingerprint — row ids in order, which change on every save since one
+  deletes and re-inserts the lot). ✅tested `buildSchedule`'s 7th arg `ScheduleOptions`
   feeds them in: REQUIRED never bends (a slot is left open instead — a held
   SAME_PLAYER seat is the `HOLD` case), PREFERENCES rank lexicographically
   above rotation. All three callers pass them; the prisma side is
@@ -594,6 +674,25 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   mid-handoff stays on the old owner's invite until approved. Never throws.
   The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
   `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
+- `invitePicker.ts` — /profile's "Send invites to" picker, pure:
+  `inviteOptions` / `selectedInviteValue` / `inviteSelectionValue` +
+  `INVITE_OTHER_VALUE` (the option that opens the address box and saves
+  NOTHING, since it isn't an answer yet). See the `calendarInviteEmail` note in
+  the data model. ✅tested
+- `profile.ts` — the /profile save rules, pure: `resolveProfileEmail` (an
+  OAuth-only account's email is not its own to change) and
+  **`calendarResyncNeeded`** — whether saving a profile has to re-sync that
+  person's upcoming sets, which is the write that actually sends or withdraws
+  their invites. It compares the RESOLVED `inviteAddress`, not the two fields,
+  so pointing the override at the address already in use is not a re-sync (and
+  a re-sync emails the whole team). A changed address re-syncs, and so does
+  switching invites back
+  ON (that is how they arrive). Switching them OFF is the one case that asks:
+  it could mean "no more of these" or "and take me off the ones I have", so
+  /profile puts that question in a modal and only a yes (`withdrawInvites` in
+  the PUT body) touches events already sent. The opt-out itself saves either
+  way, BEFORE the modal opens, so a dismissed question can't leave the ticked
+  box disagreeing with the db. ✅tested
 - `pendingHandoff.ts` — who a seat mid-handoff STILL belongs to (cover-take →
   `Assignment.pendingCoverFromUserId`; accepted swap → the SwapProposal). Feeds
   `pendingFromUser` on the wire and the MD rules, so a pending cover can't

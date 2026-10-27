@@ -3,6 +3,7 @@
 // nobody — member or admin — gets a join/leave control here.
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
+import { INVITE_OTHER_VALUE } from "@/lib/invitePicker";
 
 test("a user sees their per-team roles but can't change them", async ({ page }) => {
   await login(page, "carol");
@@ -163,10 +164,268 @@ test("with Google Calendar connected, a member with no email is asked for one on
   await email.blur();
   await expect(page.getByTestId("profile-saved")).toBeVisible();
   await expect(banner).toHaveCount(0);
-  await expect(page.getByText("Calendar invites for your sets go here.")).toBeVisible();
 
-  // Clearing it brings the banner back; this also restores the seed state.
+  // With an address to invite, the switch takes the banner's place: on by
+  // default, and saying where the invites go.
+  const invites = page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets");
+  await expect(invites).toBeChecked();
+
+  // Where they go is the person's to choose, because Google decides which
+  // calendar an invite lands on from the address it was sent to. Blank means
+  // the email above; an address moves the sets onto that calendar.
+  const sendTo = page.getByLabel("Send invites to");
+  await expect(sendTo).toHaveValue("");
+  await expect(sendTo).toHaveAttribute("placeholder", "carol.cal@example.com");
+  await sendTo.fill("not an address");
+  await sendTo.blur();
+  await expect(page.getByText(/doesn’t|doesn't/)).toBeVisible();
+  // A refused address is rolled back, so the field never shows something the
+  // server didn't take.
+  await expect(sendTo).toHaveValue("");
+
+  await sendTo.fill("sets@group.calendar.google.com");
+  await sendTo.blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Send invites to")).toHaveValue(
+    "sets@group.calendar.google.com"
+  );
+  // Clearing it hands the invites back to the account email.
+  await page.getByLabel("Send invites to").fill("");
+  await page.getByLabel("Send invites to").blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+
+  // Opting out asks about the invites already on their calendar. The
+  // preference saves either way, so dismissing the question can't leave the
+  // box disagreeing with the db.
+  await invites.uncheck();
+  const withdraw = page.getByRole("dialog");
+  await expect(withdraw).toContainText("already sent");
+  await withdraw.getByRole("button", { name: "Leave them" }).click();
+  await expect(withdraw).toHaveCount(0);
+  await expect(page.getByText("You're still on the roster")).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByTestId("profile-calendar-invites").getByLabel("Calendar invites for my sets")
+  ).not.toBeChecked();
+
+  // And the other answer: re-opting in, then out again with a yes, which is
+  // what asks the server to drop them from those events.
+  const again = page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets");
+  await again.check();
+  await again.uncheck();
+  await page.getByRole("dialog").getByRole("button", { name: "Remove me" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(again).not.toBeChecked();
+
+  // Back on, then clear the email — which restores the seed state and brings
+  // the banner back, the switch having nowhere to send anything.
+  await page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets")
+    .check();
   await email.fill(original);
   await email.blur();
+  await expect(page.getByTestId("profile-calendar-invites")).toHaveCount(0);
   if (!original) await expect(banner).toBeVisible();
+});
+
+test("the invite address can be picked from your own Google calendars", async ({
+  page,
+}) => {
+  // Same trick as the test above: no test org has a real Google account, so
+  // mark Carol's orgs connected on the way out of GET /api/me.
+  await page.route("**/api/me", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    for (const m of body.memberships ?? []) m.orgGoogleCalendarConnected = true;
+    await route.fulfill({ response: res, json: body });
+  });
+  // And no test account has given Google permission to list its calendars, so
+  // stand in for that list. The picker's own shape is what's under test here;
+  // reading it from Google is lib/googleAvailability's job.
+  await page.route("**/api/google-calendar/my-calendars", async (route) => {
+    await route.fulfill({
+      json: {
+        calendars: [
+          { id: "carol.pick@example.com", name: "carol.pick@example.com", primary: true },
+          { id: "sets@group.calendar.google.com", name: "Worship sets", primary: false },
+        ],
+      },
+    });
+  });
+
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  // The invite settings only exist once there's an address to invite. Waiting
+  // on the section rather than the "Saved" flash keeps this step honest on a
+  // re-run, where the email may already be what we're setting it to.
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  await email.fill("carol.pick@example.com");
+  await email.blur();
+  await expect(page.getByTestId("profile-calendar-invites")).toBeVisible();
+
+  // With a list to offer, "Send invites to" is a picker rather than a box.
+  // Located by test id: the select's accessible name takes in its option text,
+  // one of which is "Another address…", so a label lookup for the box below
+  // would match the select too.
+  const picker = page.getByTestId("invite-calendar");
+  await expect(picker).toBeVisible();
+  // The account's own calendar leads; the primary calendar is NOT listed again
+  // under its own name, since its address IS that email.
+  await expect(picker).toContainText("carol.pick@example.com");
+  await expect(picker).toContainText("Worship sets");
+  // Start from the default however an earlier run left it.
+  await picker.selectOption({ value: "" });
+  await page.reload();
+  await expect(page.getByTestId("invite-calendar")).toHaveValue("");
+
+  // Picking a calendar saves its address — which is how Google is told where
+  // to put the event, there being no other way to choose a calendar.
+  await page.getByTestId("invite-calendar").selectOption({ label: "Worship sets" });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId("invite-calendar")).toHaveValue(
+    "sets@group.calendar.google.com"
+  );
+
+  // The address box is still there as the way out of the list — a calendar
+  // someone else owns, or another account's, is never in it.
+  await page.getByTestId("invite-calendar").selectOption({ value: INVITE_OTHER_VALUE });
+  const box = page.getByTestId("invite-address");
+  await expect(box).toBeVisible();
+  await box.fill("elsewhere@example.com");
+  await box.blur();
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await page.reload();
+  // A saved address the list can't offer keeps its own option, so the picker
+  // shows what is actually in force rather than quietly reading as the default.
+  await expect(page.getByTestId("invite-calendar")).toHaveValue(
+    "elsewhere@example.com"
+  );
+
+  // Back to the default, and restore the seed state.
+  await page.getByTestId("invite-calendar").selectOption({ value: "" });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await email.fill(original);
+  await email.blur();
+});
+
+test("the invite settings are mine to set before any org connects a calendar", async ({
+  page,
+}) => {
+  // No /api/me mock here, deliberately: no test org has connected Google
+  // Calendar, which is the state under test. Whether I want these invites, and
+  // which of my own calendars they land on, is my answer to give — waiting on
+  // an admin to connect would mean the first invite could arrive before I had
+  // the chance to say no to it.
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  await email.fill("carol.nogcal@example.com");
+  await email.blur();
+
+  const invites = page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets");
+  await expect(invites).toBeVisible();
+  await expect(invites).toBeChecked();
+  // And it says why nothing is arriving yet, rather than looking broken.
+  await expect(page.getByText("sends calendar invites yet")).toBeVisible();
+
+  // The answer sticks, so it's in force the moment an org does connect.
+  await invites.uncheck();
+  await page.getByRole("dialog").getByRole("button", { name: "Leave them" }).click();
+  await page.reload();
+  await expect(
+    page.getByTestId("profile-calendar-invites").getByLabel("Calendar invites for my sets")
+  ).not.toBeChecked();
+
+  // Put the seed state back.
+  await page
+    .getByTestId("profile-calendar-invites")
+    .getByLabel("Calendar invites for my sets")
+    .check();
+  await email.fill(original);
+  await email.blur();
+});
+
+test("calendar invites are their own section under Slack, and a long calendar name can't widen the page", async ({
+  page,
+}) => {
+  // A calendar can be named anything its owner likes, and a secondary
+  // calendar's address runs to forty-odd characters. The picker is `w-full`
+  // inside the card, so the box can only be as wide as the card — this pins
+  // that, because a native select is one of the few controls whose intrinsic
+  // width is its widest option.
+  const LONG =
+    "Tapestry LA — Sunday Morning Worship Team Rehearsals, Services and Soundcheck";
+  await page.route("**/api/google-calendar/my-calendars", async (route) => {
+    await route.fulfill({
+      json: {
+        calendars: [
+          { id: "carol.wide@example.com", name: "carol.wide@example.com", primary: true },
+          { id: "verylongcalendarid000111222@group.calendar.google.com", name: LONG, primary: false },
+        ],
+      },
+    });
+  });
+
+  await login(page, "carol");
+  await page.goto("/profile");
+  await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
+
+  const email = page.getByLabel("Email");
+  const original = await email.inputValue();
+  await email.fill("carol.wide@example.com");
+  await email.blur();
+
+  // Its own section, below Slack — it used to hang off the Email field in the
+  // Account card, where a switch and a picker read as footnotes to a text box.
+  const heading = page.getByRole("heading", { name: "Google Calendar" });
+  await expect(heading).toBeVisible();
+  const slack = await page.getByRole("heading", { name: "Slack" }).boundingBox();
+  const gcal = await heading.boundingBox();
+  expect(gcal!.y).toBeGreaterThan(slack!.y);
+
+  const picker = page.getByTestId("invite-calendar");
+  await expect(picker).toBeVisible();
+  await picker.selectOption({ label: LONG });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+
+  // Nothing sideways to scroll, at whatever width this project runs.
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
+
+  // And the select itself still sits inside the card that holds it.
+  const box = (await picker.boundingBox())!;
+  const card = (await page
+    .locator("div", { has: page.getByRole("heading", { name: "Google Calendar" }) })
+    .last()
+    .boundingBox())!;
+  expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width + 1);
+
+  // Truncation can't hide where the invites go: the line below names it.
+  await expect(
+    page.getByText(/Invites go to verylongcalendarid/).first()
+  ).toBeVisible();
+
+  // Put the seed state back.
+  await picker.selectOption({ value: "" });
+  await expect(page.getByTestId("profile-saved")).toBeVisible();
+  await email.fill(original);
+  await email.blur();
 });

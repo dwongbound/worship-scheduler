@@ -5,8 +5,18 @@ import bcrypt from "bcryptjs";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
-import { resolveProfileEmail } from "@/lib/profile";
+import { calendarResyncNeeded, resolveProfileEmail } from "@/lib/profile";
 import { isGoogleCalendarAppConfigured, syncSetsAfterResponse } from "@/lib/googleCalendar";
+
+/**
+ * Loose enough for a Google calendar address (`…@group.calendar.google.com`)
+ * and anything else a person might legitimately own, strict enough to catch a
+ * calendar NAME pasted in by mistake — which would otherwise fail silently,
+ * since Google just drops an attendee it can't deliver to.
+ */
+function isEmailish(value: string): boolean {
+  return /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test(value);
+}
 
 export async function GET() {
   const user = await getSessionUser();
@@ -21,6 +31,8 @@ export async function GET() {
       name: true,
       email: true,
       dailyDigest: true,
+      calendarInvites: true,
+      calendarInviteEmail: true,
       // OAuth-only accounts (Google) are created with an empty passwordHash;
       // the profile page hides "Change password" when there's no usable one.
       passwordHash: true,
@@ -121,7 +133,12 @@ export async function PUT(req: NextRequest) {
   // rule is a pure, unit-tested helper (see lib/profile.ts).
   const current = await prisma.user.findUnique({
     where: { id: user.id },
-    select: { passwordHash: true, email: true },
+    select: {
+      passwordHash: true,
+      email: true,
+      calendarInviteEmail: true,
+      calendarInvites: true,
+    },
   });
   const email = resolveProfileEmail(
     !!current?.passwordHash,
@@ -140,6 +157,24 @@ export async function PUT(req: NextRequest) {
   if (typeof body.dailyDigest === "boolean") {
     data.dailyDigest = body.dailyDigest;
   }
+  // Calendar invites on/off, same rule: only written when sent, so saving a
+  // name can't quietly opt someone back in.
+  if (typeof body.calendarInvites === "boolean") {
+    data.calendarInvites = body.calendarInvites;
+  }
+  // Where those invites are sent, when the account email isn't where they want
+  // them — typically a secondary calendar's own address. Empty clears it, and
+  // a clear falls back to the account email, so there is no "nowhere" state.
+  if (typeof body.calendarInviteEmail === "string") {
+    const addr = body.calendarInviteEmail.trim();
+    if (addr && !isEmailish(addr)) {
+      return NextResponse.json(
+        { error: "That doesn't look like an email or calendar address" },
+        { status: 400 }
+      );
+    }
+    data.calendarInviteEmail = addr || null;
+  }
   if (typeof body.password === "string" && body.password.length > 0) {
     if (body.password.length < 8) {
       return NextResponse.json(
@@ -154,11 +189,31 @@ export async function PUT(req: NextRequest) {
     const updated = await prisma.user.update({
       where: { id: user.id },
       data,
-      select: { name: true, email: true, dailyDigest: true },
+      select: {
+        name: true,
+        email: true,
+        dailyDigest: true,
+        calendarInvites: true,
+        calendarInviteEmail: true,
+      },
     });
-    // A new (or changed) email is where set invites go, so every upcoming set
-    // they're on re-syncs its guest list — that's what sends the invites.
-    if (isGoogleCalendarAppConfigured() && (current?.email ?? null) !== updated.email) {
+    // A new (or changed) email is where set invites go, and switching invites
+    // back on is how they arrive, so either re-syncs every upcoming set's guest
+    // list — that is what actually sends them. Switching invites OFF only
+    // touches the events already out when the person asked to be withdrawn:
+    // /profile puts that question in a modal and sends the answer here.
+    if (
+      isGoogleCalendarAppConfigured() &&
+      calendarResyncNeeded(
+        {
+          email: current?.email ?? null,
+          calendarInviteEmail: current?.calendarInviteEmail ?? null,
+          calendarInvites: current?.calendarInvites ?? true,
+        },
+        updated,
+        body.withdrawInvites === true
+      )
+    ) {
       const seats = await prisma.assignment.findMany({
         where: { userId: user.id, set: { startsAt: { gte: new Date() } } },
         select: { setId: true },

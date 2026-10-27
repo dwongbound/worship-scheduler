@@ -268,6 +268,35 @@ test("the home page is readable signed out, naming TapWorship", async ({ page })
   await expect(page).toHaveURL(/\/login/);
 });
 
+// With the script, the sections below the fold start hidden and arrive as you
+// reach them. Anything that reaches the bottom of the page must end up visible
+// — a reveal that never fires is content nobody can read.
+test("the home page's sections arrive as you scroll, and all of them arrive", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const contact = page.getByRole("heading", { name: "Get your organization started" });
+
+  await page.getByRole("link", { name: "Get started" }).click();
+  await expect(contact).toBeVisible();
+  await expect(contact).toHaveCSS("opacity", "1");
+
+  // The roster card's rows stagger in from the card's own reveal rather than
+  // one of their own — so they are the rows most easily left hidden, which is
+  // an empty card beside the headline.
+  await expect(page.getByText("Lena Okafor")).toHaveCSS("opacity", "1");
+  await expect(page.getByText("Nobody yet")).toHaveCSS("opacity", "1");
+
+  // Every revealed block on the page, once it has been scrolled past.
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+  const revealed = page.locator(".reveal");
+  const count = await revealed.count();
+  expect(count).toBeGreaterThan(5);
+  for (let i = 0; i < count; i++) {
+    await expect(revealed.nth(i)).toHaveClass(/is-in/);
+  }
+});
+
 // The two call-to-action buttons point at different people, and swapping them
 // is the easy mistake: there is no self-serve sign-up, so "Get started" that
 // lands on /login strands the very person it is for.
@@ -316,4 +345,45 @@ test("a signed-in visitor to the home page gets the app, not the marketing page"
   await page.goto("/");
   await expect(page).toHaveURL(/\/calendar/);
   await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
+});
+
+// The login page got the home page's arrival motion (Dylan's ask). The rule is
+// the same one that governs the home page: the card must READ with the motion
+// off, so these two tests are the no-motion path and the motion path.
+test("the login card arrives, and is plainly there with motion turned off", async ({
+  page,
+}) => {
+  // Someone who asked their system for less motion gets no attribute at all,
+  // so every `.reveal` renders exactly as the markup has it. This is also the
+  // state a crawler and a blocked bundle see.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/login");
+  await expect(page.getByRole("heading", { name: "TapWorship" })).toBeVisible();
+  await expect(page.locator("html")).not.toHaveAttribute("data-reveal", "on");
+  const card = page.locator(".reveal").first();
+  await expect(card).toHaveCSS("opacity", "1");
+  // The form is a staggered child of the card, which is the part most easily
+  // left at opacity 0 — an empty card with nothing to sign in with.
+  await expect(page.getByLabel("Username / Email")).toBeVisible();
+  await expect(page.locator("form")).toHaveCSS("opacity", "1");
+});
+
+test("the login card and its rows all finish arriving", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.goto("/login");
+  await expect(page.locator("html")).toHaveAttribute("data-reveal", "on");
+
+  const card = page.locator(".reveal").first();
+  await expect(card).toHaveClass(/is-in/);
+  await expect(card).toHaveCSS("opacity", "1");
+
+  // Every direct child of the staggered card, not just the first. They start
+  // hidden and are released by a rule keyed on the CARD's `is-in`, so one that
+  // never gets released is an empty card with nothing to sign in with.
+  const rows = page.locator(".reveal-stagger > *");
+  const count = await rows.count();
+  expect(count).toBeGreaterThan(3);
+  for (let i = 0; i < count; i++) {
+    await expect(rows.nth(i)).toHaveCSS("opacity", "1");
+  }
 });

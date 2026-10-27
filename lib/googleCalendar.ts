@@ -39,6 +39,7 @@ import {
   eventDescription,
   eventTimes,
   eventTitle,
+  inviteAddress,
   seatsToConfirm,
   type CalendarAttendee,
 } from "./calendarEvent";
@@ -142,9 +143,24 @@ export function verifyState(token: string): { orgId: string; userId: string } | 
 // The member-side "Import from Google Calendar" (lib/googleAvailability.ts)
 // shares this callback, so its state is signed the same way under a purpose of
 // its own: neither flow's state verifies as the other's.
-type ImportState = { p: "gimport"; userId: string; requestId: string; exp: number };
+//
+// `requestId` is the availability request the import is for — and it is
+// OPTIONAL, because the same permission is what /profile's "send my invites
+// to" picker reads the person's calendars with, and that has no request
+// behind it. A state with no request is the profile flow, and the callback
+// returns there instead.
+type ImportState = {
+  p: "gimport";
+  userId: string;
+  requestId?: string | null;
+  exp: number;
+};
 
-export function signImportState(userId: string, requestId: string, ttlSec = 600): string {
+export function signImportState(
+  userId: string,
+  requestId: string | null,
+  ttlSec = 600
+): string {
   const body: ImportState = {
     p: "gimport",
     userId,
@@ -155,13 +171,15 @@ export function signImportState(userId: string, requestId: string, ttlSec = 600)
   return `${payload}.${sign(payload, "gimport-state")}`;
 }
 
-export function verifyImportState(token: string): { userId: string; requestId: string } | null {
+export function verifyImportState(
+  token: string
+): { userId: string; requestId: string | null } | null {
   try {
     const [payload, sig] = token.split(".");
     if (!payload || !sig || !safeEqual(sig, sign(payload, "gimport-state"))) return null;
     const body = JSON.parse(Buffer.from(payload, "base64url").toString()) as ImportState;
     if (body.p !== "gimport" || body.exp < Math.floor(Date.now() / 1000)) return null;
-    return { userId: body.userId, requestId: body.requestId };
+    return { userId: body.userId, requestId: body.requestId ?? null };
   } catch {
     return null;
   }
@@ -529,7 +547,14 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             status: true,
             pendingCoverFromUserId: true,
             userId: true,
-            user: { select: { name: true, email: true } },
+            user: {
+              select: {
+                name: true,
+                email: true,
+                calendarInviteEmail: true,
+                calendarInvites: true,
+              },
+            },
           },
         },
       },
@@ -542,19 +567,39 @@ export async function syncSetCalendar(setId: string): Promise<void> {
     // the person handing it over, so the invite stays theirs until an admin
     // approves — a rejected handoff then never bounced anyone's invite.
     const owners = await pendingOwners(set.assignments);
-    const ownerEmails = new Map(
+    const ownerById = new Map(
       (
         await prisma.user.findMany({
           where: { id: { in: [...owners.values()].map((o) => o.id) } },
-          select: { id: true, email: true },
+          select: {
+            id: true,
+            email: true,
+            calendarInviteEmail: true,
+            calendarInvites: true,
+          },
         })
-      ).map((u) => [u.id, u.email])
+      ).map((u) => [u.id, u] as const)
     );
     const seats = set.assignments.map((a) => {
       const owner = owners.get(a.id);
+      // A seat mid-handoff is invited in its OLD owner's name, so it's their
+      // preference that decides, not the taker's.
+      const held = owner ? ownerById.get(owner.id) : null;
       return owner
-        ? { role: a.role, userId: owner.id, name: owner.name, email: ownerEmails.get(owner.id) ?? null }
-        : { role: a.role, userId: a.userId, name: a.user.name, email: a.user.email };
+        ? {
+            role: a.role,
+            userId: owner.id,
+            name: owner.name,
+            email: held ? inviteAddress(held) : null,
+            calendarInvites: held?.calendarInvites ?? true,
+          }
+        : {
+            role: a.role,
+            userId: a.userId,
+            name: a.user.name,
+            email: inviteAddress(a.user),
+            calendarInvites: a.user.calendarInvites,
+          };
     });
     const catalog = await getTeamCatalog(set.teamId);
     const description = eventDescription(seats, set.songs, catalog, `${baseUrl()}${setLinkPath(set.id)}`);
@@ -746,11 +791,26 @@ async function applyRsvps(ev: GoogleEvent): Promise<void> {
   if (!setId || ev.status === "cancelled" || !ev.attendees?.length) return;
   const seats = await prisma.assignment.findMany({
     where: { setId, status: "PENDING" },
-    select: { id: true, role: true, status: true, userId: true, user: { select: { email: true } } },
+    select: {
+      id: true,
+      role: true,
+      status: true,
+      userId: true,
+      user: {
+        select: { email: true, calendarInviteEmail: true, calendarInvites: true },
+      },
+    },
   });
   const ids = seatsToConfirm(
     ev.attendees,
-    seats.map((s) => ({ id: s.id, status: s.status, email: s.user.email }))
+    seats.map((s) => ({
+      id: s.id,
+      status: s.status,
+      // The RSVP comes back from whatever address we invited, so the seat is
+      // matched on that same reading.
+      email: inviteAddress(s.user),
+      calendarInvites: s.user.calendarInvites,
+    }))
   );
   if (ids.length === 0) return;
   const confirmed = seats.filter((s) => ids.includes(s.id));

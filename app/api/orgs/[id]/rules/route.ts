@@ -8,7 +8,12 @@
 //   rule is parsed, every id checked against this org, and the required ones
 //   checked against each other (lib/schedulingRules.ts validateRules), so a
 //   contradiction is refused here even if the editor missed it. 400 carries
-//   `{ error, index }` — which rule it's about.
+//   `{ error, index }` — which rule it's about. The body also carries the
+//   `version` the editor loaded: these rules are ORG-wide and every save
+//   replaces the WHOLE list, so a save built on a stale copy would silently
+//   revert whatever another admin changed in between. A mismatch is a 409 with
+//   `{ stale: true, rules, version }` — the list as it now stands — and
+//   nothing is written.
 // Org admins only. See lib/schedulingRules.ts.
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
@@ -30,9 +35,11 @@ const ROLE_RULE_KINDS: RuleKind[] = ["LEADS_FROM", "ROLE_HOST", "MAY_DOUBLE"];
 import {
   loadOrgRules,
   orgRuleRefs,
+  orgRulesVersion,
   ruleContext,
   ruleEditorOptions,
   saveOrgRules,
+  StaleRulesError,
 } from "@/lib/schedulingRuleStore";
 
 export async function GET(
@@ -94,7 +101,15 @@ export async function GET(
     });
     list = await loadOrgRules(id);
   }
-  return NextResponse.json({ rules: list, options: await ruleEditorOptions(id) });
+  // `version` is the fingerprint of the list as stored: the editor sends it
+  // back with its save so a save built on a stale copy is refused rather than
+  // reverting another admin's edits. These rules are ORG-wide, so two admins
+  // are always editing the same list.
+  return NextResponse.json({
+    rules: list,
+    version: await orgRulesVersion(id),
+    options: await ruleEditorOptions(id),
+  });
 }
 
 export async function PUT(
@@ -111,6 +126,32 @@ export async function PUT(
   if (!result.ok) {
     return NextResponse.json({ error: result.error, index: result.index }, { status: 400 });
   }
-  await saveOrgRules(id, result.rules);
-  return NextResponse.json({ rules: await loadOrgRules(id, refs) });
+  // A stale save is refused with the list as it NOW stands, so the editor can
+  // show the truth instead of its own copy. 409: the request was fine, the
+  // list simply moved under it.
+  try {
+    await saveOrgRules(
+      id,
+      result.rules,
+      typeof body?.version === "string" ? body.version : undefined
+    );
+  } catch (err) {
+    if (err instanceof StaleRulesError) {
+      return NextResponse.json(
+        {
+          error:
+            "Someone else changed these rules while you had them open, so nothing was saved. The list below is up to date — try again.",
+          stale: true,
+          rules: await loadOrgRules(id, refs),
+          version: await orgRulesVersion(id),
+        },
+        { status: 409 }
+      );
+    }
+    throw err;
+  }
+  return NextResponse.json({
+    rules: await loadOrgRules(id, refs),
+    version: await orgRulesVersion(id),
+  });
 }
