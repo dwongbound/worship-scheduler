@@ -124,6 +124,26 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   (its event on the org's Google Calendar; `Org.googleCal*` holds the
   connection),
   `slotCapacities: Json?` (per-set team-shape override; null = global default).
+- **SetPractice** — one practice (rehearsal) on a set: `startsAt` + `endsAt`
+  (a start and an END, never a duration — that's how an admin says it and what
+  the calendar event needs) and its own `googleEventId`. Three deliberate
+  absences: it is NOT drawn on the app calendar (the set detail modal is its
+  one home), it is NEVER handed to `buildSchedule` as a booking (so load,
+  spacing and availability are decided by sets alone), and it has NO roster —
+  who's invited is derived from the set's assignments at sync time, so a roster
+  change carries the practice invite with it. `@@unique([setId, startsAt])`.
+  Added/deleted ad hoc on any set, recurring or not, on any date
+  (`POST /api/sets/[id]/practices`, `DELETE …/[practiceId]`, both org admin).
+- **SetTemplatePractice** — a practice on a weekly `SetTemplate`, as a
+  `dayOfWeek` + `startMinute` + `endMinute`. A weekly time has no date, so its
+  practices can't either: the weekday means "the one in the SET's own week",
+  weeks running **Mon–Sun** like `weekKey`, which is what puts a Wednesday
+  practice BEFORE each Sunday service instead of after it. Stamped onto
+  `SetPractice` rows at generate time (`admin/generate/apply` matches each new
+  set back to its template with `templateIdOf`, since sets don't store theirs)
+  and editable per set afterwards — editing a template does NOT rewrite sets
+  already generated, the same bargain `slotCapacities` makes. Vocabulary in
+  `lib/practices.ts`.
 - **Assignment** — one User in one `role` (a TeamRole.key **string**, not an
   enum) on one Set; a user may fill several roles on a set.
   `status: PENDING|CONFIRMED|SWAP_REQUESTED`. `@@unique([setId, userId, role])`.
@@ -276,6 +296,11 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   `assignments/[id]`, `assignments/confirm-all`.
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
+- Practices: `sets/[id]/practices` (POST, org admin — one ad-hoc practice on
+  any set, any date), `sets/[id]/practices/[practiceId]` (DELETE, org admin;
+  the practice must belong to THAT set, so an id from elsewhere can't delete
+  across orgs). A set's practices ride along in `SET_INCLUDE`, since the detail
+  modal is the only place they're shown.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Google Calendar: `google-calendar/import` — a MEMBER's import, now three
   routes because it's a SCREEN (`components/GoogleImportModal`), not one click:
@@ -341,7 +366,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   "already in this role", anything else says nothing was saved. DMs go out ONCE per person across the
   whole batch via `lib/slack.ts notifyRosterChanges`/`rosterDmText`, so a month
   of one role is one message, not one per set; a multi-set DM lists sets as
-  plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
+  plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])` (both carry
+  `practices` — a weekday + window list that REPLACES the whole set, like the
+  rules PUT; omitting the field on a PATCH leaves the existing ones alone, so
+  renaming a time can't wipe them),
   `admin/generate(+/apply)`, `admin/availability-request`,
   `admin/drafts(+/[id])` (saved previews — GET lists them WITHOUT
   their plan payloads, `[id]` GET is what carries one back. `?mode=` /
@@ -442,6 +470,20 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
 - `guestTeams.ts` — guest-team vocabulary: `GuestRoleSpec`, `isUnbounded`,
   `openSeats` (an `allAvailable` seat reports 0, so it never reads as a hole),
   `validateGuestRoles(raw, allowedKeys)`. ✅tested
+- `practices.ts` — practices on a set, pure: `practiceWeekStart` (the **Monday**
+  of a set's week — the whole meaning of "the Wednesday" on a template),
+  `practiceDates` / `practicesForSet` (a template's weekdays resolved against
+  one set), `practiceMinutes`, `validateTemplatePractices` (a duplicate is
+  DROPPED, since two practices at one instant would be two identical calendar
+  events; anything else is an error, because guessing would send the wrong
+  invite), `validateSetPractice` (any date at all — that's the point of an
+  ad-hoc one — and it names the same-instant clash and the cap ITSELF rather
+  than leaving a `@@unique` violation for the route to interpret),
+  `practiceCountBadge` ("+2" after a recurring set's time, null for none) and
+  `describeTemplatePractice`. `PRACTICES_ARE_NOT_BOOKINGS` is a note, not a
+  switch: nothing here is wired into `lib/scheduler.ts` and nothing should be —
+  auto schedule ignores practices by construction, there being no
+  practice-aware branch to forget to turn on. ✅tested
 - `stagedPlan.ts` — pure helpers for the generate-review modal, incl. the Team
   load panel's metrics: `LOAD_METRICS` / `loadMetricRange()` / `parseLoadMetric()`
   let the admin measure people by this plan, upcoming bookings, or the past
