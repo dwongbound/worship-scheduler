@@ -831,3 +831,29 @@ export function defaultRoleRules(builtIn: {
     })),
   ];
 }
+
+/**
+ * A fingerprint of the org's stored rule list, for detecting a save built on a
+ * stale copy.
+ *
+ * Rules are ORG-wide: two admins editing them are editing the same list, and
+ * every save replaces the whole list in order (`saveOrgRules`). So an editor
+ * that loaded the list ten minutes ago and then toggles one rule would send
+ * back ten-minute-old copies of all the others, silently undoing whatever the
+ * other admin did in between. The fingerprint is what lets the server notice
+ * and refuse, instead of taking the loser's word for the whole list.
+ *
+ * Row ids are the whole input, and they're enough because a save deletes every
+ * row and inserts new ones — so any write at all changes them. Order matters,
+ * since reordering the list IS an edit (a preference's position is its rank).
+ */
+export function rulesVersion(ids: string[]): string {
+  // FNV-1a, 32-bit. Not a security hash — it only has to change when the list
+  // does, and be the same string in two different requests.
+  let h = 0x811c9dc5;
+  for (const s of ids.join("\u0000") + `|${ids.length}`) {
+    h ^= s.charCodeAt(0);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
