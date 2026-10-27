@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { validateSetPractice } from "@/lib/practices";
+import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 export async function POST(
   req: NextRequest,
@@ -46,5 +47,8 @@ export async function POST(
     },
     select: { id: true, startsAt: true, endsAt: true },
   });
+  // One sync for the set covers its new practice: syncSetCalendar writes the
+  // set's event and every practice's from the same load.
+  syncSetsAfterResponse(id);
   return NextResponse.json(practice, { status: 201 });
 }

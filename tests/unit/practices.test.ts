@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   MAX_PRACTICES_PER_SET,
   MAX_PRACTICE_MINUTES,
@@ -7,6 +7,7 @@ import {
   practiceCountBadge,
   practiceDates,
   practiceMinutes,
+  practiceFreeBusy,
   practiceWeekStart,
   practicesForSet,
   validateSetPractice,
@@ -309,5 +310,71 @@ describe("describeTemplatePractice", () => {
     expect(
       describeTemplatePractice(wed7to9, (d) => DAY_LABELS[d], minutesToShortTimeLabel)
     ).toBe("Wednesdays, 7PM–9PM");
+  });
+});
+
+describe("practiceFreeBusy", () => {
+  const practice = {
+    id: "p1",
+    startsAt: new Date(2026, 10, 4, 19, 0),
+    endsAt: new Date(2026, 10, 4, 21, 0),
+  };
+  // Stand-in for isUserAvailable: a rule blocks the person it names.
+  type Rule = { userId: string; label: string };
+  const blocks = (userId: string, _w: unknown, rules: Rule[]) =>
+    !rules.some((r) => r.userId === userId);
+
+  it("answers per person, free and not", () => {
+    const out = practiceFreeBusy(
+      [{ userId: "a" }, { userId: "b" }],
+      practice,
+      [{ userId: "b", label: "Wednesdays" }],
+      blocks
+    );
+    expect(out).toEqual([
+      { userId: "a", free: true, blockedBy: [] },
+      { userId: "b", free: false, blockedBy: [{ userId: "b", label: "Wednesdays" }] },
+    ]);
+  });
+
+  it("is one row per person, however many seats they hold", () => {
+    const out = practiceFreeBusy(
+      [{ userId: "a" }, { userId: "a" }, { userId: "b" }],
+      practice,
+      [],
+      blocks
+    );
+    expect(out.map((p) => p.userId)).toEqual(["a", "b"]);
+  });
+
+  it("names every block that would do it on its own", () => {
+    const out = practiceFreeBusy(
+      [{ userId: "a" }],
+      practice,
+      [
+        { userId: "a", label: "weekly" },
+        { userId: "a", label: "that evening" },
+        { userId: "other", label: "not theirs" },
+      ],
+      blocks
+    );
+    expect(out[0].free).toBe(false);
+    expect(out[0].blockedBy.map((r) => r.label)).toEqual(["weekly", "that evening"]);
+  });
+
+  it("hands the window the practice's own span, not a duration it was given", () => {
+    const seen: { startsAt: Date; durationMinutes: number }[] = [];
+    practiceFreeBusy([{ userId: "a" }], practice, [], (_u, w) => {
+      seen.push(w);
+      return true;
+    });
+    expect(seen[0].durationMinutes).toBe(120);
+    expect(seen[0].startsAt).toEqual(practice.startsAt);
+  });
+
+  it("asks nothing of the rules when the roster is empty", () => {
+    const blocksSpy = vi.fn(() => true);
+    expect(practiceFreeBusy([], practice, [], blocksSpy)).toEqual([]);
+    expect(blocksSpy).not.toHaveBeenCalled();
   });
 });

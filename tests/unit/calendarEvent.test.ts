@@ -6,6 +6,8 @@ import {
   eventAttendees,
   eventDescription,
   eventTimes,
+  practiceTimes,
+  practiceTitle,
   eventTitle,
   inviteAddress,
   normalizeEmail,
@@ -26,6 +28,13 @@ describe("eventTitle", () => {
     expect(eventTitle({ label: "Sunday Morning" })).toBe("Sunday Morning");
     expect(eventTitle({ label: null })).toBe("Worship set");
     expect(eventTitle({ label: "   " })).toBe("Worship set");
+  });
+});
+
+describe("practiceTitle", () => {
+  it("names the practice after its set, prefixed so it can't read as the set", () => {
+    expect(practiceTitle({ label: "Sunday Morning" })).toBe("Practice: Sunday Morning");
+    expect(practiceTitle({ label: null })).toBe("Practice: Worship set");
   });
 });
 
@@ -146,6 +155,23 @@ describe("eventTimes", () => {
     expect(eventTimes({ startsAt, durationMinutes: 150 }, "America/Los_Angeles")).toEqual({
       start: { dateTime: "2026-10-25T16:00:00.000Z", timeZone: "America/Los_Angeles" },
       end: { dateTime: "2026-10-25T18:30:00.000Z", timeZone: "America/Los_Angeles" },
+    });
+  });
+});
+
+describe("practiceTimes", () => {
+  it("takes both ends from the practice — there is no duration to add", () => {
+    expect(
+      practiceTimes(
+        {
+          startsAt: new Date("2026-11-04T19:00:00Z"),
+          endsAt: new Date("2026-11-04T21:00:00Z"),
+        },
+        "America/Los_Angeles"
+      )
+    ).toEqual({
+      start: { dateTime: "2026-11-04T19:00:00.000Z", timeZone: "America/Los_Angeles" },
+      end: { dateTime: "2026-11-04T21:00:00.000Z", timeZone: "America/Los_Angeles" },
     });
   });
 });
