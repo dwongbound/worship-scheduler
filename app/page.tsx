@@ -20,7 +20,8 @@ import { Archivo, IBM_Plex_Mono } from "next/font/google";
 import Logo from "@/components/Logo";
 import Reveal from "@/components/Reveal";
 import CopyEmailButton from "@/components/CopyEmailButton";
-import { REVEAL_CSS, REVEAL_SCRIPT, REVEAL_STAGGER_CLASS } from "@/lib/reveal";
+import RevealRoot from "@/components/RevealRoot";
+import { REVEAL_STAGGER_CLASS } from "@/lib/reveal";
 import { CONTACT_EMAIL, LEGAL_LINKS } from "@/lib/legal";
 
 export const metadata: Metadata = {
@@ -92,17 +93,9 @@ export default function HomePage() {
   return (
     <div className={`${archivo.variable} ${plexMono.variable}`}>
       {/* Anchor jumps glide rather than teleport, and the page's sections
-          rise into view as you reach them. Both rules live on <html> (the
-          scrolling element), which a page can't reach through a class, and
-          both belong to this page rather than globals.css — nothing else in
-          the app navigates by anchor or animates on scroll. React drops them
-          again on the way out.
-
-          The script ARMS the motion before the first paint. Without it the
-          rules are inert and the page is simply visible, which is what a
-          crawler and Google's OAuth review get — see lib/reveal.ts. */}
-      <style>{REVEAL_CSS}</style>
-      <script dangerouslySetInnerHTML={{ __html: REVEAL_SCRIPT }} />
+          rise into view as you reach them. /login arms the same thing, which
+          is why both halves live in one component. */}
+      <RevealRoot />
       {/* The mark and the name together, which is what the OAuth review
           matches against the consent screen. Sticky so "Get started" is always
           one press away however far down the page you are. */}

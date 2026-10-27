@@ -242,7 +242,16 @@ on a container staggers its CHILDREN off the nearest revealed ancestor — one
 observer for the roster card, the stagger being pure CSS — and it may sit on
 the revealed element itself or inside it, which is why there are two selectors.
 `tests/unit/reveal.test.ts` parses the sheet and fails if any hiding rule
-escapes that scoping.
+escapes that scoping. **`components/RevealRoot.tsx` is the two halves
+together** — the rules, which HIDE, and the script, which is the only thing
+that ever reveals — because a page carrying one without the other hides its
+content for good; the same test asserts every animated page renders it and
+inlines neither half. **/login arms the same motion**: its card rises in as one
+piece with `REVEAL_STAGGER_CLASS` on the Card so its own rows follow, behind the
+home page's soft wash. `RevealRoot` sits OUTSIDE the `Suspense` boundary there,
+since `useSearchParams` makes the form client-rendered and the attribute has to
+be in the document before the first paint. The no-motion rule is the same, and
+`tests/e2e/auth.spec.ts` covers both paths.
 Signed in it's still the app: `proxy.ts` redirects a session holder to
 `/calendar` at the edge, because Google's sign-in callback lands on `/` and
 marketing copy after signing in reads as broken. That redirect can't live in
