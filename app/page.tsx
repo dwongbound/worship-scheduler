@@ -18,7 +18,9 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Archivo, IBM_Plex_Mono } from "next/font/google";
 import Logo from "@/components/Logo";
+import Reveal from "@/components/Reveal";
 import CopyEmailButton from "@/components/CopyEmailButton";
+import { REVEAL_CSS, REVEAL_SCRIPT, REVEAL_STAGGER_CLASS } from "@/lib/reveal";
 import { CONTACT_EMAIL, LEGAL_LINKS } from "@/lib/legal";
 
 export const metadata: Metadata = {
@@ -89,13 +91,18 @@ const primaryButton =
 export default function HomePage() {
   return (
     <div className={`${archivo.variable} ${plexMono.variable}`}>
-      {/* Anchor jumps glide rather than teleport. It has to be on <html> (the
-          scrolling element), which a page can't reach through a class, and it
-          belongs to this page rather than globals.css — nothing else in the
-          app navigates by anchor. React drops the rule again on the way out. */}
-      <style>{
-        "@media (prefers-reduced-motion: no-preference){html{scroll-behavior:smooth}}"
-      }</style>
+      {/* Anchor jumps glide rather than teleport, and the page's sections
+          rise into view as you reach them. Both rules live on <html> (the
+          scrolling element), which a page can't reach through a class, and
+          both belong to this page rather than globals.css — nothing else in
+          the app navigates by anchor or animates on scroll. React drops them
+          again on the way out.
+
+          The script ARMS the motion before the first paint. Without it the
+          rules are inert and the page is simply visible, which is what a
+          crawler and Google's OAuth review get — see lib/reveal.ts. */}
+      <style>{REVEAL_CSS}</style>
+      <script dangerouslySetInnerHTML={{ __html: REVEAL_SCRIPT }} />
       {/* The mark and the name together, which is what the OAuth review
           matches against the consent screen. Sticky so "Get started" is always
           one press away however far down the page you are. */}
@@ -120,27 +127,47 @@ export default function HomePage() {
         </div>
       </header>
 
-      <section id="top" className="mx-auto max-w-5xl px-4 py-12 sm:py-16">
+      {/* A single soft wash behind the hero, so the page opens on something
+          warmer than flat grey. Decorative and inert: it takes no space, is
+          hidden from the accessibility tree, and sits earlier in the document
+          than every section — which is what puts it behind them, since a
+          negative z-index would put it behind the page's own background
+          instead and show nothing at all. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute top-[-11rem] left-1/2 h-[24rem] w-[52rem] max-w-[140vw] -translate-x-1/2 rounded-full bg-indigo-200/45 blur-3xl dark:bg-indigo-500/10"
+      />
+
+      <section id="top" className="relative mx-auto max-w-5xl px-4 py-12 sm:py-16">
         <div className="grid items-start gap-10 lg:grid-cols-2 lg:gap-14">
           <div>
-            <p className={`${mono} text-xs tracking-[0.14em] text-gray-500 uppercase dark:text-gray-400`}>
+            <Reveal
+              as="p"
+              className={`${mono} text-xs tracking-[0.14em] text-gray-500 uppercase dark:text-gray-400`}
+            >
               Rota scheduling
-            </p>
-            <h1
+            </Reveal>
+            <Reveal
+              as="h1"
+              delayIndex={1}
               className={`${display} mt-4 text-4xl leading-[1.05] font-bold tracking-tight text-balance sm:text-5xl`}
             >
               Who&rsquo;s playing Sunday?
-            </h1>
-            <p className="mt-5 max-w-[34ch] text-lg text-gray-600 dark:text-gray-300">
+            </Reveal>
+            <Reveal
+              as="p"
+              delayIndex={2}
+              className="mt-5 max-w-[34ch] text-lg text-gray-600 dark:text-gray-300"
+            >
               TapWorship builds the roster, keeps everyone&rsquo;s availability in
               one place, and lets the team sort out its own covers.
-            </p>
+            </Reveal>
             {/* "Get started" means getting an organization set up, which is a
                 conversation, not a form — so it lands on the contact block at
                 the foot of the page rather than on /login. Anyone who already
                 has an account wants the header's Sign in, which the line
                 beside it points at. */}
-            <div className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
+            <Reveal delayIndex={3} className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-3">
               <a href="#contact" className={primaryButton}>
                 Get started
               </a>
@@ -154,11 +181,14 @@ export default function HomePage() {
                 </Link>
                 .
               </span>
-            </div>
+            </Reveal>
           </div>
 
-          <div
-            className="overflow-hidden rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800"
+          {/* The card arrives last and as one piece, then its rows fill in —
+              one observer for the lot, the stagger being pure CSS. */}
+          <Reveal
+            delayIndex={2}
+            className={`${REVEAL_STAGGER_CLASS} overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800`}
             aria-label="Example set roster"
           >
             <div className="flex flex-wrap items-baseline justify-between gap-3 border-b border-gray-200 px-4 py-3.5 dark:border-gray-700">
@@ -207,7 +237,7 @@ export default function HomePage() {
                 </span>
               </div>
             ))}
-          </div>
+          </Reveal>
         </div>
       </section>
 
@@ -218,15 +248,23 @@ export default function HomePage() {
         className="scroll-mt-16 border-t border-gray-200 dark:border-gray-800"
       >
         <div className="mx-auto max-w-5xl px-4 py-12 sm:py-16">
-          <h2 className={`${display} text-2xl font-semibold tracking-tight sm:text-3xl`}>
+          <Reveal
+            as="h2"
+            className={`${display} text-2xl font-semibold tracking-tight sm:text-3xl`}
+          >
             How it works
-          </h2>
-          <p className="mt-1.5 text-gray-600 dark:text-gray-300">
+          </Reveal>
+          <Reveal as="p" delayIndex={1} className="mt-1.5 text-gray-600 dark:text-gray-300">
             Four steps, in the order they actually happen.
-          </p>
+          </Reveal>
+          {/* Each step rises as you reach it, which is the one place the
+              motion is doing work rather than decorating: they are numbered
+              because they happen in that order, and arriving in that order
+              says so. */}
           <ol className="mt-7">
             {STEPS.map((step, i) => (
-              <li
+              <Reveal
+                as="li"
                 key={step.title}
                 className="grid grid-cols-[2.25rem_minmax(0,1fr)] items-baseline gap-x-5 gap-y-1.5 border-t border-gray-200 py-4 last:border-b sm:grid-cols-[2.25rem_minmax(0,11rem)_minmax(0,1fr)] dark:border-gray-800"
               >
@@ -237,7 +275,7 @@ export default function HomePage() {
                 <p className="col-start-2 text-gray-600 sm:col-start-3 dark:text-gray-300">
                   {step.body}
                 </p>
-              </li>
+              </Reveal>
             ))}
           </ol>
         </div>
@@ -248,15 +286,15 @@ export default function HomePage() {
         className="scroll-mt-16 border-t border-gray-200 dark:border-gray-800"
       >
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-7 gap-y-5 px-4 py-12 sm:py-14">
-          <div className="min-w-0 flex-[1_1_18rem]">
+          <Reveal className="min-w-0 flex-[1_1_18rem]">
             <h2 className={`${display} text-2xl font-semibold tracking-tight sm:text-3xl`}>
               Get your organization started
             </h2>
             <p className="mt-1.5 text-gray-600 dark:text-gray-300">
               Contact me and I&rsquo;ll set your teams up.
             </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
+          </Reveal>
+          <Reveal delayIndex={1} className="flex flex-wrap items-center gap-3">
             {/* Shown as text, not only behind the button: a copy can be refused
                 and there is no way for the page to tell the visitor that. */}
             <span
@@ -266,7 +304,7 @@ export default function HomePage() {
               {CONTACT_EMAIL}
             </span>
             <CopyEmailButton email={CONTACT_EMAIL} targetId={CONTACT_ID} />
-          </div>
+          </Reveal>
         </div>
       </section>
 
