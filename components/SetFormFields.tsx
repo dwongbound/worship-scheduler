@@ -170,7 +170,7 @@ export default function SetFormFields({
 
       {/* Auto-create the set's private Slack channel this many days before it
           starts. Blank = off (an admin can still make one by hand with the
-          set's "Slack Team" button). The org must have Slack connected. */}
+          set's "Create Group" button). The org must have Slack connected. */}
       <Input
         label="Auto-create group chat (days before, blank = off)"
         type="number"

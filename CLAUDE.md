@@ -637,6 +637,26 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   per org makes that one request and collapses simultaneous askers. Connecting
   is a full navigation (the cache dies with the page); the one in-app change,
   Disconnect on Org settings, calls `invalidateSlackStatus(orgId)`. ✅tested
+- `dropdownPosition.ts` — `placeMenu()`: where a portaled dropdown panel
+  actually goes. The portal (see `components/common/Dropdown.tsx`) stops a
+  modal CLIPPING the menu; it doesn't stop the menu landing off the screen. A
+  right-aligned panel hangs leftward from its trigger, so a trigger near the
+  left of a phone put the panel's left edge ~86px past the edge and the set
+  modal's "⋮" lost the first letters of every row. So placement is a CLAMP, not
+  a pin: the panel keeps `MENU_GUTTER` from both sides (a panel wider than the
+  screen pins to the LEFT gutter — its first characters are the ones worth
+  keeping), flips above the trigger when there's no room below AND more room
+  above, and reports a `maxHeight` to scroll in when neither side can hold it
+  whole. Pure viewport-space geometry, which is why it's a module and not
+  inline arithmetic. ✅tested
+- `loadMetrics.ts` — the "how often is this person already serving?" windows,
+  shared by the review modal's Team load panel and the ×N badges. Only the
+  review workspace PICKS one (`PLAN_LOAD_METRICS`): a plan spans months. The
+  set detail modal has no picker — `SET_LOAD_METRIC` is the whole answer, the
+  set's own calendar month, because one set is one month's problem and the
+  176px control that offered "past 3 months" there took a phone's action bar by
+  itself. `serveMonthLabel()` names that month for the (i) and the badge's
+  title, so neither describes a window the reader can't choose. ✅tested
 - `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
   behind "is this the app-style layout?", shared by the bottom bar's `lg:`
   classes, SwipePager and PullToRefresh. Plus `PREVIEW_MIN_WIDTH` (768 = `md`)
@@ -874,6 +894,9 @@ opts out with `data-no-pull`),
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
 Primitives in `components/common/`: `Badge Banner Button Card Checkbox
 ColorPicker Dropdown Input Modal Select Stepper LoadingDots LoadingScreen`.
+(`Dropdown` portals its menu to `<body>` so a modal can't clip it, then places
+it with `lib/dropdownPosition.ts placeMenu` — it renders the panel hidden for
+one pass to MEASURE it, since the panel's own size is half of where it can go.)
 Prefer extending these. (`Stepper` = number field with big − / + either side,
 replacing a native spinner — a plain text box under the hood, digits only, so
 it can be cleared and retyped; `ColorPicker` = a swatch opening a portaled
