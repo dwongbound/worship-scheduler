@@ -744,6 +744,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   Only the set's own event carries `SET_ID_PROPERTY`; a practice carries
   `PRACTICE_ID_PROPERTY` instead, because `applyRsvps` keys off the former and
   accepting a REHEARSAL invite must not confirm a seat on the service.
+  A practice's title is `practiceTitle` — **"(Practice) <set name>"**, since
+  its set is the only thing that tells two rehearsals apart in a month of
+  entries; bracketed rather than "Practice: …" so the set's own name starts as
+  early as possible in a cell that truncates hard.
   Routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
   roster, swap-approval and setlist change, and DELETE reads
   `calendarEventsOfSet` before the row goes — plural, since a set's practices
@@ -826,12 +830,16 @@ admin-only, and unlike the rest of that modal it acts IMMEDIATELY rather than
 staging, because each one sends or cancels a real calendar invite — the same
 reason Delete set and sending a note do. The free/busy modal fetches on the
 CLICK, never on the set opening. Deleting asks first: it emails the whole
-roster a cancellation),
+roster a cancellation. Each row LEADS with its ✕ and adding is a full-width
+dashed "+ Add Practice" bar — the same control the Create tab's weekly set
+times use, so "add another one of these" looks the same wherever it is),
 `TemplatePracticesEditor` (the same thing for a weekly set time: a weekday +
 from/to per row, since a weekly time has no date. Deliberately NOT in
 `SetFormFields`, which `CreateSetModal` shares — a practice on a concrete set
 is a date, not a weekday. It runs `validateTemplatePractices` as you type, so
-the form can't offer a save the API would 400),
+the form can't offer a save the API would 400. Same two controls as
+`SetPractices`: the ✕ leads its row (trailing it, it landed under whichever
+field wrapped last) and the dashed bar adds),
 `SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal` (the weekly set time
 form. Its day picker is seven toggle buttons ACROSS — `DAY_INITIALS`
 ("Su"…"Sa") visible, the full day name as the accessible one, so it is still
@@ -942,6 +950,14 @@ gives them the phone row's 44px; the submit button is outside the `<form>` as a
 result, so it carries `form={formId}` with a `useId()` the form shares.)
 `SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
+**Auto Create Slack Channel** (the `groupChatLeadDays` number, blank = off) and
+**Team** share ONE row, half each — a two-digit number and a handful of team
+names neither needed a row of its own. The team picker is CHIPS, not a
+`Select`: the same rounded pill the set modal's title wears, so the whole
+choice is readable at a glance and picking one is a single tap
+(`getByRole("radio", { name: "Sunday Team" })`, `aria-checked` the state).
+Switching team still clears any custom shape — its keys are the old team's
+roles.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 

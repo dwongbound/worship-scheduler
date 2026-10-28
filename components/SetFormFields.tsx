@@ -12,7 +12,6 @@ import {
   minutesToTimeInput,
   timeStringToMinutes,
 } from "@/lib/dates";
-import Select from "./common/Select";
 import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import type { BandRole } from "@/lib/constants";
@@ -114,26 +113,81 @@ export default function SetFormFields({
 
       {scheduleField}
 
-      {/* Which team this set is for — only its members can be scheduled. */}
-      <Select
-        label="Team"
-        value={state.teamId}
-        // Switching teams drops any custom shape: its keys belong to the old
-        // team's roles and would mean nothing against the new one's.
-        onChange={(e) => patch({ teamId: e.target.value, capacities: null })}
-        required
-        disabled={disabled || teams.length === 0}
-      >
-        {teams.length === 0 ? (
-          <option value="">Loading teams…</option>
-        ) : (
-          teams.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))
-        )}
-      </Select>
+      {/* Two half-width columns: how far ahead to open the set's Slack channel,
+          and which team the set is for. Neither needs a full row of its own —
+          one is a two-digit number and the other a short list of names — and
+          side by side they take one row's height instead of two. */}
+      <div className="grid grid-cols-2 items-start gap-3">
+        {/* Auto-create the set's private Slack channel this many days before it
+            starts. Blank = off (an admin can still make one by hand with the
+            set's "Create Group" button). The org must have Slack connected.
+            The rule sits UNDER the field as a hint rather than in the label,
+            which is already long enough to wrap in half a row. */}
+        <div>
+          <Input
+            label="Auto Create Slack Channel"
+            type="number"
+            min={1}
+            value={state.groupChatLeadDays ?? ""}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              patch({
+                groupChatLeadDays:
+                  e.target.value === "" || Number.isNaN(n) ? null : n,
+              });
+            }}
+            placeholder="Off"
+            disabled={disabled}
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Days before the set to create it. Blank leaves it off.
+          </p>
+        </div>
+
+        {/* Which team this set is for — only its members can be scheduled.
+            Chips rather than a dropdown, the same pill the set modal's title
+            wears: an org has a handful of teams, so the whole choice is
+            readable at a glance and picking one is a single tap instead of
+            open-scroll-pick. */}
+        <fieldset disabled={disabled}>
+          <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Team
+          </legend>
+          {teams.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Loading teams…
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {teams.map((t) => {
+                const on = t.id === state.teamId;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    // Switching teams drops any custom shape: its keys belong
+                    // to the old team's roles and would mean nothing against
+                    // the new one's.
+                    onClick={() => patch({ teamId: t.id, capacities: null })}
+                    className={`inline-flex h-11 items-center rounded-full border px-3 text-sm
+                      font-medium transition-colors disabled:cursor-not-allowed
+                      disabled:opacity-60 sm:h-9 ${
+                        on
+                          ? "border-indigo-600 bg-indigo-600 text-white"
+                          : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 " +
+                            "dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
+                      }`}
+                  >
+                    {t.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </fieldset>
+      </div>
 
       {/* Start + END time. The set still STORES a duration, so the end time is
           derived from it: moving the start slides the end along and keeps the
@@ -167,33 +221,6 @@ export default function SetFormFields({
       <p className="-mt-1 text-xs text-gray-500 dark:text-gray-400">
         {durationLabel(state.duration)} long
       </p>
-
-      {/* Auto-create the set's private Slack channel this many days before it
-          starts. Blank = off (an admin can still make one by hand with the
-          set's "Create Group" button). The org must have Slack connected.
-          The label is two words and the rule sits UNDER the field as a hint:
-          as one long label it wrapped to two lines and was several times the
-          width of the number it was asking for. */}
-      <div>
-        <Input
-          label="Group chat"
-          type="number"
-          min={1}
-          value={state.groupChatLeadDays ?? ""}
-          onChange={(e) => {
-            const n = Number(e.target.value);
-            patch({
-              groupChatLeadDays:
-                e.target.value === "" || Number.isNaN(n) ? null : n,
-            });
-          }}
-          placeholder="Off"
-          disabled={disabled}
-        />
-        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-          Days before the set to create it. Blank leaves it off.
-        </p>
-      </div>
 
       {/* On: this set wants a musical director — the auto-scheduler seats one
           and the set detail modal shows the MD picker. Off: no MD is tracked

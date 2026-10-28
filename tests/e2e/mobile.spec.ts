@@ -756,8 +756,8 @@ test("the weekly set time form fits a phone: one row of days, a footer in reach"
   await expect(modal).toBeVisible();
 
   // Exactly the seven days, named in full for anyone who can't see the two
-  // letters on the button. (Anchored, or "Sunday" also matches the Team
-  // select, whose accessible name concatenates "…Sunday Team…".)
+  // letters on the button. (Anchored, or "Sunday" would also match the
+  // "Sunday Team" chip.)
   const days = modal.getByRole("checkbox", {
     name: /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day$/,
   });
@@ -787,4 +787,22 @@ test("the weekly set time form fits a phone: one row of days, a footer in reach"
   });
   await expect(submit).toBeVisible();
   expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  // The Slack-channel number and the team chips share one row, half each:
+  // a two-digit number and a few short names don't each need a full row, and
+  // on a phone a row saved is a row of scrolling saved.
+  const lead = modal.getByLabel("Auto Create Slack Channel");
+  const chip = modal.getByRole("radio", { name: "Sunday Team" });
+  const leadBox = (await lead.boundingBox())!;
+  const chipBox = (await chip.boundingBox())!;
+  // Side by side, not stacked.
+  expect(chipBox.x).toBeGreaterThan(leadBox.x + leadBox.width - 1);
+  // Neither column takes much over half the form's width.
+  expect(leadBox.width).toBeLessThan(viewport.width * 0.55);
+  // A chip is a tap target too.
+  expect(chipBox.height).toBeGreaterThanOrEqual(44);
+
+  // Picking a team is one tap on a chip — no dropdown to open.
+  await chip.click();
+  await expect(chip).toHaveAttribute("aria-checked", "true");
 });

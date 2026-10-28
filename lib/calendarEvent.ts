@@ -62,9 +62,13 @@ export function eventTitle(set: Pick<CalendarSet, "label">): string {
  * A practice's event title. Named after its set, because that is the only
  * thing that tells two of them apart in a month of calendar entries — and
  * prefixed, so the rehearsal never reads as the service itself.
+ *
+ * The prefix is bracketed rather than "Practice: …" so the set's own name
+ * starts as early as possible: a calendar cell truncates hard, and a colon
+ * prefix spends its first characters on a word every practice shares.
  */
 export function practiceTitle(set: Pick<CalendarSet, "label">): string {
-  return `Practice: ${eventTitle(set)}`;
+  return `(Practice) ${eventTitle(set)}`;
 }
 
 /** Lower-cased and trimmed: Google compares attendee emails case-insensitively. */

@@ -33,8 +33,8 @@ describe("eventTitle", () => {
 
 describe("practiceTitle", () => {
   it("names the practice after its set, prefixed so it can't read as the set", () => {
-    expect(practiceTitle({ label: "Sunday Morning" })).toBe("Practice: Sunday Morning");
-    expect(practiceTitle({ label: null })).toBe("Practice: Worship set");
+    expect(practiceTitle({ label: "Sunday Morning" })).toBe("(Practice) Sunday Morning");
+    expect(practiceTitle({ label: null })).toBe("(Practice) Worship set");
   });
 });
 
