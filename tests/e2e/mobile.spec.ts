@@ -740,3 +740,51 @@ test("the set modal's overflow trigger stays at the right edge", async ({
     modal.getByRole("button", { name: "Create Group" })
   ).toBeVisible();
 });
+
+test("the weekly set time form fits a phone: one row of days, a footer in reach", async ({
+  page,
+}) => {
+  // The Create tab's "weekly set time" form was the densest screen on a phone:
+  // seven full-word day checkboxes wrapped into three ragged rows of 16px
+  // targets, and its Close/Save buttons sat at the end of the scrolling body
+  // rather than in the pinned footer. Both are layout facts worth pinning —
+  // they only go wrong at this width, where nobody looks.
+  await login(page, "admin");
+  await gotoReady(page, "/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  // Exactly the seven days, named in full for anyone who can't see the two
+  // letters on the button. (Anchored, or "Sunday" also matches the Team
+  // select, whose accessible name concatenates "…Sunday Team…".)
+  const days = modal.getByRole("checkbox", {
+    name: /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day$/,
+  });
+  await expect(days).toHaveCount(7);
+
+  const boxes = [];
+  for (let i = 0; i < 7; i++) boxes.push((await days.nth(i).boundingBox())!);
+  const viewport = page.viewportSize()!;
+
+  // One row: every day shares a top edge, and the last one ends on screen.
+  const tops = boxes.map((b) => Math.round(b.y));
+  expect(new Set(tops).size).toBe(1);
+  expect(boxes[0].x).toBeGreaterThanOrEqual(0);
+  const last = boxes[6];
+  expect(last.x + last.width).toBeLessThanOrEqual(viewport.width);
+
+  // Apple's 44px minimum — a day is a tap target here, not a 16px tick.
+  for (const [i, b] of boxes.entries()) {
+    expect({ i, tall: b.height >= 44 }).toEqual({ i, tall: true });
+  }
+
+  // The actions are in the modal's pinned footer, so they're reachable
+  // without scrolling the form to its end, and they carry the phone row's
+  // full height.
+  const submit = page.locator(".modal-footer").getByRole("button", {
+    name: "Add template",
+  });
+  await expect(submit).toBeVisible();
+  expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+});
