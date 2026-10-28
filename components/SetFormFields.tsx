@@ -7,6 +7,7 @@
 // `scheduleField` slot, which renders right under the label.
 import { ReactNode } from "react";
 import Input from "./common/Input";
+import Select from "./common/Select";
 import {
   durationBetween,
   minutesToTimeInput,
@@ -123,7 +124,7 @@ export default function SetFormFields({
             set's "Create Group" button). The org must have Slack connected.
             The rule sits UNDER the field as a hint rather than in the label,
             which is already long enough to wrap in half a row. */}
-        <div>
+        <div className="min-w-0">
           <Input
             label="Auto Create Slack Channel"
             type="number"
@@ -145,48 +146,30 @@ export default function SetFormFields({
         </div>
 
         {/* Which team this set is for — only its members can be scheduled.
-            Chips rather than a dropdown, the same pill the set modal's title
-            wears: an org has a handful of teams, so the whole choice is
-            readable at a glance and picking one is a single tap instead of
-            open-scroll-pick. */}
-        <fieldset disabled={disabled}>
-          <legend className="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-300">
-            Team
-          </legend>
+            A real dropdown (an org can hold more teams than a row of chips
+            would fit) wearing the chip the set modal's title wears, so the
+            same thing looks the same in both places. */}
+        <Select
+          label="Team"
+          // Switching teams drops any custom shape: its keys belong to the old
+          // team's roles and would mean nothing against the new one's.
+          onChange={(e) => patch({ teamId: e.target.value, capacities: null })}
+          value={state.teamId}
+          required
+          disabled={disabled || teams.length === 0}
+          className="rounded-full border-indigo-200 bg-indigo-50 font-medium text-indigo-700
+            dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300"
+        >
           {teams.length === 0 ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Loading teams…
-            </p>
+            <option value="">Loading teams…</option>
           ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {teams.map((t) => {
-                const on = t.id === state.teamId;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={on}
-                    // Switching teams drops any custom shape: its keys belong
-                    // to the old team's roles and would mean nothing against
-                    // the new one's.
-                    onClick={() => patch({ teamId: t.id, capacities: null })}
-                    className={`inline-flex h-11 items-center rounded-full border px-3 text-sm
-                      font-medium transition-colors disabled:cursor-not-allowed
-                      disabled:opacity-60 sm:h-9 ${
-                        on
-                          ? "border-indigo-600 bg-indigo-600 text-white"
-                          : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50 " +
-                            "dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700"
-                      }`}
-                  >
-                    {t.name}
-                  </button>
-                );
-              })}
-            </div>
+            teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))
           )}
-        </fieldset>
+        </Select>
       </div>
 
       {/* Start + END time. The set still STORES a duration, so the end time is
@@ -195,7 +178,11 @@ export default function SetFormFields({
           or before the start reads as running past midnight (durationBetween);
           typing the start time back over the end is ignored rather than
           collapsing the set to nothing. */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Stacked on a phone, side by side from `sm` up. A `type="time"` control
+          has a wide intrinsic size — Safari won't render one narrower than its
+          own "09:00 AM" — so two of them in half a phone's width is what was
+          running off the side of the modal. A full-width one fits anywhere. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Input
           label="Start time"
           type="time"

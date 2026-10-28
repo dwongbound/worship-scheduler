@@ -792,17 +792,30 @@ test("the weekly set time form fits a phone: one row of days, a footer in reach"
   // a two-digit number and a few short names don't each need a full row, and
   // on a phone a row saved is a row of scrolling saved.
   const lead = modal.getByLabel("Auto Create Slack Channel");
-  const chip = modal.getByRole("radio", { name: "Sunday Team" });
+  const team = modal.getByLabel("Team");
   const leadBox = (await lead.boundingBox())!;
-  const chipBox = (await chip.boundingBox())!;
+  const teamBox = (await team.boundingBox())!;
   // Side by side, not stacked.
-  expect(chipBox.x).toBeGreaterThan(leadBox.x + leadBox.width - 1);
+  expect(teamBox.x).toBeGreaterThan(leadBox.x + leadBox.width - 1);
   // Neither column takes much over half the form's width.
   expect(leadBox.width).toBeLessThan(viewport.width * 0.55);
-  // A chip is a tap target too.
-  expect(chipBox.height).toBeGreaterThanOrEqual(44);
 
-  // Picking a team is one tap on a chip — no dropdown to open.
-  await chip.click();
-  await expect(chip).toHaveAttribute("aria-checked", "true");
+  // The two time fields are STACKED here, each the full width of the form:
+  // a `type="time"` control has a wide intrinsic size (Safari won't draw one
+  // narrower than its own "09:00 AM"), so two of them in half a phone's width
+  // is what ran off the side of the modal. They go back side by side at `sm`,
+  // which tablet.spec.ts checks.
+  const start = (await modal.getByLabel("Start time").boundingBox())!;
+  const end = (await modal.getByLabel("End time").boundingBox())!;
+  expect(end.y).toBeGreaterThan(start.y + start.height - 1);
+  expect(Math.round(end.width)).toBe(Math.round(start.width));
+
+  // And nothing in the form runs off the side of the modal.
+  const overflowing = await modal.evaluate((dialog: HTMLElement) => {
+    const right = dialog.getBoundingClientRect().right;
+    return [...dialog.querySelectorAll("input, select")]
+      .filter((el) => el.getBoundingClientRect().right > right + 1)
+      .map((el) => (el as HTMLElement).getAttribute("type") ?? el.tagName);
+  });
+  expect(overflowing).toEqual([]);
 });

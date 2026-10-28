@@ -19,9 +19,8 @@ import LoadingDots from "./common/LoadingDots";
 import DateSelect from "./common/DateSelect";
 import { MAX_PRACTICES_PER_SET, validateSetPractice } from "@/lib/practices";
 import {
-  formatDay,
-  formatTime,
   minutesToTimeInput,
+  shortDateTimeCompact,
   timeStringToMinutes,
   toYmd,
 } from "@/lib/dates";
@@ -42,11 +41,15 @@ interface FreeBusyPerson {
   }[];
 }
 
-/** "Wed, Nov 4 · 7:00 – 9:00 PM" — one line, both ends, no duration. */
+/**
+ * "11/4/26 7PM" — the compact date every chat message names a set by, and the
+ * START only. Spelled out with both ends ("Wednesday, November 4, 2026 · 7:00
+ * PM – 9:00 PM") the line wrapped to three on a phone and the row stopped
+ * reading as a row; the end time is on the calendar invite, which is where a
+ * practice actually lives.
+ */
 function practiceWhen(practice: ApiSetPractice): string {
-  const start = new Date(practice.startsAt);
-  const end = new Date(practice.endsAt);
-  return `${formatDay(start)} · ${formatTime(start)} – ${formatTime(end)}`;
+  return shortDateTimeCompact(practice.startsAt);
 }
 
 /** Why someone isn't free, in a few words. */
@@ -236,7 +239,7 @@ export default function SetPractices({
             <div className="w-44">
               <DateSelect label="Date" value={date} onChange={setDate} />
             </div>
-            <div className="w-28">
+            <div className="w-36 sm:w-28">
               <Input
                 label="From"
                 // Test id rather than the label: getByLabel is a substring,
@@ -248,7 +251,7 @@ export default function SetPractices({
                 onChange={(e) => setStartMinute(timeStringToMinutes(e.target.value))}
               />
             </div>
-            <div className="w-28">
+            <div className="w-36 sm:w-28">
               <Input
                 label="To"
                 data-testid="practice-to"
