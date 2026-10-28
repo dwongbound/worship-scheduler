@@ -232,7 +232,11 @@ humanized key, so a custom/deleted role never renders blank), `roleKeyFromLabel`
 `lib/constants.ts` keeps the BUILT-IN defaults only (`SLOT_CAPACITIES`,
 `ROLE_ORDER`, `INSTRUMENT_LABELS`, `ALL_INSTRUMENTS`) plus `MD_ROLES` /
 `ACOUSTIC_HOST_ROLES` — special behaviours pinned to built-in keys that custom
-roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`. `CHOIR` is
+roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`. Day names
+come in three widths: `DAY_LABELS` (full), `DAY_ABBRS` ("Tues"/"Thurs", for a
+tight row like "Tues 7PM") and `DAY_INITIALS` ("Su"…"Sa", the only spelling
+narrow enough to fit all seven across a phone — single letters repeat S/T/T/S,
+so they can't tell the days apart). `CHOIR` is
 just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 `lib/guestTeams.ts`, available to any team's any role.
 
@@ -828,7 +832,14 @@ from/to per row, since a weekly time has no date. Deliberately NOT in
 `SetFormFields`, which `CreateSetModal` shares — a practice on a concrete set
 is a date, not a weekday. It runs `validateTemplatePractices` as you type, so
 the form can't offer a save the API would 400),
-`SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
+`SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal` (the weekly set time
+form. Its day picker is seven toggle buttons ACROSS — `DAY_INITIALS`
+("Su"…"Sa") visible, the full day name as the accessible one, so it is still
+`getByRole("checkbox", { name: "Sunday" })` and still `.check()`-able. As
+full-word checkboxes they wrapped into three ragged rows of 16px targets on a
+phone and outweighed every other field; a week reads as a week when its days
+sit side by side. Adding is multi-select, editing moves the one row),
+`MySetsPanel`,
 `GenerateModal` (the "Generate New Schedule" options — window, which recurring sets, and an
 optional per-set-type color) → `StagedScheduleModal` (the preview — and, as
 `mode="preview"`, the calendar's Preview Mode too, which has the same plan-wide
@@ -924,7 +935,12 @@ renders into `<body>` (a transformed ancestor — the swipe pager, pull-to-refre
 — would otherwise be what its `fixed` overlay centres in), takes `headerActions`
 for controls pinned in the header left of the ✕, and accepts `footer` as a
 FUNCTION `({ atEnd }) => …` for an action that must wait until a long body has
-been scrolled to the end — the availability submit's Confirm.) `SetFormFields` asks for a start + **end** time; the set still stores
+been scrolled to the end — the availability submit's Confirm. Both set forms —
+`CreateSetModal` and `TemplateModal` — pass their Close/Save buttons as
+`footer` rather than ending the form with them, which is what pins them and
+gives them the phone row's 44px; the submit button is outside the `<form>` as a
+result, so it carries `form={formId}` with a `useId()` the form shares.)
+`SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
 
 ## Slack / chat message house style (`lib/slack.ts`)
