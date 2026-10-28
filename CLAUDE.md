@@ -968,6 +968,11 @@ table — these get re-picked by hand more than the copy does), `lead()`,
 `setName()`, `setWhen()`, `linkOr()`. Bold and code always sit OUTSIDE a link —
 no provider renders markup inside a link label, which is also why the digest's
 labels and the batched-roster DM's set names can't be part of their links.
+Every message that LISTS a set's people marks the set's MD with **"(MD)"**
+after their name — `teamRosterText` (the group chat's roster) and
+`weeklySummaryText` (the week-ahead digest), so who is leading reads the same
+in both. Matching is by user id, so a caller whose roster carries no ids marks
+nobody rather than guessing by name.
 A full inventory of who gets what, when, with the literal copy, is the
 TapWorship Slack Notices artifact.
 The ONE daily cron (`vercel.json` → `/api/cron/daily`) fires at **13:30 UTC**
