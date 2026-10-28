@@ -41,6 +41,15 @@ export const SET_INCLUDE = {
     },
   },
   songs: { orderBy: { order: "asc" } },
+  // This set's practices. They ride along with the set because that is the
+  // only place they are ever shown — a practice is deliberately absent from
+  // the app calendar, and the set detail modal is its one home. Cheap: a
+  // handful of rows per set, and the free/busy answer is a separate request
+  // made only when one is clicked.
+  practices: {
+    select: { id: true, startsAt: true, endsAt: true },
+    orderBy: { startsAt: "asc" },
+  },
 } as const;
 
 /**

@@ -40,7 +40,7 @@ import {
   type GuestRoleSpec,
 } from "@/lib/guestTeams";
 import {
-  calendarEventOf,
+  calendarEventsOfSet,
   deleteSetCalendarEvent,
   syncSetsAfterResponse,
 } from "@/lib/googleCalendar";
@@ -390,11 +390,15 @@ export async function DELETE(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // The event id goes with the row, so read it first; the cancellation (and
-  // Google's email to the guests) goes out after the response.
-  const event = await calendarEventOf(id);
-  // Assignments cascade on Set delete (see schema onDelete: Cascade).
+  // The event ids go with the rows, so read them first; the cancellations
+  // (and Google's email to the guests) go out after the response. Plural
+  // because a set's practices have events of their own and cascade away with
+  // it — see calendarEventsOfSet.
+  const events = await calendarEventsOfSet(id);
+  // Assignments and practices cascade on Set delete (schema onDelete: Cascade).
   await prisma.set.delete({ where: { id } });
-  after(() => deleteSetCalendarEvent(event));
+  after(async () => {
+    for (const event of events) await deleteSetCalendarEvent(event);
+  });
   return NextResponse.json({ ok: true });
 }

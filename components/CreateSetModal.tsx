@@ -6,10 +6,9 @@
 // The set is created empty — to staff it, open it and use "Auto schedule"
 // (or assign people by hand) in the set detail modal.
 // Shares its body with the Create tab's TemplateModal via SetFormFields.
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useState, useId } from "react";
 import Modal from "./common/Modal";
 import Button from "./common/Button";
-import LoadingDots from "./common/LoadingDots";
 import SetFormFields, { SetFormState, emptySetForm } from "./SetFormFields";
 import { useOrgs } from "./OrgProvider";
 import { formatDay, timeStringToMinutes } from "@/lib/dates";
@@ -27,6 +26,9 @@ export default function CreateSetModal({
 }) {
   const { orgs, isAdminOf } = useOrgs();
   const [form, setForm] = useState<SetFormState>(emptySetForm);
+  // The footer's submit button sits outside the <form>, so the two need a
+  // shared id to find each other.
+  const formId = useId();
   const [busy, setBusy] = useState(false);
   const [teams, setTeams] = useState<ApiTeam[]>([]);
 
@@ -123,22 +125,11 @@ export default function CreateSetModal({
             dark:placeholder:text-gray-500 dark:hover:border-gray-600 sm:w-80"
         />
       }
-    >
-      <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
-        {formatDay(date)}
-      </p>
-
-      <form onSubmit={submit} className="space-y-3">
-        <SetFormFields
-          state={form}
-          onChange={setForm}
-          teams={teams}
-          disabled={busy}
-          allowPrivate
-          showLabel={false}
-        />
-
-        <div className="flex flex-wrap justify-end gap-2 pt-1">
+      // Pinned by Modal so it never scrolls away, and given the phone's
+      // full-width 44px row by globals.css. That puts the submit button
+      // outside the <form>, so it names the form it submits.
+      footer={
+        <>
           <Button
             type="button"
             variant="secondary"
@@ -148,10 +139,31 @@ export default function CreateSetModal({
             Close
           </Button>
           {/* Blocked until the teams list loads — every set needs a team. */}
-          <Button type="submit" disabled={busy || !form.teamId}>
-            {busy ? <LoadingDots size="sm" /> : "Create set"}
+          <Button
+            form={formId}
+            type="submit"
+            loading={busy}
+            disabled={!form.teamId}
+          >
+            Create set
           </Button>
-        </div>
+        </>
+      }
+    >
+      <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
+        {formatDay(date)}
+      </p>
+
+      <form id={formId} onSubmit={submit} className="space-y-3">
+        <SetFormFields
+          state={form}
+          onChange={setForm}
+          teams={teams}
+          disabled={busy}
+          allowPrivate
+          showLabel={false}
+        />
+
       </form>
     </Modal>
   );

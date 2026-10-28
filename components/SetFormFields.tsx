@@ -170,22 +170,30 @@ export default function SetFormFields({
 
       {/* Auto-create the set's private Slack channel this many days before it
           starts. Blank = off (an admin can still make one by hand with the
-          set's "Slack Team" button). The org must have Slack connected. */}
-      <Input
-        label="Auto-create group chat (days before, blank = off)"
-        type="number"
-        min={1}
-        value={state.groupChatLeadDays ?? ""}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          patch({
-            groupChatLeadDays:
-              e.target.value === "" || Number.isNaN(n) ? null : n,
-          });
-        }}
-        placeholder="Off"
-        disabled={disabled}
-      />
+          set's "Create Group" button). The org must have Slack connected.
+          The label is two words and the rule sits UNDER the field as a hint:
+          as one long label it wrapped to two lines and was several times the
+          width of the number it was asking for. */}
+      <div>
+        <Input
+          label="Group chat"
+          type="number"
+          min={1}
+          value={state.groupChatLeadDays ?? ""}
+          onChange={(e) => {
+            const n = Number(e.target.value);
+            patch({
+              groupChatLeadDays:
+                e.target.value === "" || Number.isNaN(n) ? null : n,
+            });
+          }}
+          placeholder="Off"
+          disabled={disabled}
+        />
+        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+          Days before the set to create it. Blank leaves it off.
+        </p>
+      </div>
 
       {/* On: this set wants a musical director — the auto-scheduler seats one
           and the set detail modal shows the MD picker. Off: no MD is tracked

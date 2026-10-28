@@ -23,6 +23,8 @@ import { getTeamCatalogs } from "@/lib/teamRoleStore";
 import { DEFAULT_TEAM_ROLES } from "@/lib/teamRoles";
 import type { StagedPlan, StagedSet } from "@/lib/types";
 import { notifyAssignmentsAdded, type NewSeat } from "@/lib/slack";
+import { templateIdOf } from "@/lib/schedulingRules";
+import { practicesForSet, type TemplatePracticeSpec } from "@/lib/practices";
 import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 // Light validation of one staged set from the request body. Returns a
@@ -112,6 +114,27 @@ export async function POST(req: NextRequest) {
   // membership guards above, same spirit).
   const catalogs = await getTeamCatalogs(sets.map((s) => s.teamId));
 
+  // The org's recurring set times and the practices they hand down. A set
+  // doesn't store which template made it, so each new one is matched back by
+  // label + team + weekday + time, the same recognition the scheduling rules
+  // use (lib/schedulingRules.ts templateIdOf).
+  const templates = await prisma.setTemplate.findMany({
+    where: { orgId: admin.orgId },
+    select: {
+      id: true,
+      label: true,
+      dayOfWeek: true,
+      startMinute: true,
+      teamId: true,
+      practices: {
+        select: { dayOfWeek: true, startMinute: true, endMinute: true },
+      },
+    },
+  });
+  const practicesByTemplate = new Map<string, TemplatePracticeSpec[]>(
+    templates.map((t) => [t.id, t.practices])
+  );
+
   let setsCreated = 0;
   const touched: string[] = [];
   let assignmentsCreated = 0;
@@ -161,6 +184,29 @@ export async function POST(req: NextRequest) {
         },
       });
       setsCreated++;
+
+      // A new set inherits its recurring time's practices, the same way it
+      // inherits the team shape and the group-chat lead time. Only on CREATE:
+      // a set that already existed keeps whatever practices it has, so an
+      // ad-hoc one an admin added by hand survives a re-apply.
+      const templateId = templateIdOf(
+        { label: set.label, teamId: set.teamId, startsAt: set.startsAt },
+        templates
+      );
+      const specs = templateId ? practicesByTemplate.get(templateId) ?? [] : [];
+      if (specs.length > 0) {
+        await prisma.setPractice.createMany({
+          data: practicesForSet(set.startsAt, specs).map((p) => ({
+            setId: set!.id,
+            startsAt: p.startsAt,
+            endsAt: p.endsAt,
+          })),
+          // Two template practices can resolve to the same instant only if the
+          // template held duplicates; @@unique([setId, startsAt]) catches it
+          // and skipping is what the admin meant.
+          skipDuplicates: true,
+        });
+      }
     } else {
       // Reused set: bring its shape/flags in line with the plan so an
       // empty existing row doesn't keep stale requiresMD/capacities/duration.

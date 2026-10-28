@@ -12,6 +12,7 @@ import {
   clearBusyBlocks,
   gotoReady,
   login,
+  openSetByLabel,
   pickSingleDay,
   requestAvailability,
   sectionByHeading,
@@ -676,4 +677,114 @@ test("phone turns away a Preview Mode draft link", async ({ page }) => {
   // And nothing of the workspace itself: no dialog, and no sign it tried.
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText(/doesn't match a saved plan/i)).toHaveCount(0);
+});
+
+test("the set modal's overflow menu opens fully inside the screen", async ({
+  page,
+}) => {
+  // The bug this guards: the action bar used to carry a 176px load-window
+  // picker, which on a phone took the first row by itself and wrapped the
+  // "⋮" onto a second row at the FAR LEFT. Its menu hangs leftward from its
+  // trigger, so the panel's left edge landed ~86px off the side of the screen
+  // and five rows lost their first letters. Two things keep it on screen now —
+  // the picker is gone, so the bar is one row again, and lib/dropdownPosition
+  // clamps the panel into the viewport whatever the trigger's position.
+  await login(page, "paul"); // admin, so the menu has its full set of rows
+  const modal = await openSetByLabel(page, "Sunday Morning");
+
+  const viewport = page.viewportSize()!;
+  const bar = modal.getByRole("button", { name: "Auto schedule" });
+  await expect(bar).toBeVisible();
+
+  await modal.getByRole("button", { name: "More actions" }).click();
+
+  // The menu is portaled to document.body, so it is looked up on the page.
+  const item = page.getByRole("button", { name: "Change Roles" });
+  await expect(item).toBeVisible();
+  const menu = page.locator("div.fixed.z-\\[60\\]").filter({ has: item });
+  const box = (await menu.boundingBox())!;
+
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+
+  // And the rows really are readable, not merely in the box.
+  const itemBox = (await item.boundingBox())!;
+  expect(itemBox.x).toBeGreaterThanOrEqual(0);
+});
+
+test("the set modal's overflow trigger stays at the right edge", async ({
+  page,
+}) => {
+  // Not "one row": at 360px the four controls are about ten pixels too wide to
+  // share one, and that is fine. What matters is that the group they wrap into
+  // is pinned RIGHT. Left-aligned — which is what the parent's justify-between
+  // gave it — the "\u22ee" sat near the left of the screen, and a menu that hangs
+  // leftward from its trigger had nowhere to go.
+  await login(page, "paul");
+  const modal = await openSetByLabel(page, "Sunday Morning");
+
+  const more = (await modal
+    .getByRole("button", { name: "More actions" })
+    .boundingBox())!;
+  const bar = (await modal
+    .locator("div.mb-3.flex.flex-wrap")
+    .first()
+    .boundingBox())!;
+
+  // Its right edge sits on the bar's, give or take the border.
+  expect(Math.abs(bar.x + bar.width - (more.x + more.width))).toBeLessThan(4);
+
+  // And the group chat button now says what it does.
+  await expect(
+    modal.getByRole("button", { name: "Create Group" })
+  ).toBeVisible();
+});
+
+test("the weekly set time form fits a phone: one row of days, a footer in reach", async ({
+  page,
+}) => {
+  // The Create tab's "weekly set time" form was the densest screen on a phone:
+  // seven full-word day checkboxes wrapped into three ragged rows of 16px
+  // targets, and its Close/Save buttons sat at the end of the scrolling body
+  // rather than in the pinned footer. Both are layout facts worth pinning —
+  // they only go wrong at this width, where nobody looks.
+  await login(page, "admin");
+  await gotoReady(page, "/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  // Exactly the seven days, named in full for anyone who can't see the two
+  // letters on the button. (Anchored, or "Sunday" also matches the Team
+  // select, whose accessible name concatenates "…Sunday Team…".)
+  const days = modal.getByRole("checkbox", {
+    name: /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day$/,
+  });
+  await expect(days).toHaveCount(7);
+
+  const boxes = [];
+  for (let i = 0; i < 7; i++) boxes.push((await days.nth(i).boundingBox())!);
+  const viewport = page.viewportSize()!;
+
+  // One row: every day shares a top edge, and the last one ends on screen.
+  const tops = boxes.map((b) => Math.round(b.y));
+  expect(new Set(tops).size).toBe(1);
+  expect(boxes[0].x).toBeGreaterThanOrEqual(0);
+  const last = boxes[6];
+  expect(last.x + last.width).toBeLessThanOrEqual(viewport.width);
+
+  // Apple's 44px minimum — a day is a tap target here, not a 16px tick.
+  for (const [i, b] of boxes.entries()) {
+    expect({ i, tall: b.height >= 44 }).toEqual({ i, tall: true });
+  }
+
+  // The actions are in the modal's pinned footer, so they're reachable
+  // without scrolling the form to its end, and they carry the phone row's
+  // full height.
+  const submit = page.locator(".modal-footer").getByRole("button", {
+    name: "Add template",
+  });
+  await expect(submit).toBeVisible();
+  expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
 });

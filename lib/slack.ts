@@ -1120,7 +1120,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *   • before startsAt − leadDays → too early: that's the window in which the
  *     chat gets created, and there may be no chat (or audience) yet.
  *   • no channel on the set → nothing to post into. The chat is created by the
- *     cron (or the Slack Team button); we never create one just to complain.
+ *     cron (or the Create Group button); we never create one just to complain.
  *   • the set has already happened → the channel is being archived; stay quiet.
  *
  * Best-effort and non-throwing: a Slack outage must never fail the db mutation
