@@ -137,7 +137,7 @@ export default function TemplatePracticesEditor({
               <span className="pb-2 text-sm text-gray-500 dark:text-gray-400">
                 from
               </span>
-              <div className="w-28">
+              <div className="w-36 sm:w-28">
                 <Input
                   label="Start time"
                   hideLabel
@@ -154,7 +154,7 @@ export default function TemplatePracticesEditor({
               <span className="pb-2 text-sm text-gray-500 dark:text-gray-400">
                 to
               </span>
-              <div className="w-28">
+              <div className="w-36 sm:w-28">
                 <Input
                   label="End time"
                   hideLabel

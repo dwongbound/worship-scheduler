@@ -832,8 +832,11 @@ admin-only, and unlike the rest of that modal it acts IMMEDIATELY rather than
 staging, because each one sends or cancels a real calendar invite — the same
 reason Delete set and sending a note do. The free/busy modal fetches on the
 CLICK, never on the set opening. Deleting asks first: it emails the whole
-roster a cancellation. Each row LEADS with its ✕ and adding is a full-width
-dashed "+ Add Practice" bar — the same control the Create tab's weekly set
+roster a cancellation. A row names its practice with `shortDateTimeCompact`
+and its START only ("11/4/26 7PM") — spelled out with both ends it wrapped to
+three lines on a phone, and the end time is on the calendar invite, which is
+where a practice actually lives. Each row LEADS with its ✕ and adding is a
+full-width dashed "+ Add Practice" bar — the same control the Create tab's weekly set
 times use, so "add another one of these" looks the same wherever it is),
 `TemplatePracticesEditor` (the same thing for a weekly set time: a weekday +
 from/to per row, since a weekly time has no date. Deliberately NOT in
@@ -940,7 +943,10 @@ kept for undoing a request, e.g. "Cancel swap"); `Checkbox` takes `rowTarget` to
 the whole row a real `<label>` (off by default: most rows carry chips and text
 you may want to click without flipping a tick); `Input`/`Select` set their own
 `text-base sm:text-sm` — 16px on phones is what stops iOS zooming into a
-focused field — and step aside when the caller passes its own size; `Modal`
+focused field — and step aside when the caller passes its own size; both also
+wrap in a `min-w-0` label, since a grid or flex item defaults to
+`min-width:auto` and a field with a wide intrinsic size (a `type="time"`
+input) would otherwise push its row past the container; `Modal`
 renders into `<body>` (a transformed ancestor — the swipe pager, pull-to-refresh
 — would otherwise be what its `fixed` overlay centres in), takes `headerActions`
 for controls pinned in the header left of the ✕, and accepts `footer` as a
@@ -954,12 +960,15 @@ result, so it carries `form={formId}` with a `useId()` the form shares.)
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
 **Auto Create Slack Channel** (the `groupChatLeadDays` number, blank = off) and
 **Team** share ONE row, half each — a two-digit number and a handful of team
-names neither needed a row of its own. The team picker is CHIPS, not a
-`Select`: the same rounded pill the set modal's title wears, so the whole
-choice is readable at a glance and picking one is a single tap
-(`getByRole("radio", { name: "Sunday Team" })`, `aria-checked` the state).
+names neither needed a row of its own. Team is still a real `Select` (an org
+can hold more teams than a row would fit), STYLED as the rounded indigo pill
+the set modal's title wears, so the same thing looks the same in both places.
 Switching team still clears any custom shape — its keys are the old team's
-roles.
+roles. The **start + end times stack below `sm`** and sit side by side from
+`sm` up: a `type="time"` control has a wide intrinsic size (Safari won't draw
+one narrower than its own "09:00 AM"), so two of them in half a phone's width
+ran off the side of the modal. `tests/e2e/mobile.spec.ts` pins the stacking
+and `tablet.spec.ts` the two columns, both asserting nothing overflows.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 
