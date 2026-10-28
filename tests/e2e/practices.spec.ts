@@ -47,7 +47,7 @@ test("an admin adds a practice to a set, and it isn't on the calendar", async ({
 
   await expect(modal.getByText("Practices", { exact: true })).toBeVisible();
 
-  await modal.getByRole("button", { name: "+ Add practice" }).click();
+  await modal.getByRole("button", { name: "+ Add Practice" }).click();
   // The form opens on a sensible evening window, so adding one is two clicks.
   await expect(modal.getByTestId("practice-from")).toHaveValue("19:00");
   await expect(modal.getByTestId("practice-to")).toHaveValue("21:00");
@@ -97,7 +97,7 @@ test("a member can read a set's practices but not change them", async ({ page })
 
   const modal = await openSetByLabel(page, SET);
   await expect(modal.getByRole("button", { name: /Who’s free\?/ }).first()).toBeVisible();
-  await expect(modal.getByRole("button", { name: "+ Add practice" })).toHaveCount(0);
+  await expect(modal.getByRole("button", { name: "+ Add Practice" })).toHaveCount(0);
   await expect(modal.getByRole("button", { name: "Delete practice" })).toHaveCount(0);
 });
 
@@ -124,6 +124,32 @@ test("deleting a practice asks first, because it emails everyone", async ({ page
   await expect(modal.getByRole("button", { name: /Who’s free\?/ })).toHaveCount(0);
 });
 
+test("the practice rows read left to right: ✕, then the row it removes", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  await givePractice(page, SET);
+  const modal = await openSetByLabel(page, SET);
+
+  // The ✕ LEADS its row. Trailing it, it sat under whichever field wrapped
+  // last on a phone and stopped reading as "remove THIS one".
+  const remove = modal.getByRole("button", { name: "Delete practice" }).first();
+  const row = modal.getByRole("button", { name: /Who’s free\?/ }).first();
+  const removeBox = (await remove.boundingBox())!;
+  const rowBox = (await row.boundingBox())!;
+  expect(removeBox.x + removeBox.width).toBeLessThanOrEqual(rowBox.x + 1);
+  // Still a real touch target.
+  expect(removeBox.height).toBeGreaterThanOrEqual(44);
+
+  // Adding is the full-width dashed bar, the same control the Create tab's
+  // weekly set times use — so it spans the list it adds to, not a chip's worth.
+  const add = modal.getByRole("button", { name: "+ Add Practice" });
+  const addBox = (await add.boundingBox())!;
+  expect(addBox.width).toBeGreaterThan(
+    removeBox.width + rowBox.width - 2
+  );
+});
+
 test("a weekly set time carries practices, and the list says how many", async ({
   page,
 }) => {
@@ -142,7 +168,7 @@ test("a weekly set time carries practices, and the list says how many", async ({
   await row.getByRole("button", { name: "Edit" }).click();
   const form = page.getByRole("dialog");
   await expect(form.getByText("Practices", { exact: true })).toBeVisible();
-  await form.getByRole("button", { name: "+ Add practice" }).click();
+  await form.getByRole("button", { name: "+ Add Practice" }).click();
   // Defaults to the midweek evening most teams rehearse on.
   await expect(form.getByTestId("template-practice-day")).toHaveValue("3");
 

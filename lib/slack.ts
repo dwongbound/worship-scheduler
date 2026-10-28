@@ -313,21 +313,29 @@ function channelNameForSet(set: SetLike): string {
     .slice(0, 72);
 }
 
-// "Worship Leader: Alice\nVocals: Bob, Carol\n…" in scarce-first role order,
-// skipping roles nobody is filling.
+// "Worship Leader: Alice (MD)\nVocals: Bob, Carol\n…" in scarce-first role
+// order, skipping roles nobody is filling.
 export function teamRosterText(
-  assignments: { role: Instrument; user: { name: string } }[],
+  assignments: { role: Instrument; user: { id?: string; name: string } }[],
   // The set's team catalog, so roles read in that team's own names and order.
   // Omitted → the built-in ordering, with unknown keys humanized by roleLabel.
   catalog?: TeamRoleDef[],
   // The provider's markup. Defaults to Slack's so the existing output (and its
   // tests) are unchanged; real callers pass `messaging.fmt`.
-  fmt: MessageFormat = SLACK_FORMAT
+  fmt: MessageFormat = SLACK_FORMAT,
+  // The set's designated MD, marked "(MD)" after their name — the same mark
+  // the weekly summary uses, so who is leading reads the same in every
+  // message. Null/omitted (a team with no MD role, or a set that hasn't been
+  // given one) marks nobody, and a caller that doesn't carry user ids can't
+  // match one either.
+  mdUserId?: string | null
 ): string {
   const namesByRole = new Map<Instrument, string[]>();
   for (const a of assignments) {
     const names = namesByRole.get(a.role) ?? [];
-    names.push(a.user.name);
+    names.push(
+      mdUserId && a.user.id === mdUserId ? `${a.user.name} (MD)` : a.user.name
+    );
     namesByRole.set(a.role, names);
   }
   const order = catalog?.length
@@ -1015,8 +1023,14 @@ export async function messageSetTeamOnSlack(
       // The team's catalog, so the roster reads in this team's own role names
       // and order rather than the built-in ones.
       team: { select: { roles: { orderBy: { order: "asc" } } } },
+      // The set's MD, so the roster says who is leading (see teamRosterText).
+      mdUserId: true,
       assignments: {
-        select: { userId: true, role: true, user: { select: { name: true } } },
+        select: {
+          userId: true,
+          role: true,
+          user: { select: { id: true, name: true } },
+        },
       },
     },
   });
@@ -1072,7 +1086,8 @@ export async function messageSetTeamOnSlack(
   const text =
     `${EMOJI.groupChat} Thanks for serving! Your upcoming set is ` +
     `${setLabelLong(set, messaging.fmt)}.\n\n` +
-    `Here's everyone playing in it:\n${teamRosterText(set.assignments, set.team?.roles, messaging.fmt)}`;
+    `Here's everyone playing in it:\n` +
+    `${teamRosterText(set.assignments, set.team?.roles, messaging.fmt, set.mdUserId)}`;
   const posted = await messaging.postToChannel(channelId, text);
 
   // Auto-build the set's collaborative Spotify playlist alongside the group chat

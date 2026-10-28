@@ -275,7 +275,7 @@ describe("practices on a set", () => {
     const body = made.body as Record<string, unknown>;
     // Named after its set, and prefixed so the rehearsal never reads as the
     // service itself.
-    expect(body.summary).toBe("Practice: Sunday Morning");
+    expect(body.summary).toBe("(Practice) Sunday Morning");
     // Same guests and same setlist as the service — that's what it rehearses.
     expect(body.attendees).toEqual([{ email: "kate@example.com", displayName: "Kate" }]);
     expect(body.description).toContain("1. Who Else (E)");

@@ -169,21 +169,9 @@ export default function SetPractices({
         <div className="space-y-2">
           {practices.map((practice) => (
             <div key={practice.id} className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => openFreeBusy(practice)}
-                className="flex flex-1 items-center justify-between gap-3 rounded-lg border border-gray-200
-                  bg-gray-50 px-3 py-2 text-left text-sm hover:border-indigo-300 hover:bg-indigo-50
-                  dark:border-gray-700 dark:bg-gray-800/60 dark:hover:border-indigo-700
-                  dark:hover:bg-indigo-950/30"
-              >
-                <span className="font-medium">{practiceWhen(practice)}</span>
-                {/* Not a count — nothing has been read yet. The point of the
-                    row is that clicking it is what asks. */}
-                <Badge size="sm" tone="gray">
-                  Who&rsquo;s free?
-                </Badge>
-              </button>
+              {/* Leads the row rather than trailing it, so it reads as
+                  "remove THIS practice" and lines up with every other list
+                  that can be deleted from. */}
               {isAdmin && (
                 <button
                   type="button"
@@ -203,24 +191,43 @@ export default function SetPractices({
                   </svg>
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => openFreeBusy(practice)}
+                className="flex flex-1 items-center justify-between gap-3 rounded-lg border border-gray-200
+                  bg-gray-50 px-3 py-2 text-left text-sm hover:border-indigo-300 hover:bg-indigo-50
+                  dark:border-gray-700 dark:bg-gray-800/60 dark:hover:border-indigo-700
+                  dark:hover:bg-indigo-950/30"
+              >
+                <span className="font-medium">{practiceWhen(practice)}</span>
+                {/* Not a count — nothing has been read yet. The point of the
+                    row is that clicking it is what asks. */}
+                <Badge size="sm" tone="gray">
+                  Who&rsquo;s free?
+                </Badge>
+              </button>
             </div>
           ))}
         </div>
       )}
 
       {isAdmin && !adding && (
-        <Button
-          size="sm"
-          variant="secondary"
-          className="mt-2"
+        /* The same full-width dashed add row the Create tab's weekly set times
+           use, so "add another one of these" looks the same wherever it is. */
+        <button
+          type="button"
+          className="mt-2 w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium
+            text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700
+            disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600
+            dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
           disabled={practices.length >= MAX_PRACTICES_PER_SET}
           onClick={() => {
             setAdding(true);
             setAddError(null);
           }}
         >
-          + Add practice
-        </Button>
+          + Add Practice
+        </button>
       )}
 
       {isAdmin && adding && (
