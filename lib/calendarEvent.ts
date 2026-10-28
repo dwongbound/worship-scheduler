@@ -97,12 +97,18 @@ export function inviteAddress(
 /**
  * The description: roster in the team's role order (a person in two roles
  * appears under both), then the setlist when there is one, then the link.
+ *
+ * The set's MD is marked "(MD)" after their name, the same mark the Slack
+ * roster and the weekly summary use — matched by id, so a set with no MD
+ * marks nobody. A seat mid-handoff is listed in its old owner's name, which
+ * is also who can still be the set's MD until an admin approves.
  */
 export function eventDescription(
   seats: CalendarSeat[],
   songs: CalendarSong[],
   catalog: TeamRoleDef[],
-  link: string
+  link: string,
+  mdUserId?: string | null
 ): string {
   const order = new Map(orderedRoles(catalog).map((r, i) => [r.key, i]));
   const rank = (key: string) => order.get(key) ?? Number.MAX_SAFE_INTEGER;
@@ -111,7 +117,7 @@ export function eventDescription(
     (a, b) => rank(a.role) - rank(b.role) || a.role.localeCompare(b.role)
   )) {
     const names = byRole.get(s.role) ?? [];
-    names.push(s.name);
+    names.push(mdUserId && s.userId === mdUserId ? `${s.name} (MD)` : s.name);
     byRole.set(s.role, names);
   }
 

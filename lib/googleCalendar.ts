@@ -600,6 +600,8 @@ export async function syncSetCalendar(setId: string): Promise<void> {
         orgId: true,
         teamId: true,
         googleEventId: true,
+        // Who is leading, so the roster in the invite says so (eventDescription).
+        mdUserId: true,
         songs: { select: { title: true, key: true }, orderBy: { order: "asc" } },
         // Practices ride along: they're the same people and the same setlist,
         // so one load serves the set's event and every rehearsal's. That's
@@ -674,7 +676,13 @@ export async function syncSetCalendar(setId: string): Promise<void> {
     // One description for the set and its practices alike: the same roster,
     // the same setlist (which is what a rehearsal is for) and the same link
     // back to the set.
-    const description = eventDescription(seats, set.songs, catalog, `${baseUrl()}${setLinkPath(set.id)}`);
+    const description = eventDescription(
+      seats,
+      set.songs,
+      catalog,
+      `${baseUrl()}${setLinkPath(set.id)}`,
+      set.mdUserId
+    );
 
     await syncOneEvent(org, {
       eventId: set.googleEventId,

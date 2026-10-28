@@ -757,6 +757,8 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   an ACCEPTED invite confirms that person's PENDING seats (a No changes
   nothing). The daily cron renews channels (`maintainCalendarWatches`). A seat
   mid-handoff stays on the old owner's invite until approved. Never throws.
+  The invite's roster marks the set's MD with "(MD)", by id, the same mark the
+  Slack roster and the weekly summary use.
   The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
   `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
 - `invitePicker.ts` — /profile's "Send invites to" picker, pure:

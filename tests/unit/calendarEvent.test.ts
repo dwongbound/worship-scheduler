@@ -45,6 +45,15 @@ describe("eventDescription", () => {
     { key: "DRUMS", label: "Drums", defaultCount: 1, adminOnly: false, order: 2 },
   ];
 
+  it("marks the set's MD, and nobody when the set has none", () => {
+    const seats = [seat("KEYS", "Kate", null), seat("DRUMS", "Bob", null)];
+    const withMd = eventDescription(seats, [], catalog, "https://x", "Kate");
+    expect(withMd).toContain("Keys: Kate (MD)");
+    expect(withMd).toContain("Drums: Bob");
+    expect(withMd.match(/\(MD\)/g)).toHaveLength(1);
+    expect(eventDescription(seats, [], catalog, "https://x")).not.toContain("(MD)");
+  });
+
   it("lists the roster in the team's role order, then the setlist and link", () => {
     const text = eventDescription(
       [seat("DRUMS", "Bob", null), seat("WL", "Nina", null), seat("KEYS", "Kate", null)],
