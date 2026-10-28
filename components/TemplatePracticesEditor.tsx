@@ -10,7 +10,6 @@
 // Deliberately NOT in SetFormFields, which is shared with the ad-hoc
 // CreateSetModal: a practice on a concrete set is a DATE, not a weekday, so
 // the two forms genuinely differ.
-import Button from "./common/Button";
 import Input from "./common/Input";
 import Select from "./common/Select";
 import { DAY_LABELS } from "@/lib/constants";
@@ -92,6 +91,28 @@ export default function TemplatePracticesEditor({
         <div className="mb-2 space-y-2">
           {practices.map((row) => (
             <div key={row.localId} className="flex flex-wrap items-end gap-2">
+              {/* Leads the row rather than trailing it: the fields wrap on a
+                  narrow screen, so a trailing ✕ ends up under whichever field
+                  happened to wrap last and stops reading as "remove THIS row". */}
+              <button
+                type="button"
+                aria-label="Remove practice"
+                className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg text-gray-400
+                  hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
+                onClick={() =>
+                  onChange(practices.filter((r) => r.localId !== row.localId))
+                }
+              >
+                <svg viewBox="0 0 18 18" className="h-[18px] w-[18px]" aria-hidden>
+                  <path
+                    d="M4 4l10 10M14 4L4 14"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                </svg>
+              </button>
               <div className="w-36">
                 <Select
                   label="Day"
@@ -147,25 +168,6 @@ export default function TemplatePracticesEditor({
                   }
                 />
               </div>
-              <button
-                type="button"
-                aria-label="Remove practice"
-                className="mb-0.5 flex h-11 w-11 items-center justify-center rounded-lg text-gray-400
-                  hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
-                onClick={() =>
-                  onChange(practices.filter((r) => r.localId !== row.localId))
-                }
-              >
-                <svg viewBox="0 0 18 18" className="h-[18px] w-[18px]" aria-hidden>
-                  <path
-                    d="M4 4l10 10M14 4L4 14"
-                    stroke="currentColor"
-                    strokeWidth="1.75"
-                    strokeLinecap="round"
-                    fill="none"
-                  />
-                </svg>
-              </button>
             </div>
           ))}
         </div>
@@ -175,15 +177,19 @@ export default function TemplatePracticesEditor({
         <p className="mb-2 text-sm text-rose-600 dark:text-rose-400">{error}</p>
       )}
 
-      <Button
+      {/* The same full-width dashed add row the Create tab's weekly set times
+          use, so "add another one of these" looks the same wherever it is. */}
+      <button
         type="button"
-        size="sm"
-        variant="secondary"
         disabled={practices.length >= MAX_PRACTICES_PER_SET}
         onClick={() => onChange([...practices, newPracticeDraft()])}
+        className="w-full rounded-lg border border-dashed border-gray-300 py-2 text-sm font-medium
+          text-gray-500 transition-colors hover:border-gray-400 hover:text-gray-700
+          disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-600
+          dark:text-gray-400 dark:hover:border-gray-500 dark:hover:text-gray-200"
       >
-        + Add practice
-      </Button>
+        + Add Practice
+      </button>
       <p className="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
         A practice is an extra calendar invite for everyone on the set. Changing
         these doesn&rsquo;t touch sets already generated — it lands on the next

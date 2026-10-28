@@ -33,8 +33,8 @@ describe("eventTitle", () => {
 
 describe("practiceTitle", () => {
   it("names the practice after its set, prefixed so it can't read as the set", () => {
-    expect(practiceTitle({ label: "Sunday Morning" })).toBe("Practice: Sunday Morning");
-    expect(practiceTitle({ label: null })).toBe("Practice: Worship set");
+    expect(practiceTitle({ label: "Sunday Morning" })).toBe("(Practice) Sunday Morning");
+    expect(practiceTitle({ label: null })).toBe("(Practice) Worship set");
   });
 });
 
@@ -44,6 +44,15 @@ describe("eventDescription", () => {
     { key: "KEYS", label: "Keys", defaultCount: 1, adminOnly: false, order: 1 },
     { key: "DRUMS", label: "Drums", defaultCount: 1, adminOnly: false, order: 2 },
   ];
+
+  it("marks the set's MD, and nobody when the set has none", () => {
+    const seats = [seat("KEYS", "Kate", null), seat("DRUMS", "Bob", null)];
+    const withMd = eventDescription(seats, [], catalog, "https://x", "Kate");
+    expect(withMd).toContain("Keys: Kate (MD)");
+    expect(withMd).toContain("Drums: Bob");
+    expect(withMd.match(/\(MD\)/g)).toHaveLength(1);
+    expect(eventDescription(seats, [], catalog, "https://x")).not.toContain("(MD)");
+  });
 
   it("lists the roster in the team's role order, then the setlist and link", () => {
     const text = eventDescription(

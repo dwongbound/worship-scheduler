@@ -125,9 +125,9 @@ test("admin can add a weekly template and generate a schedule", async ({ page })
   await modal.getByLabel("Label").fill("Sunday Service");
   // A template is created for each checked day and must name a team (its
   // members are who the generated sets can be staffed from).
-  await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
-  // Target the day by role: getByLabel("Sunday") also matches the Team select,
-  // whose accessible name concatenates its option text ("…Sunday Team…").
+  await modal.getByRole("radio", { name: "Sunday Team" }).click();
+  // By role: the team chips answer to "Sunday Team", so a day has to be
+  // picked as a checkbox rather than by label.
   await modal.getByRole("checkbox", { name: "Sunday" }).check();
   await modal.getByLabel("Start time").fill("09:00");
   // The form asks for an end time now; 9:00 → 10:30 is the same 90 minutes.
@@ -236,7 +236,7 @@ test("admin can set a custom team shape on a template", async ({ page }) => {
   await page.getByRole("button", { name: "Add weekly set time" }).click();
   const modal = page.getByRole("dialog");
   await modal.getByLabel("Label").fill("Tuesday Morning");
-  await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
+  await modal.getByRole("radio", { name: "Sunday Team" }).click();
   await modal.getByRole("checkbox", { name: "Tuesday" }).check();
   await modal.getByLabel("Start time").fill("09:00");
 
@@ -312,9 +312,8 @@ test("re-running the preview settles MDs on a plan that requires them", async ({
   await modal.getByLabel("Label").fill("MD Rotation Check");
   // Sunday Team holds every seeded user, which is where the two musical
   // directors (jack + paul, both on keys) live.
-  await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
-  // By role: getByLabel("Sunday") also matches the Team select, whose
-  // accessible name concatenates its option text.
+  await modal.getByRole("radio", { name: "Sunday Team" }).click();
+  // By role, for the same reason as above.
   await modal.getByRole("checkbox", { name: "Sunday" }).check();
   await modal.getByLabel("Start time").fill("14:00");
   await modal.getByLabel("End time").fill("15:30");

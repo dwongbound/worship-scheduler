@@ -149,7 +149,7 @@ describe("describeSetChanges", () => {
       "Musical director: Bob",
       "Edited the notes",
       "Made the set private",
-      "Auto group chat: 7 days before",
+      "Auto Create Slack Channel: 7 days before",
     ]);
   });
 
