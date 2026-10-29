@@ -9,6 +9,15 @@
 // `/calendar?set=<id>` opens the set, and Close, the ✕, Escape and the
 // backdrop all ran a navigation the router threw away.
 //
+// **It only does this in a PRODUCTION build.** Under `next dev` the same
+// `router.replace(pathname)` clears the param and closes the modal, measured
+// on both. That is why the bug reached prod and why no test caught it: the e2e
+// suite runs against `next dev` (`npm run e2e:server`), so an e2e assertion
+// about closing a linked set PASSES on the broken code. The guard that works
+// on any machine is therefore a source-level one — `tests/unit/urlParam.test.ts`
+// fails if a page clears or sets a param on its own pathname through the
+// router instead of coming through here.
+//
 // The native history API is the supported way to change search params without
 // a navigation (Next 14.1+), and Next keeps `useSearchParams` in step with it,
 // so the derived state follows the URL exactly as it did before. It also never

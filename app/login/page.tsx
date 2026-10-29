@@ -29,6 +29,7 @@ import {
   rememberPostLogin,
   safeInternalPath,
 } from "@/lib/postLogin";
+import { replaceUrl } from "@/lib/urlParam";
 
 // useSearchParams() (used inside LoginForm to read ?callbackUrl) must sit
 // under a Suspense boundary, so the page export just wraps the form in one.
@@ -126,12 +127,17 @@ function LoginForm() {
     setConflicts(found);
     // Strip the conflict params, but keep any destination: this bounce is
     // mid-journey, and "Continue anyway" re-runs Google with it.
-    router.replace(
+    //
+    // Through `replaceUrl`, not `router.replace`: this lands on /login from
+    // /login, and in a PRODUCTION build the router discards a navigation to
+    // the pathname already on screen, so the params survived and a refresh
+    // resurrected the very warning this is here to clear (lib/urlParam.ts).
+    replaceUrl(
       rawCallback
         ? `/login?callbackUrl=${encodeURIComponent(rawCallback)}`
         : "/login"
     );
-  }, [searchParams, router, rawCallback]);
+  }, [searchParams, rawCallback]);
 
   function switchMode(next: "signin" | "signup") {
     setMode(next);
