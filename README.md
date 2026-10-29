@@ -375,6 +375,18 @@ owner's invite until an admin approves the handoff. Deleting a set cancels its
 event. Guests are emailed only when they're added or removed or the time moves;
 a setlist edit updates the event quietly.
 
+**Invite emails** — each member's Profile has *Send emails with each calendar
+invite* (on by default, `User.calendarInviteEmails`). Off, the event still
+lands on their calendar and accepting it still confirms the seat; Google just
+doesn't email them. Google's `sendUpdates` is one value per request, not per
+guest, so a write emails (`all`) when ANY guest it touches wants emails — the
+people added or dropped, or everyone when the time moves, the event is created
+or it's cancelled — and is silent (`none`) only when all of them opted out. On
+a mixed roster an opted-out member can therefore still get an email. Whether a
+silent invite shows up at all is the member's own Google setting (*Settings →
+Event settings → Add invitations to my calendar*); "only when I respond in
+email" means a silent invite never appears.
+
 **How RSVPs come back** — Google pings `/api/google-calendar/webhook` whenever
 the calendar changes; the app reads what changed (using the stored sync token)
 and confirms each PENDING seat whose holder accepted, logging "Accepted the

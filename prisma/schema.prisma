@@ -423,6 +423,12 @@ model User {
   // other. Null = use `email`; `lib/calendarEvent.ts inviteAddress` is the
   // one reading of it, and the RSVP comes back from the same address.
   calendarInviteEmail String?
+  // Whether Google EMAILS this person when it invites them, moves their set or
+  // cancels it (the API's `sendUpdates`). Off = the event still lands on their
+  // calendar and RSVPs still work, there's just no email. `sendUpdates` is one
+  // value per request, not per guest, so `lib/calendarEvent.ts sendUpdatesFor`
+  // emails when ANYONE the change touches wants it.
+  calendarInviteEmails Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

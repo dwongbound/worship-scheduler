@@ -35,7 +35,6 @@ import { pendingOwners } from "./pendingHandoff";
 import {
   PRACTICE_ID_PROPERTY,
   SET_ID_PROPERTY,
-  attendeesChanged,
   eventAttendees,
   eventDescription,
   eventTimes,
@@ -44,6 +43,8 @@ import {
   practiceTimes,
   practiceTitle,
   seatsToConfirm,
+  sendUpdatesFor,
+  touchedGuests,
   type CalendarAttendee,
 } from "./calendarEvent";
 
@@ -499,7 +500,7 @@ export async function selectCalendar(
     select: { id: true, googleEventId: true },
   });
   for (const s of upcoming) {
-    await gapi(org, "DELETE", `${cal(org)}/events/${encodeURIComponent(s.googleEventId!)}?sendUpdates=all`);
+    await cancelEvent(org, s.googleEventId!);
   }
   await prisma.set.updateMany({ where: { orgId }, data: { googleEventId: null } });
   await prisma.org.update({
@@ -524,6 +525,55 @@ export async function selectCalendar(
 }
 
 // ── Set ⇄ event ────────────────────────────────────────────────────────────
+
+/**
+ * Who among these invite addresses wants Google's emails
+ * (User.calendarInviteEmails), keyed by normalized address. Read by address
+ * rather than off the seats so a guest who has just been dropped from the
+ * roster — no seat left to carry the flag — is still asked. An address shared
+ * by two accounts wants the email if either does.
+ */
+async function emailPrefs(addresses: string[]): Promise<Map<string, boolean>> {
+  const prefs = new Map<string, boolean>();
+  if (addresses.length === 0) return prefs;
+  const users =
+    (await prisma.user.findMany({
+      where: {
+        OR: [
+          { calendarInviteEmail: { in: addresses, mode: "insensitive" } },
+          { calendarInviteEmail: null, email: { in: addresses, mode: "insensitive" } },
+        ],
+      },
+      select: { email: true, calendarInviteEmail: true, calendarInviteEmails: true },
+    })) ?? [];
+  for (const u of users) {
+    const addr = inviteAddress(u);
+    if (addr) prefs.set(addr, (prefs.get(addr) ?? false) || u.calendarInviteEmails !== false);
+  }
+  return prefs;
+}
+
+/** `sendUpdates` for a write touching these guests (see `sendUpdatesFor`). */
+async function notifyFor(touched: string[]): Promise<"all" | "none"> {
+  if (touched.length === 0) return "none";
+  return sendUpdatesFor(touched, await emailPrefs(touched));
+}
+
+/**
+ * Cancel one event, emailing its guests only if one of them wants it. The
+ * event is read first because the guest list lives on it: by now the set may
+ * already be gone from the db.
+ */
+async function cancelEvent(org: OrgCal, eventId: string): Promise<void> {
+  const path = `${cal(org)}/events/${encodeURIComponent(eventId)}`;
+  const current = await gapi(org, "GET", path);
+  // Unreadable (a blip, or already gone) = email by default, as before.
+  const guests = current?.ok
+    ? touchedGuests(null, (current.json.attendees as CalendarAttendee[] | undefined) ?? [], true)
+    : null;
+  const notify = guests ? await notifyFor(guests) : "all";
+  await gapi(org, "DELETE", `${path}?sendUpdates=${notify}`);
+}
 
 /**
  * Create or update a set's event so it matches the db. Safe to call after any
@@ -559,8 +609,9 @@ async function syncOneEvent(
       const start = (current.json.start as { dateTime?: string } | undefined)?.dateTime;
       const moved = !start || new Date(start).getTime() !== ev.startsAt.getTime();
       // Email guests only when it matters to them — someone added or dropped,
-      // or the time moved. A setlist edit just updates the event quietly.
-      const notify = moved || attendeesChanged(before, attendees) ? "all" : "none";
+      // or the time moved — and only if one of those guests wants the email.
+      // A setlist edit just updates the event quietly.
+      const notify = await notifyFor(touchedGuests(before, attendees, moved));
       await gapi(
         org,
         "PATCH",
@@ -573,11 +624,13 @@ async function syncOneEvent(
     // Gone (deleted by hand in Google) — fall through and make a new one.
   }
 
-  const made = await gapi(org, "POST", `${cal(org)}/events?sendUpdates=all`, {
+  const attendees = eventAttendees(ev.seats);
+  const notify = await notifyFor(touchedGuests(null, attendees, true));
+  const made = await gapi(org, "POST", `${cal(org)}/events?sendUpdates=${notify}`, {
     summary: ev.summary,
     description: ev.description,
     ...ev.times,
-    attendees: eventAttendees(ev.seats),
+    attendees,
     guestsCanModify: false,
     guestsCanInviteOthers: false,
     extendedProperties: { private: ev.properties },
@@ -771,7 +824,10 @@ export async function calendarEventOfPractice(
     : null;
 }
 
-/** Cancel a deleted set's (or practice's) event; Google emails the guests. */
+/**
+ * Cancel a deleted set's (or practice's) event; Google emails the guests
+ * unless every one of them has switched invite emails off.
+ */
 export async function deleteSetCalendarEvent(
   ref: { orgId: string; eventId: string } | null
 ): Promise<void> {
@@ -779,7 +835,7 @@ export async function deleteSetCalendarEvent(
   try {
     const org = await loadOrg(ref.orgId);
     if (!org) return;
-    await gapi(org, "DELETE", `${cal(org)}/events/${encodeURIComponent(ref.eventId)}?sendUpdates=all`);
+    await cancelEvent(org, ref.eventId);
   } catch (err) {
     console.error(`[gcal] delete of event ${ref.eventId} failed:`, err);
   }

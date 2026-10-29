@@ -73,6 +73,9 @@ export default function ProfilePage() {
   // Being a guest on my sets' Google Calendar events, on by default. Off takes
   // me off the guest list only — the seat and the event's roster are unchanged.
   const [calendarInvites, setCalendarInvites] = useState(true);
+  // Whether Google emails me with those invites, on by default. Off = the sets
+  // still land on my calendar, just without the email (Google's sendUpdates).
+  const [calendarInviteEmails, setCalendarInviteEmails] = useState(true);
   // Where the invites are sent, when the account email isn't the place for
   // them. Saved on blur like the email above; the saved copy is what a failed
   // save is rolled back to.
@@ -137,6 +140,7 @@ export default function ProfilePage() {
     setHasPassword(me.hasPassword);
     setDailyDigest(me.dailyDigest);
     setCalendarInvites(me.calendarInvites);
+    setCalendarInviteEmails(me.calendarInviteEmails ?? true);
     setInviteEmail(me.calendarInviteEmail ?? "");
     setSavedInviteEmail(me.calendarInviteEmail ?? "");
     savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
@@ -214,6 +218,25 @@ export default function ProfilePage() {
       if (!res.ok) throw new Error();
     } catch {
       setDailyDigest(prev);
+      setMessage("Error: could not save that");
+    }
+  }
+
+  // Flip the invite-email preference. Same shape as the digest toggle, and it
+  // re-syncs nothing: it only decides whether Google emails on later changes.
+  async function saveCalendarInviteEmails(next: boolean) {
+    const prev = calendarInviteEmails;
+    setCalendarInviteEmails(next);
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // name is required by the endpoint, so send the current one through.
+        body: JSON.stringify({ name, email: email || null, calendarInviteEmails: next }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setCalendarInviteEmails(prev);
       setMessage("Error: could not save that");
     }
   }
@@ -692,6 +715,17 @@ export default function ProfilePage() {
               checked={calendarInvites}
               onChange={(e) => toggleCalendarInvites(e.target.checked)}
             />
+            {/* Only while invites are on: with no invite there is no email
+                to send or skip. */}
+            {calendarInvites && (
+              <div className="mt-2" data-testid="profile-calendar-invite-emails">
+                <Checkbox
+                  label="Send emails with each calendar invite"
+                  checked={calendarInviteEmails}
+                  onChange={(e) => saveCalendarInviteEmails(e.target.checked)}
+                />
+              </div>
+            )}
             {calendarInvites ? (
               <div className="mt-2">
                 {/* Google puts an invite on the default calendar of

@@ -3,6 +3,8 @@
 import { describe, expect, it } from "vitest";
 import {
   attendeesChanged,
+  sendUpdatesFor,
+  touchedGuests,
   eventAttendees,
   eventDescription,
   eventTimes,
@@ -277,5 +279,39 @@ describe("normalizeEmail", () => {
     expect(normalizeEmail("  Kate@Example.COM ")).toBe("kate@example.com");
     expect(normalizeEmail("")).toBeNull();
     expect(normalizeEmail(null)).toBeNull();
+  });
+});
+
+describe("touchedGuests", () => {
+  const a = [{ email: "a@x.com" }, { email: "b@x.com" }];
+  it("is everyone on a new event", () => {
+    expect(touchedGuests(null, a, false).sort()).toEqual(["a@x.com", "b@x.com"]);
+  });
+  it("is only who was added or dropped when nothing moved", () => {
+    expect(touchedGuests(a, [{ email: "A@x.com" }, { email: "c@x.com" }], false).sort()).toEqual([
+      "b@x.com",
+      "c@x.com",
+    ]);
+    expect(touchedGuests(a, a, false)).toEqual([]);
+  });
+  it("is everyone, dropped guests included, when the time moved", () => {
+    expect(touchedGuests(a, [{ email: "a@x.com" }], true).sort()).toEqual(["a@x.com", "b@x.com"]);
+  });
+});
+
+describe("sendUpdatesFor", () => {
+  const prefs = new Map([
+    ["off@x.com", false],
+    ["on@x.com", true],
+  ]);
+  it("is quiet when nobody is touched or everyone touched opted out", () => {
+    expect(sendUpdatesFor([], prefs)).toBe("none");
+    expect(sendUpdatesFor(["Off@x.com"], prefs)).toBe("none");
+  });
+  it("emails when any touched guest wants it", () => {
+    expect(sendUpdatesFor(["off@x.com", "on@x.com"], prefs)).toBe("all");
+  });
+  it("emails an address it knows nothing about, since that's the default", () => {
+    expect(sendUpdatesFor(["stranger@x.com"], prefs)).toBe("all");
   });
 });

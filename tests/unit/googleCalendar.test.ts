@@ -26,6 +26,7 @@ import { pendingOwners } from "@/lib/pendingHandoff";
 import {
   calendarEventOfPractice,
   calendarEventsOfSet,
+  deleteSetCalendarEvent,
   handleNotification,
   isGoogleCalendarAppConfigured,
   listCalendarsFor,
@@ -209,6 +210,99 @@ describe("syncSetCalendar", () => {
         : undefined;
     await syncSetCalendar("s1");
     expect(calls.find((c) => c.method === "PATCH")!.url).toContain("sendUpdates=all");
+  });
+
+  describe("invite emails (sendUpdates)", () => {
+    // Kate (on the roster) and Ann (added below) as the db reports them.
+    const prefs = (kate: boolean, ann = true) =>
+      m(prisma.user.findMany).mockResolvedValue([
+        { email: "kate@example.com", calendarInviteEmail: null, calendarInviteEmails: kate },
+        { email: "x@y.com", calendarInviteEmail: "ann@example.com", calendarInviteEmails: ann },
+      ]);
+    const withAnn = (overrides: Record<string, unknown> = {}) =>
+      aSet({
+        ...overrides,
+        assignments: [
+          ...aSet().assignments,
+          {
+            id: "a3",
+            role: "BASS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u3",
+            user: { name: "Ann", email: "x@y.com", calendarInviteEmail: "ann@example.com" },
+          },
+        ],
+      });
+
+    it("invites without email when every guest has switched emails off", async () => {
+      prefs(false);
+      m(prisma.set.findUnique).mockResolvedValue(aSet());
+      routes = (method) => (method === "POST" ? { body: { id: "ev1" } } : undefined);
+      await syncSetCalendar("s1");
+      const create = calls.find((c) => c.method === "POST")!;
+      expect(create.url).toContain("?sendUpdates=none");
+      // Still invited — only the email is skipped.
+      expect((create.body as { attendees: unknown[] }).attendees).toHaveLength(1);
+    });
+
+    it("emails a mixed roster, since Google can't pick per guest", async () => {
+      prefs(false, true);
+      m(prisma.set.findUnique).mockResolvedValue(withAnn());
+      routes = (method) => (method === "POST" ? { body: { id: "ev1" } } : undefined);
+      await syncSetCalendar("s1");
+      expect(calls.find((c) => c.method === "POST")!.url).toContain("?sendUpdates=all");
+    });
+
+    it("matches a guest by their invite address, not their account email", async () => {
+      prefs(true, false);
+      m(prisma.set.findUnique).mockResolvedValue(withAnn({ googleEventId: "ev1" }));
+      routes = (method) =>
+        method === "GET"
+          ? {
+              body: {
+                status: "confirmed",
+                start: { dateTime: LATER.toISOString() },
+                attendees: [{ email: "kate@example.com", responseStatus: "accepted" }],
+              },
+            }
+          : undefined;
+      await syncSetCalendar("s1");
+      // Only Ann is new, and Ann (at ann@example.com) said no emails.
+      expect(calls.find((c) => c.method === "PATCH")!.url).toContain("sendUpdates=none");
+    });
+
+    it("emails when a guest who wants it is the one added", async () => {
+      prefs(false, true);
+      m(prisma.set.findUnique).mockResolvedValue(withAnn({ googleEventId: "ev1" }));
+      routes = (method) =>
+        method === "GET"
+          ? {
+              body: {
+                status: "confirmed",
+                start: { dateTime: LATER.toISOString() },
+                attendees: [{ email: "kate@example.com", responseStatus: "accepted" }],
+              },
+            }
+          : undefined;
+      await syncSetCalendar("s1");
+      expect(calls.find((c) => c.method === "PATCH")!.url).toContain("sendUpdates=all");
+    });
+
+    it("cancels quietly when no guest on the event wants the email", async () => {
+      prefs(false);
+      routes = (method) =>
+        method === "GET" ? { body: { attendees: [{ email: "Kate@Example.com" }] } } : undefined;
+      await deleteSetCalendarEvent({ orgId: "org1", eventId: "ev1" });
+      expect(calls.map((c) => c.method)).toEqual(["GET", "DELETE"]);
+      expect(calls[1].url).toContain("/events/ev1?sendUpdates=none");
+    });
+
+    it("cancels with email when the event can't be read first", async () => {
+      routes = (method) => (method === "GET" ? { status: 500 } : undefined);
+      await deleteSetCalendarEvent({ orgId: "org1", eventId: "ev1" });
+      expect(calls.find((c) => c.method === "DELETE")!.url).toContain("sendUpdates=all");
+    });
   });
 
   it("makes a new event when the old one was deleted in Google", async () => {
@@ -436,6 +530,9 @@ describe("choosing the calendar", () => {
       if (url.includes("/calendarList")) return { body: list };
       if (url.includes("/events/watch")) return { body: { resourceId: "res2" } };
       if (url.includes("/events?")) return { body: { items: [], nextSyncToken: "tok2" } };
+      if (method === "GET" && url.endsWith("/events/ev1")) {
+        return { body: { attendees: [{ email: "kate@example.com" }] } };
+      }
       return undefined;
     };
     m(prisma.set.findMany).mockResolvedValue([{ id: "s1", googleEventId: "ev1" }]);

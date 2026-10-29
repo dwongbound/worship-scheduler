@@ -92,7 +92,7 @@ test("a password (non-Google) account can edit its email and password", async ({
   await login(page, "carol");
   await page.goto("/profile");
 
-  await expect(page.getByLabel("Email")).toBeEnabled();
+  await expect(page.getByLabel("Email", { exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Change password" })).toBeEnabled();
   await expect(page.getByText("Managed by your Google account.")).toHaveCount(0);
   await expect(page.getByText("(signed in with Google)")).toHaveCount(0);
@@ -117,7 +117,7 @@ test("editing a profile field fires one write and no session/org refetch", async
 
   // The email field, not the name: a name change deliberately refreshes the
   // session (the navbar shows it), which would make the assertions below lie.
-  const email = page.getByLabel("Email");
+  const email = page.getByLabel("Email", { exact: true });
   const original = await email.inputValue();
   // The field saves on blur, not on every keystroke — so typing alone isn't a
   // write, and the test has to leave the field the way a person would.
@@ -154,7 +154,7 @@ test("with Google Calendar connected, a member with no email is asked for one on
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  const email = page.getByLabel("Email");
+  const email = page.getByLabel("Email", { exact: true });
   const original = await email.inputValue();
   const banner = page.getByTestId("profile-calendar-banner");
   // Seeded users have no email, so the banner shows until one is saved.
@@ -171,6 +171,26 @@ test("with Google Calendar connected, a member with no email is asked for one on
     .getByTestId("profile-calendar-invites")
     .getByLabel("Calendar invites for my sets");
   await expect(invites).toBeChecked();
+
+  // Under it, whether Google emails each invite (sendUpdates): on by default,
+  // saved on click, and still off after a reload.
+  const emails = () =>
+    page
+      .getByTestId("profile-calendar-invite-emails")
+      .getByLabel("Send emails with each calendar invite");
+  const saved = () =>
+    page.waitForResponse((r) => r.url().endsWith("/api/me") && r.request().method() === "PUT");
+  await expect(emails()).toBeChecked();
+  let put = saved();
+  await emails().uncheck();
+  expect((await put).ok()).toBe(true);
+  await page.reload();
+  await expect(emails()).not.toBeChecked();
+  put = saved();
+  await emails().check();
+  expect((await put).ok()).toBe(true);
+  await page.reload();
+  await expect(emails()).toBeChecked();
 
   // Where they go is the person's to choose, because Google decides which
   // calendar an invite lands on from the address it was sent to. Blank means
@@ -267,7 +287,7 @@ test("the invite address can be picked from your own Google calendars", async ({
   // The invite settings only exist once there's an address to invite. Waiting
   // on the section rather than the "Saved" flash keeps this step honest on a
   // re-run, where the email may already be what we're setting it to.
-  const email = page.getByLabel("Email");
+  const email = page.getByLabel("Email", { exact: true });
   const original = await email.inputValue();
   await email.fill("carol.pick@example.com");
   await email.blur();
@@ -331,7 +351,7 @@ test("the invite settings are mine to set before any org connects a calendar", a
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  const email = page.getByLabel("Email");
+  const email = page.getByLabel("Email", { exact: true });
   const original = await email.inputValue();
   await email.fill("carol.nogcal@example.com");
   await email.blur();
@@ -386,7 +406,7 @@ test("calendar invites are their own section under Slack, and a long calendar na
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "Edit Profile" })).toBeVisible();
 
-  const email = page.getByLabel("Email");
+  const email = page.getByLabel("Email", { exact: true });
   const original = await email.inputValue();
   await email.fill("carol.wide@example.com");
   await email.blur();

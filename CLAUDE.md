@@ -87,6 +87,13 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   event's roster, so the team still sees who is playing. Switched on /profile,
   honoured by `lib/calendarEvent.ts` (`eventAttendees` skips them;
   `seatsToConfirm` ignores an RSVP that crossed with the opt-out).
+  `calendarInviteEmails` (default true) is whether Google EMAILS them with
+  those invites (`sendUpdates`); the checkbox sits under the invites one and
+  hides while invites are off. `sendUpdates` is per request, not per guest, so
+  `lib/calendarEvent.ts` `touchedGuests` + `sendUpdatesFor` email when ANY
+  guest a write touches wants it; `lib/googleCalendar.ts emailPrefs` reads the
+  flag by invite address (so a just-dropped guest is still asked), and
+  cancelling an event GETs its guest list first for the same reason.
   `calendarInviteEmail` is WHERE those invites go, null = `email`. Google puts
   an invite on the default calendar of whatever address it was sent to and an
   attendee can't move an invited event afterwards, so the address IS the only

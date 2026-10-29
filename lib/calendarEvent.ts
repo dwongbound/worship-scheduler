@@ -186,6 +186,45 @@ export function attendeesChanged(
   return false;
 }
 
+/**
+ * The guests a write actually tells something new: everyone on a new event or
+ * one whose time moved, otherwise just who was added or dropped. A setlist or
+ * roster-text edit touches nobody, so it goes out quietly.
+ */
+export function touchedGuests(
+  before: CalendarAttendee[] | null,
+  after: CalendarAttendee[],
+  moved: boolean
+): string[] {
+  const b = new Set((before ?? []).flatMap((x) => normalizeEmail(x.email) ?? []));
+  const a = new Set(after.flatMap((x) => normalizeEmail(x.email) ?? []));
+  if (before === null || moved) return [...new Set([...a, ...b])];
+  return [...[...a].filter((e) => !b.has(e)), ...[...b].filter((e) => !a.has(e))];
+}
+
+/**
+ * Google's `sendUpdates` for a write: "all" emails every guest, "none" emails
+ * nobody, and there is no per-guest choice — it's one value per request. So
+ * the email goes out when ANY guest the write touches wants it, and only an
+ * all-opted-out (or empty) list is quiet. Someone who switched emails off can
+ * therefore still get one when a guest who didn't is invited alongside them.
+ *
+ * `wantsEmail` is keyed by normalized invite address; an address it doesn't
+ * know (no account, or a caller that doesn't track it) gets the email, since
+ * that's the default.
+ */
+export function sendUpdatesFor(
+  touched: string[],
+  wantsEmail: Map<string, boolean>
+): "all" | "none" {
+  return touched.some((e) => {
+    const n = normalizeEmail(e);
+    return n !== null && wantsEmail.get(n) !== false;
+  })
+    ? "all"
+    : "none";
+}
+
 /** The event's start/end in the app's zone, as Google's EventDateTime. */
 export function eventTimes(set: Pick<CalendarSet, "startsAt" | "durationMinutes">, timeZone: string) {
   const end = new Date(set.startsAt.getTime() + set.durationMinutes * 60_000);
