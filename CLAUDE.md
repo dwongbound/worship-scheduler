@@ -87,6 +87,26 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   event's roster, so the team still sees who is playing. Switched on /profile,
   honoured by `lib/calendarEvent.ts` (`eventAttendees` skips them;
   `seatsToConfirm` ignores an RSVP that crossed with the opt-out).
+  `calendarInviteEmails` (default true) is a SECOND, separate answer: whether
+  Google EMAILS them about those events, as opposed to just putting them on
+  the calendar. Different ask from `calendarInvites` — that one is "don't put
+  my sets on my calendar", this one is "put them there, but stop mailing me
+  about every roster change". /profile shows it directly under the invites
+  checkbox, and only while invites are ON, since there is nothing to mail
+  about otherwise. **Google's `sendUpdates` is per REQUEST, not per attendee**,
+  so this cannot be honoured in every case and the two places that decide are
+  the contract: **`notifyForUpdate`** (patching an existing event — "none"
+  when no guest wants mail, or when the only change is people joining who all
+  asked for none; "all" on a move, on a removal, or when the same change also
+  concerns somebody who does want mail) and **`splitInviteEmails`** (a NEW
+  event, where the mail people actually notice comes from, written in TWO
+  passes: invite the ones who want mail, then add the rest with
+  `sendUpdates=none`). So one person's opt-out is exact at creation and when a
+  change is theirs alone, and loses to a teammate who wants mail otherwise —
+  a limit of the API, not a bug. Saving it deliberately does NOT re-sync
+  (`lib/profile.ts calendarResyncNeeded` never sees it): a re-sync rewrites
+  every upcoming event and mails the guests, which is the thing being turned
+  off. ✅tested
   `calendarInviteEmail` is WHERE those invites go, null = `email`. Google puts
   an invite on the default calendar of whatever address it was sent to and an
   attendee can't move an invited event afterwards, so the address IS the only
@@ -787,8 +807,12 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   mid-handoff stays on the old owner's invite until approved. Never throws.
   The invite's roster marks the set's MD with "(MD)", by id, the same mark the
   Slack roster and the weekly summary use.
+  Whether Google MAILS the guests about a write is `notifyForUpdate` /
+  `splitInviteEmails` in `calendarEvent.ts` — `sendUpdates` is per request, so
+  a mixed roster's NEW event is two calls (see `calendarInviteEmails` in the
+  data model).
   The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
-  `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
+  `seatsToConfirm`/`notifyForUpdate`/`splitInviteEmails`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
 - `invitePicker.ts` — /profile's "Send invites to" picker, pure:
   `inviteOptions` / `selectedInviteValue` / `inviteSelectionValue` +
   `INVITE_OTHER_VALUE` (the option that opens the address box and saves

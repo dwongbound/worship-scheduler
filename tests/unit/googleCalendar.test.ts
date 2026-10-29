@@ -174,6 +174,119 @@ describe("syncSetCalendar", () => {
     });
   });
 
+  it("invites a mixed roster in two passes, so the silent guest gets no mail", async () => {
+    // Google's sendUpdates is per request, not per attendee: one call either
+    // mails everybody or nobody. So the people who want an email are invited
+    // first, then the rest are added with sendUpdates=none.
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        assignments: [
+          {
+            id: "a1",
+            role: "KEYS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u1",
+            user: { name: "Kate", email: "kate@example.com", calendarInviteEmails: false },
+          },
+          {
+            id: "a2",
+            role: "BASS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u3",
+            user: { name: "Sam", email: "sam@example.com", calendarInviteEmails: true },
+          },
+        ],
+      })
+    );
+    routes = (method) => (method === "POST" ? { body: { id: "ev1" } } : undefined);
+    await syncSetCalendar("s1");
+
+    expect(calls.map((c) => c.method)).toEqual(["POST", "PATCH"]);
+    const [create, add] = calls;
+    expect(create.url).toContain("sendUpdates=all");
+    expect((create.body as { attendees: { email: string }[] }).attendees).toEqual([
+      { email: "sam@example.com", displayName: "Sam" },
+    ]);
+    expect(add.url).toContain("/events/ev1?sendUpdates=none");
+    expect(
+      (add.body as { attendees: { email: string }[] }).attendees.map((a) => a.email)
+    ).toEqual(["kate@example.com", "sam@example.com"]);
+    // The id is stored before the second pass, so a failed add leaves an
+    // event the next sync can finish rather than a duplicate.
+    expect(prisma.set.update).toHaveBeenCalledWith({
+      where: { id: "s1" },
+      data: { googleEventId: "ev1" },
+    });
+  });
+
+  it("creates in one quiet call when no guest wants an email", async () => {
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        assignments: [
+          {
+            id: "a1",
+            role: "KEYS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u1",
+            user: { name: "Kate", email: "kate@example.com", calendarInviteEmails: false },
+          },
+        ],
+      })
+    );
+    routes = (method) => (method === "POST" ? { body: { id: "ev1" } } : undefined);
+    await syncSetCalendar("s1");
+
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+    expect(calls[0].url).toContain("sendUpdates=none");
+    expect((calls[0].body as { attendees: unknown[] }).attendees).toHaveLength(1);
+  });
+
+  it("adds a silent guest to an existing event without mailing the team", async () => {
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        googleEventId: "ev1",
+        assignments: [
+          {
+            id: "a1",
+            role: "KEYS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u1",
+            user: { name: "Kate", email: "kate@example.com", calendarInviteEmails: true },
+          },
+          {
+            id: "a2",
+            role: "BASS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u3",
+            user: { name: "Sam", email: "sam@example.com", calendarInviteEmails: false },
+          },
+        ],
+      })
+    );
+    routes = (method) =>
+      method === "GET"
+        ? {
+            body: {
+              status: "confirmed",
+              start: { dateTime: LATER.toISOString() },
+              attendees: [{ email: "kate@example.com", responseStatus: "accepted" }],
+            },
+          }
+        : undefined;
+    await syncSetCalendar("s1");
+
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.url).toContain("sendUpdates=none");
+    expect(
+      (patch.body as { attendees: { email: string }[] }).attendees.map((a) => a.email)
+    ).toEqual(["kate@example.com", "sam@example.com"]);
+  });
+
   it("patches quietly when only the setlist changed, keeping each RSVP", async () => {
     m(prisma.set.findUnique).mockResolvedValue(aSet({ googleEventId: "ev1" }));
     routes = (method) =>

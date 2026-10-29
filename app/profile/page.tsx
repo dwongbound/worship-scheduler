@@ -73,6 +73,7 @@ export default function ProfilePage() {
   // Being a guest on my sets' Google Calendar events, on by default. Off takes
   // me off the guest list only — the seat and the event's roster are unchanged.
   const [calendarInvites, setCalendarInvites] = useState(true);
+  const [calendarInviteEmails, setCalendarInviteEmails] = useState(true);
   // Where the invites are sent, when the account email isn't the place for
   // them. Saved on blur like the email above; the saved copy is what a failed
   // save is rolled back to.
@@ -137,6 +138,7 @@ export default function ProfilePage() {
     setHasPassword(me.hasPassword);
     setDailyDigest(me.dailyDigest);
     setCalendarInvites(me.calendarInvites);
+    setCalendarInviteEmails(me.calendarInviteEmails);
     setInviteEmail(me.calendarInviteEmail ?? "");
     setSavedInviteEmail(me.calendarInviteEmail ?? "");
     savedKeyRef.current = fieldsKey(me.name, me.email ?? "");
@@ -247,6 +249,30 @@ export default function ProfilePage() {
       setCalendarInvites(prev);
       setMessage("Error: could not save that");
       return false;
+    }
+  }
+
+  // Whether Google emails them about those invites. Same optimistic shape as
+  // the toggles above, and deliberately NO re-sync: a re-sync is a write to
+  // every upcoming event, which is itself what mails the guests.
+  async function saveCalendarInviteEmails(next: boolean) {
+    const prev = calendarInviteEmails;
+    setCalendarInviteEmails(next);
+    try {
+      const res = await fetch("/api/me", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        // name is required by the endpoint, so send the current one through.
+        body: JSON.stringify({
+          name,
+          email: email || null,
+          calendarInviteEmails: next,
+        }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      setCalendarInviteEmails(prev);
+      setMessage("Error: could not save that");
     }
   }
 
@@ -694,34 +720,51 @@ export default function ProfilePage() {
             />
             {calendarInvites ? (
               <div className="mt-2">
+                {/* Under the invites switch, because it only means anything
+                    while they ARE being invited: it decides whether the
+                    invite arrives silently or with Google's mail. Only shown
+                    with invites on for that reason. */}
+                <Checkbox
+                  label="Send emails with each calendar invite"
+                  data-testid="invite-emails"
+                  checked={calendarInviteEmails}
+                  onChange={(e) => saveCalendarInviteEmails(e.target.checked)}
+                />
                 {/* Google puts an invite on the default calendar of
                     whatever address it was sent to, and you can't move an
                     invited event afterwards — so which calendar your sets
                     land on is this one choice, made by address. The list is
                     your own calendars, read with your permission; the box
                     below it is for an address the list can't offer. */}
+                {/* Wrapped for the gap: a checkbox sits directly above the
+                    picker now, where the parent's own margin used to do. */}
                 {myCalendars ? (
-                  <Select
-                    label="Send invites to"
-                    data-testid="invite-calendar"
-                    // A calendar can be named anything, and a secondary
-                    // calendar's address is 40-odd characters, so the closed
-                    // box ellipsizes rather than running its text under the
-                    // chevron. Nothing is lost: the line below names the
-                    // address the invites are actually going to, and it wraps.
-                    className="truncate"
-                    value={pickerValue}
-                    onChange={(e) => pickInviteCalendar(e.target.value)}
-                  >
-                    {pickerOptions.map((o) => (
-                      <option key={o.value || "default"} value={o.value}>
-                        {o.label}
-                      </option>
-                    ))}
-                  </Select>
+                  <div className="mt-2">
+                    <Select
+                      label="Send invites to"
+                      data-testid="invite-calendar"
+                      // A calendar can be named anything, and a secondary
+                      // calendar's address is 40-odd characters, so the closed
+                      // box ellipsizes rather than running its text under the
+                      // chevron. Nothing is lost: the line below names the
+                      // address the invites are actually going to, and it wraps.
+                      className="truncate"
+                      value={pickerValue}
+                      onChange={(e) => pickInviteCalendar(e.target.value)}
+                    >
+                      {pickerOptions.map((o) => (
+                        <option key={o.value || "default"} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                 ) : null}
+                {/* Always spaced: with no picker this box follows the
+                    emails checkbox, which the parent's margin no longer
+                    covers. */}
                 {(!myCalendars || inviteOther) && (
-                  <div className={myCalendars ? "mt-2" : undefined}>
+                  <div className="mt-2">
                     <Input
                       label={myCalendars ? "Address" : "Send invites to"}
                       data-testid="invite-address"

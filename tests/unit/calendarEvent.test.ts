@@ -11,7 +11,9 @@ import {
   eventTitle,
   inviteAddress,
   normalizeEmail,
+  notifyForUpdate,
   seatsToConfirm,
+  splitInviteEmails,
   type CalendarSeat,
 } from "@/lib/calendarEvent";
 import { DEFAULT_TEAM_ROLES, type TeamRoleDef } from "@/lib/teamRoles";
@@ -155,6 +157,91 @@ describe("attendeesChanged", () => {
     expect(attendeesChanged(a, [{ email: "a@x.com" }])).toBe(true);
     expect(attendeesChanged(a, [...a, { email: "c@x.com" }])).toBe(true);
     expect(attendeesChanged(a, [{ email: "a@x.com" }, { email: "c@x.com" }])).toBe(true);
+  });
+});
+
+describe("splitInviteEmails", () => {
+  // Google's sendUpdates is per request, so a mixed roster has to be written
+  // in two passes — this is the split those passes are made from.
+  const quiet = (sx: CalendarSeat) => ({ ...sx, calendarInviteEmails: false });
+
+  it("puts the people who want no email in their own group", () => {
+    const seats = [
+      quiet(seat("KEYS", "Kate", "kate@example.com")),
+      seat("BASS", "Sam", "sam@example.com"),
+    ];
+    const out = splitInviteEmails(eventAttendees(seats), seats);
+    expect(out.emailed.map((a) => a.email)).toEqual(["sam@example.com"]);
+    expect(out.silent.map((a) => a.email)).toEqual(["kate@example.com"]);
+  });
+
+  it("treats an address with no seat behind it as wanting emails", () => {
+    // Google's own default, and the safe way round: a guest we can't read a
+    // preference for still hears about their invite.
+    const out = splitInviteEmails([{ email: "stranger@example.com" }], []);
+    expect(out.silent).toEqual([]);
+    expect(out.emailed).toHaveLength(1);
+  });
+
+  it("counts someone holding two seats once", () => {
+    const seats = [
+      quiet(seat("KEYS", "Kate", "kate@example.com")),
+      quiet(seat("CHOIR", "Kate", "kate@example.com")),
+    ];
+    const out = splitInviteEmails(eventAttendees(seats), seats);
+    expect(out.emailed).toEqual([]);
+    expect(out.silent).toHaveLength(1);
+  });
+});
+
+describe("notifyForUpdate", () => {
+  const kate = { email: "kate@example.com" };
+  const sam = { email: "sam@example.com" };
+  const wants = [seat("KEYS", "Kate", "kate@example.com"), seat("BASS", "Sam", "sam@example.com")];
+  const kateQuiet = [
+    { ...seat("KEYS", "Kate", "kate@example.com"), calendarInviteEmails: false },
+    seat("BASS", "Sam", "sam@example.com"),
+  ];
+
+  it("keeps the old behaviour when nobody has opted out", () => {
+    // Guest list changed, or the time moved → everyone is told. A setlist-only
+    // edit (same guests, same time) stays quiet, as before.
+    expect(notifyForUpdate([sam], [sam, kate], wants, false)).toBe("all");
+    expect(notifyForUpdate([sam, kate], [sam, kate], wants, true)).toBe("all");
+    expect(notifyForUpdate([sam, kate], [sam, kate], wants, false)).toBe("none");
+  });
+
+  it("says nothing when the only person joining asked for no email", () => {
+    // THE case this setting exists for: being added to a set is what generates
+    // the mail, and here it is suppressed exactly.
+    expect(notifyForUpdate([sam], [sam, kate], kateQuiet, false)).toBe("none");
+  });
+
+  it("still emails when somebody who wants it is part of the same change", () => {
+    // Google cannot mail a subset, so Sam joining means Sam is told — and
+    // Kate, already a guest, is copied. The limit is the API's.
+    const both = [
+      ...kateQuiet,
+      seat("DRUMS", "Dee", "dee@example.com"),
+    ];
+    const dee = { email: "dee@example.com" };
+    expect(notifyForUpdate([sam], [sam, kate, dee], both, false)).toBe("all");
+  });
+
+  it("emails on a move even when the person who joined wanted silence", () => {
+    expect(notifyForUpdate([sam], [sam, kate], kateQuiet, true)).toBe("all");
+  });
+
+  it("emails when somebody was dropped", () => {
+    // Their copy has to be cancelled, and their seat is gone so there is no
+    // preference left to read.
+    expect(notifyForUpdate([sam, kate], [sam], kateQuiet, false)).toBe("all");
+  });
+
+  it("says nothing at all when no guest wants emails, whatever changed", () => {
+    const allQuiet = kateQuiet.map((sx) => ({ ...sx, calendarInviteEmails: false }));
+    expect(notifyForUpdate([kate], [kate, sam], allQuiet, true)).toBe("none");
+    expect(notifyForUpdate([kate, sam], [kate], allQuiet, false)).toBe("none");
   });
 });
 
