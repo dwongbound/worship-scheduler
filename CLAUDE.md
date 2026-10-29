@@ -638,9 +638,21 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   API is the supported way to change search params without navigating (Next
   14.1+) and Next keeps `useSearchParams` in step with it; it also never
   scrolls, which is what every caller passed `scroll: false` for.
-  `app/{orgs,schedule,profile}/page.tsx` already clear their own params this
-  way inline. Covered by `tests/e2e/set-links.spec.ts` — opening from the grid
-  puts the link in the URL, and a linked set closes.
+  **The router only does this in a PRODUCTION build** — under `next dev` the
+  same `router.replace(pathname)` clears the param and closes the modal. That
+  is why the bug reached prod AND why no test caught it: the e2e suite runs
+  against `next dev` (`npm run e2e:server`), so an e2e assertion about closing
+  a linked set passes on the broken code. So the real guard is a source one —
+  **`tests/unit/urlParam.test.ts`** reads each param-writing page and fails if
+  one navigates to its own pathname through the router. ✅tested
+  `/login` had the same defect: its `?nameConflict`/`?conflicts` strip is a
+  /login → /login replace, so on prod the params survived and a refresh
+  resurrected a stale duplicate-name warning. `app/{orgs,schedule,profile}/page.tsx`
+  already clear their own params this way inline, and `app/set-manager` never
+  clears `?set=` at all (it rings a row rather than opening a modal, so there
+  is nothing to trap). `tests/e2e/set-links.spec.ts` still covers the intended
+  behaviour — opening from the grid puts the link in the URL, and a linked set
+  closes — but being a dev-server run it cannot fail on this bug.
 - `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
   PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
   render bare (those plus `/join`). Four places used to carry their own copy of
