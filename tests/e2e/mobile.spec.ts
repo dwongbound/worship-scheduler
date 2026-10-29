@@ -416,14 +416,32 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
 /**
  * Sets up a targeted swap proposed TO `toName` by `fromUsername`, entirely over
  * the API so it doesn't depend on which sets earlier specs have already traded.
- * Returns the accepting user's username.
+ *
+ * IDEMPOTENT, and that is the point. Proposing is a write, so an attempt that
+ * dies anywhere AFTER the POST — a slow login, a slow first render, anything
+ * that trips the 30s test timeout — leaves the proposal PENDING. That ties up
+ * the proposer's slot, so on the retry `toName` is no longer a swap CANDIDATE
+ * and the setup used to fail with a different error than the one that started
+ * it ("no swap candidate named …"), taking both retries and the next spec down
+ * with it. One transient miss became four hard failures. So when no candidate
+ * is on offer, check whether that is because the proposal this helper wants
+ * already exists, and treat it as the setup already done.
+ *
+ * `toUsername` is the recipient's login, needed only for that check: the
+ * pending proposal is visible to the person being asked, not the asker.
  */
 async function proposeSwapTo(
   page: import("@playwright/test").Page,
   fromUsername: string,
-  toName: string
+  toName: string,
+  toUsername: string
 ) {
   await login(page, fromUsername);
+
+  // My display name, which is how the recipient's incoming list identifies me.
+  const me = (await (await page.request.get("/api/me")).json()) as {
+    name: string;
+  };
 
   // Every assignment of mine, newest API shape: { id, role, set: {...} }.
   const mine = (await (await page.request.get("/api/assignments")).json()) as {
@@ -452,10 +470,23 @@ async function proposeSwapTo(
       break;
     }
   }
-  expect(
-    fromAssignmentId,
-    `no swap candidate named "${toName}" for ${fromUsername}`
-  ).toBeTruthy();
+  if (!fromAssignmentId) {
+    // No candidate on offer. Either a previous attempt already proposed this
+    // very trade (see the note above), in which case the setup is done, or the
+    // seed genuinely can't make it.
+    await login(page, toUsername);
+    const incoming = (await (
+      await page.request.get("/api/swaps/proposals/incoming")
+    ).json()) as { requestedBy: { name: string } }[];
+    const already = (incoming ?? []).some(
+      (p) => p.requestedBy.name === me.name
+    );
+    expect(
+      already,
+      `no swap candidate named "${toName}" for ${fromUsername}, and no pending proposal from ${me.name} either`
+    ).toBeTruthy();
+    return;
+  }
 
   const proposed = await page.request.post("/api/swaps/propose", {
     data: { fromAssignmentId, toAssignmentId },
@@ -466,7 +497,7 @@ async function proposeSwapTo(
 test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async ({
   page,
 }) => {
-  await proposeSwapTo(page, "erin", "Omar Osei");
+  await proposeSwapTo(page, "erin", "Omar Osei", "omar");
 
   await login(page, "omar");
   await page.goto("/set-manager");
@@ -490,7 +521,7 @@ test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async (
 test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async ({
   page,
 }) => {
-  await proposeSwapTo(page, "erin", "Omar Osei");
+  await proposeSwapTo(page, "erin", "Omar Osei", "omar");
 
   await login(page, "omar");
   await page.goto("/set-manager");
