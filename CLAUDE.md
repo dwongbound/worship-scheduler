@@ -624,7 +624,23 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   has loaded is resolved through `GET /api/sets/[id]`: the calendar widens its
   window and switches org, the set-manager widens its horizon (or says why it
   can't). Roster DMs, digest bullets and the Approvals tab use the calendar
-  form. ✅tested
+  form. ✅tested. The param is WRITTEN through `urlParam.ts`, never
+  `router.replace` — see below.
+- `urlParam.ts` — `replaceUrl(url)`: the one way a page mirrors a modal's
+  identity into the address bar (`?set=`, `?draft=`, `?user=`) and clears it
+  again. **`router.replace` cannot do this**: Next 16 drops a soft navigation
+  whose target pathname is the one already on screen, so opening a set never
+  reached the address bar and — the half that actually broke — CLEARING
+  `?set=` never reached `useSearchParams`, which on the calendar is the only
+  thing that closes the modal. Someone following a Google Calendar invite's
+  link therefore had no way out of the set it opened: Close, the ✕, Escape and
+  the backdrop all ran a navigation the router threw away. The native history
+  API is the supported way to change search params without navigating (Next
+  14.1+) and Next keeps `useSearchParams` in step with it; it also never
+  scrolls, which is what every caller passed `scroll: false` for.
+  `app/{orgs,schedule,profile}/page.tsx` already clear their own params this
+  way inline. Covered by `tests/e2e/set-links.spec.ts` — opening from the grid
+  puts the link in the URL, and a linked set closes.
 - `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
   PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
   render bare (those plus `/join`). Four places used to carry their own copy of

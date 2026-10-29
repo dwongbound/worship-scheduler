@@ -3,7 +3,7 @@
 // auto-scheduler, and see who has finished entering availability.
 import { useSession } from "next-auth/react";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -31,6 +31,7 @@ import {
   draftSearch,
   draftSlug,
 } from "@/lib/draftLink";
+import { replaceUrl } from "@/lib/urlParam";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
@@ -95,7 +96,6 @@ export default function CreatePage() {
 }
 
 function CreateView() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   // ?draft=<slug>: the plan a link names, and the slugs already followed — a
@@ -211,13 +211,14 @@ function CreateView() {
 
   // Mirror the open draft into ?draft=<slug>, or clear it. Through
   // `draftSearch` so any other param this page carries survives either way.
+  // Writing the slug is NOT following a link, so it's marked as followed
+  // first — see the deep-link effect below, which reads the same param.
   const setDraftParam = useCallback(
     (slug: string | null) => {
-      router.replace(`${pathname}${draftSearch(searchParams.toString(), slug)}`, {
-        scroll: false,
-      });
+      if (slug) followedDraftLinks.current.add(slug);
+      replaceUrl(`${pathname}${draftSearch(searchParams.toString(), slug)}`);
     },
-    [router, pathname, searchParams]
+    [pathname, searchParams]
   );
 
   /**
