@@ -358,8 +358,15 @@ function CalendarView() {
 
   // Mirror the open draft into ?draft=<slug>, or clear it. Through
   // `draftSearch` so a ?set= link on the same URL survives either way.
+  //
+  // Writing the slug is NOT following a link, so it's marked as followed
+  // first: the deep-link effect below reads the same param, and a plan that
+  // had just been opened or saved would otherwise be re-opened by the page's
+  // own write — which closed the Drafts list out from under whoever was
+  // looking at it.
   const setDraftParam = useCallback(
     (slug: string | null) => {
+      if (slug) followedDraftLinks.current.add(slug);
       replaceUrl(`${pathname}${draftSearch(searchParams.toString(), slug)}`);
     },
     [pathname, searchParams]

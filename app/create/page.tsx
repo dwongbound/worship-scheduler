@@ -211,8 +211,11 @@ function CreateView() {
 
   // Mirror the open draft into ?draft=<slug>, or clear it. Through
   // `draftSearch` so any other param this page carries survives either way.
+  // Writing the slug is NOT following a link, so it's marked as followed
+  // first — see the deep-link effect below, which reads the same param.
   const setDraftParam = useCallback(
     (slug: string | null) => {
+      if (slug) followedDraftLinks.current.add(slug);
       replaceUrl(`${pathname}${draftSearch(searchParams.toString(), slug)}`);
     },
     [pathname, searchParams]
