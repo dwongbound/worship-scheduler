@@ -11,7 +11,7 @@
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -32,6 +32,7 @@ import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import { replaceUrl } from "@/lib/urlParam";
 import { type Instrument } from "@/lib/constants";
 import { DEFAULT_TEAM_ROLES, MD_KEY, orderedRoles } from "@/lib/teamRoles";
 import { STAT_RANGES, rangeForDays } from "@/lib/stats";
@@ -194,7 +195,6 @@ function UsersPageInner() {
   // scrolls that person's card into view and rings it briefly (username keeps
   // the URL readable instead of exposing an opaque id). `handledHighlight`
   // remembers which one we've already acted on so re-renders don't re-scroll.
-  const router = useRouter();
   const searchParams = useSearchParams();
   const highlightParam = searchParams.get("user");
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -308,8 +308,10 @@ function UsersPageInner() {
       .getElementById(`user-card-${match.id}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightedId(match.id);
-    router.replace("/users", { scroll: false });
-  }, [highlightParam, users, router]);
+    // Through `replaceUrl`: Next drops a navigation to the pathname already
+    // on screen, so `router.replace` left ?user= in the URL (lib/urlParam.ts).
+    replaceUrl("/users");
+  }, [highlightParam, users]);
 
   // Fade the highlight ring a few seconds after it lands.
   useEffect(() => {
