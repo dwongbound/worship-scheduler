@@ -13,7 +13,7 @@
 // browser and only reach the calendar on "Save Changes", which pushes each
 // changed set's roster diff through PATCH /api/admin/sets/:id/roster.
 import { useSession } from "next-auth/react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Banner from "@/components/common/Banner";
 import Modal from "@/components/common/Modal";
@@ -42,6 +42,7 @@ import {
 } from "@/lib/constants";
 import { toYmd } from "@/lib/dates";
 import { SET_PARAM } from "@/lib/setLink";
+import { replaceUrl } from "@/lib/urlParam";
 import { setStatus, type SetStatus } from "@/lib/setStatus";
 import {
   applyDraftSets,
@@ -88,7 +89,6 @@ export default function CalendarPage() {
 
 function CalendarView() {
   const { data: session } = useSession();
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [sets, setSets] = useState<ApiSet[] | null>(null);
@@ -321,11 +321,9 @@ function CalendarView() {
   const selectSet = useCallback(
     (set: ApiSet) => {
       clickedSetIds.current.add(set.id);
-      router.replace(`${pathname}?${SET_PARAM}=${encodeURIComponent(set.id)}`, {
-        scroll: false,
-      });
+      replaceUrl(`${pathname}?${SET_PARAM}=${encodeURIComponent(set.id)}`);
     },
-    [router, pathname]
+    [pathname]
   );
 
   // Paging the month grid: widen the fetch window to cover the new month if it
@@ -351,20 +349,20 @@ function CalendarView() {
     });
   }, []);
 
-  // Close the modal by dropping ?set from the URL.
+  // Close the modal by dropping ?set from the URL. Through `replaceUrl`, not
+  // `router.replace`, which drops a navigation to the pathname already on
+  // screen and left a linked set's modal with no way out — see lib/urlParam.ts.
   const closeSet = useCallback(() => {
-    router.replace(pathname, { scroll: false });
-  }, [router, pathname]);
+    replaceUrl(pathname);
+  }, [pathname]);
 
   // Mirror the open draft into ?draft=<slug>, or clear it. Through
   // `draftSearch` so a ?set= link on the same URL survives either way.
   const setDraftParam = useCallback(
     (slug: string | null) => {
-      router.replace(`${pathname}${draftSearch(searchParams.toString(), slug)}`, {
-        scroll: false,
-      });
+      replaceUrl(`${pathname}${draftSearch(searchParams.toString(), slug)}`);
     },
-    [router, pathname, searchParams]
+    [pathname, searchParams]
   );
 
   // ── ?set=<id> deep links ──────────────────────────────────────────────
