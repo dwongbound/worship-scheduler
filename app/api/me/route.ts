@@ -32,6 +32,7 @@ export async function GET() {
       email: true,
       dailyDigest: true,
       calendarInvites: true,
+      calendarInviteEmails: true,
       calendarInviteEmail: true,
       // OAuth-only accounts (Google) are created with an empty passwordHash;
       // the profile page hides "Change password" when there's no usable one.
@@ -162,6 +163,14 @@ export async function PUT(req: NextRequest) {
   if (typeof body.calendarInvites === "boolean") {
     data.calendarInvites = body.calendarInvites;
   }
+  // Whether Google emails them about those invites, same rule again.
+  // Deliberately NOT part of the re-sync decision below: a re-sync rewrites
+  // every upcoming event, and Google mails the guests when it does — exactly
+  // what someone turning this off is asking to stop. The preference is read
+  // on the next write the roster causes, which is when it matters.
+  if (typeof body.calendarInviteEmails === "boolean") {
+    data.calendarInviteEmails = body.calendarInviteEmails;
+  }
   // Where those invites are sent, when the account email isn't where they want
   // them — typically a secondary calendar's own address. Empty clears it, and
   // a clear falls back to the account email, so there is no "nowhere" state.
@@ -194,6 +203,7 @@ export async function PUT(req: NextRequest) {
         email: true,
         dailyDigest: true,
         calendarInvites: true,
+        calendarInviteEmails: true,
         calendarInviteEmail: true,
       },
     });

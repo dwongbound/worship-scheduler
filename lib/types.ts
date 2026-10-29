@@ -551,6 +551,10 @@ export interface ApiMe {
   // Opt-in (default on) to being a guest on their sets' Google Calendar
   // events. Off keeps them off the guest list only — see lib/calendarEvent.ts.
   calendarInvites: boolean;
+  // Opt-in (default on) to Google EMAILING them about those events, as
+  // opposed to just putting them on the calendar. Off is honoured where a
+  // per-request parameter allows — lib/calendarEvent.ts notifyForUpdate.
+  calendarInviteEmails: boolean;
   // Where those invites are sent instead of `email` — usually a secondary
   // calendar's own address, so the sets land on their own calendar. Null =
   // use `email` (lib/calendarEvent.ts inviteAddress).

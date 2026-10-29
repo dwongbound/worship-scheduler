@@ -35,15 +35,16 @@ import { pendingOwners } from "./pendingHandoff";
 import {
   PRACTICE_ID_PROPERTY,
   SET_ID_PROPERTY,
-  attendeesChanged,
   eventAttendees,
   eventDescription,
   eventTimes,
   eventTitle,
   inviteAddress,
+  notifyForUpdate,
   practiceTimes,
   practiceTitle,
   seatsToConfirm,
+  splitInviteEmails,
   type CalendarAttendee,
 } from "./calendarEvent";
 
@@ -559,8 +560,11 @@ async function syncOneEvent(
       const start = (current.json.start as { dateTime?: string } | undefined)?.dateTime;
       const moved = !start || new Date(start).getTime() !== ev.startsAt.getTime();
       // Email guests only when it matters to them — someone added or dropped,
-      // or the time moved. A setlist edit just updates the event quietly.
-      const notify = moved || attendeesChanged(before, attendees) ? "all" : "none";
+      // or the time moved. A setlist edit just updates the event quietly. And
+      // nobody is mailed about people joining who all asked not to be mailed:
+      // `notifyForUpdate` is the whole rule, and says where a per-person
+      // answer can't be honoured against a per-request parameter.
+      const notify = notifyForUpdate(before, attendees, ev.seats, moved);
       await gapi(
         org,
         "PATCH",
@@ -573,17 +577,42 @@ async function syncOneEvent(
     // Gone (deleted by hand in Google) — fall through and make a new one.
   }
 
-  const made = await gapi(org, "POST", `${cal(org)}/events?sendUpdates=all`, {
-    summary: ev.summary,
-    description: ev.description,
-    ...ev.times,
-    attendees: eventAttendees(ev.seats),
-    guestsCanModify: false,
-    guestsCanInviteOthers: false,
-    extendedProperties: { private: ev.properties },
-  });
+  // A new event is where the invite email people actually notice comes from,
+  // so it is worth the second call to get right. `sendUpdates` is per request,
+  // so a MIXED roster is written in two passes: the guests who want an email
+  // are invited with one, then the rest are added quietly. Doing it in one
+  // call would either mail someone who asked not to be mailed or silence the
+  // invite for the whole team.
+  const attendees = eventAttendees(ev.seats);
+  const { emailed, silent } = splitInviteEmails(attendees, ev.seats);
+  const twoPass = emailed.length > 0 && silent.length > 0;
+  const made = await gapi(
+    org,
+    "POST",
+    `${cal(org)}/events?sendUpdates=${emailed.length > 0 ? "all" : "none"}`,
+    {
+      summary: ev.summary,
+      description: ev.description,
+      ...ev.times,
+      attendees: twoPass ? emailed : attendees,
+      guestsCanModify: false,
+      guestsCanInviteOthers: false,
+      extendedProperties: { private: ev.properties },
+    }
+  );
   if (made?.ok && typeof made.json.id === "string") {
+    // Remember the id BEFORE the second pass: if that call fails, the event
+    // exists and the next sync adds the missing guests — an unremembered id
+    // would instead leave a duplicate event behind.
     await ev.remember(made.json.id);
+    if (twoPass) {
+      await gapi(
+        org,
+        "PATCH",
+        `${cal(org)}/events/${encodeURIComponent(made.json.id)}?sendUpdates=none`,
+        { attendees }
+      );
+    }
   }
 }
 
@@ -624,6 +653,7 @@ export async function syncSetCalendar(setId: string): Promise<void> {
                 email: true,
                 calendarInviteEmail: true,
                 calendarInvites: true,
+                calendarInviteEmails: true,
               },
             },
           },
@@ -647,6 +677,7 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             email: true,
             calendarInviteEmail: true,
             calendarInvites: true,
+            calendarInviteEmails: true,
           },
         })
       ).map((u) => [u.id, u] as const)
@@ -663,6 +694,7 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             name: owner.name,
             email: held ? inviteAddress(held) : null,
             calendarInvites: held?.calendarInvites ?? true,
+            calendarInviteEmails: held?.calendarInviteEmails ?? true,
           }
         : {
             role: a.role,
@@ -670,6 +702,7 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             name: a.user.name,
             email: inviteAddress(a.user),
             calendarInvites: a.user.calendarInvites,
+            calendarInviteEmails: a.user.calendarInviteEmails,
           };
     });
     const catalog = await getTeamCatalog(set.teamId);
@@ -903,7 +936,11 @@ async function applyRsvps(ev: GoogleEvent): Promise<void> {
       status: true,
       userId: true,
       user: {
-        select: { email: true, calendarInviteEmail: true, calendarInvites: true },
+        select: {
+          email: true,
+          calendarInviteEmail: true,
+          calendarInvites: true,
+        },
       },
     },
   });

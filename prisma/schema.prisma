@@ -423,6 +423,17 @@ model User {
   // other. Null = use `email`; `lib/calendarEvent.ts inviteAddress` is the
   // one reading of it, and the RSVP comes back from the same address.
   calendarInviteEmail String?
+  // Whether Google EMAILS this person about the events they're invited to, as
+  // opposed to just putting them on their calendar. Separate from
+  // `calendarInvites` because they are different asks: that one is "don't put
+  // my sets on my calendar", this one is "put them there, but stop mailing me
+  // about every roster change".
+  //
+  // Google's `sendUpdates` is per REQUEST, not per attendee, so this cannot
+  // be honoured in every case — see `notifyForUpdate` in
+  // `lib/calendarEvent.ts` for exactly when it is. On by default, since that
+  // is what Google does on its own.
+  calendarInviteEmails Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -214,7 +214,9 @@ test("signs up a namesake anyway when told it's a different person", async ({
   await page.getByRole("button", { name: "Join" }).click();
   await expect(page.getByRole("heading", { name: "Calendar" })).toBeVisible();
   await page.goto("/profile");
-  await expect(page.getByLabel("Email")).toHaveValue(secondEmail);
+  // Exact, because /profile's Google Calendar section carries a "Send emails
+  // with each calendar invite" checkbox, and a loose label match reaches it too.
+  await expect(page.getByLabel("Email", { exact: true })).toHaveValue(secondEmail);
 });
 
 // Login strategy 2: Google SSO. A true end-to-end run needs real OAuth
