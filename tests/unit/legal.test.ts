@@ -45,3 +45,16 @@ describe("legal pages", () => {
     expect(LEGAL_LINKS.map((l) => l.href)).toEqual(["/privacy", "/terms"]);
   });
 });
+
+// Google's sensitive-scope review rejects a policy that leaves out any place
+// the app asks for calendar access, so each consent flow must be described.
+describe("privacy policy's Google section", () => {
+  it("describes every flow that asks for Google Calendar access", async () => {
+    const { readFileSync } = await import("fs");
+    const page = readFileSync("app/privacy/page.tsx", "utf8");
+    expect(page).toContain("An administrator connects the organization");
+    expect(page).toContain("You import your own calendars");
+    expect(page).toContain("You choose which of your calendars your invitations go to");
+    expect(page).toContain("There are three");
+  });
+});
