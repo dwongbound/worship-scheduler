@@ -18,11 +18,11 @@ export default defineConfig({
   // fail the whole suite on a transient miss; a genuinely broken test still
   // fails all its attempts.
   retries: 2,
-  // The e2e server is `next dev` (JIT), so the FIRST request to a route compiles
-  // it on demand — occasionally pushing a first-touch content assertion past the
-  // 5s default even on a healthy run. Give assertions more headroom so a cold
-  // compile doesn't read as a failure (a genuinely-missing element still fails
-  // after the timeout).
+  // Locally the e2e server is `next dev` (JIT), so the FIRST request to a route
+  // compiles it on demand — occasionally pushing a first-touch content assertion
+  // past the 5s default even on a healthy run. Give assertions more headroom so
+  // a cold compile doesn't read as a failure (a genuinely-missing element still
+  // fails after the timeout). CI runs a production build instead (see webServer).
   expect: { timeout: 10_000 },
   use: {
     baseURL: "http://localhost:3100",
@@ -77,8 +77,15 @@ export default defineConfig({
       testMatch: /tablet\.spec\.ts/,
     },
   ],
+  // E2E_PROD=1 serves a production build (`npm run e2e:build` first), which is
+  // what CI does. Under load `next dev` would sometimes answer a real nested
+  // API route (/api/swaps/proposals/[id]/respond, /api/sets/[id]/practices/
+  // [practiceId]) with its HTML 404 page for minutes at a time, failing every
+  // retry; a build has every route compiled before the first test. It is also
+  // what production runs, so router behaviour that differs between the two
+  // (lib/urlParam.ts) is now tested as shipped.
   webServer: {
-    command: "npm run e2e:server",
+    command: process.env.E2E_PROD ? "npm run e2e:server:prod" : "npm run e2e:server",
     url: "http://localhost:3100/login",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
