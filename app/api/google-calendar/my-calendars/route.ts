@@ -5,9 +5,10 @@
 // sent to, and an attendee can't move an invited event afterwards — so the
 // only way to choose where your sets land is to choose the address, and a
 // calendar's own address is what this lists (lib/calendarEvent.ts
-// inviteAddress). Reading that list needs the person's own permission, which
-// is the same one "Import from Google Calendar" asks for: one consent covers
-// both, and whichever they do first spares the other.
+// inviteAddress). Reading that list needs the person's own permission. The
+// picker asks for the calendar list only (non-sensitive, so no "unverified
+// app" screen); "Import from Google Calendar" adds read-only events on its own
+// consent, and an import permission already covers the picker.
 //
 // `?connect=1` IS the trip to Google and nothing else — it reads no calendars
 // and lands back on /profile?gcalPicker=…, the way the import's own consent
@@ -16,7 +17,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { isGoogleCalendarAppConfigured } from "@/lib/googleCalendar";
-import { importAuthorizeUrl, listImportCalendars } from "@/lib/googleAvailability";
+import {
+  CALENDAR_LIST_SCOPE,
+  importAuthorizeUrl,
+  listImportCalendars,
+} from "@/lib/googleAvailability";
 import { prisma } from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
@@ -36,7 +41,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(importAuthorizeUrl(user.id, null, me?.email ?? null));
   }
 
-  const result = await listImportCalendars(user.id);
+  const result = await listImportCalendars(user.id, CALENDAR_LIST_SCOPE);
   if (result.ok) return NextResponse.json({ calendars: result.calendars });
   if (result.needsConsent) return NextResponse.json({ needsConsent: true });
   console.error(`[gcal] my-calendars — ${result.error}`);
