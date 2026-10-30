@@ -34,6 +34,13 @@ test.afterAll(async () => {
  * traded. Returns the new proposal's id. (mobile.spec.ts has a near-twin of
  * this; kept local rather than shared so neither spec can break the other by
  * tightening it.)
+ *
+ * IDEMPOTENT. Proposing freezes the proposer's slot, so an attempt that died
+ * after the POST (the decline never landing, say) left `toName` no longer a
+ * swap candidate, and every retry and the next two tests failed on "no swap
+ * candidate" instead of the error that started it. So with no candidate on
+ * offer, a PENDING proposal between the same two people is the setup already
+ * done, and its id is returned.
  */
 async function proposeSwapTo(
   page: Page,
@@ -65,10 +72,22 @@ async function proposeSwapTo(
       break;
     }
   }
-  expect(
-    fromAssignmentId,
-    `no swap candidate named "${toName}" for ${fromUsername}`
-  ).toBeTruthy();
+  if (!fromAssignmentId) {
+    const pending = await prisma.swapProposal.findFirst({
+      where: {
+        status: "PENDING",
+        requestedBy: { username: fromUsername },
+        recipient: { name: toName },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    expect(
+      pending,
+      `no swap candidate named "${toName}" for ${fromUsername}, and no pending proposal between them either`
+    ).toBeTruthy();
+    return pending!.id;
+  }
 
   const res = await page.request.post("/api/swaps/propose", {
     data: { fromAssignmentId, toAssignmentId },

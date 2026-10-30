@@ -16,7 +16,10 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - Dev (docker): `docker compose --profile dev up` → http://localhost:3000
 - Dev (host): `npm run dev` (loads `env/dev.env`)
 - Unit: `npm run test:unit` (`vitest run`) · watch: `test:unit:watch`
-- E2E: `npm run test:e2e` (needs test db; loads `env/test.env`)
+- E2E: `npm run test:e2e` (needs test db; loads `env/test.env`) — against
+  `next dev`. CI runs it against a PRODUCTION build instead:
+  `npm run e2e:build && E2E_PROD=1 npm run test:e2e` (same locally to
+  reproduce CI; rebuild after changing code)
 - All-in-container: `docker compose --profile test up --abort-on-container-exit`
 - `npm run typecheck` · `db:push` · `db:seed` (WIPES + reseeds) · `db:studio`
 - Seeding is destructive and NEVER automatic — `--profile dev up` doesn't seed,
@@ -660,9 +663,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   scrolls, which is what every caller passed `scroll: false` for.
   **The router only does this in a PRODUCTION build** — under `next dev` the
   same `router.replace(pathname)` clears the param and closes the modal. That
-  is why the bug reached prod AND why no test caught it: the e2e suite runs
-  against `next dev` (`npm run e2e:server`), so an e2e assertion about closing
-  a linked set passes on the broken code. So the real guard is a source one —
+  is why the bug reached prod AND why no test caught it: the e2e suite ran
+  against `next dev` back then, so an e2e assertion about closing a linked set
+  passed on the broken code (CI now serves a production build, but a local
+  `npm run test:e2e` is still `next dev`). So the real guard is a source one —
   **`tests/unit/urlParam.test.ts`** reads each param-writing page and fails if
   one navigates to its own pathname through the router. ✅tested
   `/login` had the same defect: its `?nameConflict`/`?conflicts` strip is a
@@ -672,7 +676,8 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   clears `?set=` at all (it rings a row rather than opening a modal, so there
   is nothing to trap). `tests/e2e/set-links.spec.ts` still covers the intended
   behaviour — opening from the grid puts the link in the URL, and a linked set
-  closes — but being a dev-server run it cannot fail on this bug.
+  closes — and in CI, against the production build, it can now fail on this
+  bug too.
 - `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
   PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
   render bare (those plus `/join`). Four places used to carry their own copy of

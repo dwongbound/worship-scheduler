@@ -54,7 +54,7 @@ export default function PrivacyPage() {
 
       <Section title="Google user data">
         <p>
-          Google Calendar is optional and off until someone turns it on. There are two
+          Google Calendar is optional and off until someone turns it on. There are three
           separate uses, each asking your permission first:
         </p>
         <ul className="list-disc space-y-1 pl-5">
@@ -74,6 +74,13 @@ export default function PrivacyPage() {
             you only subscribe to, such as holidays or someone else&rsquo;s, are not
             read. It stores the resulting blocks, which you can then edit or delete, not
             your events, their titles or their guests.
+          </li>
+          <li>
+            <strong>You choose which of your calendars your invitations go to</strong>, on
+            your profile. The app lists the calendars in your Google account that you own
+            or can edit, so you can pick one, and saves only that calendar&rsquo;s address
+            as where your invitations are sent. It reads no events for this. It uses the
+            same permission as importing, so granting one covers the other.
           </li>
         </ul>
         <p>
