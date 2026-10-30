@@ -17,6 +17,7 @@ vi.mock("@/lib/org", () => ({ getMyOrgIds: vi.fn(async () => ["org1"]) }));
 import { prisma } from "@/lib/prisma";
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import {
+  CALENDAR_LIST_SCOPE,
   importAuthorizeUrl,
   listImportCalendars,
   previewImport,
@@ -38,6 +39,8 @@ let calendarListCalls: number;
 let eventUrls: string[];
 let tokenBodies: string[];
 let refreshStatus: number;
+// What Google says a refresh covers; undefined leaves the field off.
+let refreshScope: string | undefined;
 
 beforeEach(() => {
   process.env.GOOGLE_CLIENT_ID = "cid";
@@ -47,6 +50,7 @@ beforeEach(() => {
   calendarListCalls = 0;
   tokenBodies = [];
   refreshStatus = 200;
+  refreshScope = undefined;
   m(prisma.availabilityRequest.findFirst).mockResolvedValue(REQUEST);
   vi.stubGlobal(
     "fetch",
@@ -56,7 +60,7 @@ beforeEach(() => {
         tokenBodies.push(body);
         if (body.includes("grant_type=refresh_token")) {
           return refreshStatus === 200
-            ? new Response(JSON.stringify({ access_token: "at2" }))
+            ? new Response(JSON.stringify({ access_token: "at2", scope: refreshScope }))
             : new Response('{"error":"invalid_grant"}', { status: refreshStatus });
         }
         return new Response(
@@ -164,6 +168,53 @@ describe("rememberAccessFromCode", () => {
       error: expect.stringMatching(/wasn't granted/),
     });
     expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+});
+
+// The /profile picker asks only for the calendar list, which Google doesn't
+// count as sensitive, so members never meet the "unverified app" screen there.
+describe("the /profile picker's narrower permission", () => {
+  const LIST_ONLY = `openid email ${CALENDAR_LIST_SCOPE}`;
+
+  it("asks Google for the calendar list and not the events", () => {
+    const scope = new URL(importAuthorizeUrl("u1", null, null)).searchParams.get("scope")!;
+    expect(scope).toContain("calendar.calendarlist.readonly");
+    expect(scope).not.toContain("calendar.events");
+    // ...while keeping what an import granted earlier.
+    expect(
+      new URL(importAuthorizeUrl("u1", null, null)).searchParams.get("include_granted_scopes")
+    ).toBe("true");
+  });
+
+  it("lists calendars on a list-only permission", async () => {
+    remembered();
+    refreshScope = LIST_ONLY;
+    expect(await listImportCalendars("u1", CALENDAR_LIST_SCOPE)).toMatchObject({ ok: true });
+  });
+
+  it("sends an import on a list-only permission back to Google, keeping the token", async () => {
+    remembered();
+    refreshScope = LIST_ONLY;
+    expect(await listImportCalendars("u1")).toMatchObject({ ok: false, needsConsent: true });
+    expect(await previewImport("u1", "req1", ["primary"])).toMatchObject({
+      ok: false,
+      needsConsent: true,
+    });
+    expect(await runImportFor("u1", "req1", ["primary"])).toMatchObject({
+      ok: false,
+      needsConsent: true,
+    });
+    expect(calendarListCalls).toBe(0);
+    expect(eventUrls).toHaveLength(0);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    // The picker still uses it.
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
+  it("lets an import permission serve the picker too", async () => {
+    remembered();
+    refreshScope = `openid email https://www.googleapis.com/auth/calendar.events.readonly ${CALENDAR_LIST_SCOPE}`;
+    expect(await listImportCalendars("u1", CALENDAR_LIST_SCOPE)).toMatchObject({ ok: true });
   });
 });
 
