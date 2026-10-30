@@ -4,14 +4,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_PLAN_METRIC,
-  DEFAULT_SET_METRIC,
   LOAD_METRICS,
   loadMetricRange,
   metricLabel,
   metricToParam,
   parseLoadMetric,
   PLAN_LOAD_METRICS,
-  SET_LOAD_METRICS,
+  SET_LOAD_METRIC,
+  serveMonthLabel,
 } from "@/lib/loadMetrics";
 
 describe("loadMetricRange", () => {
@@ -93,26 +93,53 @@ describe("parseLoadMetric / metricToParam", () => {
 });
 
 describe("what each surface offers", () => {
-  it("keeps 'In this plan' out of the set detail modal's picker", () => {
+  it("offers the plan window only where there is a plan", () => {
     expect(PLAN_LOAD_METRICS.some((m) => m.metric === "plan")).toBe(true);
-    expect(SET_LOAD_METRICS.some((m) => m.metric === "plan")).toBe(false);
-    // Otherwise the two lists are the same windows, in the same order.
-    expect(SET_LOAD_METRICS).toEqual(
-      PLAN_LOAD_METRICS.filter((m) => m.metric !== "plan")
-    );
   });
 
-  it("opens each surface on a metric it actually offers", () => {
+  it("opens the review workspace on a metric it actually offers", () => {
     expect(PLAN_LOAD_METRICS.some((m) => m.metric === DEFAULT_PLAN_METRIC)).toBe(true);
-    expect(SET_LOAD_METRICS.some((m) => m.metric === DEFAULT_SET_METRIC)).toBe(true);
-    // Every window the set modal shows is one the server will actually serve.
-    for (const { metric } of SET_LOAD_METRICS) {
+    // Every window that picker shows is one the server will actually serve.
+    for (const { metric } of PLAN_LOAD_METRICS) {
+      if (metric === "plan") continue; // counted from the plan, not queried
       expect(loadMetricRange(metric)).not.toBeNull();
     }
+  });
+
+  it("gives the set detail modal one fixed window, the set's own month", () => {
+    // There is no picker there any more, so this is the whole answer rather
+    // than a default — and the server has to serve it.
+    expect(SET_LOAD_METRIC).toBe("calendar-month");
+    expect(parseLoadMetric(metricToParam(SET_LOAD_METRIC))).toBe(SET_LOAD_METRIC);
+    expect(loadMetricRange(SET_LOAD_METRIC)).not.toBeNull();
   });
 
   it("labels every metric", () => {
     expect(metricLabel("calendar-month")).toBe("Calendar month");
     expect(metricLabel(90)).toBe("Past 3 months");
+  });
+});
+
+describe("naming the month the \u00d7N counts", () => {
+  // The set detail modal has no window picker any more, so its tooltip and the
+  // badge's own title have to say WHICH month the number covers.
+  const now = new Date(2026, 9, 27); // 27 Oct 2026
+
+  it("names a month in the current year without the year", () => {
+    expect(serveMonthLabel(new Date(2026, 10, 8), now)).toBe("November");
+  });
+
+  it("adds the year once the set is in another one", () => {
+    expect(serveMonthLabel(new Date(2027, 0, 3), now)).toBe("January 2027");
+  });
+
+  it("takes the ISO string the API hands back", () => {
+    expect(serveMonthLabel(new Date(2026, 9, 27).toISOString(), now)).toBe(
+      "October"
+    );
+  });
+
+  it("falls back to plain words rather than 'Invalid Date'", () => {
+    expect(serveMonthLabel("not a date", now)).toBe("this month");
   });
 });

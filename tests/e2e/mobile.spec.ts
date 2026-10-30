@@ -12,6 +12,7 @@ import {
   clearBusyBlocks,
   gotoReady,
   login,
+  openSetByLabel,
   pickSingleDay,
   requestAvailability,
   sectionByHeading,
@@ -415,14 +416,32 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
 /**
  * Sets up a targeted swap proposed TO `toName` by `fromUsername`, entirely over
  * the API so it doesn't depend on which sets earlier specs have already traded.
- * Returns the accepting user's username.
+ *
+ * IDEMPOTENT, and that is the point. Proposing is a write, so an attempt that
+ * dies anywhere AFTER the POST — a slow login, a slow first render, anything
+ * that trips the 30s test timeout — leaves the proposal PENDING. That ties up
+ * the proposer's slot, so on the retry `toName` is no longer a swap CANDIDATE
+ * and the setup used to fail with a different error than the one that started
+ * it ("no swap candidate named …"), taking both retries and the next spec down
+ * with it. One transient miss became four hard failures. So when no candidate
+ * is on offer, check whether that is because the proposal this helper wants
+ * already exists, and treat it as the setup already done.
+ *
+ * `toUsername` is the recipient's login, needed only for that check: the
+ * pending proposal is visible to the person being asked, not the asker.
  */
 async function proposeSwapTo(
   page: import("@playwright/test").Page,
   fromUsername: string,
-  toName: string
+  toName: string,
+  toUsername: string
 ) {
   await login(page, fromUsername);
+
+  // My display name, which is how the recipient's incoming list identifies me.
+  const me = (await (await page.request.get("/api/me")).json()) as {
+    name: string;
+  };
 
   // Every assignment of mine, newest API shape: { id, role, set: {...} }.
   const mine = (await (await page.request.get("/api/assignments")).json()) as {
@@ -451,10 +470,23 @@ async function proposeSwapTo(
       break;
     }
   }
-  expect(
-    fromAssignmentId,
-    `no swap candidate named "${toName}" for ${fromUsername}`
-  ).toBeTruthy();
+  if (!fromAssignmentId) {
+    // No candidate on offer. Either a previous attempt already proposed this
+    // very trade (see the note above), in which case the setup is done, or the
+    // seed genuinely can't make it.
+    await login(page, toUsername);
+    const incoming = (await (
+      await page.request.get("/api/swaps/proposals/incoming")
+    ).json()) as { requestedBy: { name: string } }[];
+    const already = (incoming ?? []).some(
+      (p) => p.requestedBy.name === me.name
+    );
+    expect(
+      already,
+      `no swap candidate named "${toName}" for ${fromUsername}, and no pending proposal from ${me.name} either`
+    ).toBeTruthy();
+    return;
+  }
 
   const proposed = await page.request.post("/api/swaps/propose", {
     data: { fromAssignmentId, toAssignmentId },
@@ -465,7 +497,7 @@ async function proposeSwapTo(
 test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async ({
   page,
 }) => {
-  await proposeSwapTo(page, "erin", "Omar Osei");
+  await proposeSwapTo(page, "erin", "Omar Osei", "omar");
 
   await login(page, "omar");
   await page.goto("/set-manager");
@@ -489,7 +521,7 @@ test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async (
 test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async ({
   page,
 }) => {
-  await proposeSwapTo(page, "erin", "Omar Osei");
+  await proposeSwapTo(page, "erin", "Omar Osei", "omar");
 
   await login(page, "omar");
   await page.goto("/set-manager");
@@ -676,4 +708,145 @@ test("phone turns away a Preview Mode draft link", async ({ page }) => {
   // And nothing of the workspace itself: no dialog, and no sign it tried.
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText(/doesn't match a saved plan/i)).toHaveCount(0);
+});
+
+test("the set modal's overflow menu opens fully inside the screen", async ({
+  page,
+}) => {
+  // The bug this guards: the action bar used to carry a 176px load-window
+  // picker, which on a phone took the first row by itself and wrapped the
+  // "⋮" onto a second row at the FAR LEFT. Its menu hangs leftward from its
+  // trigger, so the panel's left edge landed ~86px off the side of the screen
+  // and five rows lost their first letters. Two things keep it on screen now —
+  // the picker is gone, so the bar is one row again, and lib/dropdownPosition
+  // clamps the panel into the viewport whatever the trigger's position.
+  await login(page, "paul"); // admin, so the menu has its full set of rows
+  const modal = await openSetByLabel(page, "Sunday Morning");
+
+  const viewport = page.viewportSize()!;
+  const bar = modal.getByRole("button", { name: "Auto schedule" });
+  await expect(bar).toBeVisible();
+
+  await modal.getByRole("button", { name: "More actions" }).click();
+
+  // The menu is portaled to document.body, so it is looked up on the page.
+  const item = page.getByRole("button", { name: "Change Roles" });
+  await expect(item).toBeVisible();
+  const menu = page.locator("div.fixed.z-\\[60\\]").filter({ has: item });
+  const box = (await menu.boundingBox())!;
+
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+
+  // And the rows really are readable, not merely in the box.
+  const itemBox = (await item.boundingBox())!;
+  expect(itemBox.x).toBeGreaterThanOrEqual(0);
+});
+
+test("the set modal's overflow trigger stays at the right edge", async ({
+  page,
+}) => {
+  // Not "one row": at 360px the four controls are about ten pixels too wide to
+  // share one, and that is fine. What matters is that the group they wrap into
+  // is pinned RIGHT. Left-aligned — which is what the parent's justify-between
+  // gave it — the "\u22ee" sat near the left of the screen, and a menu that hangs
+  // leftward from its trigger had nowhere to go.
+  await login(page, "paul");
+  const modal = await openSetByLabel(page, "Sunday Morning");
+
+  const more = (await modal
+    .getByRole("button", { name: "More actions" })
+    .boundingBox())!;
+  const bar = (await modal
+    .locator("div.mb-3.flex.flex-wrap")
+    .first()
+    .boundingBox())!;
+
+  // Its right edge sits on the bar's, give or take the border.
+  expect(Math.abs(bar.x + bar.width - (more.x + more.width))).toBeLessThan(4);
+
+  // And the group chat button now says what it does.
+  await expect(
+    modal.getByRole("button", { name: "Create Group" })
+  ).toBeVisible();
+});
+
+test("the weekly set time form fits a phone: one row of days, a footer in reach", async ({
+  page,
+}) => {
+  // The Create tab's "weekly set time" form was the densest screen on a phone:
+  // seven full-word day checkboxes wrapped into three ragged rows of 16px
+  // targets, and its Close/Save buttons sat at the end of the scrolling body
+  // rather than in the pinned footer. Both are layout facts worth pinning —
+  // they only go wrong at this width, where nobody looks.
+  await login(page, "admin");
+  await gotoReady(page, "/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  // Exactly the seven days, named in full for anyone who can't see the two
+  // letters on the button. (Anchored, or "Sunday" would also match the
+  // "Sunday Team" chip.)
+  const days = modal.getByRole("checkbox", {
+    name: /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day$/,
+  });
+  await expect(days).toHaveCount(7);
+
+  const boxes = [];
+  for (let i = 0; i < 7; i++) boxes.push((await days.nth(i).boundingBox())!);
+  const viewport = page.viewportSize()!;
+
+  // One row: every day shares a top edge, and the last one ends on screen.
+  const tops = boxes.map((b) => Math.round(b.y));
+  expect(new Set(tops).size).toBe(1);
+  expect(boxes[0].x).toBeGreaterThanOrEqual(0);
+  const last = boxes[6];
+  expect(last.x + last.width).toBeLessThanOrEqual(viewport.width);
+
+  // Apple's 44px minimum — a day is a tap target here, not a 16px tick.
+  for (const [i, b] of boxes.entries()) {
+    expect({ i, tall: b.height >= 44 }).toEqual({ i, tall: true });
+  }
+
+  // The actions are in the modal's pinned footer, so they're reachable
+  // without scrolling the form to its end, and they carry the phone row's
+  // full height.
+  const submit = page.locator(".modal-footer").getByRole("button", {
+    name: "Add template",
+  });
+  await expect(submit).toBeVisible();
+  expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  // The Slack-channel number and the team chips share one row, half each:
+  // a two-digit number and a few short names don't each need a full row, and
+  // on a phone a row saved is a row of scrolling saved.
+  const lead = modal.getByLabel("Auto Create Slack Channel");
+  const team = modal.getByLabel("Team");
+  const leadBox = (await lead.boundingBox())!;
+  const teamBox = (await team.boundingBox())!;
+  // Side by side, not stacked.
+  expect(teamBox.x).toBeGreaterThan(leadBox.x + leadBox.width - 1);
+  // Neither column takes much over half the form's width.
+  expect(leadBox.width).toBeLessThan(viewport.width * 0.55);
+
+  // The two time fields are STACKED here, each the full width of the form:
+  // a `type="time"` control has a wide intrinsic size (Safari won't draw one
+  // narrower than its own "09:00 AM"), so two of them in half a phone's width
+  // is what ran off the side of the modal. They go back side by side at `sm`,
+  // which tablet.spec.ts checks.
+  const start = (await modal.getByLabel("Start time").boundingBox())!;
+  const end = (await modal.getByLabel("End time").boundingBox())!;
+  expect(end.y).toBeGreaterThan(start.y + start.height - 1);
+  expect(Math.round(end.width)).toBe(Math.round(start.width));
+
+  // And nothing in the form runs off the side of the modal.
+  const overflowing = await modal.evaluate((dialog: HTMLElement) => {
+    const right = dialog.getBoundingClientRect().right;
+    return [...dialog.querySelectorAll("input, select")]
+      .filter((el) => el.getBoundingClientRect().right > right + 1)
+      .map((el) => (el as HTMLElement).getAttribute("type") ?? el.tagName);
+  });
+  expect(overflowing).toEqual([]);
 });

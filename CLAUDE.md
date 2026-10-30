@@ -87,6 +87,26 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   event's roster, so the team still sees who is playing. Switched on /profile,
   honoured by `lib/calendarEvent.ts` (`eventAttendees` skips them;
   `seatsToConfirm` ignores an RSVP that crossed with the opt-out).
+  `calendarInviteEmails` (default true) is a SECOND, separate answer: whether
+  Google EMAILS them about those events, as opposed to just putting them on
+  the calendar. Different ask from `calendarInvites` — that one is "don't put
+  my sets on my calendar", this one is "put them there, but stop mailing me
+  about every roster change". /profile shows it directly under the invites
+  checkbox, and only while invites are ON, since there is nothing to mail
+  about otherwise. **Google's `sendUpdates` is per REQUEST, not per attendee**,
+  so this cannot be honoured in every case and the two places that decide are
+  the contract: **`notifyForUpdate`** (patching an existing event — "none"
+  when no guest wants mail, or when the only change is people joining who all
+  asked for none; "all" on a move, on a removal, or when the same change also
+  concerns somebody who does want mail) and **`splitInviteEmails`** (a NEW
+  event, where the mail people actually notice comes from, written in TWO
+  passes: invite the ones who want mail, then add the rest with
+  `sendUpdates=none`). So one person's opt-out is exact at creation and when a
+  change is theirs alone, and loses to a teammate who wants mail otherwise —
+  a limit of the API, not a bug. Saving it deliberately does NOT re-sync
+  (`lib/profile.ts calendarResyncNeeded` never sees it): a re-sync rewrites
+  every upcoming event and mails the guests, which is the thing being turned
+  off. ✅tested
   `calendarInviteEmail` is WHERE those invites go, null = `email`. Google puts
   an invite on the default calendar of whatever address it was sent to and an
   attendee can't move an invited event afterwards, so the address IS the only
@@ -124,6 +144,26 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   (its event on the org's Google Calendar; `Org.googleCal*` holds the
   connection),
   `slotCapacities: Json?` (per-set team-shape override; null = global default).
+- **SetPractice** — one practice (rehearsal) on a set: `startsAt` + `endsAt`
+  (a start and an END, never a duration — that's how an admin says it and what
+  the calendar event needs) and its own `googleEventId`. Three deliberate
+  absences: it is NOT drawn on the app calendar (the set detail modal is its
+  one home), it is NEVER handed to `buildSchedule` as a booking (so load,
+  spacing and availability are decided by sets alone), and it has NO roster —
+  who's invited is derived from the set's assignments at sync time, so a roster
+  change carries the practice invite with it. `@@unique([setId, startsAt])`.
+  Added/deleted ad hoc on any set, recurring or not, on any date
+  (`POST /api/sets/[id]/practices`, `DELETE …/[practiceId]`, both org admin).
+- **SetTemplatePractice** — a practice on a weekly `SetTemplate`, as a
+  `dayOfWeek` + `startMinute` + `endMinute`. A weekly time has no date, so its
+  practices can't either: the weekday means "the one in the SET's own week",
+  weeks running **Mon–Sun** like `weekKey`, which is what puts a Wednesday
+  practice BEFORE each Sunday service instead of after it. Stamped onto
+  `SetPractice` rows at generate time (`admin/generate/apply` matches each new
+  set back to its template with `templateIdOf`, since sets don't store theirs)
+  and editable per set afterwards — editing a template does NOT rewrite sets
+  already generated, the same bargain `slotCapacities` makes. Vocabulary in
+  `lib/practices.ts`.
 - **Assignment** — one User in one `role` (a TeamRole.key **string**, not an
   enum) on one Set; a user may fill several roles on a set.
   `status: PENDING|CONFIRMED|SWAP_REQUESTED`. `@@unique([setId, userId, role])`.
@@ -212,7 +252,11 @@ humanized key, so a custom/deleted role never renders blank), `roleKeyFromLabel`
 `lib/constants.ts` keeps the BUILT-IN defaults only (`SLOT_CAPACITIES`,
 `ROLE_ORDER`, `INSTRUMENT_LABELS`, `ALL_INSTRUMENTS`) plus `MD_ROLES` /
 `ACOUSTIC_HOST_ROLES` — special behaviours pinned to built-in keys that custom
-roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`. `CHOIR` is
+roles never inherit — and `validateSlotCapacities(raw, allowedKeys)`. Day names
+come in three widths: `DAY_LABELS` (full), `DAY_ABBRS` ("Tues"/"Thurs", for a
+tight row like "Tues 7PM") and `DAY_INITIALS` ("Su"…"Sa", the only spelling
+narrow enough to fit all seven across a phone — single letters repeat S/T/T/S,
+so they can't tell the days apart). `CHOIR` is
 just a built-in key now; its old "unbounded list" behaviour is `allAvailable` in
 `lib/guestTeams.ts`, available to any team's any role.
 
@@ -276,6 +320,14 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   `assignments/[id]`, `assignments/confirm-all`.
 - Swaps: `swaps`, `swaps/[id]/take`, `swaps/[id]/decline` (the "not me" on an
   open cover — see CoverDecline), `swaps/propose`, `swaps/proposals/*`.
+- Practices: `sets/[id]/practices` (POST, org admin — one ad-hoc practice on
+  any set, any date), `sets/[id]/practices/[practiceId]` (DELETE, org admin;
+  the practice must belong to THAT set, so an id from elsewhere can't delete
+  across orgs), and `.../availability` (GET — who of the set's roster is free
+  for THIS practice, its own endpoint because the detail modal shows practices
+  with no availability at all and this is fetched only when one is clicked).
+  A set's practices ride along in `SET_INCLUDE`, since the detail modal is the
+  only place they're shown.
 - Teams: `teams` (GET any user, POST admin), `teams/[id]` (DELETE admin).
 - Google Calendar: `google-calendar/import` — a MEMBER's import, now three
   routes because it's a SCREEN (`components/GoogleImportModal`), not one click:
@@ -341,7 +393,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   "already in this role", anything else says nothing was saved. DMs go out ONCE per person across the
   whole batch via `lib/slack.ts notifyRosterChanges`/`rosterDmText`, so a month
   of one role is one message, not one per set; a multi-set DM lists sets as
-  plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])`,
+  plain text and closes with ONE link to My Sets — no per-set links), `admin/templates(+/[id])` (both carry
+  `practices` — a weekday + window list that REPLACES the whole set, like the
+  rules PUT; omitting the field on a PATCH leaves the existing ones alone, so
+  renaming a time can't wipe them),
   `admin/generate(+/apply)`, `admin/availability-request`,
   `admin/drafts(+/[id])` (saved previews — GET lists them WITHOUT
   their plan payloads, `[id]` GET is what carries one back. `?mode=` /
@@ -442,6 +497,24 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
 - `guestTeams.ts` — guest-team vocabulary: `GuestRoleSpec`, `isUnbounded`,
   `openSeats` (an `allAvailable` seat reports 0, so it never reads as a hole),
   `validateGuestRoles(raw, allowedKeys)`. ✅tested
+- `practices.ts` — practices on a set, pure: `practiceWeekStart` (the **Monday**
+  of a set's week — the whole meaning of "the Wednesday" on a template),
+  `practiceDates` / `practicesForSet` (a template's weekdays resolved against
+  one set), `practiceMinutes`, `validateTemplatePractices` (a duplicate is
+  DROPPED, since two practices at one instant would be two identical calendar
+  events; anything else is an error, because guessing would send the wrong
+  invite), `validateSetPractice` (any date at all — that's the point of an
+  ad-hoc one — and it names the same-instant clash and the cap ITSELF rather
+  than leaving a `@@unique` violation for the route to interpret),
+  `practiceCountBadge` ("+2" after a recurring set's time, null for none) and
+  `describeTemplatePractice`, and **`practiceFreeBusy`** — the free/busy modal's
+  answer, with `isUserAvailable` INJECTED so it can't drift from the
+  scheduler's own verdict; each rule is tried alone to name the ones that would
+  block on their own (the same leave-one-out trick `ruleHeldRoles` uses).
+  `PRACTICES_ARE_NOT_BOOKINGS` is a note, not a
+  switch: nothing here is wired into `lib/scheduler.ts` and nothing should be —
+  auto schedule ignores practices by construction, there being no
+  practice-aware branch to forget to turn on. ✅tested
 - `stagedPlan.ts` — pure helpers for the generate-review modal, incl. the Team
   load panel's metrics: `LOAD_METRICS` / `loadMetricRange()` / `parseLoadMetric()`
   let the admin measure people by this plan, upcoming bookings, or the past
@@ -571,7 +644,35 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   has loaded is resolved through `GET /api/sets/[id]`: the calendar widens its
   window and switches org, the set-manager widens its horizon (or says why it
   can't). Roster DMs, digest bullets and the Approvals tab use the calendar
-  form. ✅tested
+  form. ✅tested. The param is WRITTEN through `urlParam.ts`, never
+  `router.replace` — see below.
+- `urlParam.ts` — `replaceUrl(url)`: the one way a page mirrors a modal's
+  identity into the address bar (`?set=`, `?draft=`, `?user=`) and clears it
+  again. **`router.replace` cannot do this**: Next 16 drops a soft navigation
+  whose target pathname is the one already on screen, so opening a set never
+  reached the address bar and — the half that actually broke — CLEARING
+  `?set=` never reached `useSearchParams`, which on the calendar is the only
+  thing that closes the modal. Someone following a Google Calendar invite's
+  link therefore had no way out of the set it opened: Close, the ✕, Escape and
+  the backdrop all ran a navigation the router threw away. The native history
+  API is the supported way to change search params without navigating (Next
+  14.1+) and Next keeps `useSearchParams` in step with it; it also never
+  scrolls, which is what every caller passed `scroll: false` for.
+  **The router only does this in a PRODUCTION build** — under `next dev` the
+  same `router.replace(pathname)` clears the param and closes the modal. That
+  is why the bug reached prod AND why no test caught it: the e2e suite runs
+  against `next dev` (`npm run e2e:server`), so an e2e assertion about closing
+  a linked set passes on the broken code. So the real guard is a source one —
+  **`tests/unit/urlParam.test.ts`** reads each param-writing page and fails if
+  one navigates to its own pathname through the router. ✅tested
+  `/login` had the same defect: its `?nameConflict`/`?conflicts` strip is a
+  /login → /login replace, so on prod the params survived and a refresh
+  resurrected a stale duplicate-name warning. `app/{orgs,schedule,profile}/page.tsx`
+  already clear their own params this way inline, and `app/set-manager` never
+  clears `?set=` at all (it rings a row rather than opening a modal, so there
+  is nothing to trap). `tests/e2e/set-links.spec.ts` still covers the intended
+  behaviour — opening from the grid puts the link in the URL, and a linked set
+  closes — but being a dev-server run it cannot fail on this bug.
 - `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
   PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
   render bare (those plus `/join`). Four places used to carry their own copy of
@@ -588,6 +689,26 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   per org makes that one request and collapses simultaneous askers. Connecting
   is a full navigation (the cache dies with the page); the one in-app change,
   Disconnect on Org settings, calls `invalidateSlackStatus(orgId)`. ✅tested
+- `dropdownPosition.ts` — `placeMenu()`: where a portaled dropdown panel
+  actually goes. The portal (see `components/common/Dropdown.tsx`) stops a
+  modal CLIPPING the menu; it doesn't stop the menu landing off the screen. A
+  right-aligned panel hangs leftward from its trigger, so a trigger near the
+  left of a phone put the panel's left edge ~86px past the edge and the set
+  modal's "⋮" lost the first letters of every row. So placement is a CLAMP, not
+  a pin: the panel keeps `MENU_GUTTER` from both sides (a panel wider than the
+  screen pins to the LEFT gutter — its first characters are the ones worth
+  keeping), flips above the trigger when there's no room below AND more room
+  above, and reports a `maxHeight` to scroll in when neither side can hold it
+  whole. Pure viewport-space geometry, which is why it's a module and not
+  inline arithmetic. ✅tested
+- `loadMetrics.ts` — the "how often is this person already serving?" windows,
+  shared by the review modal's Team load panel and the ×N badges. Only the
+  review workspace PICKS one (`PLAN_LOAD_METRICS`): a plan spans months. The
+  set detail modal has no picker — `SET_LOAD_METRIC` is the whole answer, the
+  set's own calendar month, because one set is one month's problem and the
+  176px control that offered "past 3 months" there took a phone's action bar by
+  itself. `serveMonthLabel()` names that month for the (i) and the badge's
+  title, so neither describes a window the reader can't choose. ✅tested
 - `layout.ts` — `BOTTOM_NAV_MAX_WIDTH` + `isBottomNavWidth()`: the one number
   behind "is this the app-style layout?", shared by the bottom bar's `lg:`
   classes, SwipePager and PullToRefresh. Plus `PREVIEW_MIN_WIDTH` (768 = `md`)
@@ -665,15 +786,33 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   set with the roster invited. On whenever `GOOGLE_CLIENT_ID`/`_SECRET` are
   set — there's deliberately NO enable flag; the UI is an admin-only row in Org
   settings (`components/OrgGoogleCalendar.tsx`). `syncSetCalendar(setId)` is idempotent (create or patch from the
-  db); routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
+  db) and writes the set's event AND one per upcoming PRACTICE from the same
+  load — same guests, same setlist, its own window — so every caller keeps
+  rehearsal invites in step for free; `syncOneEvent` is that shared write.
+  Only the set's own event carries `SET_ID_PROPERTY`; a practice carries
+  `PRACTICE_ID_PROPERTY` instead, because `applyRsvps` keys off the former and
+  accepting a REHEARSAL invite must not confirm a seat on the service.
+  A practice's title is `practiceTitle` — **"(Practice) <set name>"**, since
+  its set is the only thing that tells two rehearsals apart in a month of
+  entries; bracketed rather than "Practice: …" so the set's own name starts as
+  early as possible in a cell that truncates hard.
+  Routes call `syncSetsAfterResponse(...ids)` (Next `after`) on every set,
   roster, swap-approval and setlist change, and DELETE reads
-  `calendarEventOf` before the row goes. Write-back: a watch channel pings
+  `calendarEventsOfSet` before the row goes — plural, since a set's practices
+  have events of their own and cascade away with it (`calendarEventOfPractice`
+  is the same read for one practice). Write-back: a watch channel pings
   `/api/google-calendar/webhook`, the stored sync token reads what changed, and
   an ACCEPTED invite confirms that person's PENDING seats (a No changes
   nothing). The daily cron renews channels (`maintainCalendarWatches`). A seat
   mid-handoff stays on the old owner's invite until approved. Never throws.
+  The invite's roster marks the set's MD with "(MD)", by id, the same mark the
+  Slack roster and the weekly summary use.
+  Whether Google MAILS the guests about a write is `notifyForUpdate` /
+  `splitInviteEmails` in `calendarEvent.ts` — `sendUpdates` is per request, so
+  a mixed roster's NEW event is two calls (see `calendarInviteEmails` in the
+  data model).
   The pure half is `calendarEvent.ts` (`eventDescription`/`eventAttendees`/
-  `seatsToConfirm`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
+  `seatsToConfirm`/`notifyForUpdate`/`splitInviteEmails`, ✅tested); `googleCalendar.ts` is ✅tested with mocked fetch.
 - `invitePicker.ts` — /profile's "Send invites to" picker, pure:
   `inviteOptions` / `selectedInviteValue` / `inviteSelectionValue` +
   `INVITE_OTHER_VALUE` (the option that opens the address box and saves
@@ -738,7 +877,34 @@ exit with changes hits a confirm that lists them — Delete-set, Slack messaging
 and sending a note act immediately; the Notes box is a composer with a send
 arrow, empty on every open, its log below holding what's been written; there's
 no per-set history here, that's the Team tab's `TeamActivityModal`), `SetFormFields`,
-`SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal`, `MySetsPanel`,
+`SetPractices` (a set's practices, under Songs in the detail modal — a
+practice's ONE home, since it's deliberately off the calendar. Everyone on the
+set reads them and can click one to see who's free; adding and deleting is
+admin-only, and unlike the rest of that modal it acts IMMEDIATELY rather than
+staging, because each one sends or cancels a real calendar invite — the same
+reason Delete set and sending a note do. The free/busy modal fetches on the
+CLICK, never on the set opening. Deleting asks first: it emails the whole
+roster a cancellation. A row names its practice with `shortDateTimeCompact`
+and its START only ("11/4/26 7PM") — spelled out with both ends it wrapped to
+three lines on a phone, and the end time is on the calendar invite, which is
+where a practice actually lives. Each row LEADS with its ✕ and adding is a
+full-width dashed "+ Add Practice" bar — the same control the Create tab's weekly set
+times use, so "add another one of these" looks the same wherever it is),
+`TemplatePracticesEditor` (the same thing for a weekly set time: a weekday +
+from/to per row, since a weekly time has no date. Deliberately NOT in
+`SetFormFields`, which `CreateSetModal` shares — a practice on a concrete set
+is a date, not a weekday. It runs `validateTemplatePractices` as you type, so
+the form can't offer a save the API would 400. Same two controls as
+`SetPractices`: the ✕ leads its row (trailing it, it landed under whichever
+field wrapped last) and the dashed bar adds),
+`SlotCapacityEditor`, `GuestTeamsModal`, `TemplateModal` (the weekly set time
+form. Its day picker is seven toggle buttons ACROSS — `DAY_INITIALS`
+("Su"…"Sa") visible, the full day name as the accessible one, so it is still
+`getByRole("checkbox", { name: "Sunday" })` and still `.check()`-able. As
+full-word checkboxes they wrapped into three ragged rows of 16px targets on a
+phone and outweighed every other field; a week reads as a week when its days
+sit side by side. Adding is multi-select, editing moves the one row),
+`MySetsPanel`,
 `GenerateModal` (the "Generate New Schedule" options — window, which recurring sets, and an
 optional per-set-type color) → `StagedScheduleModal` (the preview — and, as
 `mode="preview"`, the calendar's Preview Mode too, which has the same plan-wide
@@ -804,6 +970,9 @@ opts out with `data-no-pull`),
 `StatusBadge`, `ExportIcsButton`, `LoadingProvider`.
 Primitives in `components/common/`: `Badge Banner Button Card Checkbox
 ColorPicker Dropdown Input Modal Select Stepper LoadingDots LoadingScreen`.
+(`Dropdown` portals its menu to `<body>` so a modal can't clip it, then places
+it with `lib/dropdownPosition.ts placeMenu` — it renders the panel hidden for
+one pass to MEASURE it, since the panel's own size is half of where it can go.)
 Prefer extending these. (`Stepper` = number field with big − / + either side,
 replacing a native spinner — a plain text box under the hood, digits only, so
 it can be cleared and retyped; `ColorPicker` = a swatch opening a portaled
@@ -826,13 +995,32 @@ kept for undoing a request, e.g. "Cancel swap"); `Checkbox` takes `rowTarget` to
 the whole row a real `<label>` (off by default: most rows carry chips and text
 you may want to click without flipping a tick); `Input`/`Select` set their own
 `text-base sm:text-sm` — 16px on phones is what stops iOS zooming into a
-focused field — and step aside when the caller passes its own size; `Modal`
+focused field — and step aside when the caller passes its own size; both also
+wrap in a `min-w-0` label, since a grid or flex item defaults to
+`min-width:auto` and a field with a wide intrinsic size (a `type="time"`
+input) would otherwise push its row past the container; `Modal`
 renders into `<body>` (a transformed ancestor — the swipe pager, pull-to-refresh
 — would otherwise be what its `fixed` overlay centres in), takes `headerActions`
 for controls pinned in the header left of the ✕, and accepts `footer` as a
 FUNCTION `({ atEnd }) => …` for an action that must wait until a long body has
-been scrolled to the end — the availability submit's Confirm.) `SetFormFields` asks for a start + **end** time; the set still stores
+been scrolled to the end — the availability submit's Confirm. Both set forms —
+`CreateSetModal` and `TemplateModal` — pass their Close/Save buttons as
+`footer` rather than ending the form with them, which is what pins them and
+gives them the phone row's 44px; the submit button is outside the `<form>` as a
+result, so it carries `form={formId}` with a `useId()` the form shares.)
+`SetFormFields` asks for a start + **end** time; the set still stores
 `durationMinutes` (`lib/dates.ts durationBetween` / `minutesToTimeInput`).
+**Auto Create Slack Channel** (the `groupChatLeadDays` number, blank = off) and
+**Team** share ONE row, half each — a two-digit number and a handful of team
+names neither needed a row of its own. Team is still a real `Select` (an org
+can hold more teams than a row would fit), STYLED as the rounded indigo pill
+the set modal's title wears, so the same thing looks the same in both places.
+Switching team still clears any custom shape — its keys are the old team's
+roles. The **start + end times stack below `sm`** and sit side by side from
+`sm` up: a `type="time"` control has a wide intrinsic size (Safari won't draw
+one narrower than its own "09:00 AM"), so two of them in half a phone's width
+ran off the side of the modal. `tests/e2e/mobile.spec.ts` pins the stacking
+and `tablet.spec.ts` the two columns, both asserting nothing overflows.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 
@@ -843,6 +1031,11 @@ table — these get re-picked by hand more than the copy does), `lead()`,
 `setName()`, `setWhen()`, `linkOr()`. Bold and code always sit OUTSIDE a link —
 no provider renders markup inside a link label, which is also why the digest's
 labels and the batched-roster DM's set names can't be part of their links.
+Every message that LISTS a set's people marks the set's MD with **"(MD)"**
+after their name — `teamRosterText` (the group chat's roster) and
+`weeklySummaryText` (the week-ahead digest), so who is leading reads the same
+in both. Matching is by user id, so a caller whose roster carries no ids marks
+nobody rather than guessing by name.
 A full inventory of who gets what, when, with the literal copy, is the
 TapWorship Slack Notices artifact.
 The ONE daily cron (`vercel.json` → `/api/cron/daily`) fires at **13:30 UTC**

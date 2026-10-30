@@ -40,13 +40,18 @@ export default function SlotCapacityEditor({
   };
 
   return (
-    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+    // A fixed row height, so a two-word role ("Worship Leader") wrapping onto a
+    // second line lifts its own box instead of making the whole grid ragged —
+    // on a phone, where the columns are narrowest, most of them wrap.
+    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
       {slottedRoles(catalog).map((role) => (
         <label
           key={role.key}
-          className="flex items-center justify-between gap-2 text-sm"
+          className="flex min-h-11 items-center justify-between gap-2 text-sm sm:min-h-0"
         >
-          <span className="text-gray-700 dark:text-gray-300">{role.label}</span>
+          <span className="leading-tight text-gray-700 dark:text-gray-300">
+            {role.label}
+          </span>
           <input
             type="number"
             min={minFor(role.key)}

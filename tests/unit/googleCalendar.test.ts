@@ -10,6 +10,7 @@ vi.mock("@/lib/prisma", () => ({
     org: { findUnique: vi.fn(), update: vi.fn() },
     user: { findMany: vi.fn() },
     assignment: { findMany: vi.fn(), updateMany: vi.fn() },
+    setPractice: { findUnique: vi.fn(), update: vi.fn() },
     setHistoryEvent: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -23,7 +24,8 @@ import { prisma } from "@/lib/prisma";
 import { encryptSecret } from "@/lib/crypto";
 import { pendingOwners } from "@/lib/pendingHandoff";
 import {
-  calendarEventOf,
+  calendarEventOfPractice,
+  calendarEventsOfSet,
   handleNotification,
   isGoogleCalendarAppConfigured,
   listCalendarsFor,
@@ -67,6 +69,7 @@ function aSet(overrides: Record<string, unknown> = {}) {
     teamId: "t1",
     googleEventId: null,
     songs: [{ title: "Who Else", key: "E" }],
+    practices: [],
     assignments: [
       {
         id: "a1",
@@ -171,6 +174,119 @@ describe("syncSetCalendar", () => {
     });
   });
 
+  it("invites a mixed roster in two passes, so the silent guest gets no mail", async () => {
+    // Google's sendUpdates is per request, not per attendee: one call either
+    // mails everybody or nobody. So the people who want an email are invited
+    // first, then the rest are added with sendUpdates=none.
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        assignments: [
+          {
+            id: "a1",
+            role: "KEYS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u1",
+            user: { name: "Kate", email: "kate@example.com", calendarInviteEmails: false },
+          },
+          {
+            id: "a2",
+            role: "BASS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u3",
+            user: { name: "Sam", email: "sam@example.com", calendarInviteEmails: true },
+          },
+        ],
+      })
+    );
+    routes = (method) => (method === "POST" ? { body: { id: "ev1" } } : undefined);
+    await syncSetCalendar("s1");
+
+    expect(calls.map((c) => c.method)).toEqual(["POST", "PATCH"]);
+    const [create, add] = calls;
+    expect(create.url).toContain("sendUpdates=all");
+    expect((create.body as { attendees: { email: string }[] }).attendees).toEqual([
+      { email: "sam@example.com", displayName: "Sam" },
+    ]);
+    expect(add.url).toContain("/events/ev1?sendUpdates=none");
+    expect(
+      (add.body as { attendees: { email: string }[] }).attendees.map((a) => a.email)
+    ).toEqual(["kate@example.com", "sam@example.com"]);
+    // The id is stored before the second pass, so a failed add leaves an
+    // event the next sync can finish rather than a duplicate.
+    expect(prisma.set.update).toHaveBeenCalledWith({
+      where: { id: "s1" },
+      data: { googleEventId: "ev1" },
+    });
+  });
+
+  it("creates in one quiet call when no guest wants an email", async () => {
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        assignments: [
+          {
+            id: "a1",
+            role: "KEYS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u1",
+            user: { name: "Kate", email: "kate@example.com", calendarInviteEmails: false },
+          },
+        ],
+      })
+    );
+    routes = (method) => (method === "POST" ? { body: { id: "ev1" } } : undefined);
+    await syncSetCalendar("s1");
+
+    expect(calls.map((c) => c.method)).toEqual(["POST"]);
+    expect(calls[0].url).toContain("sendUpdates=none");
+    expect((calls[0].body as { attendees: unknown[] }).attendees).toHaveLength(1);
+  });
+
+  it("adds a silent guest to an existing event without mailing the team", async () => {
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        googleEventId: "ev1",
+        assignments: [
+          {
+            id: "a1",
+            role: "KEYS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u1",
+            user: { name: "Kate", email: "kate@example.com", calendarInviteEmails: true },
+          },
+          {
+            id: "a2",
+            role: "BASS",
+            status: "PENDING",
+            pendingCoverFromUserId: null,
+            userId: "u3",
+            user: { name: "Sam", email: "sam@example.com", calendarInviteEmails: false },
+          },
+        ],
+      })
+    );
+    routes = (method) =>
+      method === "GET"
+        ? {
+            body: {
+              status: "confirmed",
+              start: { dateTime: LATER.toISOString() },
+              attendees: [{ email: "kate@example.com", responseStatus: "accepted" }],
+            },
+          }
+        : undefined;
+    await syncSetCalendar("s1");
+
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.url).toContain("sendUpdates=none");
+    expect(
+      (patch.body as { attendees: { email: string }[] }).attendees.map((a) => a.email)
+    ).toEqual(["kate@example.com", "sam@example.com"]);
+  });
+
   it("patches quietly when only the setlist changed, keeping each RSVP", async () => {
     m(prisma.set.findUnique).mockResolvedValue(aSet({ googleEventId: "ev1" }));
     routes = (method) =>
@@ -251,6 +367,134 @@ describe("syncSetCalendar", () => {
   });
 });
 
+describe("practices on a set", () => {
+  // A practice is an extra event for the SAME people, so it rides along on the
+  // set's own sync — one load, one roster, one description.
+  const practice = (overrides: Record<string, unknown> = {}) => ({
+    id: "p1",
+    startsAt: new Date("2026-10-22T19:00:00Z"),
+    endsAt: new Date("2026-10-22T21:00:00Z"),
+    googleEventId: null,
+    ...overrides,
+  });
+
+  it("creates the practice's own event alongside the set's", async () => {
+    m(prisma.set.findUnique).mockResolvedValue(aSet({ practices: [practice()] }));
+    routes = (method) => (method === "POST" ? { body: { id: "evX" } } : undefined);
+    await syncSetCalendar("s1");
+
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(2);
+    const [, made] = calls;
+    const body = made.body as Record<string, unknown>;
+    // Named after its set, and prefixed so the rehearsal never reads as the
+    // service itself.
+    expect(body.summary).toBe("(Practice) Sunday Morning");
+    // Same guests and same setlist as the service — that's what it rehearses.
+    expect(body.attendees).toEqual([{ email: "kate@example.com", displayName: "Kate" }]);
+    expect(body.description).toContain("1. Who Else (E)");
+    expect(body.start).toEqual({
+      dateTime: "2026-10-22T19:00:00.000Z",
+      timeZone: expect.any(String),
+    });
+    expect(body.end).toEqual({
+      dateTime: "2026-10-22T21:00:00.000Z",
+      timeZone: expect.any(String),
+    });
+    expect(prisma.setPractice.update).toHaveBeenCalledWith({
+      where: { id: "p1" },
+      data: { googleEventId: "evX" },
+    });
+  });
+
+  it("marks the practice's event as a practice, and NOT as the set", async () => {
+    // applyRsvps keys off tapworshipSetId, so a rehearsal invite carrying it
+    // would confirm somebody's seat on the service when they accepted.
+    m(prisma.set.findUnique).mockResolvedValue(aSet({ practices: [practice()] }));
+    routes = (method) => (method === "POST" ? { body: { id: "evX" } } : undefined);
+    await syncSetCalendar("s1");
+
+    const [set, rehearsal] = calls.map((c) => c.body as Record<string, unknown>);
+    expect(set.extendedProperties).toEqual({ private: { tapworshipSetId: "s1" } });
+    expect(rehearsal.extendedProperties).toEqual({
+      private: { tapworshipPracticeId: "p1" },
+    });
+  });
+
+  it("skips a rehearsal already behind an upcoming set", async () => {
+    // A practice usually sits BEFORE its set, so this is the ordinary case the
+    // morning after a Wednesday rehearsal — the Sunday still needs syncing.
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        practices: [
+          practice({ id: "past", endsAt: new Date("2026-10-19T21:00:00Z") }),
+          practice({ id: "soon" }),
+        ],
+      })
+    );
+    routes = (method) => (method === "POST" ? { body: { id: "evX" } } : undefined);
+    await syncSetCalendar("s1");
+
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(2); // set + "soon"
+    expect(prisma.setPractice.update).toHaveBeenCalledTimes(1);
+    expect(prisma.setPractice.update).toHaveBeenCalledWith({
+      where: { id: "soon" },
+      data: { googleEventId: "evX" },
+    });
+  });
+
+  it("patches an existing practice event instead of making a second one", async () => {
+    m(prisma.set.findUnique).mockResolvedValue(
+      aSet({
+        googleEventId: "ev1",
+        practices: [practice({ googleEventId: "evX" })],
+      })
+    );
+    routes = (method) =>
+      method === "GET"
+        ? {
+            body: {
+              status: "confirmed",
+              start: { dateTime: new Date("2026-10-22T19:00:00Z").toISOString() },
+              attendees: [{ email: "kate@example.com", responseStatus: "accepted" }],
+            },
+          }
+        : undefined;
+    await syncSetCalendar("s1");
+
+    const patches = calls.filter((c) => c.method === "PATCH");
+    expect(patches).toHaveLength(2);
+    expect(patches[1].url).toContain("/events/evX");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("collects the set's event and its practices' for a delete", async () => {
+    m(prisma.set.findUnique).mockResolvedValue({
+      orgId: "org1",
+      googleEventId: "ev1",
+      practices: [{ googleEventId: "evX" }, { googleEventId: null }],
+    });
+    // The null one has nothing to cancel, so it's left out rather than
+    // becoming a DELETE of "undefined".
+    expect(await calendarEventsOfSet("s1")).toEqual([
+      { orgId: "org1", eventId: "ev1" },
+      { orgId: "org1", eventId: "evX" },
+    ]);
+  });
+
+  it("reads one practice's event id for its own delete", async () => {
+    m(prisma.setPractice.findUnique).mockResolvedValue({
+      googleEventId: "evX",
+      set: { orgId: "org1" },
+    });
+    expect(await calendarEventOfPractice("p1")).toEqual({ orgId: "org1", eventId: "evX" });
+    m(prisma.setPractice.findUnique).mockResolvedValue({
+      googleEventId: null,
+      set: { orgId: "org1" },
+    });
+    expect(await calendarEventOfPractice("p1")).toBeNull();
+  });
+});
+
 describe("isGoogleCalendarAppConfigured", () => {
   it("is on with just the OAuth client — no extra flag", () => {
     expect(isGoogleCalendarAppConfigured()).toBe(true);
@@ -260,7 +504,7 @@ describe("isGoogleCalendarAppConfigured", () => {
     delete process.env.GOOGLE_CLIENT_SECRET;
     expect(isGoogleCalendarAppConfigured()).toBe(false);
     expect(await maintainCalendarWatches()).toEqual({ renewed: 0, orgs: 0 });
-    expect(await calendarEventOf("s1")).toBeNull();
+    expect(await calendarEventsOfSet("s1")).toEqual([]);
     await handleNotification("chan1", "anything", "exists");
     expect(prisma.set.findUnique).not.toHaveBeenCalled();
     expect(prisma.org.findUnique).not.toHaveBeenCalled();

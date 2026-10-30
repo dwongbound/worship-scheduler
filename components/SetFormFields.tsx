@@ -7,12 +7,12 @@
 // `scheduleField` slot, which renders right under the label.
 import { ReactNode } from "react";
 import Input from "./common/Input";
+import Select from "./common/Select";
 import {
   durationBetween,
   minutesToTimeInput,
   timeStringToMinutes,
 } from "@/lib/dates";
-import Select from "./common/Select";
 import Checkbox from "./common/Checkbox";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import type { BandRole } from "@/lib/constants";
@@ -114,26 +114,63 @@ export default function SetFormFields({
 
       {scheduleField}
 
-      {/* Which team this set is for — only its members can be scheduled. */}
-      <Select
-        label="Team"
-        value={state.teamId}
-        // Switching teams drops any custom shape: its keys belong to the old
-        // team's roles and would mean nothing against the new one's.
-        onChange={(e) => patch({ teamId: e.target.value, capacities: null })}
-        required
-        disabled={disabled || teams.length === 0}
-      >
-        {teams.length === 0 ? (
-          <option value="">Loading teams…</option>
-        ) : (
-          teams.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}
-            </option>
-          ))
-        )}
-      </Select>
+      {/* Two half-width columns: how far ahead to open the set's Slack channel,
+          and which team the set is for. Neither needs a full row of its own —
+          one is a two-digit number and the other a short list of names — and
+          side by side they take one row's height instead of two. */}
+      <div className="grid grid-cols-2 items-start gap-3">
+        {/* Auto-create the set's private Slack channel this many days before it
+            starts. Blank = off (an admin can still make one by hand with the
+            set's "Create Group" button). The org must have Slack connected.
+            The rule sits UNDER the field as a hint rather than in the label,
+            which is already long enough to wrap in half a row. */}
+        <div className="min-w-0">
+          <Input
+            label="Auto Create Slack Channel"
+            type="number"
+            min={1}
+            value={state.groupChatLeadDays ?? ""}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              patch({
+                groupChatLeadDays:
+                  e.target.value === "" || Number.isNaN(n) ? null : n,
+              });
+            }}
+            placeholder="Off"
+            disabled={disabled}
+          />
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            Days before the set to create it. Blank leaves it off.
+          </p>
+        </div>
+
+        {/* Which team this set is for — only its members can be scheduled.
+            A real dropdown (an org can hold more teams than a row of chips
+            would fit) wearing the chip the set modal's title wears, so the
+            same thing looks the same in both places. */}
+        <Select
+          label="Team"
+          // Switching teams drops any custom shape: its keys belong to the old
+          // team's roles and would mean nothing against the new one's.
+          onChange={(e) => patch({ teamId: e.target.value, capacities: null })}
+          value={state.teamId}
+          required
+          disabled={disabled || teams.length === 0}
+          className="rounded-full border-indigo-200 bg-indigo-50 font-medium text-indigo-700
+            dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300"
+        >
+          {teams.length === 0 ? (
+            <option value="">Loading teams…</option>
+          ) : (
+            teams.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))
+          )}
+        </Select>
+      </div>
 
       {/* Start + END time. The set still STORES a duration, so the end time is
           derived from it: moving the start slides the end along and keeps the
@@ -141,7 +178,11 @@ export default function SetFormFields({
           or before the start reads as running past midnight (durationBetween);
           typing the start time back over the end is ignored rather than
           collapsing the set to nothing. */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* Stacked on a phone, side by side from `sm` up. A `type="time"` control
+          has a wide intrinsic size — Safari won't render one narrower than its
+          own "09:00 AM" — so two of them in half a phone's width is what was
+          running off the side of the modal. A full-width one fits anywhere. */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Input
           label="Start time"
           type="time"
@@ -167,25 +208,6 @@ export default function SetFormFields({
       <p className="-mt-1 text-xs text-gray-500 dark:text-gray-400">
         {durationLabel(state.duration)} long
       </p>
-
-      {/* Auto-create the set's private Slack channel this many days before it
-          starts. Blank = off (an admin can still make one by hand with the
-          set's "Slack Team" button). The org must have Slack connected. */}
-      <Input
-        label="Auto-create group chat (days before, blank = off)"
-        type="number"
-        min={1}
-        value={state.groupChatLeadDays ?? ""}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          patch({
-            groupChatLeadDays:
-              e.target.value === "" || Number.isNaN(n) ? null : n,
-          });
-        }}
-        placeholder="Off"
-        disabled={disabled}
-      />
 
       {/* On: this set wants a musical director — the auto-scheduler seats one
           and the set detail modal shows the MD picker. Off: no MD is tracked

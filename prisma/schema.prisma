@@ -423,6 +423,17 @@ model User {
   // other. Null = use `email`; `lib/calendarEvent.ts inviteAddress` is the
   // one reading of it, and the RSVP comes back from the same address.
   calendarInviteEmail String?
+  // Whether Google EMAILS this person about the events they're invited to, as
+  // opposed to just putting them on their calendar. Separate from
+  // `calendarInvites` because they are different asks: that one is "don't put
+  // my sets on my calendar", this one is "put them there, but stop mailing me
+  // about every roster change".
+  //
+  // Google's `sendUpdates` is per REQUEST, not per attendee, so this cannot
+  // be honoured in every case — see `notifyForUpdate` in
+  // `lib/calendarEvent.ts` for exactly when it is. On by default, since that
+  // is what Google does on its own.
+  calendarInviteEmails Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -492,6 +503,12 @@ model Set {
   // the per-set Drive chart folder.
   songs Song[]
 
+  // This set's practices (rehearsals): extra calendar events the whole roster
+  // is invited to, deliberately NOT shown on the app calendar and deliberately
+  // invisible to the scheduler — a practice is never a booking. Cascade-deletes
+  // with the set.
+  practices SetPractice[]
+
   // The collaborative Spotify playlist created for this set (under the org's
   // shared account), so a re-sync updates the SAME playlist instead of making a
   // duplicate. Both null until a playlist is first created. The url is the
@@ -547,6 +564,49 @@ model SetGuestTeam {
   // One row per team per set; re-adding a guest edits its roles instead.
   @@unique([setId, teamId])
   @@map("set_guest_teams")
+}
+
+// One practice (rehearsal) on a set.
+//
+// A practice is an extra Google Calendar event for the SAME people: its roster
+// is DERIVED from the set's assignments rather than stored, so adding someone
+// to the set puts them on the practice invite too, and nobody can be on a
+// practice without being on the set. Three deliberate absences:
+//
+//   - it never appears on the app calendar (only under the set it belongs to);
+//   - it is never fed to `buildSchedule` as a booking, so auto schedule's
+//     load, spacing and availability answers are untouched by practices;
+//   - it carries no roles or capacities — the set owns the shape.
+//
+// Sets generated from a SetTemplate get their practices from
+// SetTemplatePractice at generate time, and they are editable per set
+// afterwards (the same inheritance `slotCapacities` and `groupChatLeadDays`
+// use). A practice can also be added ad hoc on ANY set, recurring or not, on
+// any date — including one nowhere near the template's weekday.
+model SetPractice {
+  id    String @id @default(cuid())
+  set   Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId String
+
+  // A practice is a start and an END, never a length: that is how an admin
+  // says it ("Wednesday 7 to 9"), and it is what the calendar event needs.
+  // Sets store a duration for historical reasons; practices deliberately
+  // don't.
+  startsAt DateTime
+  endsAt   DateTime
+
+  // This practice's event on the org's Google Calendar, so a re-sync patches
+  // the SAME event instead of making a duplicate. Null until first synced (or
+  // when the org has no calendar connected).
+  googleEventId String?
+
+  createdAt DateTime @default(now())
+
+  // Two practices on one set at the same instant are meaningless and would
+  // make two identical calendar events, so the db refuses it — and the route
+  // can say so truthfully rather than guessing at a cause.
+  @@unique([setId, startsAt])
+  @@map("set_practices")
 }
 
 // One song in a set's setlist. The worship leader enters a title and (optional)
@@ -803,6 +863,10 @@ model SetTemplate {
   // time (see Set.groupChatLeadDays). Null = off for the generated sets.
   groupChatLeadDays Int?
 
+  // The practices sets expanded from this template start with — see
+  // SetTemplatePractice. An empty list = no practices.
+  practices SetTemplatePractice[]
+
   // The org this template (and its expanded sets) belongs to.
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
@@ -814,6 +878,31 @@ model SetTemplate {
   createdAt DateTime @default(now())
 
   @@map("set_templates")
+}
+
+// One practice on a weekly SetTemplate — a WEEKDAY and a time window, the way
+// an admin says it: "Wednesdays, 7 to 9".
+//
+// A weekly set time has no date, so neither can its practices. The weekday is
+// read as "the one in the same week as the set", weeks running Mon–Sun like
+// `weekKey` in lib/schedulingRules.ts — so a Wednesday practice on a Sunday
+// 10 AM template is the Wednesday BEFORE each of its Sundays, which is what
+// makes a rehearsal a rehearsal. `lib/practices.ts practiceDates` is the one
+// resolution of that, and it is stamped onto SetPractice rows at generate
+// time; editing a template does NOT rewrite sets already generated, exactly
+// like slotCapacities.
+model SetTemplatePractice {
+  id         String      @id @default(cuid())
+  template   SetTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateId String
+
+  dayOfWeek   Int // 0 = Sunday … 6 = Saturday, within the set's own Mon–Sun week
+  startMinute Int // minutes from midnight, e.g. 19:00 = 1140
+  endMinute   Int // ditto; always after startMinute — a practice is start-to-end
+
+  createdAt DateTime @default(now())
+
+  @@map("set_template_practices")
 }
 
 // An admin's request for the team to enter their availability over a date

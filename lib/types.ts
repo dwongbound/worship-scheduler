@@ -132,6 +132,10 @@ export interface ApiSet {
   // The worship leader's setlist, ordered. Present on GET /api/sets; may be
   // absent (undefined) on endpoints that don't include it.
   songs?: ApiSong[];
+  // This set's practices, in time order. Present on GET /api/sets and
+  // /api/sets/[id]; absent on endpoints that don't include it. Never drawn on
+  // the calendar — the set detail modal is the one place they appear.
+  practices?: ApiSetPractice[];
   // The set's collaborative Spotify playlist, once created (null before then).
   spotifyPlaylistUrl?: string | null;
 }
@@ -252,6 +256,30 @@ export interface ApiSetTemplate {
   slotCapacities: SlotCapacityMap | null; // null = default team shape
   teamId: string | null; // team the generated sets belong to
   team: ApiTeam | null;
+  // The practices every set expanded from this template starts with, as a
+  // weekday + window in the set's own week (see lib/practices.ts). Empty =
+  // none, and its LENGTH is the "+2" badge after the time in the Create tab's
+  // list.
+  practices: ApiTemplatePractice[];
+}
+
+// One practice on a weekly set time — a weekday and a window, because a weekly
+// time has no date of its own. The weekday is the one in the SET's week
+// (Mon–Sun); `practiceDates` is the one resolution of that.
+export interface ApiTemplatePractice {
+  id: string;
+  dayOfWeek: number; // 0 = Sunday, read within the set's own Mon–Sun week
+  startMinute: number; // minutes from midnight on that day
+  endMinute: number; // ditto — a practice is a start and an end, not a length
+}
+
+// One practice on a concrete set: an extra calendar event for the people
+// already on that set. Never on the app calendar, and never a booking as far
+// as the scheduler is concerned.
+export interface ApiSetPractice {
+  id: string;
+  startsAt: string;
+  endsAt: string;
 }
 
 // An admin's request for their org to submit availability over a date range.
@@ -523,6 +551,10 @@ export interface ApiMe {
   // Opt-in (default on) to being a guest on their sets' Google Calendar
   // events. Off keeps them off the guest list only — see lib/calendarEvent.ts.
   calendarInvites: boolean;
+  // Opt-in (default on) to Google EMAILING them about those events, as
+  // opposed to just putting them on the calendar. Off is honoured where a
+  // per-request parameter allows — lib/calendarEvent.ts notifyForUpdate.
+  calendarInviteEmails: boolean;
   // Where those invites are sent instead of `email` — usually a secondary
   // calendar's own address, so the sets land on their own calendar. Null =
   // use `email` (lib/calendarEvent.ts inviteAddress).
