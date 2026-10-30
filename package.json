@@ -16,7 +16,9 @@
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "test:e2e": "dotenv -e env/test.env -- playwright test",
-    "e2e:server": "dotenv -e env/test.env -- next dev -p 3100"
+    "e2e:server": "dotenv -e env/test.env -- next dev -p 3100",
+    "e2e:build": "dotenv -e env/test.env -- npm run build",
+    "e2e:server:prod": "dotenv -e env/test.env -- next start -p 3100"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
