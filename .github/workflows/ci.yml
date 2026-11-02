@@ -13,6 +13,11 @@ name: CI
 # run locally, so the environment (TZ, db, browsers) matches exactly — just
 # with the command overridden per job.
 #
+# e2e serves a PRODUCTION build (`npm run e2e:build`, then E2E_PROD=1 makes
+# playwright.config.ts run `next start`), not `next dev`: the dev server would
+# sometimes answer real nested API routes with its HTML 404 page for minutes
+# at a time, and a build is what production actually runs.
+#
 # PRs are the gate for dev → staging → main; the push trigger covers only main
 # (a post-merge confirmation of what production deploys). No push trigger for
 # dev/staging — that would double-run against an open PR's identical code.
@@ -77,7 +82,7 @@ jobs:
       - name: E2e tests — desktop (playwright)
         run: >
           docker compose --profile test run --rm worship-scheduler-test
-          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e -- --project=chromium"
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run e2e:build && E2E_PROD=1 npm run test:e2e -- --project=chromium"
       # Playwright traces/screenshots for debugging a red run.
       - name: Upload test artifacts
         if: failure()
@@ -113,7 +118,7 @@ jobs:
       - name: E2e tests — mobile (playwright)
         run: >
           docker compose --profile test run --rm worship-scheduler-test
-          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e -- --project=mobile-ios --project=mobile-android"
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run e2e:build && E2E_PROD=1 npm run test:e2e -- --project=mobile-ios --project=mobile-android"
       # Playwright traces/screenshots for debugging a red run.
       - name: Upload test artifacts
         if: failure()
@@ -150,7 +155,7 @@ jobs:
       - name: E2e tests — tablet (playwright)
         run: >
           docker compose --profile test run --rm worship-scheduler-test
-          sh -c "npm install && npx prisma generate && npx prisma db push && npm run test:e2e -- --project=tablet-ipad --project=tablet-android"
+          sh -c "npm install && npx prisma generate && npx prisma db push && npm run e2e:build && E2E_PROD=1 npm run test:e2e -- --project=tablet-ipad --project=tablet-android"
       # Playwright traces/screenshots for debugging a red run.
       - name: Upload test artifacts
         if: failure()

@@ -29,7 +29,7 @@ export const CONTACT_EMAIL =
  * The date both pages show as "Last updated". Bump it whenever the wording
  * changes in a way that matters — Google re-reads the page on review.
  */
-export const LEGAL_LAST_UPDATED = "October 23, 2026";
+export const LEGAL_LAST_UPDATED = "October 30, 2026";
 
 /** The two pages, as the sign-in footer lists them. */
 export const LEGAL_LINKS = [

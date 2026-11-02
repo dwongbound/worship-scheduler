@@ -103,6 +103,14 @@ npx playwright install chromium            # first time only
 npm run test:e2e                           # boots the app, needs the test db
 ```
 
+`npm run test:e2e` serves the app with `next dev`. CI serves a production
+build instead, which is closer to what users run and never compiles a route
+mid-test; to reproduce a CI run locally:
+
+```bash
+npm run e2e:build && E2E_PROD=1 npm run test:e2e
+```
+
 Playwright's global setup (`tests/e2e/global-setup.ts`) force-resets and
 reseeds the test database before every run, so e2e runs are deterministic
 and never touch dev data.
