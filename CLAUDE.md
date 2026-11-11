@@ -318,6 +318,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
 
 - Auth: `auth/[...nextauth]`, `auth/allow-duplicate-name` (consent cookie for
   the duplicate-name warning on the Google path), `signup`, `me`.
+  `mobile/session` (POST) is the iOS app's sign-in: `verifyCredentials` (the
+  web form's own check, shared) → a bearer token that IS a NextAuth JWT
+  (`lib/mobileToken.ts`). `getSessionUser` reads the cookie, then the
+  `Authorization: Bearer` header, so every route serves the app unchanged.
 - Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
   list row has — what a `?set=` deep link resolves through), `assignments`,
   `assignments/[id]`, `assignments/confirm-all`.
@@ -849,7 +853,11 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   two places that param can't reach: Google's duplicate-name bounce back through
   /login, and the /join gate a brand-new account passes through. So a set link
   followed while signed out still opens that set afterwards.
-- `auth.ts` — `authOptions`, `getSessionUser()`, `getAdminUser()`.
+- `auth.ts` — `authOptions`, `getSessionUser()` (cookie, then bearer),
+  `verifyCredentials()` (the ONE username/password check, both doors).
+- `mobileToken.ts` — the iOS app's bearer token: `parseBearer`,
+  `mintMobileToken`/`readMobileToken` (NextAuth `encode`/`decode`, same secret,
+  claims and 30-day life as a web session — no token table). ✅tested
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
 - `prisma.ts` — singleton client from generated output.

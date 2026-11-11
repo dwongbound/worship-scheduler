@@ -52,21 +52,56 @@ failed to parse — the API emits milliseconds (`2026-10-11T17:00:00.000Z`) and
 `.iso8601` rejects fractional seconds. That's a crash on a device you can't
 hot-fix, caught before a line of UI existed.
 
-## Where this is up to
+## Signing in
 
-Early. What's here is the foundation, verified; what isn't here is the app.
+The app signs in with `POST /api/mobile/session` (username-or-email +
+password), which answers a bearer token the app keeps in the Keychain and
+sends as `Authorization: Bearer …` on every request. The token **is** the web
+session's own NextAuth JWT, minted with `NEXTAUTH_SECRET` and the same claims
+(`lib/mobileToken.ts`), and `getSessionUser` in `lib/auth.ts` reads a cookie
+first and that header second — so every existing route serves the app with no
+change, and a deleted account is signed out on both. It lasts 30 days, the
+web session's own lifetime; signing out is the app forgetting it.
 
-- **Done** — the API model shapes (`Models.swift`, mirroring `lib/types.ts`),
-  the canonical JSON decoder, and 24 checks covering both the fat
-  `GET /api/sets` payload and the thin single-set one.
-- **Next, and blocking** — auth. 64 of the 70 routes read a NextAuth **cookie**
-  session; a native client needs tokens. That endpoint belongs in the web app
-  and should land before more Swift is written against a scheme that doesn't
-  exist yet.
-- **Then** — a real API client, sign-in, and the calendar. The scheduling port
-  (`lib/scheduler.ts`, which runs in the BROWSER today for staged auto-fill)
-  is the other big piece; moving it server-side instead would serve both
-  clients and is worth deciding before porting it.
+Who can't sign in here yet: accounts made with **Google** have no password.
+The sign-in screen tells them to set one on the web. Offering Google on iOS
+would also oblige Sign in with Apple (App Store rule 4.8).
+
+## Pointing a build at staging
+
+Release builds always talk to `https://tapworship.com`. A Debug build honours
+`TAPWORSHIP_API_URL` from the Xcode scheme (Product → Scheme → Edit Scheme →
+Run → Environment Variables), e.g. a Vercel preview URL. It must be https —
+App Transport Security refuses plain http, and this app carries no exception.
+
+## What the app has
+
+| Screen | |
+|---|---|
+| Sign in | `SignInView` — the two fields, keyboard Next/Go, errors inline |
+| My Sets | `MySetsView` — upcoming sets, "Needs your answer" first; swipe right to confirm; a set's page has Confirm · Request cover (with a note) · Cancel cover, the web's three buttons |
+| Account | `AccountView` — who's signed in, a link to /profile on the web, Sign out |
+
+The logic behind them lives in `TapWorshipKit` and is checked: `APIClient`
+(every request is built by a pure `makeRequest`, every status read by a pure
+`check`), `MobileSession`, and `MySets` (grouping, which buttons a status
+offers, the web's status words). 61 checks; CI runs them on Linux in the
+`ios-kit` job.
+
+**Not yet compiled:** the SwiftUI views in `App/` need Xcode, and nothing in
+CI or the cloud sessions that wrote them has it. Each view has `#Preview`s
+(light, dark, largest text, empty, offline) — open them on an SE and a Pro Max
+before trusting them.
+
+## Next
+
+- The calendar (`GET /api/sets`), then availability.
+- **Account deletion inside the app** — App Store rule 5.1.1(v) requires it
+  for any app with accounts, and the web has no self-serve delete yet either.
+- A rate limit on sign-in. Neither door (the web form or this route) has one.
+- The scheduling port (`lib/scheduler.ts` runs in the BROWSER today for staged
+  auto-fill). Moving it server-side would serve both clients; decide before
+  porting it.
 
 ## Before App Store Connect
 

@@ -46,6 +46,14 @@ public struct TeamRoleDef: Codable, Hashable, Sendable {
   public let adminOnly: Bool
   /// Admin-set display order. Position IS the order — see lib/teamRoles.ts.
   public let order: Int
+
+  public init(key: RoleKey, label: String, defaultCount: Int, adminOnly: Bool, order: Int) {
+    self.key = key
+    self.label = label
+    self.defaultCount = defaultCount
+    self.adminOnly = adminOnly
+    self.order = order
+  }
 }
 
 public struct ApiTeam: Codable, Hashable, Identifiable, Sendable {

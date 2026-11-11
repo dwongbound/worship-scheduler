@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(FoundationNetworking)
+// Linux keeps URLSession/URLRequest in a separate module; on Apple platforms
+// they're part of Foundation and this import doesn't exist.
+import FoundationNetworking
+#endif
 import TapWorshipKit
 
 // The suite, as an executable. See Package.swift for why this isn't XCTest.
@@ -109,6 +114,112 @@ check("milliseconds parse", withMs != nil)
 check("plain parses", noMs != nil)
 check("same instant", withMs == noMs)
 check("nonsense is rejected, not silently zero", TapWorship.parseISO8601("not a date") == nil)
+
+// ── Sign-in ─────────────────────────────────────────────────────────────
+// What POST /api/mobile/session answers (app/api/mobile/session/route.ts).
+section("decoding MobileSession")
+let sessionJSON = """
+{ "token": "eyJ.abc.def", "expiresAt": "2026-12-11T02:00:00.000Z",
+  "user": { "id": "u_1", "name": "Bob Baker", "email": null,
+            "memberships": [ { "orgId": "o_1", "isAdmin": false } ] } }
+"""
+do {
+  let s = try decoder.decode(MobileSession.self, from: Data(sessionJSON.utf8))
+  check("token", s.token == "eyJ.abc.def")
+  check("null email", s.user.email == nil)
+  check("membership", s.user.memberships.first?.orgId == "o_1")
+  check("not expired before expiresAt", !s.isExpired(now: s.expiresAt.addingTimeInterval(-1)))
+  check("expired at expiresAt", s.isExpired(now: s.expiresAt))
+  check("has an org", !s.user.hasNoOrg)
+  // The Keychain stores it as JSON through our own encoder; it must come back.
+  let again = try decoder.decode(MobileSession.self, from: TapWorship.makeEncoder().encode(s))
+  check("round-trips through the app's encoder", again == s)
+} catch {
+  failures += 1
+  print("  ✗ session failed to decode: \(error)")
+}
+
+// ── Requests ────────────────────────────────────────────────────────────
+section("APIClient.makeRequest")
+let base = URL(string: "https://tapworship.example")!
+let signedIn = APIClient(baseURL: base, token: { "tok123" }, transport: { _ in fatalError("no network in Checks") })
+let signedOut = APIClient(baseURL: base, token: { nil }, transport: { _ in fatalError("no network in Checks") })
+do {
+  let get = try signedIn.makeRequest("GET", "/api/assignments")
+  check("absolute url", get.url?.absoluteString == "https://tapworship.example/api/assignments")
+  check("bearer header", get.value(forHTTPHeaderField: "Authorization") == "Bearer tok123")
+  check("GET has no body", get.httpBody == nil)
+  let anonymous = try signedOut.makeRequest("GET", "/api/me")
+  check("no token, no header", anonymous.value(forHTTPHeaderField: "Authorization") == nil)
+  let login = try signedIn.makeRequest("POST", "/api/mobile/session", body: ["username": "bob"], authorized: false)
+  check("sign-in never sends an old token", login.value(forHTTPHeaderField: "Authorization") == nil)
+  check("json content type", login.value(forHTTPHeaderField: "Content-Type") == "application/json")
+} catch {
+  failures += 1
+  print("  ✗ makeRequest threw: \(error)")
+}
+
+section("APIClient.check (status codes)")
+func thrown(_ status: Int, _ body: String = "", authorized: Bool = true) -> APIError? {
+  do { try APIClient.check(status: status, data: Data(body.utf8), authorized: authorized); return nil }
+  catch { return error as? APIError }
+}
+check("200 passes", thrown(200) == nil)
+check("204 passes", thrown(204) == nil)
+check("401 signs out", thrown(401, #"{"error":"Unauthorized"}"#) == .unauthorized)
+check("401 on sign-in keeps the server's words",
+      thrown(401, #"{"error":"That username or password isn't right"}"#, authorized: false)
+        == .server(status: 401, message: "That username or password isn't right"))
+check("400 keeps the message", thrown(400, #"{"error":"Unknown action"}"#) == .server(status: 400, message: "Unknown action"))
+check("500 without json", thrown(500, "<html>") == .server(status: 500, message: nil))
+check("a server message is shown as-is", APIError.server(status: 400, message: "Nope").message == "Nope")
+check("no message falls back to words", !APIError.server(status: 500, message: nil).message.isEmpty)
+
+// ── My Sets ─────────────────────────────────────────────────────────────
+// GET /api/assignments: the set row WITHOUT a roster, plus `pendingSwap`.
+section("My Sets")
+let mineJSON = """
+[
+  { "id": "a_1", "role": "KEYS", "status": "PENDING", "pendingSwap": null,
+    "setId": "set_1", "userId": "u_1",
+    "set": { "id": "set_1", "label": "Sunday", "startsAt": "2026-11-15T17:00:00.000Z",
+             "durationMinutes": 90, "notes": null, "isPrivate": false,
+             "org": { "id": "o_1", "name": "Grace Chapel" } } },
+  { "id": "a_2", "role": "VOCALS", "status": "CONFIRMED", "pendingSwap": null,
+    "set": { "id": "set_1", "label": "Sunday", "startsAt": "2026-11-15T17:00:00.000Z",
+             "durationMinutes": 90, "notes": null, "isPrivate": false,
+             "org": { "id": "o_1", "name": "Grace Chapel" } } },
+  { "id": "a_3", "role": "SOUND_BOOTH", "status": "PENDING_SWAP",
+    "pendingSwap": { "proposalId": "p_1", "isRequester": true },
+    "set": { "id": "set_0", "label": null, "startsAt": "2026-11-12T03:00:00Z",
+             "durationMinutes": 60, "notes": "Bring a capo" } }
+]
+"""
+do {
+  let mine = try decoder.decode([ApiMyAssignment].self, from: Data(mineJSON.utf8))
+  check("three seats", mine.count == 3)
+  check("pendingSwap", mine[2].pendingSwap?.isRequester == true)
+  check("org absent is fine", mine[2].set.org == nil)
+  let groups = MySets.grouped(mine)
+  check("two sets, one per set", groups.count == 2)
+  check("soonest first", groups.first?.set.id == "set_0")
+  check("both roles on one set", groups.last?.seats.map(\.role) == ["KEYS", "VOCALS"])
+  check("a pending seat flags its set", groups.last?.needsAttention == true)
+  check("no pending seat, no flag", groups.first?.needsAttention == false)
+} catch {
+  failures += 1
+  print("  ✗ my assignments failed to decode: \(error)")
+}
+check("pending: confirm + request cover", MySets.actions(for: .pending) == [.confirm, .requestSwap])
+check("confirmed: request cover", MySets.actions(for: .confirmed) == [.requestSwap])
+check("asking: cancel cover", MySets.actions(for: .swapRequested) == [.cancelSwap])
+check("status words match the web", MySets.statusLabel(.pending) == "Pending confirmation")
+check("built-in role label", RoleLabels.label(for: "VOCALS") == "Vox")
+check("unknown role is humanized", RoleLabels.label(for: "SOUND_BOOTH") == "Sound Booth")
+check("the team's own label wins", RoleLabels.label(for: "KEYS", in: [
+  TeamRoleDef(key: "KEYS", label: "Piano", defaultCount: 1, adminOnly: false, order: 0),
+]) == "Piano")
+check("PATCH body uses the server's action names", AssignmentAction.requestSwap.rawValue == "requestSwap")
 
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
