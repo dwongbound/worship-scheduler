@@ -46,6 +46,14 @@ public struct TeamRoleDef: Codable, Hashable, Sendable {
   public let adminOnly: Bool
   /// Admin-set display order. Position IS the order — see lib/teamRoles.ts.
   public let order: Int
+
+  public init(key: RoleKey, label: String, defaultCount: Int, adminOnly: Bool, order: Int) {
+    self.key = key
+    self.label = label
+    self.defaultCount = defaultCount
+    self.adminOnly = adminOnly
+    self.order = order
+  }
 }
 
 public struct ApiTeam: Codable, Hashable, Identifiable, Sendable {
@@ -62,6 +70,12 @@ public struct ApiUserRef: Codable, Hashable, Identifiable, Sendable {
   public let name: String
   /// Musical director — global to the person, like their instruments.
   public let isMD: Bool?
+
+  public init(id: String, name: String, isMD: Bool? = nil) {
+    self.id = id
+    self.name = name
+    self.isMD = isMD
+  }
 }
 
 public struct ApiAssignment: Codable, Hashable, Identifiable, Sendable {

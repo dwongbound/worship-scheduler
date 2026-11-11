@@ -56,6 +56,21 @@ jobs:
           docker compose --profile test run --rm --no-deps worship-scheduler-test
           sh -c "npm install && npx prisma generate && npm run test:unit"
 
+  # The iOS app's logic package (ios/TapWorshipKit): API shapes, decoding, the
+  # API client's request/status rules. Plain SwiftPM with no UI dependency, so
+  # it builds and runs its suite on Linux in Apple's official Swift image —
+  # no macOS runner. The SwiftUI views themselves need Xcode and aren't
+  # compiled here.
+  ios-kit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+      - name: TapWorshipKit checks
+        working-directory: ios/TapWorshipKit
+        run: swift run Checks
+
   e2e-desktop:
     runs-on: ubuntu-latest
     timeout-minutes: 20
