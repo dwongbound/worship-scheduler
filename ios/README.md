@@ -95,12 +95,22 @@ App Transport Security refuses plain http, and this app carries no exception.
 | Sign in | `SignInView` — the two fields, keyboard Next/Go, errors inline |
 | My Sets | `MySetsView` — upcoming sets, "Needs your answer" first; swipe right to confirm; a set's page has Confirm · Request cover (with a note) · Cancel cover, the web's three buttons |
 | Join | `JoinOrgView` — a new Apple/Google account enters its org key |
+| Approvals (admins) | `ApprovalsView` — covers and swaps waiting on an admin; swipe right to approve, left to reject (asks first); a row's page has both as buttons. The tab carries a count badge |
+| Team (admins) | `TeamView` — searchable, sectioned by team, people on no team last; a person's page has Org admin, Musical director, and per team: on/off, Scheduled automatically (the `active` flag), and their roles from that team's catalog. Every switch saves as it's flipped and springs back if refused. Remove from Org asks first. Your own admin switch and Remove are disabled |
 | Account | `AccountView` — who's signed in, a link to /profile on the web, Sign out, Delete account |
+
+The two admin tabs show only for someone who is an admin of some org, and
+share one org picker (top right, hidden with a single org) since they send
+the `x-org-id` header the admin routes read. The web's **Create** tab stays on
+the web on purpose: generating a schedule is a big-screen job, and the web
+already refuses its review workspace at phone widths (`lib/layout.ts`
+`PREVIEW_MIN_WIDTH`).
 
 The logic behind them lives in `TapWorshipKit` and is checked: `APIClient`
 (every request is built by a pure `makeRequest`, every status read by a pure
-`check`), `MobileSession`, and `MySets` (grouping, which buttons a status
-offers, the web's status words). 78 checks; CI runs them on Linux in the
+`check`), `MobileSession`, `MySets` (grouping, which buttons a status
+offers, the web's status words) and `Admin` (approval decoding, team search
+and sections, the PATCH body carrying only what changed). 95 checks; CI runs them on Linux in the
 `ios-kit` job.
 
 **Not yet compiled:** the SwiftUI views in `App/` need Xcode, and nothing in

@@ -34,13 +34,31 @@ struct RootView: View {
   }
 }
 
+/// Admins get Approvals and Team between their own tabs. The web's Create
+/// tab stays on the web: generating a schedule is a big-screen job, and the
+/// web refuses its review workspace at phone widths too.
 struct MainTabView: View {
+  @Environment(AppModel.self) private var model
+
   var body: some View {
     TabView {
       MySetsView()
         .tabItem { Label("My Sets", systemImage: "music.note.list") }
+      if model.isAdminAnywhere {
+        ApprovalsView()
+          .tabItem { Label("Approvals", systemImage: "checkmark.seal") }
+          .badge(model.pendingApprovals)
+        TeamView()
+          .tabItem { Label("Team", systemImage: "person.3") }
+      }
       AccountView()
         .tabItem { Label("Account", systemImage: "person.crop.circle") }
     }
+    .task { await model.refreshAdminOrgs() }
   }
+}
+
+#Preview("Tabs · admin") {
+  MainTabView()
+    .environment(AppModel.adminPreview())
 }

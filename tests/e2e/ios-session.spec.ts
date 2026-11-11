@@ -67,3 +67,45 @@ test("/api/mobile/session/social refuses what it can't verify", async ({ playwri
   expect((await google.json()).token).toBeUndefined();
   await api.dispose();
 });
+
+// The app's admin tabs: the same routes the web's Approvals and Team tabs
+// use, reached with a bearer token and the org named in `x-org-id`.
+test("an admin's bearer token reaches the admin routes for their org only", async ({
+  playwright,
+  baseURL,
+}) => {
+  const api = await playwright.request.newContext({ baseURL });
+  const tokenFor = async (username: string) => {
+    const res = await api.post("/api/mobile/session", { data: { username, password: "password123" } });
+    expect(res.status()).toBe(200);
+    return (await res.json()).token as string;
+  };
+  const admin = { Authorization: `Bearer ${await tokenFor("admin")}` };
+  const member = { Authorization: `Bearer ${await tokenFor("bob")}` };
+
+  // /api/me names the orgs the app's picker shows.
+  const me = await (await api.get("/api/me", { headers: admin })).json();
+  const adminOrg = me.memberships.find((m: { isAdmin: boolean }) => m.isAdmin);
+  expect(adminOrg?.orgName).toBeTruthy();
+  const org = { "x-org-id": adminOrg.orgId };
+
+  const approvals = await api.get("/api/admin/approvals", { headers: { ...admin, ...org } });
+  expect(approvals.status()).toBe(200);
+  expect(Array.isArray(await approvals.json())).toBe(true);
+
+  const users = await api.get("/api/admin/users", { headers: { ...admin, ...org } });
+  expect(users.status()).toBe(200);
+  const people = await users.json();
+  const bob = people.find((u: { username: string }) => u.username === "bob");
+  expect(bob).toBeTruthy();
+  expect(Array.isArray(bob.teams)).toBe(true);
+
+  const teams = await api.get(`/api/teams?orgId=${adminOrg.orgId}`, { headers: admin });
+  expect(teams.status()).toBe(200);
+  expect((await teams.json()).every((t: { roles: unknown[] }) => Array.isArray(t.roles))).toBe(true);
+
+  // A member's token, or no org named, gets nothing.
+  expect((await api.get("/api/admin/users", { headers: { ...member, ...org } })).status()).toBe(403);
+  expect((await api.get("/api/admin/users", { headers: admin })).status()).toBe(403);
+  await api.dispose();
+});

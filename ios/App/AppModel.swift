@@ -81,6 +81,51 @@ final class AppModel {
   func signOut() {
     store.clear()
     session = nil
+    adminOrgs = nil
+    adminOrgID = nil
+    pendingApprovals = 0
+  }
+
+  // MARK: Admin
+
+  /// The orgs I administer, by name, from GET /api/me. nil until loaded; the
+  /// token's own `isAdmin` hints decide the tabs until then, so they don't
+  /// pop in a beat after launch.
+  private(set) var adminOrgs: [ApiMyOrg]?
+  /// Which org the admin tabs are looking at. Shared, so switching on one
+  /// tab switches the other — two tabs on two orgs would read as a bug.
+  var adminOrgID: String?
+  /// The Approvals tab's badge.
+  var pendingApprovals = 0
+
+  var isAdminAnywhere: Bool {
+    if let adminOrgs { return !adminOrgs.isEmpty }
+    return session?.user.memberships.contains(where: \.isAdmin) ?? false
+  }
+
+  var adminOrg: ApiMyOrg? { adminOrgs?.first { $0.orgId == adminOrgID } }
+
+  /// The org an admin screen should load, fetching the list first if this
+  /// is the first admin screen to ask.
+  func currentAdminOrgID() async -> String? {
+    if adminOrgs == nil { await refreshAdminOrgs() }
+    return adminOrgID
+  }
+
+  /// Refreshes the org list. A failure keeps what we had: the admin tabs
+  /// show their own errors when their own loads fail.
+  func refreshAdminOrgs() async {
+    do {
+      let orgs = try await api.me().adminOrgs
+      adminOrgs = orgs
+      if !orgs.contains(where: { $0.orgId == adminOrgID }) { adminOrgID = orgs.first?.orgId }
+      // The tab's badge, before anyone opens the tab.
+      if let orgId = adminOrgID {
+        pendingApprovals = (try? await api.approvals(orgId: orgId).count) ?? pendingApprovals
+      }
+    } catch {
+      _ = handle(error)
+    }
   }
 
   /// Every screen routes its errors through here. Returns the words to show,

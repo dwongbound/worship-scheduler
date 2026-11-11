@@ -257,6 +257,72 @@ do {
   print("  ✗ delete request threw: \(error)")
 }
 
+section("admin: approvals, team")
+let approvalsJSON = """
+[
+  {"kind":"swap","id":"p1","role":"BASS","reason":"Away","createdAt":"2026-11-01T00:00:00.000Z",
+   "requester":{"id":"u1","name":"Ana"},"recipient":{"id":"u2","name":"Ben"},
+   "receive":{"id":"s1","label":null,"startsAt":"2026-11-22T17:00:00.000Z"},
+   "giveUp":{"id":"s2","label":"Youth","startsAt":"2026-11-15T17:00:00.000Z"}},
+  {"kind":"cover","id":"a9","role":"KEYS","reason":null,"createdAt":"2026-11-02T00:00:00.000Z",
+   "taker":{"id":"u3","name":"Cy"},"originalOwner":null,
+   "set":{"id":"s3","label":null,"startsAt":"2026-11-29T17:00:00.000Z"}}
+]
+"""
+do {
+  let items = try decoder.decode([ApiApproval].self, from: Data(approvalsJSON.utf8))
+  check("decodes both kinds", items.map(\.kind) == ["swap", "cover"])
+  check("swap's first date is the earlier set", ISO8601DateFormatter().string(from: items[0].firstDate) == "2026-11-15T17:00:00Z")
+  check("swap summary", items[0].summary.hasPrefix("Ana and Ben are trading"))
+  check("cover with no owner reads as someone", items[1].summary.hasPrefix("Cy is covering someone on"))
+  check("approval id", items[1].id == "a9")
+} catch {
+  failures += 1
+  print("  ✗ approvals threw: \(error)")
+}
+check("an unknown kind is refused",
+      (try? decoder.decode([ApiApproval].self, from: Data(#"[{"kind":"trade","id":"x","role":"BASS"}]"#.utf8))) == nil)
+
+let meJSON = #"{"name":"Dee","email":null,"hasPassword":true,"memberships":[{"orgId":"o2","orgName":"zion","isAdmin":true},{"orgId":"o1","orgName":"Grace","isAdmin":true},{"orgId":"o3","orgName":"Hope","isAdmin":false}]}"#
+if let me = try? decoder.decode(ApiMe.self, from: Data(meJSON.utf8)) {
+  check("adminOrgs drops non-admin orgs and sorts by name", me.adminOrgs.map(\.orgId) == ["o1", "o2"])
+} else {
+  failures += 1
+  print("  ✗ ApiMe didn't decode")
+}
+
+let band = ApiOrgTeam(id: "t1", name: "Band", orgId: "o1", roles: [])
+let youth = ApiOrgTeam(id: "t2", name: "Youth", orgId: "o1", roles: [])
+let people = [
+  ApiAdminUser(id: "u1", name: "José Ruiz", username: "jose", isMD: false, isAdmin: false,
+               teams: [ApiMemberTeam(id: "t1", name: "Band", roles: ["BASS"], active: false)]),
+  ApiAdminUser(id: "u2", name: "Kim", username: "kimk", isMD: true, isAdmin: true,
+               teams: [ApiMemberTeam(id: "t1", name: "Band", roles: ["KEYS"], active: true),
+                       ApiMemberTeam(id: "t2", name: "Youth", roles: [], active: true)]),
+  ApiAdminUser(id: "u3", name: "Lee", username: "lee", isMD: false, isAdmin: false, teams: []),
+]
+check("search ignores accents and case", TeamList.filter(people, query: " jose ").map(\.id) == ["u1"])
+check("search matches username", TeamList.filter(people, query: "KIMK").map(\.id) == ["u2"])
+check("blank search is everyone", TeamList.filter(people, query: "  ").count == 3)
+let sections = TeamList.byTeam(people, teams: [band, youth])
+check("sections by team, teamless last", sections.map(\.title) == ["Band", "Youth", "On no team"])
+check("someone on two teams shows in both", sections[0].members.count == 2 && sections[1].members.map(\.id) == ["u2"])
+check("empty teams are dropped", TeamList.byTeam([people[2]], teams: [band]).map(\.title) == ["On no team"])
+check("inactive everywhere", people[0].isInactiveEverywhere && !people[1].isInactiveEverywhere && !people[2].isInactiveEverywhere)
+
+do {
+  let patch = MemberPatch(teamActive: [.init(teamId: "t1", active: false)])
+  let req = try signedIn.makeRequest("PATCH", "/api/admin/users/u1", body: patch, orgId: "o1")
+  let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+  check("patch sends only what changed", body.contains("teamActive") && !body.contains("isAdmin") && !body.contains("teamIds"))
+  check("admin calls name their org", req.value(forHTTPHeaderField: "x-org-id") == "o1")
+  let plain = try signedIn.makeRequest("GET", "/api/assignments")
+  check("other calls carry no org header", plain.value(forHTTPHeaderField: "x-org-id") == nil)
+} catch {
+  failures += 1
+  print("  ✗ admin request threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

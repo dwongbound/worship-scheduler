@@ -70,6 +70,12 @@ public struct ApiUserRef: Codable, Hashable, Identifiable, Sendable {
   public let name: String
   /// Musical director — global to the person, like their instruments.
   public let isMD: Bool?
+
+  public init(id: String, name: String, isMD: Bool? = nil) {
+    self.id = id
+    self.name = name
+    self.isMD = isMD
+  }
 }
 
 public struct ApiAssignment: Codable, Hashable, Identifiable, Sendable {

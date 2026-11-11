@@ -119,7 +119,8 @@ public struct APIClient: Sendable {
     _ method: String,
     _ path: String,
     body: (any Encodable)? = nil,
-    authorized: Bool = true
+    authorized: Bool = true,
+    orgId: String? = nil
   ) throws -> URLRequest {
     guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
       throw APIError.network("Bad path: \(path)")
@@ -131,25 +132,28 @@ public struct APIClient: Sendable {
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.httpBody = try TapWorship.makeEncoder().encode(body)
     }
+    // Admin routes name their org in a header (lib/org.ts requireOrgAdmin).
+    if let orgId { request.setValue(orgId, forHTTPHeaderField: "x-org-id") }
     if authorized, let token = token() {
       request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
     }
     return request
   }
 
-  private struct Ignored: Decodable {}
+  struct Ignored: Decodable {}
   private struct ServerError: Decodable {
     let error: String?
     let nameConflicts: [ExistingAccount]?
   }
 
-  private func send<T: Decodable>(
+  func send<T: Decodable>(
     _ method: String,
     _ path: String,
     body: (any Encodable)? = nil,
-    authorized: Bool = true
+    authorized: Bool = true,
+    orgId: String? = nil
   ) async throws -> T {
-    let request = try makeRequest(method, path, body: body, authorized: authorized)
+    let request = try makeRequest(method, path, body: body, authorized: authorized, orgId: orgId)
     let data: Data
     let response: URLResponse
     do {
