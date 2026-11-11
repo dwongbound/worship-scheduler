@@ -63,9 +63,23 @@ first and that header second — so every existing route serves the app with no
 change, and a deleted account is signed out on both. It lasts 30 days, the
 web session's own lifetime; signing out is the app forgetting it.
 
-Who can't sign in here yet: accounts made with **Google** have no password.
-The sign-in screen tells them to set one on the web. Offering Google on iOS
-would also oblige Sign in with Apple (App Store rule 4.8).
+**Sign in with Apple and Google** go through `POST /api/mobile/session/social`
+with the provider's ID token, which the server verifies before believing
+(`lib/socialToken.ts`). Either can create an account, which then lands on
+`JoinOrgView` for an org key. Google runs without Google's SDK: the system web
+sign-in sheet doing the authorization-code flow with PKCE (`GoogleSignIn.swift`,
+rules in `TapWorshipKit` `GoogleOAuth`). Both offered side by side, Apple
+first and the same size, is what App Store rule 4.8 asks for.
+
+To switch them on: tick Sign in with Apple on the bundle id in the Apple
+Developer portal and set `APPLE_BUNDLE_ID` on the server; create an **iOS**
+OAuth client in Google Cloud, put its id in `App/AppConfig.swift`
+(`googleIOSClientID`) and in `GOOGLE_IOS_CLIENT_ID` on the server. Until then
+the Apple button answers "isn't set up yet" and the Google button is hidden.
+
+**Deleting an account** (App Store rule 5.1.1(v)) is Account → Delete account:
+a sheet that says it can't be undone, lists what goes, and arms only once
+DELETE is typed. The web has the same on /profile; both call `DELETE /api/me`.
 
 ## Pointing a build at staging
 
@@ -80,12 +94,13 @@ App Transport Security refuses plain http, and this app carries no exception.
 |---|---|
 | Sign in | `SignInView` — the two fields, keyboard Next/Go, errors inline |
 | My Sets | `MySetsView` — upcoming sets, "Needs your answer" first; swipe right to confirm; a set's page has Confirm · Request cover (with a note) · Cancel cover, the web's three buttons |
-| Account | `AccountView` — who's signed in, a link to /profile on the web, Sign out |
+| Join | `JoinOrgView` — a new Apple/Google account enters its org key |
+| Account | `AccountView` — who's signed in, a link to /profile on the web, Sign out, Delete account |
 
 The logic behind them lives in `TapWorshipKit` and is checked: `APIClient`
 (every request is built by a pure `makeRequest`, every status read by a pure
 `check`), `MobileSession`, and `MySets` (grouping, which buttons a status
-offers, the web's status words). 61 checks; CI runs them on Linux in the
+offers, the web's status words). 78 checks; CI runs them on Linux in the
 `ios-kit` job.
 
 **Not yet compiled:** the SwiftUI views in `App/` need Xcode, and nothing in
@@ -96,8 +111,6 @@ before trusting them.
 ## Next
 
 - The calendar (`GET /api/sets`), then availability.
-- **Account deletion inside the app** — App Store rule 5.1.1(v) requires it
-  for any app with accounts, and the web has no self-serve delete yet either.
 - A rate limit on sign-in. Neither door (the web form or this route) has one.
 - The scheduling port (`lib/scheduler.ts` runs in the BROWSER today for staged
   auto-fill). Moving it server-side would serve both clients; decide before

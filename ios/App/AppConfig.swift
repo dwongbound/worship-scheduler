@@ -10,6 +10,13 @@ import Foundation
 enum AppConfig {
   static let productionURL = URL(string: "https://tapworship.com")!
 
+  /// The iOS OAuth client from Google Cloud (Credentials → Create OAuth
+  /// client ID → iOS, with this app's bundle id), e.g.
+  /// `123-abc.apps.googleusercontent.com`. Not a secret: it ships in every
+  /// copy of the app. The server must list the same id in
+  /// `GOOGLE_IOS_CLIENT_ID`. Nil hides the Google button.
+  static let googleIOSClientID: String? = nil
+
   static var baseURL: URL {
     #if DEBUG
     if let raw = ProcessInfo.processInfo.environment["TAPWORSHIP_API_URL"],

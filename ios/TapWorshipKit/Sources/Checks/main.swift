@@ -221,6 +221,42 @@ check("the team's own label wins", RoleLabels.label(for: "KEYS", in: [
 ]) == "Piano")
 check("PATCH body uses the server's action names", AssignmentAction.requestSwap.rawValue == "requestSwap")
 
+// ── Google, Apple, deletion ─────────────────────────────────────────────
+section("Google OAuth (PKCE)")
+let gid = "123-abc.apps.googleusercontent.com"
+check("redirect scheme is the reversed client id", GoogleOAuth.redirectScheme(clientID: gid) == "com.googleusercontent.apps.123-abc")
+check("redirect uri", GoogleOAuth.redirectURI(clientID: gid) == "com.googleusercontent.apps.123-abc:/oauthredirect")
+let authURL = GoogleOAuth.authorizationURL(clientID: gid, codeChallenge: "chal", state: "st8")
+let authItems = URLComponents(url: authURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+func item(_ n: String) -> String? { authItems.first { $0.name == n }?.value }
+check("auth url host", authURL.host == "accounts.google.com")
+check("S256 challenge", item("code_challenge_method") == "S256" && item("code_challenge") == "chal")
+check("asks for openid + email", item("scope") == "openid email profile")
+check("carries state", item("state") == "st8")
+let cb = URL(string: "com.googleusercontent.apps.123-abc:/oauthredirect?state=st8&code=4/0Ab+x")!
+check("reads the code", GoogleOAuth.readCallback(cb, expectedState: "st8") == .code("4/0Ab+x"))
+check("wrong state is refused", GoogleOAuth.readCallback(cb, expectedState: "other") == .failed)
+check("access_denied is a cancel", GoogleOAuth.readCallback(URL(string: "x:/r?error=access_denied")!, expectedState: "st8") == .cancelled)
+let form = String(decoding: GoogleOAuth.tokenRequestBody(clientID: gid, code: "4/0Ab+x", codeVerifier: "v"), as: UTF8.self)
+check("token body escapes +", form.contains("code=4/0Ab%2Bx"))
+check("token body has the verifier, no secret", form.contains("code_verifier=v") && !form.contains("secret"))
+check("base64url drops padding and swaps alphabet", GoogleOAuth.base64URL(Data([0xfb, 0xff])) == "-_8")
+
+section("social sign-in + deletion")
+check("409 with nameConflicts is its own error",
+      thrown(409, #"{"error":"exists","nameConflicts":[{"name":"Sam R","email":"sam@x.com"}]}"#, authorized: false)
+        == .nameConflicts([ExistingAccount(name: "Sam R", email: "sam@x.com")]))
+check("a plain 409 stays a server error", thrown(409, #"{"error":"Only admin"}"#) == .server(status: 409, message: "Only admin"))
+check("deletion phrase", AccountDeletion.matches(" DELETE ") && !AccountDeletion.matches("delete"))
+do {
+  let del = try signedIn.makeRequest("DELETE", "/api/me", body: ["confirm": AccountDeletion.phrase])
+  check("delete sends the phrase", String(decoding: del.httpBody ?? Data(), as: UTF8.self).contains("DELETE"))
+  check("delete is authorized", del.value(forHTTPHeaderField: "Authorization") == "Bearer tok123")
+} catch {
+  failures += 1
+  print("  ✗ delete request threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

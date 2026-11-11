@@ -18,13 +18,19 @@ struct RootView: View {
 
   var body: some View {
     Group {
-      if model.session != nil {
-        MainTabView()
-      } else {
+      switch model.session {
+      case nil:
         SignInView()
+          .transition(.opacity)
+      case let session? where session.user.hasNoOrg:
+        JoinOrgView()
+          .transition(.opacity)
+      case _?:
+        MainTabView()
+          .transition(.opacity)
       }
     }
-    .animation(.default, value: model.session == nil)
+    .animation(.smooth, value: model.session?.user.memberships.count ?? -1)
   }
 }
 

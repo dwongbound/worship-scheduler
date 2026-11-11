@@ -50,3 +50,20 @@ test("/api/mobile/session refuses a bad password and missing fields", async ({
   expect(empty.status()).toBe(400);
   await api.dispose();
 });
+
+test("/api/mobile/session/social refuses what it can't verify", async ({ playwright, baseURL }) => {
+  const api = await playwright.request.newContext({ baseURL });
+  // Missing fields, or a provider that isn't ours.
+  expect((await api.post("/api/mobile/session/social", { data: {} })).status()).toBe(400);
+  expect(
+    (await api.post("/api/mobile/session/social", { data: { provider: "facebook", idToken: "x" } })).status()
+  ).toBe(400);
+  // The test env configures neither provider, so even a well-formed request
+  // is turned away before any token is read — never signed in.
+  const google = await api.post("/api/mobile/session/social", {
+    data: { provider: "google", idToken: "eyJ.not.real" },
+  });
+  expect(google.status()).toBe(503);
+  expect((await google.json()).token).toBeUndefined();
+  await api.dispose();
+});

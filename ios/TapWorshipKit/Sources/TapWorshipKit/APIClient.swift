@@ -20,6 +20,9 @@ public enum APIError: Error, Equatable, Sendable {
   /// An answer arrived that doesn't match the shapes in Models.swift — a bug,
   /// on one side or the other.
   case decoding(String)
+  /// A new Google/Apple sign-in whose name matches someone already here —
+  /// most likely the same person on another address. Ask before going on.
+  case nameConflicts([ExistingAccount])
 
   /// Words for a person, not a developer.
   public var message: String {
@@ -29,6 +32,7 @@ public enum APIError: Error, Equatable, Sendable {
     case .server: "Something went wrong on our end. Try again in a moment."
     case .network: "Can't reach TapWorship. Check your connection and try again."
     case .decoding: "TapWorship sent something this version of the app doesn't understand. Updating the app may fix it."
+    case .nameConflicts: "An account with that name already exists."
     }
   }
 }
@@ -56,6 +60,42 @@ public struct APIClient: Sendable {
   public func signIn(username: String, password: String) async throws -> MobileSession {
     struct Body: Encodable { let username: String; let password: String }
     return try await send("POST", "/api/mobile/session", body: Body(username: username, password: password), authorized: false)
+  }
+
+  /// Google or Apple: the provider's ID token, checked by the server.
+  /// `name` matters only for Apple, which shows it to the app once and never
+  /// puts it in the token.
+  public func socialSignIn(
+    provider: SocialProvider,
+    idToken: String,
+    name: String? = nil,
+    allowDuplicateName: Bool = false
+  ) async throws -> MobileSession {
+    struct Body: Encodable {
+      let provider: SocialProvider
+      let idToken: String
+      let name: String?
+      let allowDuplicateName: Bool
+    }
+    return try await send(
+      "POST",
+      "/api/mobile/session/social",
+      body: Body(provider: provider, idToken: idToken, name: name, allowDuplicateName: allowDuplicateName),
+      authorized: false
+    )
+  }
+
+  /// Redeem an org key — the web's /join.
+  public func joinOrg(key: String) async throws -> ApiOrgRef {
+    struct Body: Encodable { let key: String }
+    return try await send("POST", "/api/orgs/join", body: Body(key: key))
+  }
+
+  /// Delete my account for good. `confirm` must be `AccountDeletion.phrase`;
+  /// the server checks it too.
+  public func deleteAccount(confirm: String) async throws {
+    struct Body: Encodable { let confirm: String }
+    let _: Ignored = try await send("DELETE", "/api/me", body: Body(confirm: confirm))
   }
 
   /// My upcoming seats, soonest first.
@@ -98,7 +138,10 @@ public struct APIClient: Sendable {
   }
 
   private struct Ignored: Decodable {}
-  private struct ServerError: Decodable { let error: String? }
+  private struct ServerError: Decodable {
+    let error: String?
+    let nameConflicts: [ExistingAccount]?
+  }
 
   private func send<T: Decodable>(
     _ method: String,
@@ -128,8 +171,12 @@ public struct APIClient: Sendable {
   /// password, not an expired session, so it keeps the server's words.
   public static func check(status: Int, data: Data, authorized: Bool = true) throws {
     if (200..<300).contains(status) { return }
-    let message = (try? JSONDecoder().decode(ServerError.self, from: data))?.error
+    let parsed = try? JSONDecoder().decode(ServerError.self, from: data)
+    let message = parsed?.error
     if status == 401 && authorized { throw APIError.unauthorized }
+    if status == 409, let conflicts = parsed?.nameConflicts, !conflicts.isEmpty {
+      throw APIError.nameConflicts(conflicts)
+    }
     throw APIError.server(status: status, message: message)
   }
 }

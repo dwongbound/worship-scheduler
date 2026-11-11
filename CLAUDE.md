@@ -322,6 +322,15 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   web form's own check, shared) → a bearer token that IS a NextAuth JWT
   (`lib/mobileToken.ts`). `getSessionUser` reads the cookie, then the
   `Authorization: Bearer` header, so every route serves the app unchanged.
+  `mobile/session/social` (POST) is Google/Apple from the app: the provider's
+  ID token is VERIFIED first (`lib/socialToken.ts` — JWKS signature, issuer,
+  audience = `GOOGLE_IOS_CLIENT_ID` / `APPLE_BUNDLE_ID`), then
+  `lib/socialSignIn.ts` picks the account: Apple by `User.appleSub`, either by
+  verified email (claiming a placeholder), else a NEW account — after one 409
+  `nameConflicts`, like the web's Google path. `me` DELETE deletes my own
+  account (`lib/accountDeletion.ts`: body must carry `confirm: "DELETE"`;
+  refused while I'm an org's only admin and others remain; disconnects any org
+  Google Calendar connected with my account; then the User cascade).
 - Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
   list row has — what a `?set=` deep link resolves through), `assignments`,
   `assignments/[id]`, `assignments/confirm-all`.
@@ -855,6 +864,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   followed while signed out still opens that set afterwards.
 - `auth.ts` — `authOptions`, `getSessionUser()` (cookie, then bearer),
   `verifyCredentials()` (the ONE username/password check, both doors).
+- `accountDeletion.ts` — `DELETE_CONFIRM_PHRASE`, `confirmationMatches`,
+  `strandedOrgs` (sole admin of an org with others = refused). ✅tested
+  `components/DeleteAccount.tsx` is /profile's last card + its modal.
+- `socialToken.ts` / `socialSignIn.ts` — the app's Google/Apple sign-in. ✅tested
 - `mobileToken.ts` — the iOS app's bearer token: `parseBearer`,
   `mintMobileToken`/`readMobileToken` (NextAuth `encode`/`decode`, same secret,
   claims and 30-day life as a web session — no token table). ✅tested

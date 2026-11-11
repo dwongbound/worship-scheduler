@@ -159,6 +159,8 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SEED_ADMIN_USERNAME` / `_PASSWORD` | used by `npm run db:seed` | — (don't seed) | — (**never** seed prod) |
 | `SLACK_DRY_RUN` | `1` (log, never send) | `1` (optional) | unset (send for real) |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² (also offers Google Calendar⁷) |
+| `GOOGLE_IOS_CLIENT_ID` | optional⁸ | optional⁸ | set to offer Google sign-in in the iOS app⁸ |
+| `APPLE_BUNDLE_ID` | optional⁸ | optional⁸ | the iOS app's bundle id, to offer Sign in with Apple⁸ |
 | `GOOGLE_CALENDAR_REDIRECT_URI` | only if not `<NEXTAUTH_URL>/api/google-calendar/callback`⁷ | unset | unset |
 | `GOOGLE_CALENDAR_WEBHOOK_URL` | your HTTPS tunnel's `…/api/google-calendar/webhook`⁷ | unset | unset |
 | `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
@@ -209,6 +211,16 @@ Calendar*); its refresh token is stored encrypted on the `Org` row. Redirect
 URI: `…/api/google-calendar/callback`. RSVPs come back through Google's push
 channel at `…/api/google-calendar/webhook`, which must be public HTTPS, so on
 `localhost` set `GOOGLE_CALENDAR_WEBHOOK_URL` to a tunnel (or skip write-back).
+
+⁸ **iOS app sign-in** (`ios/`, `POST /api/mobile/session/social`). The app
+sends the provider's ID token and the server checks it is addressed to OUR
+app, so each needs that app's identity here. `GOOGLE_IOS_CLIENT_ID` is the
+**iOS** OAuth client (Google Cloud → Credentials → Create OAuth client ID →
+iOS, with the app's bundle id; a different client from the web's
+`GOOGLE_CLIENT_ID`), and the same id goes in `ios/App/AppConfig.swift`.
+`APPLE_BUNDLE_ID` is the app's bundle id, with Sign in with Apple ticked on it
+in the Apple Developer portal. Comma-separate several (a debug and a release
+build). Unset = that button's requests are refused with a 503.
 
 ### Deploying (Vercel + Neon, free tier)
 

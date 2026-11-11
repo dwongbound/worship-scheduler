@@ -39,6 +39,45 @@ final class AppModel {
     self.session = session
   }
 
+  /// Google or Apple. A `nameConflicts` error comes back to the caller, which
+  /// asks the person and may call again with `allowDuplicateName`.
+  func socialSignIn(
+    _ provider: SocialProvider,
+    idToken: String,
+    name: String? = nil,
+    allowDuplicateName: Bool = false
+  ) async throws {
+    let session = try await api.socialSignIn(
+      provider: provider, idToken: idToken, name: name, allowDuplicateName: allowDuplicateName
+    )
+    store.save(session)
+    self.session = session
+  }
+
+  /// Redeem an org key. The token's memberships are only hints, so the new
+  /// one is added to the saved session here rather than minting a new token.
+  func joinOrg(key: String) async throws {
+    let org = try await api.joinOrg(key: key)
+    guard let current = session else { return }
+    var memberships = current.user.memberships
+    if !memberships.contains(where: { $0.orgId == org.id }) {
+      memberships.append(SessionMembership(orgId: org.id, isAdmin: false))
+    }
+    let updated = MobileSession(
+      token: current.token,
+      expiresAt: current.expiresAt,
+      user: SessionUser(id: current.user.id, name: current.user.name, email: current.user.email, memberships: memberships)
+    )
+    store.save(updated)
+    session = updated
+  }
+
+  /// Gone for good. Signs out only once the server has said yes.
+  func deleteAccount(confirm: String) async throws {
+    try await api.deleteAccount(confirm: confirm)
+    signOut()
+  }
+
   func signOut() {
     store.clear()
     session = nil
