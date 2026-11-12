@@ -58,6 +58,9 @@ export default function SlotCapacityEditor({
           </span>
           <input
             type="number"
+            // The digit pad on a phone: these are small counts, retyped
+            // rather than stepped (no spinner arrows, see app/globals.css).
+            inputMode="numeric"
             min={minFor(role.key)}
             max={MAX_SLOTS_PER_ROLE}
             value={value[role.key] ?? 0}

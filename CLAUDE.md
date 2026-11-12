@@ -1054,6 +1054,8 @@ edge. `app/globals.css` drops the native appearance on every date/time input
 `overflow-x-hidden`, so no dialog body can be dragged sideways on a phone.
 `SlotCapacityEditor` rows are a two-track grid (label `1fr`, box a fixed 4rem)
 so the team-shape boxes form two even columns however long a role's name is.
+Number fields have NO spinner arrows anywhere (`app/globals.css`, Dylan
+2026-11-12: people retype the count), pinned by `tests/unit/globalStyles.test.ts`.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 

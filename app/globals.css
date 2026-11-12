@@ -210,3 +210,18 @@ input::-webkit-date-and-time-value {
   text-align: left;
   min-height: 1.5em;
 }
+
+/* Number fields carry no spinner arrows anywhere in the app: every one holds a
+   small count (team shape, lead days, guest seats) that is quicker to retype
+   than to click up to, and on the team-shape grid the arrows ate half of each
+   narrow box. Firefox draws them unless the appearance is textfield; WebKit
+   and Blink draw them as these two pseudo-elements. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
