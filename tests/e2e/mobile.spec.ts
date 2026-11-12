@@ -850,3 +850,56 @@ test("the weekly set time form fits a phone: one row of days, a footer in reach"
   });
   expect(overflowing).toEqual([]);
 });
+
+test("the weekly set time form's times and team shape line up on a phone", async ({
+  page,
+}) => {
+  // On an iPhone the Start/End time boxes ran past the modal's right edge
+  // (iOS draws a native time field wider than its box), which also let the
+  // whole dialog body be dragged sideways. And the team-shape number boxes
+  // were ragged: a long role name ("Worship Leader") squeezed its box, so no
+  // two boxes in a column started at the same x.
+  await login(page, "admin");
+  await gotoReady(page, "/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "Customize team shape" }).click();
+
+  // The time fields sit inside the form's own width, not just the modal's:
+  // they end where the Label field ends.
+  const labelBox = (await modal.getByLabel("Label").boundingBox())!;
+  for (const name of ["Start time", "End time"]) {
+    const box = (await modal.getByLabel(name).boundingBox())!;
+    expect({ name, right: Math.round(box.x + box.width) }).toEqual({
+      name,
+      right: Math.round(labelBox.x + labelBox.width),
+    });
+  }
+
+  // The dialog body never scrolls sideways.
+  const body = modal.locator(".overflow-y-auto").first();
+  expect(
+    await body.evaluate((el) => getComputedStyle(el).overflowX)
+  ).toBe("hidden");
+  expect(
+    await body.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+  ).toBe(true);
+
+  // Team shape: every number box is the same width, and the boxes form two
+  // clean columns — one left edge per column, whatever the label beside it.
+  // (The Slack-channel lead days is a number field too, higher up the form;
+  // it isn't part of the shape, so only boxes below the times count.)
+  const below = (await modal.getByLabel("End time").boundingBox())!;
+  const shape = modal.getByRole("spinbutton");
+  const boxes = [];
+  for (let i = 0; i < (await shape.count()); i++) {
+    const b = (await shape.nth(i).boundingBox())!;
+    if (b.y > below.y + below.height) boxes.push(b);
+  }
+  expect(boxes.length).toBeGreaterThan(3);
+  const widths = new Set(boxes.map((b) => Math.round(b.width)));
+  expect(widths.size).toBe(1);
+  const lefts = new Set(boxes.map((b) => Math.round(b.x)));
+  expect(lefts.size).toBe(2);
+});

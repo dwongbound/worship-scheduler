@@ -1047,6 +1047,13 @@ roles. The **start + end times stack below `sm`** and sit side by side from
 one narrower than its own "09:00 AM"), so two of them in half a phone's width
 ran off the side of the modal. `tests/e2e/mobile.spec.ts` pins the stacking
 and `tablet.spec.ts` the two columns, both asserting nothing overflows.
+Stacking alone wasn't enough on a real iPhone: iOS draws a native time field
+wider than its `width: 100%` box, so the boxes still ran past the modal's
+edge. `app/globals.css` drops the native appearance on every date/time input
+(`appearance: none`, `min-width: 0`, `max-width: 100%`), and the `Modal` body is
+`overflow-x-hidden`, so no dialog body can be dragged sideways on a phone.
+`SlotCapacityEditor` rows are a two-track grid (label `1fr`, box a fixed 4rem)
+so the team-shape boxes form two even columns however long a role's name is.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 
