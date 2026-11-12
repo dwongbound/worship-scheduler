@@ -186,3 +186,27 @@ body {
     flex: 0 0 auto;
   }
 }
+
+/* Native date/time fields on iOS Safari ignore `width: 100%`: with the system
+   appearance they size to their own value plus WebKit's padding, so the set
+   form's Start/End time boxes ran past the modal's right edge on an iPhone
+   (min-w-0 on the wrapping label wasn't enough — the input itself refused to
+   shrink). Dropping the native appearance makes them honour the box like any
+   text field; min-width/max-width keep them inside a flex or grid cell.
+   Unlayered so it beats Tailwind, like the rules above. */
+input[type="time"],
+input[type="date"],
+input[type="datetime-local"],
+input[type="month"],
+input[type="week"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+}
+/* Without the native appearance iOS left-aligns nothing and collapses an EMPTY
+   field to zero height; this keeps the value on the left and one line tall. */
+input::-webkit-date-and-time-value {
+  text-align: left;
+  min-height: 1.5em;
+}

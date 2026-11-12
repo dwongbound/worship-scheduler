@@ -43,13 +43,17 @@ export default function SlotCapacityEditor({
     // A fixed row height, so a two-word role ("Worship Leader") wrapping onto a
     // second line lifts its own box instead of making the whole grid ragged —
     // on a phone, where the columns are narrowest, most of them wrap.
+    // Each row is its own two-track grid — the label takes what's left, the box
+    // a FIXED track — so every box in a column starts at the same x and is the
+    // same width. With flex + justify-between a long label squeezed its box
+    // narrower (and so further right) than its neighbours.
     <div className="grid grid-cols-2 gap-x-4 gap-y-1">
       {slottedRoles(catalog).map((role) => (
         <label
           key={role.key}
-          className="flex min-h-11 items-center justify-between gap-2 text-sm sm:min-h-0"
+          className="grid min-h-11 grid-cols-[minmax(0,1fr)_4rem] items-center gap-2 text-sm sm:min-h-0"
         >
-          <span className="leading-tight text-gray-700 dark:text-gray-300">
+          <span className="min-w-0 break-words leading-tight text-gray-700 dark:text-gray-300">
             {role.label}
           </span>
           <input
@@ -65,7 +69,7 @@ export default function SlotCapacityEditor({
                 : undefined
             }
             onChange={(e) => setRole(role.key, e.target.value)}
-            className="w-16 rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm
+            className="w-16 min-w-0 rounded-lg border border-gray-300 bg-white px-2 py-1 text-sm
               focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
               disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800"
           />
