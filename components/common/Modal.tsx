@@ -256,7 +256,12 @@ export default function Modal({
         {/* overscroll-contain: reaching the end of the body stops there instead
             of handing the swipe to the page behind (the body-overflow lock
             below isn't enough on iOS Safari, which scrolls it anyway). */}
-        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 pb-6 pt-1">
+        {/* overflow-x-hidden: a dialog body only ever scrolls DOWN. A control a
+            hair wider than the panel (iOS draws native time fields wider than
+            their box) otherwise turned the whole body into a sideways-draggable
+            pane on iPhone. Anything that really needs to scroll sideways (the
+            review workspace's ScrollRow) carries its own scroll box. */}
+        <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain px-6 pb-6 pt-1">
           {children}
         </div>
 
