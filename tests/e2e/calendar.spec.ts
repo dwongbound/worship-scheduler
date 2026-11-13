@@ -468,8 +468,13 @@ test("saving a roster sends one request for every seat it changes", async ({
 
   const modal = await openSetByLabel(page, label);
 
-  // Fill the whole roster in one go — several seats, staged locally.
+  // Fill the whole roster in one go — several seats, staged locally. Counted
+  // HERE, before Save: Save commits and closes the modal, so a count read
+  // after it races the close and can see the list already gone (0 seats).
   await modal.getByRole("button", { name: "Auto schedule" }).click();
+  const seats = modal.getByRole("listitem").filter({ hasText: "Pending confirmation" });
+  await expect(seats.first()).toBeVisible();
+  expect(await seats.count()).toBeGreaterThan(1);
 
   // Count only what Save itself sends.
   const rosterCalls: string[] = [];
@@ -480,13 +485,10 @@ test("saving a roster sends one request for every seat it changes", async ({
     }
   });
   await modal.getByRole("button", { name: "Save", exact: true }).click();
+  // The save has landed once the modal has closed.
+  await expect(modal).not.toBeVisible();
 
-  // Several people were seated…
-  const seats = modal.getByRole("listitem").filter({ hasText: "Pending confirmation" });
-  await expect(seats.first()).toBeVisible();
-  expect(await seats.count()).toBeGreaterThan(1);
-
-  // …by exactly one request, whatever the seat count.
+  // All those seats went in by exactly one request, whatever the seat count.
   expect(rosterCalls).toHaveLength(1);
   expect(rosterCalls[0]).toMatch(/^PATCH .*\/roster$/);
 });
