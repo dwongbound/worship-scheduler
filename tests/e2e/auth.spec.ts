@@ -262,6 +262,13 @@ test("the home page is readable signed out, naming TapWorship", async ({ page })
   // two things the review compares.
   await expect(page.getByText("TapWorship", { exact: true }).first()).toBeVisible();
   await expect(page.getByAltText("TapWorship").first()).toBeVisible();
+  // The mark is imported from the 3000px master; without its own width,
+  // next/image asked for a 3840w encode of it for a 36px box, which stalled
+  // this very page's load in CI. Every variant it asks for stays small.
+  const srcset = (await page.getByAltText("TapWorship").first().getAttribute("srcset")) ?? "";
+  const widths = [...srcset.matchAll(/[?&]w=(\d+)/g)].map((m) => Number(m[1]));
+  expect(widths.length).toBeGreaterThan(0);
+  expect(Math.max(...widths)).toBeLessThanOrEqual(256);
   // And a way on to each of the pages a review expects to find linked.
   await expect(page.getByRole("link", { name: "Privacy Policy" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Terms of Service" })).toBeVisible();

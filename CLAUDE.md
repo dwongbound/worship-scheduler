@@ -16,7 +16,10 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
 - Dev (docker): `docker compose --profile dev up` → http://localhost:3000
 - Dev (host): `npm run dev` (loads `env/dev.env`)
 - Unit: `npm run test:unit` (`vitest run`) · watch: `test:unit:watch`
-- E2E: `npm run test:e2e` (needs test db; loads `env/test.env`)
+- E2E: `npm run test:e2e` (needs test db; loads `env/test.env`) — against
+  `next dev`. CI runs it against a PRODUCTION build instead:
+  `npm run e2e:build && E2E_PROD=1 npm run test:e2e` (same locally to
+  reproduce CI; rebuild after changing code)
 - All-in-container: `docker compose --profile test up --abort-on-container-exit`
 - `npm run typecheck` · `db:push` · `db:seed` (WIPES + reseeds) · `db:studio`
 - Seeding is destructive and NEVER automatic — `--profile dev up` doesn't seed,
@@ -315,6 +318,19 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
 
 - Auth: `auth/[...nextauth]`, `auth/allow-duplicate-name` (consent cookie for
   the duplicate-name warning on the Google path), `signup`, `me`.
+  `mobile/session` (POST) is the iOS app's sign-in: `verifyCredentials` (the
+  web form's own check, shared) → a bearer token that IS a NextAuth JWT
+  (`lib/mobileToken.ts`). `getSessionUser` reads the cookie, then the
+  `Authorization: Bearer` header, so every route serves the app unchanged.
+  `mobile/session/social` (POST) is Google/Apple from the app: the provider's
+  ID token is VERIFIED first (`lib/socialToken.ts` — JWKS signature, issuer,
+  audience = `GOOGLE_IOS_CLIENT_ID` / `APPLE_BUNDLE_ID`), then
+  `lib/socialSignIn.ts` picks the account: Apple by `User.appleSub`, either by
+  verified email (claiming a placeholder), else a NEW account — after one 409
+  `nameConflicts`, like the web's Google path. `me` DELETE deletes my own
+  account (`lib/accountDeletion.ts`: body must carry `confirm: "DELETE"`;
+  refused while I'm an org's only admin and others remain; disconnects any org
+  Google Calendar connected with my account; then the User cascade).
 - Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
   list row has — what a `?set=` deep link resolves through), `assignments`,
   `assignments/[id]`, `assignments/confirm-all`.
@@ -660,9 +676,10 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   scrolls, which is what every caller passed `scroll: false` for.
   **The router only does this in a PRODUCTION build** — under `next dev` the
   same `router.replace(pathname)` clears the param and closes the modal. That
-  is why the bug reached prod AND why no test caught it: the e2e suite runs
-  against `next dev` (`npm run e2e:server`), so an e2e assertion about closing
-  a linked set passes on the broken code. So the real guard is a source one —
+  is why the bug reached prod AND why no test caught it: the e2e suite ran
+  against `next dev` back then, so an e2e assertion about closing a linked set
+  passed on the broken code (CI now serves a production build, but a local
+  `npm run test:e2e` is still `next dev`). So the real guard is a source one —
   **`tests/unit/urlParam.test.ts`** reads each param-writing page and fails if
   one navigates to its own pathname through the router. ✅tested
   `/login` had the same defect: its `?nameConflict`/`?conflicts` strip is a
@@ -672,7 +689,8 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   clears `?set=` at all (it rings a row rather than opening a modal, so there
   is nothing to trap). `tests/e2e/set-links.spec.ts` still covers the intended
   behaviour — opening from the grid puts the link in the URL, and a linked set
-  closes — but being a dev-server run it cannot fail on this bug.
+  closes — and in CI, against the production build, it can now fail on this
+  bug too.
 - `publicPaths.ts` — `HOME_PATH`, `isPublicPath`, `isChromelessPath`: WHICH
   PAGES A STRANGER MAY READ (`/`, `/login`, `/privacy`, `/terms`) and which
   render bare (those plus `/join`). Four places used to carry their own copy of
@@ -844,7 +862,15 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   two places that param can't reach: Google's duplicate-name bounce back through
   /login, and the /join gate a brand-new account passes through. So a set link
   followed while signed out still opens that set afterwards.
-- `auth.ts` — `authOptions`, `getSessionUser()`, `getAdminUser()`.
+- `auth.ts` — `authOptions`, `getSessionUser()` (cookie, then bearer),
+  `verifyCredentials()` (the ONE username/password check, both doors).
+- `accountDeletion.ts` — `DELETE_CONFIRM_PHRASE`, `confirmationMatches`,
+  `strandedOrgs` (sole admin of an org with others = refused). ✅tested
+  `components/DeleteAccount.tsx` is /profile's last card + its modal.
+- `socialToken.ts` / `socialSignIn.ts` — the app's Google/Apple sign-in. ✅tested
+- `mobileToken.ts` — the iOS app's bearer token: `parseBearer`,
+  `mintMobileToken`/`readMobileToken` (NextAuth `encode`/`decode`, same secret,
+  claims and 30-day life as a web session — no token table). ✅tested
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
 - `prisma.ts` — singleton client from generated output.
@@ -1021,6 +1047,15 @@ roles. The **start + end times stack below `sm`** and sit side by side from
 one narrower than its own "09:00 AM"), so two of them in half a phone's width
 ran off the side of the modal. `tests/e2e/mobile.spec.ts` pins the stacking
 and `tablet.spec.ts` the two columns, both asserting nothing overflows.
+Stacking alone wasn't enough on a real iPhone: iOS draws a native time field
+wider than its `width: 100%` box, so the boxes still ran past the modal's
+edge. `app/globals.css` drops the native appearance on every date/time input
+(`appearance: none`, `min-width: 0`, `max-width: 100%`), and the `Modal` body is
+`overflow-x-hidden`, so no dialog body can be dragged sideways on a phone.
+`SlotCapacityEditor` rows are a two-track grid (label `1fr`, box a fixed 4rem)
+so the team-shape boxes form two even columns however long a role's name is.
+Number fields have NO spinner arrows anywhere (`app/globals.css`, Dylan
+2026-11-12: people retype the count), pinned by `tests/unit/globalStyles.test.ts`.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 

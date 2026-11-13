@@ -33,6 +33,13 @@ targets:
     dependencies:
       - package: TapWorshipKit
         product: TapWorshipKit
+    # Sign in with Apple. The capability also has to be ticked on this bundle
+    # id in the Apple Developer portal (Identifiers), or signing fails.
+    entitlements:
+      path: App/TapWorship.entitlements
+      properties:
+        com.apple.developer.applesignin:
+          - Default
     settings:
       base:
         # CHANGE THIS before you touch App Store Connect — the bundle id is

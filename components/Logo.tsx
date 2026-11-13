@@ -25,9 +25,16 @@ export default function Logo({
     <Image
       src={logo}
       alt={title}
-      // Intrinsic size comes from the import; the class is what actually sizes
-      // it, so `priority` matters more than dimensions here — this is in the
-      // navbar on every page, and lazy-loading it flashes an empty box.
+      // The class is what sizes it on screen, but these are what next/image
+      // builds its srcset from. Left to the import's intrinsic 3000px, the
+      // srcset was one 3840w variant: every page asked the optimizer to
+      // encode the full master for a 36px box (39 KB where ~4 KB does), and
+      // in CI that encode stalled the page's load event outright. 96 covers
+      // the largest use (h-12 = 48px) at 2x; next/image adds a 2x of its own.
+      width={96}
+      height={96}
+      // `priority` because this is in the navbar on every page, and
+      // lazy-loading it flashes an empty box.
       priority
       className={className}
     />
