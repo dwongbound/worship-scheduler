@@ -903,3 +903,30 @@ test("the weekly set time form's times and team shape line up on a phone", async
   const lefts = new Set(boxes.map((b) => Math.round(b.x)));
   expect(lefts.size).toBe(2);
 });
+
+test("phone profile: the access keys card fits, with full-width 44px controls", async ({ page }) => {
+  // Making a key, its once-only panel and a listed row, all on a phone.
+  await login(page, "tess");
+  await page.goto("/profile");
+  const card = page.getByTestId("access-keys");
+  await card.getByLabel("Name for a new key").fill("Phone e2e");
+  const create = card.getByRole("button", { name: "Create key" });
+  await create.click();
+  await expect(card.getByTestId("new-access-key")).toBeVisible();
+
+  const viewport = page.viewportSize()!;
+  const box = (await card.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+  // The long key wraps instead of pushing the page sideways.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+
+  for (const name of ["Copy key", "Create key", "Revoke"]) {
+    const control = card.getByRole("button", { name, exact: true });
+    expect(Math.round((await control.boundingBox())!.height)).toBeGreaterThanOrEqual(44);
+  }
+
+  // Tidy up so the desktop spec starts from an empty card.
+  const keys = (await (await page.request.get("/api/access-keys")).json()) as { id: string }[];
+  for (const k of keys) await page.request.delete(`/api/access-keys/${k.id}`);
+});

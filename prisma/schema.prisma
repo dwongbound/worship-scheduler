@@ -408,6 +408,8 @@ model User {
   scheduleDrafts  ScheduleDraft[]
   // Sets where this person is the designated musical director.
   mdSets          Set[]             @relation("SetMD")
+  // Personal access keys this person made on /profile (see AccessKey).
+  accessKeys      AccessKey[]
 
   // Daily Slack summary of what needs this person's attention (lib/digest.ts).
   // Opt-out only: the send time is fixed at DIGEST_SEND_MINUTE, so on/off is
@@ -1054,4 +1056,31 @@ model SchedulingRule {
 
   @@index([orgId, position])
   @@map("scheduling_rules")
+}
+
+// A personal access key: lets ONE assistant of this person's own (Jarvis) read
+// what they can already see in the app, through GET /api/agent and the MCP
+// endpoint POST /api/mcp — and, when made with `canWrite`, confirm their sets,
+// ask for and withdraw cover, and take someone else's cover AS them. The key
+// itself is shown once at creation and never stored: only its SHA-256
+// (`keyHash`, see lib/accessKeys.ts). Revoking stamps `revokedAt` and the row
+// stays, so the profile simply stops listing it. Mirrors vff-app's AccessKey.
+model AccessKey {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  /// The person's own label ("Jarvis").
+  name     String
+  keyHash  String  @unique
+  /// May confirm, ask for cover, withdraw that ask and take covers. Off unless
+  /// the person ticked it when making the key; fixed for the key's life.
+  canWrite Boolean @default(false)
+
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("access_keys")
 }
