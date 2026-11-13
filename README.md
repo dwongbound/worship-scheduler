@@ -534,6 +534,30 @@ must reconnect**. First-search-result matching is approximate for worship songs
 with many versions — the playlist is collaborative precisely so the worship
 leader can fix it by hand.
 
+## Personal access keys (Jarvis / MCP)
+
+Anyone can make a **personal access key** on /profile → *Personal access keys*
+so an assistant of their own (Jarvis) can read TapWorship as them. Same design
+as vff-app's keys.
+
+- A key looks like `tw_…`, is shown **once** when made, and only its SHA-256 is
+  stored (`access_keys` table). Up to 5 live keys per person; revoke any time
+  and it stops working on the next request.
+- **Read-only by default.** It reads the person's own upcoming sets (with the
+  roster, songs and practices), the next 30 days of their orgs' sets they can
+  see, covers they could take, and their availability requests. Never anyone's
+  email or availability.
+- Ticking *Also let this key confirm my sets, ask for cover and take covers for
+  me* when making it adds four writing tools. They call the app's own routes
+  (`PATCH /api/assignments/[id]`, `POST /api/swaps/[id]/take`), so ownership,
+  cover eligibility, history and Slack messages are unchanged. A key never
+  reaches an admin route: `getSessionUser` doesn't read keys.
+- Connect it as an MCP server at `https://<host>/api/mcp` with the header
+  `Authorization: Bearer tw_…` (stateless Streamable HTTP, tools only), or read
+  everything in one go from `GET /api/agent`.
+
+No environment variables. The migration is `20261113000000_access_keys`.
+
 ## Timezones
 
 Recurring times ("Monday 7pm") are interpreted in the server's `TZ`
