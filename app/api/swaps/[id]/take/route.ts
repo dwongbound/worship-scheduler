@@ -1,8 +1,10 @@
 // POST /api/swaps/:id/take — take over someone's swap-requested slot.
 // The assignment moves to me already CONFIRMED — taking a cover is itself the
 // commitment, so there's no separate confirm step.
+// Also the door a personal access key made "can act for me" takes a cover
+// through (POST /api/mcp's take_cover), hence getActingUser.
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
+import { getActingUser } from "@/lib/accessKeyAuth";
 import type { Instrument } from "@/lib/constants";
 import { getMyOrgIds } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -10,11 +12,11 @@ import { coverEligibility } from "@/lib/sets";
 import { notifySwapTaken, notifyAdminsPendingApproval } from "@/lib/slack";
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const user = await getSessionUser();
+  const user = await getActingUser(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
