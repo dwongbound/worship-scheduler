@@ -106,6 +106,8 @@ final class AppModel {
     adminOrgs = nil
     adminOrgID = nil
     pendingApprovals = 0
+    swapBadge = 0
+    availabilityBadge = 0
     adminSection = .approvals
   }
 
@@ -127,6 +129,10 @@ final class AppModel {
   var adminOrgID: String?
   /// The Admin tab's badge.
   var pendingApprovals = 0
+  /// My Sets' badge: open covers in a role I play + swap requests to me.
+  var swapBadge = 0
+  /// Availability's badge: requests I still owe an answer to.
+  var availabilityBadge = 0
   /// Which half of the Admin tab is showing.
   var adminSection = AdminSection.approvals
 
@@ -142,6 +148,15 @@ final class AppModel {
   func currentAdminOrgID() async -> String? {
     if adminOrgs == nil { await refreshAdminOrgs() }
     return adminOrgID
+  }
+
+  /// Every tab badge in one request (the web navbar's dots). Quiet on
+  /// failure: a badge is a hint, and each tab shows its own errors.
+  func refreshBadges() async {
+    guard session != nil, let badges = try? await api.notifications(orgId: adminOrgID) else { return }
+    swapBadge = badges.swapCount
+    availabilityBadge = badges.availabilityOwed
+    if adminOrgID != nil { pendingApprovals = badges.approvalCount }
   }
 
   /// Refreshes the org list. A failure keeps what we had: the admin tabs

@@ -41,6 +41,7 @@ struct RootView: View {
 /// workspace at phone widths too.
 struct MainTabView: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.scenePhase) private var scenePhase
   // Opens on My Sets even though Calendar sits first in the bar.
   @State private var selection: AppTab = .mySets
 
@@ -70,9 +71,11 @@ struct MainTabView: View {
         .tag(AppTab.calendar)
       page(MySetsView())
         .tabItem { Label("My Sets", systemImage: "music.note.list") }
+        .badge(model.swapBadge)
         .tag(AppTab.mySets)
       page(AvailabilityView())
         .tabItem { Label("Availability", systemImage: "calendar.badge.clock") }
+        .badge(model.availabilityBadge)
         .tag(AppTab.availability)
       if model.isAdminAnywhere {
         page(AdminView())
@@ -112,7 +115,15 @@ struct MainTabView: View {
     )
     .animation(.snappy, value: pull == 0)
     .sensoryFeedback(.selection, trigger: selection)
-    .task { await model.refreshAdminOrgs() }
+    .task {
+      await model.refreshAdminOrgs()
+      await model.refreshBadges()
+    }
+    // Badges follow what you just did on a tab, and catch up on return.
+    .onChange(of: selection) { Task { await model.refreshBadges() } }
+    .onChange(of: scenePhase) { _, phase in
+      if phase == .active { Task { await model.refreshBadges() } }
+    }
   }
 
   /// One tab's content, moved by the swipe.

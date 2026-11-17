@@ -691,6 +691,20 @@ do {
   check("a refused write never reaches the network", result.error == .readOnly && box.hits == 0)
 }
 
+section("badges")
+do {
+  let json = #"{"swapCount":2,"availability":{"items":[{"request":{"id":"r1"},"needsResponse":true},{"request":{"id":"r2"},"needsResponse":false}],"needsResponse":true},"needsRoles":false,"teamless":[],"approvalCount":3}"#
+  let n = try TapWorship.makeDecoder().decode(ApiNotifications.self, from: Data(json.utf8))
+  check("badges decode", n.swapCount == 2 && n.approvalCount == 3 && !n.needsRoles)
+  check("availability badge counts requests still owed", n.availabilityOwed == 1)
+  let api = APIClient(baseURL: URL(string: "https://tapworship.com")!, token: { "t" })
+  let badgeRequest = try api.makeRequest("GET", "/api/notifications?orgId=o1")
+  check("badge request names the admin org", badgeRequest.url?.query == "orgId=o1")
+} catch {
+  failures += 1
+  print("  ✗ badges threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

@@ -178,6 +178,8 @@ struct MemberDetailView: View {
   @State private var error: String?
   @State private var confirmRemove = false
   @State private var saved = 0
+  @State private var renaming = false
+  @State private var newName = ""
 
   private var user: ApiAdminUser? { users.first { $0.id == userID } }
   private var isMe: Bool { userID == model.session?.user.id }
@@ -187,6 +189,12 @@ struct MemberDetailView: View {
       Form {
         Section {
           LabeledContent("Username", value: user.username)
+          if !model.readOnly {
+            Button("Rename") {
+              newName = user.name
+              renaming = true
+            }
+          }
         } footer: {
           if model.readOnly { Text("Read-only preview: change access, teams and roles on tapworship.com.") }
         }
@@ -226,6 +234,15 @@ struct MemberDetailView: View {
         }
       }
       .sensoryFeedback(.success, trigger: saved)
+      .alert("Rename \(user.name)", isPresented: $renaming) {
+        TextField("Name", text: $newName)
+          .textContentType(.name)
+        Button("Save") { Task { await rename() } }
+          .disabled(ProfileRules.cleanName(newName) == nil)
+        Button("Close", role: .cancel) {}
+      } message: {
+        Text("Their name changes everywhere, in every org they're in.")
+      }
       .confirmationDialog("Remove \(user.name) from this org?", isPresented: $confirmRemove, titleVisibility: .visible) {
         Button("Remove from Org", role: .destructive) { Task { await remove(user) } }
         Button("Close", role: .cancel) {}
@@ -329,6 +346,23 @@ struct MemberDetailView: View {
         }
         self.error = model.handle(error)
       }
+    }
+  }
+
+  private func rename() async {
+    guard let orgId = model.adminOrgID, let name = ProfileRules.cleanName(newName),
+          let index = users.firstIndex(where: { $0.id == userID }), users[index].name != name
+    else { return }
+    saving = true
+    defer { saving = false }
+    do {
+      try await model.api.renameMember(userID, name: name, orgId: orgId)
+      let old = users[index]
+      users[index] = ApiAdminUser(id: old.id, name: name, username: old.username, isMD: old.isMD, isAdmin: old.isAdmin, teams: old.teams)
+      if isMe { model.renameSession(to: name) }
+      saved += 1
+    } catch {
+      self.error = model.handle(error)
     }
   }
 

@@ -125,3 +125,40 @@ extension APIClient {
     let _: Ignored = try await send("PUT", "/api/me", body: update)
   }
 }
+
+// MARK: Badges
+
+/// GET /api/notifications — every navbar reminder in one request, the web's
+/// red dots. The app turns them into tab badges.
+public struct ApiNotifications: Decodable, Equatable, Sendable {
+  public struct Availability: Decodable, Equatable, Sendable {
+    public struct Item: Decodable, Equatable, Sendable {
+      public let needsResponse: Bool
+    }
+    public let items: [Item]
+    public let needsResponse: Bool
+  }
+  /// Open covers in a role I play + swap requests waiting on me.
+  public let swapCount: Int
+  public let availability: Availability
+  /// No role picked on any team yet.
+  public let needsRoles: Bool
+  /// Admins only, for the named org.
+  public let approvalCount: Int
+
+  /// The Availability tab's badge: requests I still owe an answer to.
+  public var availabilityOwed: Int { availability.items.filter(\.needsResponse).count }
+}
+
+extension APIClient {
+  public func notifications(orgId: String?) async throws -> ApiNotifications {
+    let query = orgId.map { "?orgId=\($0.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? $0)" } ?? ""
+    return try await send("GET", "/api/notifications\(query)")
+  }
+
+  /// An admin renames a member (the name is global to the person).
+  public func renameMember(_ userId: String, name: String, orgId: String) async throws {
+    struct Body: Encodable { let name: String }
+    let _: Ignored = try await send("PATCH", "/api/admin/users/\(userId)", body: Body(name: name), orgId: orgId)
+  }
+}
