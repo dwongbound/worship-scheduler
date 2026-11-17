@@ -237,6 +237,7 @@ struct CalendarSetRow: View {
 /// One set in full: when, who's on it and what's still open, the songs, the
 /// notes, the practices.
 struct SetDetailView: View {
+  @Environment(AppModel.self) private var model
   let set: ApiSet?
 
   var body: some View {
@@ -275,24 +276,25 @@ struct SetDetailView: View {
         if let practices = set.practices, !practices.isEmpty {
           Section("Practices") {
             ForEach(practices.sorted { $0.startsAt < $1.startsAt }) { practice in
-              VStack(alignment: .leading, spacing: 2) {
-                Text(practice.startsAt, format: .dateTime.weekday(.wide).month().day())
-                Text("\(practice.startsAt.formatted(date: .omitted, time: .shortened)) – \(practice.endsAt.formatted(date: .omitted, time: .shortened))")
-                  .font(.subheadline)
-                  .foregroundStyle(.secondary)
-              }
-              .accessibilityElement(children: .combine)
+              PracticeRow(setId: set.id, practice: practice)
             }
           }
         }
 
-        if let notes = set.notes, !notes.isEmpty {
-          Section("Notes") { Text(notes) }
-        }
+        SetNotesSection(
+          setId: set.id,
+          currentNotes: set.notes,
+          canPost: SetNotes.canPost(on: set, userId: model.session?.user.id, isOrgAdmin: model.isAdmin(of: set.org?.id))
+        )
       }
       .listStyle(.insetGrouped)
       .navigationTitle(set.label ?? "Set")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .primaryAction) {
+          AddToCalendarButton { CalendarEventDraft(set: set) }
+        }
+      }
     } else {
       ContentUnavailableView("This set is no longer on the calendar", systemImage: "calendar.badge.minus")
     }
@@ -362,4 +364,5 @@ struct RosterRowView: View {
   NavigationStack {
     SetDetailView(set: FullPreviewData.sets.first)
   }
+  .environment(AppModel.fullPreview())
 }

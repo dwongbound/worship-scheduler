@@ -8,6 +8,8 @@ struct AccountView: View {
   @Environment(\.openURL) private var openURL
   @State private var confirmSignOut = false
   @State private var deleting = false
+  @State private var joining = false
+  @State private var joinedName: String?
 
   var body: some View {
     NavigationStack {
@@ -27,6 +29,19 @@ struct AccountView: View {
         } footer: {
           Text("Calendar invites, Slack and your password are managed on the web for now.")
         }
+        Section {
+          Button {
+            joining = true
+          } label: {
+            Label("Join another org", systemImage: "person.badge.key")
+          }
+        } footer: {
+          if let joinedName {
+            Text("You've joined \(joinedName).")
+          } else {
+            Text("Got a key from another church or ministry? Enter it to join their team too.")
+          }
+        }
         if AppConfig.isDevServer {
           Section {
             LabeledContent("Server", value: AppConfig.baseURL.absoluteString)
@@ -38,6 +53,10 @@ struct AccountView: View {
         // minHeight frame here only made these two rows taller than the rest.
         Section {
           Button("Sign out", role: .destructive) { confirmSignOut = true }
+            // On the button, so the dialog points at it rather than the list.
+            .confirmationDialog("Sign out of TapWorship?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+              Button("Sign out", role: .destructive) { model.signOut() }
+            }
         }
         Section {
           Button("Delete account", role: .destructive) { deleting = true }
@@ -47,13 +66,86 @@ struct AccountView: View {
       }
       .listStyle(.insetGrouped)
       .navigationTitle("Account")
-      .confirmationDialog("Sign out of TapWorship?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-        Button("Sign out", role: .destructive) { model.signOut() }
-      }
       .sheet(isPresented: $deleting) {
         DeleteAccountView()
       }
+      .sheet(isPresented: $joining) {
+        JoinAnotherOrgSheet { joinedName = $0 }
+      }
     }
+  }
+}
+
+/// Account → Join another org: the web's /orgs "Add an org…" for someone
+/// who's already in one.
+struct JoinAnotherOrgSheet: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+  let joined: (String) -> Void
+
+  @State private var key = ""
+  @State private var working = false
+  @State private var errorMessage: String?
+  @State private var errorTick = 0
+  @FocusState private var focused: Bool
+
+  private var trimmed: String { key.trimmingCharacters(in: .whitespaces) }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          TextField("Organization key", text: $key)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.join)
+            .focused($focused)
+            .onSubmit { Task { await join() } }
+        } footer: {
+          if let errorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.circle")
+              .foregroundStyle(.red)
+          } else {
+            Text("Ask that team's admin for their organization's key.")
+          }
+        }
+      }
+      .navigationTitle("Join another org")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { dismiss() }.disabled(working)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          if working {
+            ProgressView()
+          } else {
+            Button("Join") { Task { await join() } }.disabled(trimmed.isEmpty)
+          }
+        }
+      }
+      .sensoryFeedback(.error, trigger: errorTick)
+      .onAppear { focused = true }
+    }
+    .presentationDetents([.medium])
+  }
+
+  private func join() async {
+    guard !trimmed.isEmpty, !working else { return }
+    working = true
+    errorMessage = nil
+    do {
+      let org = try await model.joinOrg(key: trimmed)
+      await model.refreshAdminOrgs()
+      joined(org.name)
+      dismiss()
+    } catch {
+      if let message = model.handle(error) {
+        errorMessage = message
+        errorTick += 1
+      }
+    }
+    working = false
   }
 }
 

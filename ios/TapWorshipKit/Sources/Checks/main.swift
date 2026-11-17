@@ -577,6 +577,28 @@ check("not a URL", DevServer.url("localhost:3000") == nil && DevServer.url("ftp:
 check("client id", DevServer.clientID(" 123-abc.apps.googleusercontent.com ") == "123-abc.apps.googleusercontent.com")
 check("an unfilled build setting is no client id", DevServer.clientID("$(GOOGLE_IOS_CLIENT_ID)") == nil && DevServer.clientID("") == nil)
 
+section("set page extras")
+do {
+  let api = APIClient(baseURL: URL(string: "https://tapworship.com")!, token: { "t" })
+  let note = try api.makeRequest("PATCH", "/api/sets/s1", body: ["notes": "Bring cables"])
+  check("a note is a PATCH of the set's notes", note.httpMethod == "PATCH" && note.url?.path == "/api/sets/s1"
+    && String(data: note.httpBody ?? Data(), encoding: .utf8)?.contains("Bring cables") == true)
+  check("blank note isn't sent", SetNotes.ready("  \n ") == nil && SetNotes.ready(" hi ") == "hi")
+  let setJSON = #"{"id":"s1","label":null,"startsAt":"2026-11-01T17:00:00.000Z","durationMinutes":90,"notes":null,"requiresMD":false,"isPrivate":false,"mdUserId":null,"slotCapacities":null,"groupChatLeadDays":null,"teamId":null,"team":null,"org":null,"assignments":[{"id":"a1","role":"WORSHIP_LEADER","status":"PENDING","user":{"id":"u1","name":"Paul"},"guestTeamId":null,"pendingFromUser":null}],"songs":[],"spotifyPlaylistUrl":null,"practices":[],"guestTeams":[]}"#
+  let set = try TapWorship.makeDecoder().decode(ApiSet.self, from: Data(setJSON.utf8))
+  check("the worship leader may post", SetNotes.canPost(on: set, userId: "u1", isOrgAdmin: false))
+  check("someone else may not, an admin may", !SetNotes.canPost(on: set, userId: "u2", isOrgAdmin: false) && SetNotes.canPost(on: set, userId: "u2", isOrgAdmin: true))
+  let avail = try TapWorship.makeDecoder().decode(PracticeAvailability.self, from: Data(#"{"people":[{"userId":"b","name":"Zed","roles":["BASS"],"free":true,"blockedBy":[]},{"userId":"a","name":"Amy","roles":["KEYS"],"free":false,"blockedBy":[{"type":"RECURRING"}]},{"userId":"c","name":"Bo","roles":[],"free":true,"blockedBy":[]}]}"#.utf8))
+  check("practice: free first, then by name", avail.sorted.map(\.name) == ["Bo", "Zed", "Amy"])
+  let log = try TapWorship.makeDecoder().decode([ApiSetHistoryEvent].self, from: Data(#"[{"id":"h1","type":"NOTES_CHANGED","role":null,"detail":"added a note","createdAt":"2026-11-02T10:00:00.000Z","actor":{"id":"u1","name":"Paul"},"targetUser":null,"previousUser":null}]"#.utf8))
+  check("note text from a log line", SetNotes.text(fromDetail: #"added a note: "Bring "the" cables""#) == #"Bring "the" cables"#
+    && SetNotes.text(fromDetail: "cleared the notes") == "cleared the notes")
+  check("note log decodes", log.first?.actor?.name == "Paul" && log.first?.detail == "added a note")
+} catch {
+  failures += 1
+  print("  ✗ set page extras threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

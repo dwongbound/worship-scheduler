@@ -159,6 +159,20 @@ struct MySetsView: View {
                   .tint(.green)
               }
           }
+          // The web's "Confirm all": one tap for every pending seat, offered
+          // once there's more than one to answer.
+          if pendingCount > 1 {
+            Button {
+              Task { await confirmEverything() }
+            } label: {
+              HStack {
+                Label("Confirm all \(pendingCount)", systemImage: "checkmark.circle")
+                Spacer()
+                if busyID == "confirm-all" { ProgressView() }
+              }
+            }
+            .disabled(busyID != nil)
+          }
         } header: {
           Text("Needs your answer")
         } footer: {
@@ -196,6 +210,15 @@ struct MySetsView: View {
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
     }
+  }
+
+  /// Every seat of mine still waiting on a yes.
+  private var pendingCount: Int {
+    groups.reduce(0) { $0 + $1.seats.filter { $0.status == .pending }.count }
+  }
+
+  private func confirmEverything() async {
+    await send("confirm-all") { _ = try await model.api.confirmAll() }
   }
 
   private func confirmAll(_ group: MySets.SetGroup) async {
@@ -303,6 +326,7 @@ struct StatusPill: View {
 
 /// A set's detail: each of my seats on it, with the buttons the web offers.
 struct SetSeatsView: View {
+  @Environment(AppModel.self) private var model
   let groupID: String
   let groups: [MySets.SetGroup]
   let act: (ApiMyAssignment, AssignmentAction, String?) async -> Void
@@ -323,9 +347,6 @@ struct SetSeatsView: View {
           LabeledContent("Date", value: group.set.startsAt.formatted(.dateTime.weekday(.wide).month(.wide).day()))
           LabeledContent("Time", value: "\(group.set.startsAt.formatted(date: .omitted, time: .shortened)) – \(group.set.endsAt.formatted(date: .omitted, time: .shortened))")
           if let org = group.set.org?.name { LabeledContent("Org", value: org) }
-        }
-        if let notes = group.set.notes, !notes.isEmpty {
-          Section("Notes") { Text(notes) }
         }
         ForEach(group.seats) { seat in
           Section {
@@ -387,10 +408,22 @@ struct SetSeatsView: View {
             }
           }
         }
+        // Notes after my seats: the worship leader (or an admin) can post here,
+        // everyone else reads the log.
+        SetNotesSection(
+          setId: group.set.id,
+          currentNotes: group.set.notes,
+          canPost: group.seats.contains { $0.role == "WORSHIP_LEADER" } || model.isAdmin(of: group.set.org?.id)
+        )
       }
       .listStyle(.insetGrouped)
       .navigationTitle(group.set.label ?? "Set")
       .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .primaryAction) {
+          AddToCalendarButton { CalendarEventDraft(group: group) }
+        }
+      }
       .confirmationDialog(
         "Cancel your cover request?",
         isPresented: Binding(

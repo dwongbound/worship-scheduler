@@ -63,9 +63,10 @@ final class AppModel {
 
   /// Redeem an org key. The token's memberships are only hints, so the new
   /// one is added to the saved session here rather than minting a new token.
-  func joinOrg(key: String) async throws {
+  @discardableResult
+  func joinOrg(key: String) async throws -> ApiOrgRef {
     let org = try await api.joinOrg(key: key)
-    guard let current = session else { return }
+    guard let current = session else { return org }
     var memberships = current.user.memberships
     if !memberships.contains(where: { $0.orgId == org.id }) {
       memberships.append(SessionMembership(orgId: org.id, isAdmin: false))
@@ -77,6 +78,7 @@ final class AppModel {
     )
     store.save(updated)
     session = updated
+    return org
   }
 
   /// Gone for good. Signs out only once the server has said yes.
