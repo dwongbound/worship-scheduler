@@ -34,13 +34,13 @@ struct AccountView: View {
             Text("This is a development build. It isn't talking to tapworship.com.")
           }
         }
+        // Plain List rows: a List row is already at least 44pt, so an extra
+        // minHeight frame here only made these two rows taller than the rest.
         Section {
           Button("Sign out", role: .destructive) { confirmSignOut = true }
-            .frame(minHeight: 44)
         }
         Section {
           Button("Delete account", role: .destructive) { deleting = true }
-            .frame(minHeight: 44)
         } footer: {
           Text("Permanently deletes your account and everything on it.")
         }
