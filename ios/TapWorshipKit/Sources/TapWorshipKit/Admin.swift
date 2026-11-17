@@ -80,6 +80,13 @@ public enum ApiApproval: Decodable, Hashable, Identifiable, Sendable {
     }
   }
 
+  /// The note the person left when they asked, if any.
+  public var reason: String? {
+    switch self {
+    case .cover(_, _, let reason, _, _, _), .swap(_, _, let reason, _, _, _, _): reason
+    }
+  }
+
   /// The earliest set it touches — what the list sorts and dates rows by.
   public var firstDate: Date {
     switch self {

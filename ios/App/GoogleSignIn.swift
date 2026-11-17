@@ -1,6 +1,8 @@
 import AuthenticationServices
 import CryptoKit
 import Foundation
+// WebAuthenticationSession is declared in AuthenticationServices' SwiftUI overlay.
+import SwiftUI
 import TapWorshipKit
 
 /// Google sign-in without Google's SDK: the system's web sign-in sheet
