@@ -187,6 +187,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
   replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
   ordinary counted role.
+- **AccessKey** — a person's personal access key for their own assistant
+  (Jarvis): `name`, `keyHash` (SHA-256; the `tw_…` key itself is shown once and
+  never stored), `canWrite` (fixed for the key's life), `lastUsedAt` (written at
+  most every 5 min), `revokedAt` (revoked rows stay, unlisted). Mirrors
+  vff-app's. See API → Access keys.
 - **SchedulingRule** — one of an org's rules for Auto schedule (ORG-wide,
   never per team): `tier` REQUIRED|PREFERENCE, `enabled`, `position` (list
   order = the preference ranking), `params: Json` (the kind + its ids; see
@@ -331,6 +336,21 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   account (`lib/accountDeletion.ts`: body must carry `confirm: "DELETE"`;
   refused while I'm an org's only admin and others remain; disconnects any org
   Google Calendar connected with my account; then the User cascade).
+- Access keys: `access-keys` (GET list / POST `{name, canWrite?}` → the key,
+  ONCE; session only) and `access-keys/[id]` (DELETE = revoke). `agent` (GET,
+  the whole read snapshot) and `mcp` (POST, stateless MCP JSON-RPC, tools only;
+  GET 405) take `Authorization: Bearer tw_…` and NOTHING else. Protocol in
+  `lib/mcp.ts`, tools in `lib/agentTools.ts`, reads in `lib/agentSnapshot.ts`
+  (db) + `lib/agentView.ts` (pure shapes; no emails, role LABELS, the
+  `assignmentId` beside each seat). A `canWrite` key's four writers
+  (confirm_set, request_cover, cancel_cover_request, take_cover) call
+  `assignments/[id]` PATCH and `swaps/[id]/take` POST with the same key; those
+  two routes read the caller with `lib/accessKeyAuth.ts getActingUser` (session
+  first, then a canWrite key with NO memberships). **`getSessionUser` never
+  reads a key** (it only reads the iOS JWT), so no other route accepts one;
+  `tests/unit/agentView.test.ts` fails if any other route names the key helpers.
+  Open covers are ONE reading, `lib/openCovers.ts`, shared with `GET /api/swaps`.
+  /profile's card is `components/AccessKeysCard.tsx`. ✅tested
 - Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
   list row has — what a `?set=` deep link resolves through), `assignments`,
   `assignments/[id]`, `assignments/confirm-all`.

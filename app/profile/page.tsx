@@ -14,6 +14,7 @@ import Badge from "@/components/common/Badge";
 import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
+import AccessKeysCard from "@/components/AccessKeysCard";
 import DeleteAccount from "@/components/DeleteAccount";
 import Checkbox from "@/components/common/Checkbox";
 import AttentionDot from "@/components/common/AttentionDot";
@@ -822,6 +823,10 @@ export default function ProfilePage() {
           </div>
         )}
       </Card>
+
+      {/* Personal access keys for an assistant (Jarvis), just above the
+          one card that ends an account. */}
+      <AccessKeysCard />
 
       <DeleteAccount />
 

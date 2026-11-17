@@ -564,3 +564,19 @@ export interface ApiMe {
   // the owning org (roles are per-team; the profile page edits them).
   teams: ApiTeamRole[];
 }
+
+// A personal access key as /profile lists it (GET /api/access-keys): its label
+// and dates, never any part of the key or its hash.
+export interface ApiAccessKey {
+  id: string;
+  name: string;
+  // Made "can act for me": may confirm, ask for cover, withdraw it, take covers.
+  canWrite: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+// The one answer that carries the key itself: POST /api/access-keys, once.
+export interface ApiNewAccessKey extends ApiAccessKey {
+  key: string;
+}
