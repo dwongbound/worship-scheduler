@@ -1,4 +1,5 @@
 import type { MetadataRoute } from "next";
+import { THEME_COLORS } from "@/lib/theme";
 
 // Web app manifest — lets phones install the site as a home-screen app
 // (iOS "Add to Home Screen", Android "Install app"). Next.js serves this
@@ -14,7 +15,10 @@ export default function manifest(): MetadataRoute.Manifest {
     display: "standalone",
     // Splash/background while the app loads (matches bg-gray-50).
     background_color: "#F9FAFB",
-    theme_color: "#F9FAFB",
+    // The installed app's title bar. A manifest takes ONE colour, so this is
+    // the light nav's; the per-scheme <meta name="theme-color"> tags
+    // (app/layout.tsx) override it wherever the browser reads those.
+    theme_color: THEME_COLORS.light,
     icons: [
       // Android/Chrome read icons from here; iOS uses the apple-touch-icon
       // link Next emits for app/apple-icon.tsx. Both are GENERATED routes

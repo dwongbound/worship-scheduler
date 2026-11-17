@@ -72,15 +72,22 @@ export default function Button({
   children,
   ...props
 }: ButtonProps) {
+  const destructive = variant === "danger" || variant === "dangerOutline";
   return (
     <button
       // A button whose action is already running can't be pressed again.
       disabled={disabled || loading}
       aria-busy={loading || undefined}
+      // globals.css keys on this: on a phone a modal footer's buttons grow to
+      // share the row, but a destructive one stays as wide as its label — the
+      // same height as its neighbours, just never the widest thing there.
+      data-destructive={destructive || undefined}
       // `relative` only while loading, so it can't fight a caller's own
       // positioning class the rest of the time.
       className={`${loading ? "relative" : ""} inline-flex items-center justify-center gap-1.5 rounded-lg font-medium
-        transition-colors disabled:cursor-not-allowed disabled:opacity-70
+        transition-[color,background-color,border-color,opacity,scale] duration-100 ease-out
+        enabled:active:scale-[0.97] enabled:active:opacity-100
+        disabled:cursor-not-allowed disabled:opacity-70
         ${VARIANT_CLASSES[variant]} ${SIZE_CLASSES[size]} ${className}`}
       {...props}
     >

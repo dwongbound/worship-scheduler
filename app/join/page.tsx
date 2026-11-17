@@ -63,6 +63,9 @@ export default function JoinPage() {
         <form onSubmit={onSubmit} className="space-y-4">
           <Input
             label="Organization key"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             value={orgKey}
             onChange={(e) => setOrgKey(e.target.value)}
             autoComplete="off"

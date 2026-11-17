@@ -1,7 +1,10 @@
 // PATCH /api/assignments/:id — act on one of MY assignments.
 // Body: { action: "confirm" | "requestSwap" | "cancelSwap" }
+// Also the door a personal access key made "can act for me" writes through
+// (POST /api/mcp's confirm_set / request_cover / cancel_cover_request), which
+// is why it reads the caller with getActingUser rather than getSessionUser.
 import { NextRequest, NextResponse } from "next/server";
-import { getSessionUser } from "@/lib/auth";
+import { getActingUser } from "@/lib/accessKeyAuth";
 import { prisma } from "@/lib/prisma";
 import { notifySwapRequested } from "@/lib/slack";
 import type { AssignmentStatus } from "@/lib/generated/prisma/client";
@@ -28,7 +31,7 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const user = await getSessionUser();
+  const user = await getActingUser(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -57,6 +60,14 @@ export async function PATCH(
   const updated = await prisma.assignment.update({
     where: { id: assignment.id },
     data: { status, swapReason },
+  });
+
+  // Any "not me" answers belonged to the PREVIOUS ask (see CoverDecline).
+  // Clearing them on every one of these actions means cancelling and asking
+  // again — or just asking again with a better reason — reaches the people who
+  // passed last time, instead of silently never reaching them.
+  await prisma.coverDecline.deleteMany({
+    where: { assignmentId: assignment.id },
   });
 
   await prisma.setHistoryEvent.create({

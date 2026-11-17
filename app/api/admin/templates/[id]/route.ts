@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 // Value import (not `import type`) — Prisma.DbNull is a runtime sentinel.
 import { Prisma } from "@/lib/generated/prisma/client";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
+import { validateTemplatePractices } from "@/lib/practices";
 
 // Edit one weekly time in place — the same fields POST takes, minus the
 // multi-day batch (a row IS one day, so editing swaps which day it recurs on).
@@ -36,6 +37,7 @@ export async function PATCH(
     requiresMD,
     groupChatLeadDays,
     teamId,
+    practices,
   } = await req.json();
   if (
     typeof label !== "string" || label.trim().length === 0 ||
@@ -59,6 +61,16 @@ export async function PATCH(
     }
   }
 
+  // Practices replace the whole list, like the scheduling rules PUT: the
+  // editor shows them all at once, so a save IS the new list. Omitting the
+  // field leaves the existing practices alone, so a caller that predates this
+  // (or only means to rename the time) can't wipe them.
+  const practiceCheck =
+    practices === undefined ? null : validateTemplatePractices(practices);
+  if (practiceCheck && "error" in practiceCheck) {
+    return NextResponse.json({ error: practiceCheck.error }, { status: 400 });
+  }
+
   // The template can be moved between teams, but only within its own org.
   if (typeof teamId !== "string" || teamId.length === 0) {
     return NextResponse.json({ error: "Team is required" }, { status: 400 });
@@ -80,6 +92,24 @@ export async function PATCH(
       // DbNull writes a real SQL NULL, i.e. "back to the default team shape".
       slotCapacities: capacities ?? Prisma.DbNull,
       teamId,
+      // Delete-then-create inside the one update, so a save can never leave
+      // the old practices beside the new ones. Sets already generated from
+      // this template keep the practices they were given — the same bargain
+      // slotCapacities makes, and the form says so.
+      ...(practiceCheck
+        ? {
+            practices: {
+              deleteMany: {},
+              create: practiceCheck.practices,
+            },
+          }
+        : {}),
+    },
+    include: {
+      practices: {
+        select: { id: true, dayOfWeek: true, startMinute: true, endMinute: true },
+        orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
+      },
     },
   });
   return NextResponse.json(template);

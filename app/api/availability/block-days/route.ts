@@ -7,19 +7,20 @@
 // ranges, and never double-blocks a day (so clicking the same date twice can't
 // pile up duplicates).
 //
-// ERASING is "I'm free all of these days" — the right-click gesture on the
-// calendar — so it removes EVERY dated block touching them, partial-day ones
+// ERASING is "I'm free all of these days" — a right-click, or a long press on
+// touch — so it removes EVERY dated block touching them, partial-day ones
 // included, not just the all-day ones. A block that only partly overlaps is
 // split into the pieces that survive, keeping its own time window, requestId
 // and note, so a request-tied morning block stays a request-tied morning block
 // on the days it still covers.
 //
-// Weekly RECURRING rules are deliberately untouched: they have no per-date
-// exception in the schema, so clearing one Monday would have to kill every
-// Monday. The response reports how many of the days a recurring rule still
-// covers (`recurringDays`) so the caller can say so rather than leaving the
-// day mysteriously still blocked.
+// Weekly RECURRING rules can't be left standing either — a day isn't free
+// while a repeat still covers it — so each one covering an erased day records
+// that date in `exceptDates`: the rule stays ONE row with a hole in it. That's
+// what keeps overlapping repeats sane — three Tuesday rules over one day are
+// three exceptions, not six half-rules.
 import { NextRequest, NextResponse } from "next/server";
+import { mergeExceptions, recurringExceptionsFor } from "@/lib/availability";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -47,18 +48,6 @@ function startOfDay(d: Date): Date {
 // A block covers whole days when its window runs 0 → end-of-day.
 function isAllDay(b: { startMinute: number | null; endMinute: number | null }) {
   return (b.startMinute ?? 0) <= 0 && (b.endMinute ?? FULL_DAY_END) >= FULL_DAY_END;
-}
-
-// Does a weekly recurring rule still apply on this day? (Mirrors the calendar's
-// own reading: matching weekday, and inside the span the rule repeats over —
-// startDate/endDate are its first/last days, null = open-ended that way.)
-function recurringCovers(
-  rule: { dayOfWeek: number | null; startDate: Date | null; endDate: Date | null },
-  day: Date
-): boolean {
-  if (day.getDay() !== rule.dayOfWeek) return false;
-  if (rule.startDate && day < startOfDay(rule.startDate)) return false;
-  return !rule.endDate || day <= startOfDay(rule.endDate);
 }
 
 // Every YYYY-MM-DD a block touches (endDate defaults to startDate). SPECIFIC
@@ -175,19 +164,31 @@ export async function POST(req: NextRequest) {
       )
     );
   }
-  if (ops.length > 0) await prisma.$transaction(ops);
 
-  // A weekly rule can't be punched out for one date, so count what's left
-  // standing on those days and let the caller explain it.
+  // A weekly rule is a pattern, so freeing a day it covers is an EXCEPTION to
+  // it — the row survives, minus that date. Every rule covering the day gets
+  // one, which is how overlapping repeats come out free together.
   const recurring = await prisma.unavailability.findMany({
     where: { userId: user.id, type: "RECURRING" },
-    select: { dayOfWeek: true, startDate: true, endDate: true },
   });
-  let recurringDays = 0;
-  for (const key of targetDays) {
-    const day = parseLocalDate(key)!;
-    if (recurring.some((r) => recurringCovers(r, day))) recurringDays++;
+  for (const rule of recurring) {
+    const bounds = {
+      dayOfWeek: rule.dayOfWeek,
+      startDate: rule.startDate ? ymd(rule.startDate) : null,
+      endDate: rule.endDate ? ymd(rule.endDate) : null,
+      exceptDates: rule.exceptDates,
+    };
+    const added = recurringExceptionsFor(bounds, targetDays);
+    if (added.length === 0) continue; // doesn't block any of these days
+    ops.push(
+      prisma.unavailability.update({
+        where: { id: rule.id },
+        data: { exceptDates: mergeExceptions(bounds, added) },
+      })
+    );
   }
 
-  return NextResponse.json({ ok: true, recurringDays });
+  if (ops.length > 0) await prisma.$transaction(ops);
+
+  return NextResponse.json({ ok: true });
 }

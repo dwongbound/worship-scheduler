@@ -5,6 +5,7 @@ import {
   draftLabel,
   MAX_DRAFTS,
   normalizeDraftName,
+  parseDraftMode,
 } from "@/lib/drafts";
 
 const kept = (id: string) => ({ id, isRecovery: false });
@@ -72,5 +73,20 @@ describe("normalizeDraftName", () => {
 
   it("caps a very long name rather than rejecting it", () => {
     expect(normalizeDraftName("x".repeat(500))).toHaveLength(80);
+  });
+});
+
+describe("parseDraftMode", () => {
+  it("reads the preview workspace's own drafts", () => {
+    expect(parseDraftMode("preview")).toBe("preview");
+  });
+
+  it("falls back to the generate flow, which is what legacy rows are", () => {
+    // Anything unrecognised has to land on generate: the column was added to
+    // rows that predate it, and a draft shown in the wrong workspace would be
+    // applied by code that can't apply it correctly.
+    for (const raw of ["generate", "", null, undefined, 7, "PREVIEW"]) {
+      expect(parseDraftMode(raw)).toBe("generate");
+    }
   });
 });

@@ -68,7 +68,7 @@ test("the tour opens itself the first time, then leaves you alone", async ({
   await expect(tour).toBeHidden();
 
   // Closing it is what records "seen" — reopening the workspace is quiet now.
-  await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Close", exact: true }).click();
   await openPreviewMode(page);
   await expect(tourOf(page)).toBeHidden();
 });
@@ -100,31 +100,38 @@ test("Help brings the tour back, from the top", async ({ page }) => {
 test("the tour describes the mode it was opened in", async ({ page }) => {
   await login(page, "admin");
 
-  // Preview Mode has no draft to park and commits with Save Changes.
+  // Preview Mode parks drafts too, but commits with Save Changes and never
+  // offers to apply a plan.
   const review = await openPreviewMode(page);
   await review.getByRole("button", { name: "Help" }).click();
   const tour = tourOf(page);
   for (let i = 0; i < TO_LAST; i++) {
     await tour.getByRole("button", { name: "Next" }).click();
   }
-  await expect(tour.getByRole("heading", { name: "Saving your changes" })).toBeVisible();
+  await expect(tour.getByRole("heading", { name: "Drafts, and saving" })).toBeVisible();
   // Pinned to the prose: the step's little illustration says "Save Changes" too.
   await expect(
     tour.getByText(/Save Changes is the only thing that writes/)
   ).toBeVisible();
-  // Nowhere on the step — not in the words, and not in the drawing of the
-  // action bar, which has to be the bar this mode actually shows.
-  await expect(tour.getByText(/Save Draft/)).toHaveCount(0);
+  // Preview drafts are the kind that can go stale, so the step has to say what
+  // reopening one does about that.
+  await expect(tour.getByText(/lays it back over the calendar/)).toBeVisible();
+  // Nowhere on this mode's step — not in the words, and not in the drawing of
+  // the action bar, which has to be the bar this mode actually shows.
+  await expect(tour.getByText(/Apply schedule/)).toHaveCount(0);
   await tour.getByRole("button", { name: "Done" }).click();
-  await review.getByRole("button", { name: "Cancel" }).click();
+  await review.getByRole("button", { name: "Close", exact: true }).click();
 
   // The generate flow does have drafts, and applies rather than saves.
   await page.goto("/create");
   await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
+  // The seeded month-long "Fall 2026" request, not just the newest one: an
+  // earlier spec sends a ONE-day request for today, and on a weekday no
+  // template falls on that window generates an empty plan.
   const reqValue = await scope
-    .locator('option[value^="req:"]')
+    .locator('option[value^="req:"]', { hasText: /^Fall 2026 \(/ })
     .first()
     .getAttribute("value");
   await scope.selectOption(reqValue!);

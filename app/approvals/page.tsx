@@ -12,6 +12,7 @@ import Card from "@/components/common/Card";
 import InfoTooltip from "@/components/common/InfoTooltip";
 import LoadingDots from "@/components/common/LoadingDots";
 import { usePageLoading } from "@/components/LoadingProvider";
+import { usePullToRefresh } from "@/components/PullToRefresh";
 import { SWAPS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
@@ -37,6 +38,8 @@ export default function ApprovalsPage() {
   useEffect(() => {
     load();
   }, [load]);
+  // Pending handoffs change as people take covers and accept swaps.
+  usePullToRefresh(load);
 
   async function decide(
     item: ApiApproval,

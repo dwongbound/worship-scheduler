@@ -8,12 +8,18 @@
 // Both providers land in the same dialog — signup gets its conflicts from a
 // 409, Google from the ?nameConflict params its signIn callback redirects to.
 import { getProviders, signIn } from "next-auth/react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
 import Input from "@/components/common/Input";
 import Modal from "@/components/common/Modal";
+import Logo from "@/components/Logo";
+import Reveal from "@/components/Reveal";
+import RevealRoot from "@/components/RevealRoot";
+import { LEGAL_LINKS } from "@/lib/legal";
+import { REVEAL_STAGGER_CLASS } from "@/lib/reveal";
 import {
   type NameConflict,
   parseNameConflicts,
@@ -23,14 +29,23 @@ import {
   rememberPostLogin,
   safeInternalPath,
 } from "@/lib/postLogin";
+import { replaceUrl } from "@/lib/urlParam";
 
 // useSearchParams() (used inside LoginForm to read ?callbackUrl) must sit
 // under a Suspense boundary, so the page export just wraps the form in one.
 export default function LoginPage() {
   return (
-    <Suspense>
-      <LoginForm />
-    </Suspense>
+    <>
+      {/* Outside the Suspense boundary on purpose: useSearchParams below makes
+          the form client-rendered, and the arming script has to be in the
+          document before the first paint or the card paints visible and is
+          then hidden. The same component the public home page uses, so the two
+          pages can't drift apart on the motion. */}
+      <RevealRoot />
+      <Suspense>
+        <LoginForm />
+      </Suspense>
+    </>
   );
 }
 
@@ -112,12 +127,17 @@ function LoginForm() {
     setConflicts(found);
     // Strip the conflict params, but keep any destination: this bounce is
     // mid-journey, and "Continue anyway" re-runs Google with it.
-    router.replace(
+    //
+    // Through `replaceUrl`, not `router.replace`: this lands on /login from
+    // /login, and in a PRODUCTION build the router discards a navigation to
+    // the pathname already on screen, so the params survived and a refresh
+    // resurrected the very warning this is here to clear (lib/urlParam.ts).
+    replaceUrl(
       rawCallback
         ? `/login?callbackUrl=${encodeURIComponent(rawCallback)}`
         : "/login"
     );
-  }, [searchParams, router, rawCallback]);
+  }, [searchParams, rawCallback]);
 
   function switchMode(next: "signin" | "signup") {
     setMode(next);
@@ -243,150 +263,180 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center">
-      <Card className="w-full max-w-sm">
-        <h1 className="mb-1 text-center text-2xl font-bold text-indigo-600 dark:text-indigo-400">
-          Worship Scheduler
-        </h1>
-        <p className="mb-6 text-center text-sm text-gray-500">
-          {mode === "signin" ? "Sign in to your account" : "Create your account"}
-        </p>
+    <div className="relative flex min-h-[70vh] items-center justify-center">
+      {/* The same soft wash the home page opens on, so arriving here from
+          "Sign in" doesn't drop you onto flat grey. Decorative and inert: it
+          takes no space and is hidden from the accessibility tree. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute top-1/2 left-1/2 h-[22rem] w-[40rem] max-w-[140vw] -translate-x-1/2 -translate-y-[65%] rounded-full bg-indigo-200/45 blur-3xl dark:bg-indigo-500/10"
+      />
+      {/* The card rises in as one piece and its rows follow — one observer
+          for the lot, the stagger being pure CSS. The stagger class goes on
+          the CARD, not this wrapper: it drives the wrapper's DIRECT children,
+          and the wrapper has exactly one.
 
-        {googleAvailable && (
-          <>
-            <div className="space-y-2">
-              <Button
-                type="button"
-                variant="secondary"
-                className="w-full"
-                onClick={() => signIn("google", { callbackUrl })}
-              >
-                Continue with Google
-              </Button>
-            </div>
-            <div className="my-4 flex items-center gap-3 text-xs text-gray-400">
-              <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
-              or
-              <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
-            </div>
-          </>
-        )}
+          With the motion off (no script, or "reduce motion") none of this
+          hides anything: the markup is visible as it stands and `Reveal`
+          contributes only a class. See lib/reveal.ts. */}
+      <Reveal className="relative w-full max-w-sm">
+        <Card className={REVEAL_STAGGER_CLASS}>
+          {/* The mark above the name: this is the page Google's OAuth review
+              lands on from the consent screen, and the two have to match. */}
+          <div className="mb-3 flex justify-center">
+            <Logo className="h-12 w-12" />
+          </div>
+          <h1 className="mb-1 text-center text-2xl font-bold text-indigo-600 dark:text-indigo-400">
+            TapWorship
+          </h1>
+          <p className="mb-6 text-center text-sm text-gray-500">
+            {mode === "signin" ? "Sign in to your account" : "Create your account"}
+          </p>
 
-        {mode === "signin" ? (
-          <form onSubmit={onSignIn} className="space-y-4">
-            <Input
-              label="Username / Email"
-              value={usernameOrEmail}
-              onChange={(e) => setUsernameOrEmail(e.target.value)}
-              autoComplete="username"
-              required
-            />
-            <Input
-              label="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button type="submit" disabled={submitting} className="w-full">
-              {submitting ? "Signing in…" : "Sign in"}
-            </Button>
-          </form>
-        ) : (
-          <form onSubmit={onSignUp} className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="First name"
-                value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
-                autoComplete="given-name"
-                required
-              />
-              <Input
-                label="Last name"
-                value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
-                autoComplete="family-name"
-                required
-              />
-            </div>
-            <Input
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              autoComplete="email"
-              required
-            />
-            <Input
-              label="Password"
-              type="password"
-              value={signupPassword}
-              onChange={(e) => setSignupPassword(e.target.value)}
-              autoComplete="new-password"
-              required
-            />
-            <Input
-              label="Confirm password"
-              type="password"
-              value={signupPassword2}
-              onChange={(e) => setSignupPassword2(e.target.value)}
-              autoComplete="new-password"
-              required
-            />
-            {needsOrgKey && (
-              <Input
-                label="Organization key"
-                value={orgKey}
-                onChange={(e) => setOrgKey(e.target.value)}
-                autoComplete="off"
-                autoFocus
-                required
-              />
-            )}
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <Button type="submit" disabled={submitting} className="w-full">
-              {submitting
-                ? needsOrgKey
-                  ? "Claiming account…"
-                  : "Creating account…"
-                : needsOrgKey
-                  ? "Claim my account"
-                  : "Sign up"}
-            </Button>
-          </form>
-        )}
-
-        <div className="mt-6 text-center text-sm text-gray-500">
-          {mode === "signin" ? (
+          {googleAvailable && (
             <>
-              Don&rsquo;t have an account?{" "}
-              <button
-                type="button"
-                onClick={() => switchMode("signup")}
-                className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-              >
-                Sign up
-              </button>
-            </>
-          ) : (
-            <>
-              Already have an account?{" "}
-              <button
-                type="button"
-                onClick={() => switchMode("signin")}
-                className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
-              >
-                Sign in
-              </button>
+              <div className="space-y-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="w-full"
+                  onClick={() => signIn("google", { callbackUrl })}
+                >
+                  Continue with Google
+                </Button>
+              </div>
+              <div className="my-4 flex items-center gap-3 text-xs text-gray-400">
+                <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+                or
+                <span className="h-px flex-1 bg-gray-200 dark:bg-gray-700" />
+              </div>
             </>
           )}
-        </div>
 
-        <VersionFooter />
-      </Card>
+          {mode === "signin" ? (
+            <form onSubmit={onSignIn} className="space-y-4">
+              <Input
+                label="Username / Email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={usernameOrEmail}
+                onChange={(e) => setUsernameOrEmail(e.target.value)}
+                autoComplete="username"
+                required
+              />
+              <Input
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                enterKeyHint="go"
+                required
+              />
+              {error && <p className="text-sm text-red-600">{error}</p>}
+              <Button type="submit" disabled={submitting} className="w-full">
+                {submitting ? "Signing in…" : "Sign in"}
+              </Button>
+            </form>
+          ) : (
+            <form onSubmit={onSignUp} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="First name"
+                  value={firstName}
+                  onChange={(e) => setFirstName(e.target.value)}
+                  autoComplete="given-name"
+                  required
+                />
+                <Input
+                  label="Last name"
+                  value={lastName}
+                  onChange={(e) => setLastName(e.target.value)}
+                  autoComplete="family-name"
+                  required
+                />
+              </div>
+              <Input
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                autoComplete="email"
+                required
+              />
+              <Input
+                label="Password"
+                type="password"
+                value={signupPassword}
+                onChange={(e) => setSignupPassword(e.target.value)}
+                autoComplete="new-password"
+                required
+              />
+              <Input
+                label="Confirm password"
+                type="password"
+                value={signupPassword2}
+                onChange={(e) => setSignupPassword2(e.target.value)}
+                autoComplete="new-password"
+                required
+              />
+              {needsOrgKey && (
+                <Input
+                  label="Organization key"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={orgKey}
+                  onChange={(e) => setOrgKey(e.target.value)}
+                  autoComplete="off"
+                  autoFocus
+                  required
+                />
+              )}
+              {error && <p className="text-sm text-red-600">{error}</p>}
+              <Button type="submit" disabled={submitting} className="w-full">
+                {submitting
+                  ? needsOrgKey
+                    ? "Claiming account…"
+                    : "Creating account…"
+                  : needsOrgKey
+                    ? "Claim my account"
+                    : "Sign up"}
+              </Button>
+            </form>
+          )}
+
+          <div className="mt-6 text-center text-sm text-gray-500">
+            {mode === "signin" ? (
+              <>
+                Don&rsquo;t have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("signup")}
+                  className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button
+                  type="button"
+                  onClick={() => switchMode("signin")}
+                  className="font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  Sign in
+                </button>
+              </>
+            )}
+          </div>
+
+          <LegalFooter />
+          <VersionFooter />
+        </Card>
+      </Reveal>
 
       {/* Duplicate-name warning. Not a block — two people really can share a
           name — but the account we found is named in full so the far more
@@ -407,7 +457,7 @@ function LoginForm() {
                 variant="secondary"
                 onClick={() => setConflicts(null)}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={continueAnyway} disabled={submitting}>
                 {submitting ? "Continuing…" : "This is someone else — continue"}
@@ -469,6 +519,21 @@ function LoginForm() {
 // Build stamp: app version + a link to the exact commit on GitHub. Both values
 // are inlined at build time by next.config.js. The commit link is hidden when
 // the sha is unknown (e.g. git unavailable in the build sandbox).
+function LegalFooter() {
+  return (
+    <p className="mt-4 text-center text-xs text-gray-500 dark:text-gray-400">
+      {LEGAL_LINKS.map((l, i) => (
+        <span key={l.href}>
+          {i > 0 && " · "}
+          <Link href={l.href} className="hover:underline">
+            {l.label}
+          </Link>
+        </span>
+      ))}
+    </p>
+  );
+}
+
 function VersionFooter() {
   const version = process.env.NEXT_PUBLIC_APP_VERSION;
   const sha = process.env.NEXT_PUBLIC_COMMIT_SHA;

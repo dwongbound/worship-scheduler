@@ -4,6 +4,9 @@
 //     visibleSetsFilter  — private-set visibility (in memory + as a db filter).
 //   • coverEligibility   — who may take a swap-requested slot.
 //   • resolveSetsWindow  — the GET /api/sets date window.
+//   • seatIndex /
+//     rolesHeldOn        — who already sits where, behind the swap picker's
+//                          double-booking warnings.
 import { describe, expect, it } from "vitest";
 import {
   canViewSet,
@@ -11,6 +14,8 @@ import {
   mergeSetWindows,
   missingRanges,
   resolveSetsWindow,
+  rolesHeldOn,
+  seatIndex,
   selectUpcomingSets,
   type CoverEligibilityInput,
   unionRange,
@@ -402,5 +407,62 @@ describe("unionRange", () => {
       start: 0,
       end: 140,
     });
+  });
+});
+
+// ── seatIndex / rolesHeldOn ──────────────────────────────────────────────
+// The swap picker's double-booking check (lib/sets.ts §5). A person may hold
+// several roles on one set, so these answer "what ELSE are they already doing
+// there?" rather than "may this happen at all".
+describe("seatIndex / rolesHeldOn", () => {
+  // Jin Woo plays drums and keys on set A; I play bass on set A and vocals on
+  // set B. (One row per person-role-set, the way the db stores it.)
+  const seats = [
+    { setId: "A", userId: "jin", role: "DRUMS" },
+    { setId: "A", userId: "jin", role: "KEYS" },
+    { setId: "A", userId: "me", role: "BASS" },
+    { setId: "B", userId: "me", role: "VOCALS" },
+    { setId: "B", userId: "jin", role: "DRUMS" },
+  ];
+
+  it("lists every role one person holds on one set", () => {
+    const index = seatIndex(seats);
+    expect(rolesHeldOn(index, "A", "jin")).toEqual(["DRUMS", "KEYS"]);
+    expect(rolesHeldOn(index, "B", "me")).toEqual(["VOCALS"]);
+  });
+
+  it("is empty for someone who isn't on that set", () => {
+    const index = seatIndex(seats);
+    expect(rolesHeldOn(index, "B", "nobody")).toEqual([]);
+    expect(rolesHeldOn(index, "C", "jin")).toEqual([]);
+  });
+
+  it("drops the role being traded, so a seat isn't its own conflict", () => {
+    const index = seatIndex(seats);
+    // Trading Jin Woo's drums seat: keys is the leftover double-booking.
+    expect(rolesHeldOn(index, "A", "jin", "DRUMS")).toEqual(["KEYS"]);
+    // Trading his only seat on B leaves nothing to warn about.
+    expect(rolesHeldOn(index, "B", "jin", "DRUMS")).toEqual([]);
+  });
+
+  it("keeps one person's set separate from another's", () => {
+    const index = seatIndex(seats);
+    // The example from the bug: I offer my set-A seat for Jin Woo's set-B
+    // seat, and he is ALREADY on set A — in a role that isn't the traded one.
+    expect(rolesHeldOn(index, "A", "jin", "VOCALS")).toEqual([
+      "DRUMS",
+      "KEYS",
+    ]);
+    expect(rolesHeldOn(index, "A", "me", "BASS")).toEqual([]);
+  });
+
+  it("returns a copy, so a caller can't mutate the index", () => {
+    const index = seatIndex(seats);
+    rolesHeldOn(index, "A", "jin").push("TRUMPET");
+    expect(rolesHeldOn(index, "A", "jin")).toEqual(["DRUMS", "KEYS"]);
+  });
+
+  it("handles no seats at all", () => {
+    expect(rolesHeldOn(seatIndex([]), "A", "jin")).toEqual([]);
   });
 });

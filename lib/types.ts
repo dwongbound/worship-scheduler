@@ -132,6 +132,10 @@ export interface ApiSet {
   // The worship leader's setlist, ordered. Present on GET /api/sets; may be
   // absent (undefined) on endpoints that don't include it.
   songs?: ApiSong[];
+  // This set's practices, in time order. Present on GET /api/sets and
+  // /api/sets/[id]; absent on endpoints that don't include it. Never drawn on
+  // the calendar — the set detail modal is the one place they appear.
+  practices?: ApiSetPractice[];
   // The set's collaborative Spotify playlist, once created (null before then).
   spotifyPlaylistUrl?: string | null;
 }
@@ -162,9 +166,14 @@ export interface ApiSwapCandidate {
     team: { id: string; name: string } | null;
   };
   youAvailable: boolean; // I'm free for their set's date
-  theyAvailable: boolean; // they're free for my set's date
-  theyMarkedUnavailable: boolean; // they explicitly blocked my set's date
+  theyAvailable: boolean; // they're free for my set's date (any kind of block)
   theyInactive: boolean; // they're marked inactive on this set's team
+  // Roles each side ALREADY holds on the other's set — empty when neither is
+  // doubling up. Never a blocker (two roles on one set is legitimate), but the
+  // picker says so in RED: an availability block is an intention, a seat they
+  // already hold is a fact. See lib/sets.ts §5.
+  theyAlsoOnYourSet: Instrument[];
+  youAlsoOnTheirSet: Instrument[];
 }
 
 // A pending targeted swap awaiting MY response (GET /api/swaps/proposals/incoming).
@@ -222,9 +231,16 @@ export interface ApiUnavailability {
   endMinute: number | null;
   startDate: string | null;
   endDate: string | null;
+  // RECURRING only: dates ("YYYY-MM-DD") this weekly rule skips, one per day
+  // freed on the calendar. Optional so hand-built test fixtures needn't carry
+  // it; every reader goes through lib/availability.ts recurringSkips.
+  exceptDates?: string[];
   // Set for SPECIFIC blocks (the request/TimeRange they belong to).
   requestId: string | null;
   note: string | null;
+  // Written by "Import from Google Calendar" (lib/googleAvailability.ts).
+  // Optional so hand-built test fixtures needn't carry it.
+  fromGoogle?: boolean;
 }
 
 export interface ApiSetTemplate {
@@ -240,6 +256,30 @@ export interface ApiSetTemplate {
   slotCapacities: SlotCapacityMap | null; // null = default team shape
   teamId: string | null; // team the generated sets belong to
   team: ApiTeam | null;
+  // The practices every set expanded from this template starts with, as a
+  // weekday + window in the set's own week (see lib/practices.ts). Empty =
+  // none, and its LENGTH is the "+2" badge after the time in the Create tab's
+  // list.
+  practices: ApiTemplatePractice[];
+}
+
+// One practice on a weekly set time — a weekday and a window, because a weekly
+// time has no date of its own. The weekday is the one in the SET's week
+// (Mon–Sun); `practiceDates` is the one resolution of that.
+export interface ApiTemplatePractice {
+  id: string;
+  dayOfWeek: number; // 0 = Sunday, read within the set's own Mon–Sun week
+  startMinute: number; // minutes from midnight on that day
+  endMinute: number; // ditto — a practice is a start and an end, not a length
+}
+
+// One practice on a concrete set: an extra calendar event for the people
+// already on that set. Never on the app calendar, and never a booking as far
+// as the scheduler is concerned.
+export interface ApiSetPractice {
+  id: string;
+  startsAt: string;
+  endsAt: string;
 }
 
 // An admin's request for their org to submit availability over a date range.
@@ -413,7 +453,18 @@ export interface StagedSet {
   // True if an (empty) Set row already exists at this time — apply fills it
   // rather than creating a new one. False = apply creates the set.
   existing: boolean;
+  // That existing row's id, so a scheduling rule naming a specific set can
+  // find it. Apply ignores it (it matches by startsAt/label). Preview Mode's
+  // sets carry their id as `stagingId` instead.
+  setId?: string | null;
   assignments: StagedAssignment[];
+  // People already on this set in a seat the card does NOT show: a role
+  // borrowed from a guest team, which belongs to the LENDING team's catalog
+  // and so has no column here (lib/calendarPreview.ts toStagedSet). They are
+  // still on the set, so the pick lists leave them out and Auto schedule
+  // counts them as taken — otherwise the same person could be seated in a role
+  // they already hold as a guest, which the db refuses outright.
+  guestSeats?: { userId: string; role: string }[];
 }
 
 // The full proposal returned by the preview and posted back to apply.
@@ -431,13 +482,36 @@ export interface StagedPlan {
     counts: Record<string, number>;
     // teamKey(userId, teamId) → the same, split by team.
     teamCounts: Record<string, number>;
-    // Dates people are already booked on, for the spacing rule.
-    booked: { userId: string; startsAt: string }[];
+    // Dates people are already booked on, for the spacing rule. `teamId` is
+    // which team's set it was — only a team-scoped LIMIT reads it.
+    booked: {
+      userId: string;
+      startsAt: string;
+      teamId?: string | null;
+      setId?: string | null;
+    }[];
     // teamId ("" for a team-less set) → who MD'd that team's last set BEFORE
     // this window. Seeds the "don't lead two running" rotation so the modal's
     // re-run starts where the server's did, rather than handing set one back to
     // last week's director.
     previousMDByTeam?: Record<string, string | null>;
+    // Real sets around the window, for SAME_PLAYER rules (lib/schedulingRules)
+    // whose partner set isn't in the plan.
+    fixedSets?: {
+      setId?: string | null;
+      templateId?: string | null;
+      startsAt: string;
+      assignments: { userId: string; role: string }[];
+    }[];
+    // A month either side of bookings, counted only by LIMIT rules.
+    periodBookings?: {
+      userId: string;
+      startsAt: string;
+      teamId?: string | null;
+      // Which set the booking is, so a PREVIEW of those same sets doesn't
+      // count its own staged copy and the db row behind it as two.
+      setId?: string | null;
+    }[];
   };
 }
 
@@ -459,6 +533,9 @@ export interface ApiMeMembership {
   // The connected account's Spotify user id — the label's fallback when the
   // account has no display_name set.
   spotifyUserId: string | null;
+  // Whether the ORG has connected Google Calendar (set events + invites). The
+  // account itself is admin-only, on /api/google-calendar/status.
+  orgGoogleCalendarConnected: boolean;
 }
 
 // The current user's own profile — GET /api/me. Fetched once by AuthGate and
@@ -469,10 +546,37 @@ export interface ApiMe {
   email: string | null;
   // Whether a usable password hash exists (OAuth-only accounts have none).
   hasPassword: boolean;
-  // Opt-in (default on) to the daily 8 AM Slack digest — see lib/digest.ts.
+  // Opt-in (default on) to the daily 6:30 AM Slack digest — see lib/digest.ts.
   dailyDigest: boolean;
+  // Opt-in (default on) to being a guest on their sets' Google Calendar
+  // events. Off keeps them off the guest list only — see lib/calendarEvent.ts.
+  calendarInvites: boolean;
+  // Opt-in (default on) to Google EMAILING them about those events, as
+  // opposed to just putting them on the calendar. Off is honoured where a
+  // per-request parameter allows — lib/calendarEvent.ts notifyForUpdate.
+  calendarInviteEmails: boolean;
+  // Where those invites are sent instead of `email` — usually a secondary
+  // calendar's own address, so the sets land on their own calendar. Null =
+  // use `email` (lib/calendarEvent.ts inviteAddress).
+  calendarInviteEmail: string | null;
   memberships: ApiMeMembership[];
   // Teams this person serves on, each with the roles they've picked there and
   // the owning org (roles are per-team; the profile page edits them).
   teams: ApiTeamRole[];
+}
+
+// A personal access key as /profile lists it (GET /api/access-keys): its label
+// and dates, never any part of the key or its hash.
+export interface ApiAccessKey {
+  id: string;
+  name: string;
+  // Made "can act for me": may confirm, ask for cover, withdraw it, take covers.
+  canWrite: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+// The one answer that carries the key itself: POST /api/access-keys, once.
+export interface ApiNewAccessKey extends ApiAccessKey {
+  key: string;
 }

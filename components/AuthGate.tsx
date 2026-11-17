@@ -20,12 +20,7 @@ import { signOut, useSession } from "next-auth/react";
 import { useEffect, useState } from "react";
 import LoadingScreen from "@/components/common/LoadingScreen";
 import { useMe } from "@/components/MeProvider";
-
-// Paths that must render for logged-out users. `/login` is the only one; its
-// own chrome is already suppressed in Navbar.
-function isPublicPath(pathname: string): boolean {
-  return pathname === "/login" || pathname.startsWith("/login/");
-}
+import { isPublicPath } from "@/lib/publicPaths";
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

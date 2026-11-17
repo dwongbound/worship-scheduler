@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_INSTRUMENTS,
   CHOIR,
+  DAY_INITIALS,
+  DAY_LABELS,
   INSTRUMENT_LABELS,
   MAX_SLOTS_PER_ROLE,
   ROLE_ORDER,
@@ -61,5 +63,28 @@ describe("choir role", () => {
 
   it("lists every band role plus choir, choir last", () => {
     expect(ALL_INSTRUMENTS).toEqual([...ROLE_ORDER, CHOIR]);
+  });
+});
+
+describe("day initials", () => {
+  // The weekly set time form fits all seven days across a phone by showing
+  // these instead of the full names. Two letters is the narrowest spelling
+  // that still tells the days apart, so the properties worth pinning are
+  // "one per day", "each really abbreviates its own day", and "all distinct".
+  it("gives one abbreviation per day, in the same order as the full names", () => {
+    expect(DAY_INITIALS).toHaveLength(DAY_LABELS.length);
+    DAY_INITIALS.forEach((short, i) => {
+      expect({ i, starts: DAY_LABELS[i].startsWith(short) }).toEqual({
+        i,
+        starts: true,
+      });
+    });
+  });
+
+  it("tells every day apart — which single letters would not", () => {
+    expect(new Set(DAY_INITIALS).size).toBe(7);
+    // The reason this isn't just DAY_LABELS[i][0]: S, T and S repeat.
+    const firstLetters = DAY_LABELS.map((d) => d[0]);
+    expect(new Set(firstLetters).size).toBeLessThan(7);
   });
 });

@@ -326,7 +326,7 @@ export default function OrgTeamsManager({ orgId }: { orgId: string }) {
                     dark:border-gray-600 dark:bg-gray-800"
                 />
                 {groupChatQuery.trim() && (
-                  <ul className="absolute left-0 top-full z-10 mt-1 max-h-56 w-64 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                  <ul className="absolute left-0 top-full z-10 mt-1 max-h-56 w-64 overflow-y-auto overscroll-contain rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
                     {groupChatMatches.length === 0 ? (
                       <li className="px-3 py-1.5 text-sm text-gray-400">
                         No matches.

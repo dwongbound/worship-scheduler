@@ -95,6 +95,9 @@ interface PlayerSelectProps {
   // Assignable candidates (excludes whoever is already in `selected`), already
   // sorted available-first by the caller.
   options: PlayerOption[];
+  // What window the ×n counts were measured over, named for the badge's
+  // title. The caller owns the window, so it owns the words too.
+  countWindow?: string;
   // Called with the chosen user id, or "" to clear the slot (None).
   onChange: (userId: string) => void;
   disabled?: boolean;
@@ -113,6 +116,12 @@ interface PlayerSelectProps {
   // styling is gated behind `lg:`): it answers a question you can only ask with
   // a pointer, on a screen wide enough to show several sets at once.
   highlighted?: boolean;
+  // This pick breaks one of the org's scheduling rules (lib/ruleWarnings.ts).
+  // A yellow EDGE only — no fill, so the locked-indigo and hover-yellow
+  // backgrounds still read underneath it, and so one warned seat in a column
+  // doesn't become the loudest thing on the card. Advisory: the caller never
+  // disables anything on the strength of it.
+  warned?: boolean;
   // Who the pointer is resting on right now, or null for nobody. Fires for the
   // person in the CLOSED control, and — once the menu is open — for whichever
   // option row is under the cursor, so the highlight follows you down the list
@@ -123,11 +132,13 @@ interface PlayerSelectProps {
 export default function PlayerSelect({
   selected,
   options,
+  countWindow = "the selected window",
   onChange,
   disabled,
   dashed,
   locked,
   highlighted,
+  warned,
   onHoverChange,
   widthClass = PLAYER_SELECT_WIDTH,
 }: PlayerSelectProps) {
@@ -279,9 +290,27 @@ export default function PlayerSelect({
             className="w-full rounded border border-indigo-200 bg-white px-2 py-1 text-sm
               focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500
               dark:border-indigo-700 dark:bg-gray-800"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                // Enter takes the first match — the reason to type at all.
+                // The caller sorted the list (freshest/available first), so the
+                // top row is the one the fill itself would pick.
+                e.preventDefault();
+                if (filtered[0]) choose(filtered[0].id);
+                return;
+              }
+              if (e.key === "Escape") {
+                // This control's Escape, not the modal's: every Modal closes on
+                // a document-level keydown, so without stopping it here,
+                // dismissing the list would close the dialog behind it too.
+                e.preventDefault();
+                e.stopPropagation();
+                setOpen(false);
+              }
+            }}
           />
         </div>
-        <ul role="listbox" className="min-h-0 flex-1 overflow-auto pb-1">
+        <ul role="listbox" className="min-h-0 flex-1 overflow-auto overscroll-contain pb-1">
           {/* "None" and the current occupant only show on an unfiltered list. */}
           {!q && (
             <OptionRow
@@ -305,6 +334,7 @@ export default function PlayerSelect({
                 />
               }
               count={selected.count}
+              countWindow={countWindow}
               active
               onClick={() => choose(selected.id)}
               onHover={(hovering) => onHoverChange?.(hovering ? selected.id : null)}
@@ -324,6 +354,7 @@ export default function PlayerSelect({
                 />
               }
               count={o.count}
+              countWindow={countWindow}
               // Unavailable/inactive people are dimmed but still selectable —
               // an admin can deliberately override and assign them anyway.
               muted={!o.available || o.inactive}
@@ -358,11 +389,17 @@ export default function PlayerSelect({
         aria-expanded={open}
         className={`flex w-full items-center justify-between gap-2 rounded border px-2 py-1 text-left text-sm disabled:opacity-50
           ${
-            dashed && !selected
-              ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
-              : locked
-                ? "border-indigo-400 font-medium dark:border-indigo-500"
-                : "border-gray-300 dark:border-gray-600"
+            // Exactly one border-colour utility, like the backgrounds below.
+            // The warning wins the edge: it is the thing you came to notice.
+            // `ring` rather than a second border width — a thicker border
+            // would shift every other box on the card by a pixel.
+            warned
+              ? "border-yellow-500 ring-1 ring-yellow-500 dark:border-yellow-400 dark:ring-yellow-400"
+              : dashed && !selected
+                ? "border-dashed border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400"
+                : locked
+                  ? "border-indigo-400 font-medium dark:border-indigo-500"
+                  : "border-gray-300 dark:border-gray-600"
           }
           ${
             // Backgrounds are kept in their own chain so exactly ONE bg utility
@@ -421,6 +458,7 @@ function OptionRow({
   disabled,
   muted,
   count,
+  countWindow,
   onClick,
   onHover,
 }: {
@@ -433,9 +471,12 @@ function OptionRow({
   // Dimmed but still clickable (e.g. an unavailable person an admin may
   // override). `disabled` blocks selection; `muted` only greys the row.
   muted?: boolean;
-  // Times already scheduled in the caller's chosen window; shown as a muted
+  // Times already scheduled in the window the caller counted; shown as a muted
   // badge so admins can see why the list is ordered the way it is.
   count?: number;
+  // That window, named, for the badge's title — "October", or "the selected
+  // window" where the caller offers a picker instead of a fixed month.
+  countWindow?: string;
   onClick: () => void;
   // Pointer entered (true) or left (false) this row. The caller turns that into
   // the person it represents — "None" has none, so it reports a plain clear.
@@ -467,9 +508,10 @@ function OptionRow({
         {count !== undefined && count > 0 && (
           <span
             className="shrink-0 text-xs text-gray-400 dark:text-gray-500"
-            // The window itself is the caller's to choose (the set detail
-            // modal has a picker for it), so this just states the number.
-            title={`Scheduled ${count} time${count === 1 ? "" : "s"} in the selected window`}
+            // Which window was counted is the caller's business — a fixed
+            // month in the set detail modal, the admin's pick in the review
+            // workspace — so the caller names it and this only says how many.
+            title={`Already on ${count} set${count === 1 ? "" : "s"} in ${countWindow}`}
           >
             ×{count}
           </span>

@@ -95,7 +95,7 @@ export default function GuestTeamsModal({
       footer={
         <>
           <Button size="sm" variant="secondary" onClick={onClose} disabled={busy}>
-            Cancel
+            Close
           </Button>
           <Button
             size="sm"

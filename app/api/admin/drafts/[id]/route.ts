@@ -17,7 +17,14 @@ import type { Prisma } from "@/lib/generated/prisma/client";
 async function authorize(id: string) {
   const draft = await prisma.scheduleDraft.findUnique({
     where: { id },
-    select: { id: true, orgId: true, name: true, isRecovery: true, plan: true },
+    select: {
+      id: true,
+      orgId: true,
+      mode: true,
+      name: true,
+      isRecovery: true,
+      plan: true,
+    },
   });
   if (!draft) return { error: NextResponse.json({ error: "Not found" }, { status: 404 }) };
   const admin = await requireOrgAdminFor(draft.orgId);
@@ -35,6 +42,7 @@ export async function GET(
   const { draft } = found;
   return NextResponse.json({
     id: draft.id,
+    mode: draft.mode,
     name: draft.name,
     isRecovery: draft.isRecovery,
     plan: draft.plan,
@@ -65,8 +73,10 @@ export async function PATCH(
     // against, so the cap has to be re-checked here — re-saving a row that is
     // ALREADY kept is a replacement and needs no free slot, which is what
     // passing the id as `replacingId` says.
+    // Scoped to this draft's own mode: promoting a preview autosave spends a
+    // preview slot, and the generate flow's five are none of its business.
     const siblings = await prisma.scheduleDraft.findMany({
-      where: { orgId: found.draft.orgId },
+      where: { orgId: found.draft.orgId, mode: found.draft.mode },
       select: { id: true, isRecovery: true },
     });
     const allowed = canSaveDraft(siblings, id);

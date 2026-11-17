@@ -9,6 +9,7 @@ import {
   lockedCounts,
   copySet,
   designateMDs,
+  HOVER_HIGHLIGHT_DELAY_MS,
   maxLoad,
   pasteSet,
   popUndo,
@@ -546,5 +547,15 @@ describe("pushUndo / popUndo", () => {
     // equality is the point, not deep equality.
     const stack = pushUndo([], { idx: 0, before: planA, after: planB });
     expect(popUndo(stack, [...planB]).ok).toBe(false);
+  });
+});
+
+describe("HOVER_HIGHLIGHT_DELAY_MS", () => {
+  it("is long enough that only a deliberate rest lights the plan up", () => {
+    // The whole point is that a cursor crossing names on its way somewhere
+    // else triggers nothing. A couple of hundred milliseconds wouldn't do
+    // that, and the tour promises "about two seconds" in words
+    // (lib/scheduleTour.ts), so the number and the copy have to agree.
+    expect(HOVER_HIGHLIGHT_DELAY_MS).toBe(2000);
   });
 });

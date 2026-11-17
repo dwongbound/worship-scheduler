@@ -13,6 +13,7 @@ import { prisma } from "@/lib/prisma";
 import type { SlotCapacityMap } from "@/lib/constants";
 import { getTeamCatalog } from "@/lib/teamRoleStore";
 import { resolveTeamCapacities } from "@/lib/teamRoles";
+import { syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 export async function DELETE(
   req: NextRequest,
@@ -81,5 +82,6 @@ export async function DELETE(
     prisma.set.update({ where: { id }, data: { slotCapacities: capacities } }),
   ]);
 
+  if (assignment) syncSetsAfterResponse(id);
   return NextResponse.json({ ok: true });
 }

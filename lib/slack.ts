@@ -239,6 +239,7 @@ export type SetLike = { label: string | null; startsAt: Date };
 const EMOJI = {
   coverRequested: "\u{1F648}", // 🙈 see-no-evil — someone needs covering for
   coverTaken: "\u{2705}", //      ✅ settled (pending an admin's nod)
+  coverDeclined: "\u{1F645}", //  🙅 someone passed — the request is still open
   swapProposed: "\u{1F501}", //   🔁 a two-way trade
   swapAccepted: "\u{2705}", //    ✅
   swapDeclined: "\u{1F6AB}", //   🚫
@@ -312,21 +313,29 @@ function channelNameForSet(set: SetLike): string {
     .slice(0, 72);
 }
 
-// "Worship Leader: Alice\nVocals: Bob, Carol\n…" in scarce-first role order,
-// skipping roles nobody is filling.
+// "Worship Leader: Alice (MD)\nVocals: Bob, Carol\n…" in scarce-first role
+// order, skipping roles nobody is filling.
 export function teamRosterText(
-  assignments: { role: Instrument; user: { name: string } }[],
+  assignments: { role: Instrument; user: { id?: string; name: string } }[],
   // The set's team catalog, so roles read in that team's own names and order.
   // Omitted → the built-in ordering, with unknown keys humanized by roleLabel.
   catalog?: TeamRoleDef[],
   // The provider's markup. Defaults to Slack's so the existing output (and its
   // tests) are unchanged; real callers pass `messaging.fmt`.
-  fmt: MessageFormat = SLACK_FORMAT
+  fmt: MessageFormat = SLACK_FORMAT,
+  // The set's designated MD, marked "(MD)" after their name — the same mark
+  // the weekly summary uses, so who is leading reads the same in every
+  // message. Null/omitted (a team with no MD role, or a set that hasn't been
+  // given one) marks nobody, and a caller that doesn't carry user ids can't
+  // match one either.
+  mdUserId?: string | null
 ): string {
   const namesByRole = new Map<Instrument, string[]>();
   for (const a of assignments) {
     const names = namesByRole.get(a.role) ?? [];
-    names.push(a.user.name);
+    names.push(
+      mdUserId && a.user.id === mdUserId ? `${a.user.name} (MD)` : a.user.name
+    );
     namesByRole.set(a.role, names);
   }
   const order = catalog?.length
@@ -419,6 +428,7 @@ export async function notifySwapRequested(assignmentId: string): Promise<void> {
               endMinute: true,
               startDate: true,
               endDate: true,
+              exceptDates: true, // days freed out of a weekly rule
             },
           },
         },
@@ -492,6 +502,54 @@ export async function notifySwapTaken(
     `${lead(EMOJI.coverTaken, "Cover Taken", fmt)} ${takerName} covering ` +
     `${roleLabel(assignment.role)} slot on ${setName(assignment.set, fmt)} ` +
     `at ${setWhen(assignment.set)}. Pending admin approval.`;
+  await dm.messaging.postDm(owner, text);
+}
+
+/**
+ * Someone passed on an open cover request. DM the owner — the slot is still
+ * theirs, so this is news about who ISN'T coming, not a change to the roster.
+ *
+ * `declinerName` and `note` are passed in rather than read back off the
+ * CoverDecline row: the caller already has both, and the note is the only part
+ * of the message the owner can't work out for themselves.
+ */
+export async function notifyCoverDeclined(
+  assignmentId: string,
+  declinerName: string,
+  note: string | null
+): Promise<void> {
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    include: {
+      user: { select: { id: true } },
+      set: { select: { label: true, startsAt: true, orgId: true } },
+    },
+  });
+  if (!assignment) return;
+  const dm = await orgMessagingContext(assignment.set.orgId, "COVER_DECLINED");
+  if (!dm) return;
+
+  const owner = await prisma.orgMembership.findUnique({
+    where: {
+      userId_orgId: { userId: assignment.userId, orgId: assignment.set.orgId },
+    },
+    select: DM_FIELDS,
+  });
+  if (!owner?.slackUserId) return;
+
+  const fmt = dm.messaging.fmt;
+  // The note hangs off the end as a quote, exactly the way the cover REQUEST
+  // notice carries the owner's own note — so the pair reads as two halves of
+  // one conversation. No note just ends the sentence.
+  const reason = note ? `: "${note}"` : "";
+  // Their row is on the My Sets tab, where the slot is still theirs to re-ask
+  // about or hand back.
+  const url = appUrl(setLinkPath(assignment.setId, "set-manager"));
+  const text =
+    `${lead(EMOJI.coverDeclined, "Cover Declined", fmt)} ${declinerName} can't take ` +
+    `your ${roleLabel(assignment.role)} slot on ${setName(assignment.set, fmt)} ` +
+    `at ${setWhen(assignment.set)}${reason}. Still open to everyone else — ` +
+    `see it ${linkOr(url, "here", fmt)}.`;
   await dm.messaging.postDm(owner, text);
 }
 
@@ -612,13 +670,18 @@ export async function notifySwapResolved(
         `${setWhen(p.fromAssignment.set)} for ${roleLabel(p.fromAssignment.role)}.`,
     ].join("\n");
   } else {
-    // Their reason leads, because it's the only part they don't already know.
-    // Punctuated for them when they didn't punctuate it themselves.
+    // Deliberately the same sentence as the COVER decline (notifyCoverDeclined):
+    // who said no, to what, and their note as a QUOTE on the end. The two are
+    // the same news — "this person isn't taking your slot" — so a column of
+    // them should read alike, and a bare, unattributed note read as the app's
+    // own words rather than something a person typed.
     const note = p.declineNote?.trim();
-    const reason = note ? `${note}${/[.!?]$/.test(note) ? "" : "."} ` : "";
+    const reason = note ? `: "${note}"` : "";
     text =
-      `${lead(EMOJI.swapDeclined, "Swap declined", fmt)} ${reason}You're still on ` +
-      `${setName(p.fromAssignment.set, fmt)} at ${setWhen(p.fromAssignment.set)}.`;
+      `${lead(EMOJI.swapDeclined, "Swap Declined", fmt)} ${who} can't take your ` +
+      `${roleLabel(p.fromAssignment.role)} slot on ` +
+      `${setName(p.fromAssignment.set, fmt)} at ` +
+      `${setWhen(p.fromAssignment.set)}${reason}. You're still on it.`;
   }
   // Its own line under a two-line accepted notice, inline after the one-line
   // decline — a trailing "See it here." hanging off the second bullet read as
@@ -734,69 +797,6 @@ export async function notifyAdminsPendingApproval(
 }
 
 /**
- * Tell ONE person their own place on a set changed — they were put on it, taken
- * off it, or handed someone else's slot. This is the personal counterpart to
- * notifySetChange: that one talks to the set's group chat (and only once the
- * chat exists and its lead window has opened), which means the person who most
- * needs to know can hear nothing at all. A DM always reaches them.
- *
- * Quiet in the cases where a message would be noise:
- *
- *   • the set has already happened → nothing they can do about it now.
- *   • they haven't linked Slack in this org → postDm no-ops.
- *
- * Note there's deliberately NO group-chat-style lead window here: being added
- * to a set two months out is exactly when you want to hear about it.
- *
- * Best-effort and non-throwing, like every notifier here — a Slack outage must
- * never fail the roster edit that triggered it.
- */
-export async function notifyAssignmentChange(
-  setId: string,
-  userId: string,
-  change: {
-    kind: "added" | "removed";
-    role: Instrument;
-    // The team catalog the role key belongs to, so it reads in that team's own
-    // words. Omit and roleLabel falls back to the built-in/humanized name.
-    catalog?: TeamRoleDef[];
-  }
-): Promise<void> {
-  try {
-    const set = await prisma.set.findUnique({
-      where: { id: setId },
-      select: { label: true, startsAt: true, orgId: true },
-    });
-    if (!set || set.startsAt < new Date()) return;
-    const dm = await orgMessagingContext(set.orgId, "ROSTER_CHANGE");
-    if (!dm) return;
-
-    const member = await prisma.orgMembership.findUnique({
-      where: { userId_orgId: { userId, orgId: set.orgId } },
-      select: DM_FIELDS,
-    });
-    if (!member?.slackUserId) return;
-
-    const fmt = dm.messaging.fmt;
-    const role = roleLabel(change.role, change.catalog);
-    // Deliberately says nothing about who else was involved. An admin swapping
-    // one person for another is NOT a cover — the person who asked for cover is
-    // the one who started it — so naming a counterpart here read as if someone
-    // had requested something they never did.
-    const text =
-      change.kind === "added"
-        ? `${lead(EMOJI.setAdded, "New Set", fmt)} ${role} for ` +
-          `${setName(set, fmt)} on ${setWhen(set)}.`
-        : `${lead(EMOJI.setRemoved, "Set Update", fmt)} No longer on ` +
-          `${setName(set, fmt)} on ${setWhen(set)}.`;
-
-    await dm.messaging.postDm(member, text);
-  } catch (err) {
-    console.error("[slack] assignment-change DM failed", err);
-  }
-}
-
-/**
  * One person's newly-created seat, for the batched notice below.
  */
 export type NewSeat = {
@@ -811,7 +811,7 @@ export type NewSeat = {
 
 /**
  * Applying a generated plan seats a lot of people across a lot of sets at once.
- * DMing per seat (what notifyAssignmentChange would do) turns one admin click
+ * DMing per seat turns one admin click
  * into a dozen pings for the same person, so this batches instead: ONE message
  * each, listing every set they just picked up, oldest first.
  *
@@ -851,36 +851,151 @@ export async function notifyAssignmentsAdded(
       select: { ...DM_FIELDS, userId: true },
     });
 
-    const calendarUrl = appUrl("/calendar");
+    const mySetsUrl = appUrl(MY_SETS_PATH);
     await Promise.all(
       members.map((m) => {
         const list = byUser.get(m.userId) ?? [];
-        // Each line's set links to its own detail modal, so a five-set message
-        // is five ways in rather than one trip to the calendar and a hunt for
-        // the right day. A provider without inline links (Discord) renders the
-        // label and the URL side by side instead — see MessageFormat.link.
         const fmt = dm.messaging.fmt;
-        // The DATE carries each line's link, not the set name: a set name is
-        // code (see setName) and no provider renders markup inside a link
-        // label, so linking the name would strip the very formatting that
-        // makes a roster line scannable.
-        const lines = list.map((seat) => {
-          const link = appUrl(setLinkPath(seat.setId));
-          const when = setWhen(seat.set);
-          return (
+        // No per-set links: a list of them is a wall of URLs on any provider
+        // without inline links, and My Sets already shows every one of them
+        // with its Confirm button — so the message ends with that one link.
+        const lines = list.map(
+          (seat) =>
             `${BULLET} ${roleLabel(seat.role, seat.catalog)} for ` +
-            `${setName(seat.set, fmt)} on ${linkOr(link, when, fmt)}.`
-          );
-        });
+            `${setName(seat.set, fmt)} on ${setWhen(seat.set)}.`
+        );
         const text =
           `${lead(EMOJI.setAdded, `New Sets ${list.length}`, fmt)}\n` +
           `${lines.join("\n")}` +
-          (calendarUrl ? `\nConfirm ${fmt.link(calendarUrl, "here")}.` : "");
+          mySetsFooter(mySetsUrl, true, fmt);
         return dm.messaging.postDm(m, text);
       })
     );
   } catch (err) {
     console.error("[slack] batched assignment DMs failed", err);
+  }
+}
+
+/** The My Sets tab — where a batched DM points instead of linking each set. */
+const MY_SETS_PATH = "/set-manager";
+
+/**
+ * The one link closing a multi-set DM. "Confirm" only when they picked
+ * something up; a removal-only message just points at the tab. Empty when
+ * there's no app URL to link to.
+ */
+function mySetsFooter(url: string, hasAdded: boolean, fmt: MessageFormat): string {
+  if (!url) return "";
+  return `\n${hasAdded ? "Confirm in" : "See"} ${fmt.link(url, "My Sets")}.`;
+}
+
+/**
+ * One seat someone gained or lost in a roster save, for the batched notice
+ * below.
+ */
+export type SeatChange = {
+  userId: string;
+  kind: "added" | "removed";
+  role: Instrument;
+  setId: string;
+  catalog?: TeamRoleDef[];
+};
+
+/**
+ * The text of one person's roster DM. A lone change reads exactly like the
+ * per-seat DM always did; several become ONE message — the sets they picked up,
+ * then the ones they came off, each oldest first, closed by ONE link to the
+ * My Sets tab (no per-set links — see notifyAssignmentsAdded).
+ * Pure, so the wording is testable without a transport.
+ *
+ * Deliberately says nothing about who else was involved. An admin swapping one
+ * person for another is NOT a cover (the person who asked for cover is the one
+ * who started it), so naming a counterpart read as if someone had requested
+ * something they never did.
+ */
+export function rosterDmText(
+  changes: (Omit<SeatChange, "userId"> & { set: SetLike })[],
+  fmt: MessageFormat,
+  mySetsUrl: string
+): string {
+  if (changes.length === 1) {
+    const [c] = changes;
+    return c.kind === "added"
+      ? `${lead(EMOJI.setAdded, "New Set", fmt)} ${roleLabel(c.role, c.catalog)} for ` +
+          `${setName(c.set, fmt)} on ${setWhen(c.set)}.`
+      : `${lead(EMOJI.setRemoved, "Set Update", fmt)} No longer on ` +
+          `${setName(c.set, fmt)} on ${setWhen(c.set)}.`;
+  }
+  const byDate = (a: { set: SetLike }, b: { set: SetLike }) =>
+    a.set.startsAt.getTime() - b.set.startsAt.getTime();
+  const line = (c: (typeof changes)[number]) =>
+    `${BULLET} ${roleLabel(c.role, c.catalog)} for ${setName(c.set, fmt)} on ` +
+    `${setWhen(c.set)}.`;
+  const added = changes.filter((c) => c.kind === "added").sort(byDate);
+  const removed = changes.filter((c) => c.kind === "removed").sort(byDate);
+  const blocks: string[] = [];
+  if (added.length > 0) {
+    blocks.push(
+      `${lead(EMOJI.setAdded, `New Sets ${added.length}`, fmt)}\n` +
+        added.map(line).join("\n")
+    );
+  }
+  if (removed.length > 0) {
+    blocks.push(
+      `${lead(EMOJI.setRemoved, `No Longer On ${removed.length}`, fmt)}\n` +
+        removed.map(line).join("\n")
+    );
+  }
+  return blocks.join("\n\n") + mySetsFooter(mySetsUrl, added.length > 0, fmt);
+}
+
+/**
+ * A roster save's DMs, ONE per person however many sets it touched. Saving a
+ * whole plan from the calendar's Preview Mode used to DM per seat, so an admin
+ * filling a month of one role sent each person a dozen pings; this is the
+ * grouped version both roster routes now use.
+ *
+ * Same quiet rules as the per-seat DM: past sets are dropped, and anyone
+ * without linked Slack in this org is skipped. Best-effort and non-throwing —
+ * the save has already landed.
+ */
+export async function notifyRosterChanges(
+  orgId: string,
+  changes: SeatChange[]
+): Promise<void> {
+  try {
+    if (changes.length === 0) return;
+    const sets = await prisma.set.findMany({
+      where: { id: { in: [...new Set(changes.map((c) => c.setId))] } },
+      select: { id: true, label: true, startsAt: true },
+    });
+    const now = new Date();
+    const setById = new Map(sets.filter((s) => s.startsAt >= now).map((s) => [s.id, s]));
+    const byUser = new Map<string, (SeatChange & { set: SetLike })[]>();
+    for (const c of changes) {
+      const set = setById.get(c.setId);
+      if (!set) continue;
+      byUser.set(c.userId, [...(byUser.get(c.userId) ?? []), { ...c, set }]);
+    }
+    if (byUser.size === 0) return;
+    const dm = await orgMessagingContext(orgId, "ROSTER_CHANGE");
+    if (!dm) return;
+
+    const members = await prisma.orgMembership.findMany({
+      where: { orgId, userId: { in: [...byUser.keys()] }, slackUserId: { not: null } },
+      select: { ...DM_FIELDS, userId: true },
+    });
+    const mySetsUrl = appUrl(MY_SETS_PATH);
+    await Promise.all(
+      members.map((m) =>
+        dm.messaging.postDm(
+          m,
+          rosterDmText(byUser.get(m.userId) ?? [], dm.messaging.fmt, mySetsUrl)
+        )
+      )
+    );
+  } catch (err) {
+    console.error("[slack] roster-change DMs failed", err);
   }
 }
 
@@ -908,8 +1023,14 @@ export async function messageSetTeamOnSlack(
       // The team's catalog, so the roster reads in this team's own role names
       // and order rather than the built-in ones.
       team: { select: { roles: { orderBy: { order: "asc" } } } },
+      // The set's MD, so the roster says who is leading (see teamRosterText).
+      mdUserId: true,
       assignments: {
-        select: { userId: true, role: true, user: { select: { name: true } } },
+        select: {
+          userId: true,
+          role: true,
+          user: { select: { id: true, name: true } },
+        },
       },
     },
   });
@@ -965,7 +1086,8 @@ export async function messageSetTeamOnSlack(
   const text =
     `${EMOJI.groupChat} Thanks for serving! Your upcoming set is ` +
     `${setLabelLong(set, messaging.fmt)}.\n\n` +
-    `Here's everyone playing in it:\n${teamRosterText(set.assignments, set.team?.roles, messaging.fmt)}`;
+    `Here's everyone playing in it:\n` +
+    `${teamRosterText(set.assignments, set.team?.roles, messaging.fmt, set.mdUserId)}`;
   const posted = await messaging.postToChannel(channelId, text);
 
   // Auto-build the set's collaborative Spotify playlist alongside the group chat
@@ -1013,7 +1135,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  *   • before startsAt − leadDays → too early: that's the window in which the
  *     chat gets created, and there may be no chat (or audience) yet.
  *   • no channel on the set → nothing to post into. The chat is created by the
- *     cron (or the Slack Team button); we never create one just to complain.
+ *     cron (or the Create Group button); we never create one just to complain.
  *   • the set has already happened → the channel is being archived; stay quiet.
  *
  * Best-effort and non-throwing: a Slack outage must never fail the db mutation
@@ -1245,7 +1367,7 @@ export async function sendTeamWeeklySummary(
  *
  * The lastSent guard is per membership and compares against the START of today,
  * so this is safe to call repeatedly — the cron fires once a day, and running it
- * more often just delivers closer to 8 AM rather than duplicating.
+ * more often just delivers closer to 6:30 AM rather than duplicating.
  * Best-effort and non-throwing, like every other sender here.
  */
 export async function sendDailyDigests(
@@ -1254,7 +1376,7 @@ export async function sendDailyDigests(
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const minutesNow = now.getHours() * 60 + now.getMinutes();
   // Outside the morning window this isn't a digest run — bail without sending.
-  // The window is deliberately wider than the 8 AM target: the UTC cron slot
+  // The window is deliberately wider than the 6:30 AM target: the UTC cron slot
   // shifts an hour against local time across DST, so an exact-time check would
   // (and did) skip the whole winter. See the constants for the full reasoning.
   if (

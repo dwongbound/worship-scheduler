@@ -62,7 +62,11 @@ export function eligibleMDIds(
   // that pick a single set's MD in isolation pass nothing and get the old
   // behaviour; the generate flow chains it down the run so nobody leads two in
   // a row (see app/api/admin/generate).
-  previousMDId?: string | null
+  previousMDId?: string | null,
+  // Which roles count as leading, best first. Defaults to the built-in
+  // MD_ROLES; the scheduler passes whatever the org's "Who can lead" rule says
+  // (lib/schedulingRules.ts resolveRoleBehavior).
+  mdRoles: string[] = MD_ROLES
 ): string[] {
   const assignments = effectiveHolders(input);
   const wl = worshipLeaderIds(assignments);
@@ -70,7 +74,7 @@ export function eligibleMDIds(
   const ids: string[] = [];
   // Walk the MD roles in preference order — electric guitar first, since that's
   // who normally MDs, and only then keys/bass.
-  for (const role of MD_ROLES) {
+  for (const role of mdRoles) {
     const inRole = assignments
       .filter((a) => a.role === role && a.isMD && !wl.has(a.userId))
       .sort((a, b) => {
@@ -95,9 +99,10 @@ export function eligibleMDIds(
 // see eligibleMDIds for exactly how far that preference reaches.
 export function defaultMDId(
   assignments: MDAssignment[],
-  previousMDId?: string | null
+  previousMDId?: string | null,
+  mdRoles?: string[]
 ): string | null {
-  return eligibleMDIds(assignments, previousMDId)[0] ?? null;
+  return eligibleMDIds(assignments, previousMDId, mdRoles)[0] ?? null;
 }
 
 // Whether a stored mdUserId is still a valid MD for the set's current roster —

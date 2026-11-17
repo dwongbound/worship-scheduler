@@ -1,8 +1,8 @@
 // E2E: saving a generated preview as a draft, reopening it, and deleting it.
 //
-// Drafts are Create-tab only: the calendar's Preview Mode mirrors real sets, so
-// there's nothing to park. The Drafts button is hidden until one exists, which
-// is the first thing this checks.
+// The Create tab's own five slots — Preview Mode keeps a separate pile of its
+// own (tests/e2e/preview-mode.spec.ts). The Drafts button is hidden until one
+// exists, which is the first thing this checks.
 import { expect, test } from "@playwright/test";
 import { login, seedOwnSetTime } from "./helpers";
 
@@ -22,8 +22,11 @@ async function openPreview(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Generate New Schedule" }).click();
   const options = page.getByRole("dialog");
   const scope = options.getByLabel("Schedule for");
+  // The seeded month-long "Fall 2026" request, not just the newest one: an
+  // earlier spec sends a ONE-day request for today, and on a weekday no
+  // template falls on that window generates an empty plan.
   const reqValue = await scope
-    .locator('option[value^="req:"]')
+    .locator('option[value^="req:"]', { hasText: /^Fall 2026 \(/ })
     .first()
     .getAttribute("value");
   await scope.selectOption(reqValue!);
@@ -89,6 +92,9 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
   await expect(
     page.getByRole("dialog").getByRole("heading", { name: "Review generated schedule" })
   ).toBeVisible();
+  // And the URL now names the plan, by its NAME rather than its id, so the
+  // workspace someone is looking at can be sent to someone else.
+  await expect(page).toHaveURL(/\?draft=advent-plan$/);
 
   // Re-saving an opened draft prefills its name, and says it replaces it.
   await page.getByRole("button", { name: "Save Draft" }).click();
@@ -97,7 +103,7 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
   await expect(reSave.getByText(/This replaces the draft you opened/)).toBeVisible();
   // Replacing one you already have is free — the cap only bites on new ones.
   await expect(reSave.getByText(/doesn’t use another/)).toBeVisible();
-  await reSave.getByRole("button", { name: "Cancel" }).click();
+  await reSave.getByRole("button", { name: "Close", exact: true }).click();
 
   // Back out of the preview again, then delete the draft from the list.
   await page.getByRole("button", { name: "Discard" }).click();
@@ -106,6 +112,25 @@ test("an admin saves a preview as a draft, reopens it, and deletes it", async ({
     .filter({ hasText: "Discard this preview?" })
     .getByRole("button", { name: "Discard" })
     .click();
+  // Leaving takes the link with it, and following it cold brings the plan
+  // straight back — which is the whole point of having one.
+  await expect(page).toHaveURL(/\/create$/);
+  await page.goto("/create?draft=advent-plan");
+  await expect(
+    page.getByRole("dialog").getByRole("heading", { name: "Review generated schedule" })
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Discard" }).click();
+  await page
+    .getByRole("dialog")
+    .filter({ hasText: "Discard this preview?" })
+    .getByRole("button", { name: "Discard" })
+    .click();
+
+  // A link naming no draft says so rather than opening the wrong plan.
+  await page.goto("/create?draft=no-such-plan");
+  await expect(page.getByText(/doesn't match a saved plan/)).toBeVisible();
+
+  await page.goto("/create");
   await page.getByRole("button", { name: "Drafts" }).click();
   await page.getByRole("button", { name: "Delete Advent plan" }).click();
 

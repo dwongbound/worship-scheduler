@@ -13,7 +13,7 @@
 // looks exactly as it will once saved. Save then diffs the copy against the
 // original (lib/setDraft.ts) and issues only the calls that changed, then CLOSES
 // the modal — a save is the end of the job (a failed one keeps the modal and
-// the staged edits up, with the error in a toast). Cancel, ✕, Escape and the
+// the staged edits up, with the error in a toast). Close, ✕, Escape and the
 // backdrop all route through a confirmation that LISTS the unsaved changes
 // first. Two things stay immediate, because neither can be
 // staged honestly: deleting the set, messaging the team on Slack (that one
@@ -47,9 +47,9 @@ import Button from "./common/Button";
 import Dropdown from "./common/Dropdown";
 import InfoTooltip from "./common/InfoTooltip";
 import Checkbox from "./common/Checkbox";
-import Select from "./common/Select";
 import SlackIcon from "./common/SlackIcon";
 import AttentionDot from "./common/AttentionDot";
+import SetPractices from "./SetPractices";
 import Toast, { type ToastMessage } from "./common/Toast";
 import SlotCapacityEditor from "./SlotCapacityEditor";
 import StatusBadge from "./StatusBadge";
@@ -86,15 +86,20 @@ import {
   availableGuestMembers,
   buildSchedule,
   isUserAvailable,
+  type ExistingAssignment,
+  type FixedSet,
   type UnavailabilityRule,
 } from "@/lib/scheduler";
-import { isActiveForSet } from "@/lib/stagedPlan";
 import {
-  DEFAULT_SET_METRIC,
-  type LoadMetric,
+  ruleSentence,
+  type RuleNames,
+  type SchedulingRule,
+} from "@/lib/schedulingRules";
+import { isActiveForSet, ruleHeldRoles } from "@/lib/stagedPlan";
+import {
   metricToParam,
-  parseLoadMetric,
-  SET_LOAD_METRICS,
+  serveMonthLabel,
+  SET_LOAD_METRIC,
 } from "@/lib/loadMetrics";
 import { schedulableRolesByTeam } from "@/lib/roster";
 import {
@@ -142,10 +147,16 @@ interface SetDetailModalProps {
   onChanged?: () => void | Promise<void>; // refetch after an edit
 }
 
-// Where the assignment dropdowns' ×n window is remembered. Session-scoped and
-// shared by every set: an admin who wants to weigh people by the past 3 months
-// wants that for the whole sitting, not one set at a time.
-const LOAD_METRIC_KEY = "worship:set-load-metric";
+// The rules holding a seat open, in the exact words the rules editor shows —
+// nothing added. The mark beside it already says it's held; what the reader
+// needs from the (i) is WHICH rule to go and change.
+function heldReason(held: SchedulingRule[], names: RuleNames): string {
+  return held.map((r) => ruleSentence(r.params, names)).join("; ");
+}
+
+// Shared "nothing held" answer for the rule marker below, so a set in an org
+// with no required rules allocates nothing per render.
+const EMPTY_HELD = new Map<Instrument, SchedulingRule[]>();
 
 export default function SetDetailModal({
   set: savedSet,
@@ -173,7 +184,7 @@ export default function SetDetailModal({
   // other irreversible step here, rather than an inline row you can hit twice.
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   // Stacked "you have unsaved changes" warning, raised by any attempt to leave
-  // with staged edits (Cancel, ✕, Escape, the backdrop).
+  // with staged edits (Close, ✕, Escape, the backdrop).
   const [confirmingDiscard, setConfirmingDiscard] = useState(false);
   // Filled slot whose "✕" was clicked — a confirm modal asks before removing
   // the person along with their slot. (Empty slots are removed right away.)
@@ -181,7 +192,7 @@ export default function SetDetailModal({
   // Slack "message team" state. The button is shown to everyone (anyone on the
   // team can start the group chat); it's disabled until this org connects Slack.
   const [slackConfigured, setSlackConfigured] = useState(false);
-  // The result of the last "Slack Team" click, shown as a floating toast rather
+  // The result of the last "Create Group" click, shown as a floating toast rather
   // than inline text — the outcome is transient, and a line of copy appearing
   // under the action bar shoved the whole modal body down.
   const [toast, setToast] = useState<ToastMessage | null>(null);
@@ -317,7 +328,46 @@ export default function SetDetailModal({
     };
   }, [guestDraft, orgTeams, set?.org?.id]);
 
-  // Is the Slack bot configured for this org? Drives whether the "Slack Team"
+  // The org's scheduling rules plus what "Auto schedule" needs to obey them for
+  // THIS set (the sets around it, a month of bookings either side). Admins
+  // only, fetched once per opened set; until it lands — or if it can't be read
+  // — the fill is plain rotation, exactly as before rules existed.
+  const [ruleData, setRuleData] = useState<{
+    rules: SchedulingRule[];
+    fixedSets: FixedSet[];
+    periodBookings: ExistingAssignment[];
+  } | null>(null);
+  const ruleOrgId = set?.org?.id ?? "";
+  useEffect(() => {
+    setRuleData(null);
+    if (!isAdmin || !openSetId || !ruleOrgId) return;
+    let cancelled = false;
+    fetch(`/api/orgs/${ruleOrgId}/rules?forSet=${encodeURIComponent(openSetId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setRuleData({
+          rules: d.rules ?? [],
+          fixedSets: (d.fixedSets ?? []).map((f: FixedSet & { startsAt: string }) => ({
+            ...f,
+            startsAt: new Date(f.startsAt),
+          })),
+          periodBookings: (d.periodBookings ?? []).map(
+            (b: { userId: string; startsAt: string; teamId?: string | null }) => ({
+              userId: b.userId,
+              startsAt: new Date(b.startsAt),
+              teamId: b.teamId ?? null,
+            })
+          ),
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, openSetId, ruleOrgId]);
+
+  // Is the Slack bot configured for this org? Drives whether the "Create Group"
   // button is enabled (it's shown to everyone regardless).
   // Only fetch while a set is actually open — this modal is always mounted (with
   // set=null) on the calendar page, so gating on `set` avoids a wasted request
@@ -329,7 +379,7 @@ export default function SetDetailModal({
   useEffect(() => {
     if (!set) return;
     let cancelled = false;
-    // Per-org: the "Slack Team" button only works if the set's OWN org has
+    // Per-org: the "Create Group" button only works if the set's OWN org has
     // connected Slack, so ask about that org specifically.
     fetchSlackStatus(slackStatusOrgId).then(
       (s) => !cancelled && setSlackConfigured(s.enabled)
@@ -359,38 +409,25 @@ export default function SetDetailModal({
     [users]
   );
 
-  // ── The ×n load window ─────────────────────────────────────────────────
+  // ── The ×n load count ──────────────────────────────────────────────────
   // How busy each person already is, which orders the assignment dropdowns
-  // least-scheduled-first and feeds the in-browser auto fill. WHICH window that
-  // is measured over is the admin's pick (the selector above the roster), so
-  // the numbers are counted server-side per window rather than from whatever
-  // the calendar happened to have fetched — "past 3 months" is data this page
-  // never holds. Same endpoint and same vocabulary as the generate-review
-  // modal's Team load panel (lib/loadMetrics.ts).
+  // least-scheduled-first and feeds the in-browser auto fill. ALWAYS the
+  // calendar month this set falls in: one set is one month's problem, and a
+  // picker offering "past 3 months" or "±2 weeks" here was 176px of control
+  // for a question nobody asked of a single set — on a phone it took the whole
+  // action bar by itself. The review workspace keeps its picker, because a
+  // plan spans months and no single month describes it.
+  //
+  // Counted server-side rather than from whatever the calendar happened to
+  // fetch, and the same endpoint and vocabulary as that panel
+  // (lib/loadMetrics.ts).
   //
   // (All of this sits above the early return to keep hook order stable.)
-  const [metric, setMetric] = useState<LoadMetric>(() => {
-    if (typeof window === "undefined") return DEFAULT_SET_METRIC;
-    // Session-scoped, so the window follows the admin from set to set.
-    const stored = parseLoadMetric(
-      window.sessionStorage.getItem(LOAD_METRIC_KEY)
-    );
-    // "plan" is the review modal's own metric and means nothing here.
-    return stored === null || stored === "plan" ? DEFAULT_SET_METRIC : stored;
-  });
-  const metricKey = metricToParam(metric);
-  const pickMetric = (next: LoadMetric) => {
-    setMetric(next);
-    try {
-      window.sessionStorage.setItem(LOAD_METRIC_KEY, metricToParam(next));
-    } catch {
-      // Private-mode storage failures are cosmetic — the pick still applies to
-      // this modal, it just won't be remembered.
-    }
-  };
-  // Tallies keyed by SET + window. The set has to be part of the key because
-  // the neighbourhood windows ("this set's month", "±2 weeks") are measured
-  // around THAT set's date, so another set's numbers aren't reusable.
+  const metricKey = metricToParam(SET_LOAD_METRIC);
+  // The month in words, for the (i) and for the ×N badge's own title.
+  const serveMonth = serveMonthLabel(set?.startsAt ?? new Date());
+  // Tallies keyed by SET + month. The set has to be part of the key because
+  // the month is THAT set's, so another set's numbers aren't reusable.
   //
   // Keying beats clearing on a set change: this modal stays mounted between
   // sets, and a clear-on-open effect could only empty the cache in a LATER
@@ -472,6 +509,16 @@ export default function SetDetailModal({
     (savedSet ?? set).assignments.map((a) => a.user.id)
   ).size;
   const capacities = resolveTeamCapacities(catalog, set.slotCapacities);
+  // How a rule's ids read as words, for the "held by a rule" tooltip. A rule
+  // naming a recurring set or another set falls back to the generic wording
+  // RuleNames allows — the sentence still reads.
+  const ruleNames: RuleNames = {
+    team: (id) => (id === (set.teamId ?? set.team?.id) ? set.team?.name ?? "this team" : "another team"),
+    user: (id) => users.find((u) => u.id === id)?.name ?? "someone",
+    role: (key) => roleLabel(key, catalog),
+    template: () => "a recurring set",
+    set: () => "another set",
+  };
   // What to call a role here — this team's own label, with the built-in name
   // (then a humanized key) as the fallback for a role it has since dropped.
   const labelFor = (role: string) => roleLabel(role, catalog);
@@ -553,7 +600,7 @@ export default function SetDetailModal({
   // meant anyone browsing the calendar could create a private channel, invite
   // a roster they're not part of, and post into it.
   const canMessageTeam = isAdmin || isSetMember;
-  // Anyone with any editable surface gets the Cancel/Save footer; a pure
+  // Anyone with any editable surface gets the Close/Save footer; a pure
   // viewer gets a plain Close, since there's nothing here for them to stage.
   const canEditAnything = canEditNotes || canEditTeam || canEditSongs;
 
@@ -707,6 +754,41 @@ export default function SetDetailModal({
       ),
     }));
 
+  // Roles whose open slot a REQUIRED scheduling rule is holding — the same
+  // check the review workspace marks "!" with, so "Auto schedule" leaving a
+  // seat empty reads the same way in both places. Empty (and free) unless the
+  // org actually has a required rule; see lib/stagedPlan.ts ruleHeldRoles.
+  const heldByRule =
+    (ruleData?.rules ?? []).some((r) => r.enabled && r.tier === "REQUIRED")
+      ? ruleHeldRoles(
+          {
+            startsAt: set.startsAt,
+            label: set.label ?? null,
+            durationMinutes: set.durationMinutes,
+            requiresMD: set.requiresMD,
+            mdUserId,
+            slotCapacities: set.slotCapacities ?? null,
+            existing: true,
+            setId: set.id,
+            teamId: set.teamId ?? set.team?.id ?? null,
+            templateId:
+              ruleData?.fixedSets.find((f) => f.setId === set.id)?.templateId ?? null,
+            assignments: ownAssignments.map((a) => ({
+              userId: a.user.id,
+              role: a.role,
+            })),
+          },
+          schedulerPool(),
+          rules,
+          catalog,
+          {
+            schedulingRules: ruleData?.rules ?? [],
+            fixedSets: ruleData?.fixedSets ?? [],
+            periodBookings: ruleData?.periodBookings ?? [],
+          }
+        )
+      : EMPTY_HELD;
+
   // Fill this set's OWN empty slots, keeping everyone already assigned in place
   // (their seats are constraints the fill works around). Never removes or moves
   // anyone, so there's nothing to confirm.
@@ -723,6 +805,11 @@ export default function SetDetailModal({
           roles: catalog,
           capacities,
           requiresMD: set.requiresMD,
+          // This set's own row from the rule context names its recurring set
+          // (recognised server-side, the way the generator would).
+          setId: set.id,
+          templateId:
+            ruleData?.fixedSets.find((f) => f.setId === set.id)?.templateId ?? null,
           preAssigned: ownAssignments.map((a) => ({
             userId: a.user.id,
             role: a.role,
@@ -736,7 +823,14 @@ export default function SetDetailModal({
       // the dropdowns sort by, so the fill and the manual picks agree on who's
       // fresh. Empty until that window lands, which only costs the fill its
       // balancing tiebreak.
-      new Map(serveCounts ?? [])
+      new Map(serveCounts ?? []),
+      [],
+      new Map(),
+      {
+        schedulingRules: ruleData?.rules ?? [],
+        fixedSets: ruleData?.fixedSets ?? [],
+        periodBookings: ruleData?.periodBookings ?? [],
+      }
     );
     if (proposals.length === 0) return;
 
@@ -891,7 +985,7 @@ export default function SetDetailModal({
 
   // Set (or turn off, with null) when this set's private Slack channel is auto-
   // created ahead of time (admin only). The daily cron makes it once inside the
-  // window; the manual "Slack Team" button still works regardless.
+  // window; the manual "Create Group" button still works regardless.
   const setGroupChatLead = (value: number | null) =>
     patchDraft((s) => ({ ...s, groupChatLeadDays: value }));
 
@@ -982,11 +1076,11 @@ export default function SetDetailModal({
   // rather than as a ternary chain in the JSX, and ordered the way you'd fix
   // them: who you are, then the org's setup, then your own unsaved edits.
   const slackDisabledReason = !canMessageTeam
-    ? "Only an admin or someone playing on this set can message the team."
+    ? "Only an admin or someone playing on this set can start the group chat."
     : !slackConfigured
-      ? "Connect Slack for this organization to message the team."
+      ? "Connect Slack for this organization to start a group chat."
       : dirty
-        ? "Save your changes first — the message goes to the roster as saved."
+        ? "Save your changes first — the group is made from the roster as saved."
         : null;
 
   // Save every staged change. Ordering is load-bearing:
@@ -1122,7 +1216,7 @@ export default function SetDetailModal({
   };
 
   // Leaving with staged edits asks first, listing exactly what would be lost.
-  // Every exit funnels through here: Cancel, the ✕, Escape and the backdrop.
+  // Every exit funnels through here: Close, the ✕, Escape and the backdrop.
   const attemptClose = () => {
     if (dirty) setConfirmingDiscard(true);
     else onClose();
@@ -1259,7 +1353,7 @@ export default function SetDetailModal({
       }
       footer={
         /* Sticky action row. Delete sits far left — away from Save, since it's
-           the one button here that can't be taken back — and Cancel/Save at the
+           the one button here that can't be taken back — and Close/Save at the
            right, Save last. Someone who can't edit anything just gets Close. */
         <div className="flex w-full items-center gap-2">
           {isAdmin && (
@@ -1272,7 +1366,9 @@ export default function SetDetailModal({
               Delete set
             </Button>
           )}
-          <div className="ml-auto flex items-center gap-2">
+          {/* On a phone this group takes the rest of the row and its buttons
+              split it at full touch height, leaving Delete the small one. */}
+          <div className="ml-auto flex flex-1 items-center justify-end gap-2 sm:flex-none [&>button]:min-h-11 [&>button]:flex-1 sm:[&>button]:min-h-0 sm:[&>button]:flex-none">
             {canEditAnything ? (
               <>
                 {/* Unsaved-changes count, so "Save" isn't the only clue that
@@ -1289,7 +1385,7 @@ export default function SetDetailModal({
                   onClick={attemptClose}
                   disabled={busy}
                 >
-                  Cancel
+                  Close
                 </Button>
                 <Button
                   size="sm"
@@ -1309,40 +1405,17 @@ export default function SetDetailModal({
         </div>
       }
     >
-      {/* Action bar right below the title: Auto schedule on the left; Slack +
-          the overflow (⋮) menu on the right. The (i) tooltip opens DOWNWARD so
-          it isn't clipped by the top of the modal. */}
+      {/* Action bar right below the title: Auto schedule on the left; Create
+          Group + the overflow (⋮) menu on the right. Four controls, which is
+          what keeps it to ONE row at phone width — it used to carry a 176px
+          window picker as well, and the wrap that caused put the ⋮ at the far
+          left of a second row, where its right-anchored menu opened off the
+          side of the screen. The (i) tooltip opens DOWNWARD so it isn't
+          clipped by the top of the modal. */}
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 pb-3 dark:border-gray-700">
         <div className="flex flex-wrap items-center gap-1.5">
           {canEditTeam && (
             <>
-              {/* What the ×n badges measure. Sits BEFORE Auto schedule because
-                  it governs it too: the fill prefers whoever is least busy in
-                  this window. Changing it refetches the counts (they're a
-                  server-side tally, not something this page could derive). */}
-              <div className="w-44">
-                <Select
-                  label="Measure recent load by"
-                  hideLabel
-                  className="!py-1.5 text-xs"
-                  value={metricKey}
-                  onChange={(e) => {
-                    // Option values are the metric in its wire form — the same
-                    // parse the API route does (lib/loadMetrics.ts).
-                    const picked = parseLoadMetric(e.target.value);
-                    if (picked !== null) pickMetric(picked);
-                  }}
-                >
-                  {SET_LOAD_METRICS.map((m) => (
-                    <option
-                      key={metricToParam(m.metric)}
-                      value={metricToParam(m.metric)}
-                    >
-                      {m.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
               <Button
                 size="sm"
                 variant="secondary"
@@ -1358,19 +1431,26 @@ export default function SetDetailModal({
                     Fills this set&apos;s <strong>empty slots</strong>{" "}
                     with available team members, preferring people who
                     aren&apos;t already serving much. People already assigned
-                    keep their roles — the fill works around them. Seats
-                    borrowed from other teams have their own Auto schedule
-                    button, on their block below. The dropdown on the left picks
-                    the window that &quot;serving much&quot; is measured over:
-                    it&apos;s the ×N badge in every assignment dropdown, and the
-                    least-scheduled, available people are listed first.
+                    keep their roles — the fill works around them.{" "}
+                    &quot;Serving much&quot; is counted over{" "}
+                    <strong>{serveMonth}</strong>, the month this set falls in:
+                    that&apos;s the ×N beside each name, and the least-scheduled,
+                    available people are listed first. Seats borrowed from other
+                    teams have their own Auto schedule button, on their block
+                    below.
                   </>
                 }
               />
             </>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        {/* ml-auto, not just the parent's justify-between: when this group
+            DOES wrap to a second row (a 360px phone is ~10px short of fitting
+            all four controls), justify-between leaves it at the START of that
+            row, which is how the "⋮" ended up at the far left with its
+            right-anchored menu hanging off the screen. Pinned right, a wrapped
+            row reads as deliberate and the menu opens where it belongs. */}
+        <div className="ml-auto flex items-center gap-2">
           {/* Still SHOWN to everyone rather than hidden from onlookers: the
               set's group chat is a thing that exists, and a missing button
               reads as "broken" where a disabled one with a reason reads as
@@ -1406,12 +1486,14 @@ export default function SetDetailModal({
                     >
                       <path d="M4 10.5l4 4 8-9" />
                     </svg>
-                    Sent
+                    Created
                   </>
                 ) : (
                   <>
-                    <SlackIcon />
-                    Slack Team
+                    {/* Slack's own mark, a notch larger than its default so it
+                        matches the tick it swaps with. */}
+                    <SlackIcon className="h-4 w-4 shrink-0" />
+                    Create Group
                   </>
                 )}
               </span>
@@ -1515,7 +1597,7 @@ export default function SetDetailModal({
             )}
             {/* Admin-only: when to auto-create this set's private Slack group
                 chat ("Auto GC"). The daily cron makes it once inside the
-                window; "Slack Team" still creates it on demand. Only
+                window; "Create Group" still makes it on demand. Only
                 meaningful once the org has Slack. */}
             {canEditTeam && slackConfigured && (
               <GroupChatLeadMenu
@@ -1581,6 +1663,20 @@ export default function SetDetailModal({
                     className="ml-1.5 h-1.5 w-1.5"
                   />
                 )}
+                {isHole && heldByRule.has(role) && (
+                  <>
+                    <span className="ml-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+                      ! held by a rule
+                    </span>
+                    {/* WHICH rule, in its own words — the mark is only
+                        actionable once you know what to go and change. */}
+                    <span className="ml-1 align-middle">
+                      <InfoTooltip
+                        text={heldReason(heldByRule.get(role) ?? [], ruleNames)}
+                      />
+                    </span>
+                  </>
+                )}
               </span>
 
               <ul className="mt-1 space-y-1 pl-4">
@@ -1597,6 +1693,7 @@ export default function SetDetailModal({
                         onClick={() => setSlotToDelete(a)}
                       />
                       <PlayerSelect
+                        countWindow={serveMonth}
                         selected={{
                           id: a.user.id,
                           name: a.user.name,
@@ -1648,6 +1745,7 @@ export default function SetDetailModal({
                         onClick={() => deleteSlot(role)}
                       />
                       <PlayerSelect
+                        countWindow={serveMonth}
                         selected={null}
                         options={options}
                         disabled={busy}
@@ -1777,6 +1875,7 @@ export default function SetDetailModal({
                               onClick={() => removeAssignment(a.id)}
                             />
                             <PlayerSelect
+                              countWindow={serveMonth}
                               selected={{
                                 id: a.user.id,
                                 name: a.user.name,
@@ -1818,6 +1917,7 @@ export default function SetDetailModal({
                               ✕
                             </span>
                             <PlayerSelect
+                              countWindow={serveMonth}
                               selected={null}
                               options={options}
                               disabled={busy}
@@ -1865,6 +1965,7 @@ export default function SetDetailModal({
                 </p>
               ) : (
                 <PlayerSelect
+                  countWindow={serveMonth}
                   selected={
                     mdUserId
                       ? { id: mdUserId, name: mdNameById.get(mdUserId) ?? "" }
@@ -1981,6 +2082,19 @@ export default function SetDetailModal({
           </div>
         )}
       </div>
+
+      {/* Practices: extra calendar events for this set's roster. Under Songs
+          because that's the rest of "what this set is", and NOT part of the
+          staged draft — each add or delete sends or cancels a real invite, so
+          it acts immediately, like Delete set and sending a note. */}
+      <SetPractices
+        setId={set.id}
+        practices={set.practices ?? []}
+        isAdmin={isAdmin}
+        onChanged={async () => {
+          await onChanged?.();
+        }}
+      />
 
       {/* Notes (bottom): editable by admins + the worship leader. */}
       <div className="mt-5 border-t border-gray-200 pt-4 dark:border-gray-700">
@@ -2119,7 +2233,7 @@ export default function SetDetailModal({
                 onClick={() => setRolesDraft(null)}
                 disabled={busy}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={saveRoles} loading={busy}>
                 Save
@@ -2254,7 +2368,7 @@ export default function SetDetailModal({
               onClick={() => setSlotToDelete(null)}
               disabled={busy}
             >
-              Cancel
+              Close
             </Button>
             <Button
               size="sm"

@@ -24,8 +24,10 @@ export const VISIBLE_WEEKS = 5;
 /**
  * How many the calendar TAB's grid shows. Six, not five, because a month can
  * span six week rows (a 31-day month starting on a Saturday) and that page's
- * job is to show you a month — the picker's is to fit in a popup. Stepping is
- * identical either way; only the window's height differs.
+ * job is to show you a month — the picker's is to fit in a popup. The geometry
+ * is identical either way; only the window's height, and what moves it, differ:
+ * the picker steps a week per gesture, the calendar tab jumps a month per
+ * button (it takes no gestures, so a day cell's own list can scroll).
  */
 export const CALENDAR_VISIBLE_WEEKS = 6;
 
@@ -37,8 +39,8 @@ export const CALENDAR_VISIBLE_WEEKS = 6;
 export const STEP_COOLDOWN_MS = 150;
 
 /**
- * Finger travel that counts as one week, in px. Shared by the date picker and
- * the calendar tab's grid so a swipe means the same thing in both.
+ * Finger travel that counts as one week, in px. The date picker's alone — the
+ * calendar tab's grid no longer moves under a gesture.
  */
 export const SWIPE_STEP_PX = 24;
 

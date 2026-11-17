@@ -200,6 +200,9 @@ export default function OrgSwitcher() {
           >
             <Input
               label="Organization key"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
               value={orgKey}
               onChange={(e) => setOrgKey(e.target.value)}
               autoComplete="off"
@@ -209,7 +212,7 @@ export default function OrgSwitcher() {
             {addError && <p className="text-sm text-red-600">{addError}</p>}
             <div className="flex justify-end gap-2">
               <Button variant="secondary" type="button" onClick={() => setAddOpen(false)}>
-                Cancel
+                Close
               </Button>
               <Button type="submit" disabled={addBusy || !orgKey.trim()}>
                 {addBusy ? "Joining…" : "Join"}

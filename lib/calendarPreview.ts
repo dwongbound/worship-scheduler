@@ -1,16 +1,17 @@
 // Pure helpers for the calendar's "Preview Mode" (admin, desktop only).
 //
 // Preview Mode reuses the Create tab's review workspace (StagedScheduleModal)
-// as a READ-ONLY-ish lens on what's ALREADY on the calendar: instead of a
-// generated proposal, the staged plan is built from the real sets and their
-// real rosters. Nothing here ever reaches an API — the plan is never applied —
-// so this file only has to answer two questions:
+// as a lens on what's ALREADY on the calendar: instead of a generated proposal,
+// the staged plan is built from the real sets and their real rosters. Saving
+// sends `previewSaves` to PUT /api/admin/sets/roster in one batch. This file
+// answers three questions:
 //
 //   1. Which "type of set" is each calendar set? — the preview's options
 //      dialog offers one checkbox per recurring set (SetTemplate) plus an
 //      "Other" bucket for everything else (private sets, one-offs, sets whose
 //      template was renamed or deleted). See `setTypeOf`.
 //   2. What does a real ApiSet look like as a StagedSet? — see `toStagedSet`.
+//   3. What does saving have to change? — see `previewSaves`.
 //
 // Kept prisma/react-free so it's trivially unit-testable
 // (tests/unit/calendarPreview.test.ts).
@@ -133,9 +134,11 @@ export function previewSetTypes(
  * `stagingId` is the set's real id, so two sets that start at the same instant
  * — a Sunday service and a prayer meeting at 9am — stay distinct rows.
  *
- * Guest-team seats are dropped: a borrowed seat belongs to the LENDING team's
- * role catalog, which the staged card (built from the owning team's roles)
- * has no column for. The preview shows the set's own roster.
+ * Guest-team seats are not staged as seats: a borrowed seat belongs to the
+ * LENDING team's role catalog, which the staged card (built from the owning
+ * team's roles) has no column for. They are reported as `guestSeats` instead,
+ * so the card shows the set's own roster while the pick lists and Auto schedule
+ * still know those people are on the set.
  */
 export function toStagedSet(
   set: ApiSet,
@@ -154,6 +157,9 @@ export function toStagedSet(
     teamId: teamIdOf(set),
     templateId: setTypeOf(set, templates, timeZone),
     existing: true,
+    guestSeats: set.assignments
+      .filter((a) => a.guestTeamId)
+      .map((a) => ({ userId: a.user.id, role: a.role })),
     assignments: set.assignments
       .filter((a) => !a.guestTeamId)
       // The row id rides along so a SAVE can tell "same seat, new person"
@@ -162,6 +168,9 @@ export function toStagedSet(
         userId: a.user.id,
         role: a.role,
         assignmentId: a.id,
+        // Everything on the calendar opens LOCKED: Auto schedule only fills
+        // the gaps unless the admin unlocks seats (one by one, or Unlock all).
+        locked: true,
         // Who the seat still belongs to while a cover/swap on it waits for
         // approval — the MD rules count them, not the taker (lib/md.ts).
         pendingFromUserId: a.pendingFromUser?.id ?? null,
@@ -211,9 +220,10 @@ export function buildPreviewPlan(
  * One set's worth of work a preview SAVE has to do.
  *
  * `ops` is exactly what PATCH /api/admin/sets/:id/roster takes (the same shape
- * the set detail modal posts). `mdUserId` is present only when the admin
- * changed it — it's a separate request (PATCH /api/sets/:id), and one that has
- * to run AFTER the roster, since applying a roster can re-derive the MD.
+ * the set detail modal posts); the batch PUT /api/admin/sets/roster takes a
+ * list of these whole. `mdUserId` is present only when the admin changed it —
+ * the server applies it AFTER the roster, since applying a roster can
+ * re-derive the MD.
  */
 export interface PreviewSetSave {
   setId: string;
@@ -272,6 +282,7 @@ export function previewSaves(
         a.assignmentId ? [] : [{ role: a.role, userId: a.userId }]
       ),
     };
+    reconcileSeats(ops, wasSeats);
 
     const mdChanged = (now.mdUserId ?? null) !== (was.mdUserId ?? null);
     const rosterChanged =
@@ -286,6 +297,49 @@ export function previewSaves(
   }
 
   return saves;
+}
+
+/**
+ * Folds a removal and an addition on the same set back into what they really
+ * are. Auto schedule and Clear all rebuild rosters wholesale, so their seats
+ * come back WITHOUT the row ids they had — read literally, re-proposing the
+ * same person would delete their seat and insert an identical one (a history
+ * entry and two DMs about nothing), and swapping one drummer for another would
+ * be a removal plus an addition instead of the reassignment it is.
+ *
+ *   1. An addition matching a removed seat's person AND role cancels both: the
+ *      seat never changed.
+ *   2. An addition in the same role as a still-removed seat becomes a
+ *      reassignment of that seat, keeping its row and history.
+ *
+ * Mutates `ops` in place.
+ */
+function reconcileSeats(
+  ops: AssignmentOps,
+  wasSeats: Map<string, StagedSet["assignments"][number]>
+): void {
+  const removed = new Set(ops.removed);
+  const leftover: AssignmentOps["added"] = [];
+  for (const add of ops.added) {
+    const same = [...removed].find((id) => {
+      const seat = wasSeats.get(id)!;
+      return seat.userId === add.userId && seat.role === add.role;
+    });
+    if (same) removed.delete(same);
+    else leftover.push(add);
+  }
+  const added: AssignmentOps["added"] = [];
+  for (const add of leftover) {
+    const seatId = [...removed].find((id) => wasSeats.get(id)!.role === add.role);
+    if (seatId) {
+      removed.delete(seatId);
+      ops.reassigned.push({ id: seatId, userId: add.userId });
+    } else {
+      added.push(add);
+    }
+  }
+  ops.removed = ops.removed.filter((id) => removed.has(id));
+  ops.added = added;
 }
 
 /**
@@ -307,4 +361,60 @@ export function describePreviewSaves(saves: PreviewSetSave[]): string {
   return `${parts.join(" and ")} across ${saves.length} set${
     saves.length === 1 ? "" : "s"
   }`;
+}
+
+/**
+ * Lay a saved preview draft back over the calendar as it stands NOW.
+ *
+ * A preview draft is one roster per EXISTING set, so it can't simply be
+ * reopened the way a generate plan is: the sets it names have gone on living —
+ * someone may have taken a cover, an admin may have deleted the set outright —
+ * and a draft reopened against stale rows would save a diff computed from a
+ * calendar that no longer exists. So the current sets are the ground truth and
+ * the draft supplies only what the admin changed: the roster, the MD and the
+ * set's shape.
+ *
+ * The seats come back WITHOUT their row ids on purpose. Ids from the draft may
+ * name rows that are gone, and `previewSaves` already folds an id-less roster
+ * into the right diff (same person, same role = no change; a different person
+ * in that role = a reassignment of the live row, keeping its history) — the
+ * same path Clear all and Auto schedule take. Everything is LOCKED, as it is
+ * everywhere else in Preview Mode, so a later Auto schedule fills gaps around
+ * the restored roster rather than through it.
+ *
+ * `missing` is the draft's sets that no longer exist. Nothing can be done with
+ * them, and silently dropping them would let an admin think a set was restored
+ * when it wasn't, so they come back for the caller to name.
+ */
+export function applyDraftSets(
+  current: StagedSet[],
+  draft: StagedSet[]
+): { sets: StagedSet[]; missing: StagedSet[] } {
+  const byId = new Map(
+    draft.flatMap((s) => (s.stagingId ? [[s.stagingId, s] as const] : []))
+  );
+  const seen = new Set<string>();
+
+  const sets = current.map((set) => {
+    const saved = set.stagingId ? byId.get(set.stagingId) : undefined;
+    if (!saved) return set;
+    seen.add(set.stagingId!);
+    return {
+      ...set,
+      // The set's own identity — time, label, team, type — belongs to the
+      // calendar, never to the draft (same rule as pasteSet).
+      mdUserId: saved.mdUserId ?? null,
+      slotCapacities: saved.slotCapacities ?? null,
+      assignments: saved.assignments.map((a) => ({
+        userId: a.userId,
+        role: a.role,
+        locked: true,
+      })),
+    };
+  });
+
+  return {
+    sets,
+    missing: draft.filter((s) => !s.stagingId || !seen.has(s.stagingId)),
+  };
 }

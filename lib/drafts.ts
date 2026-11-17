@@ -9,6 +9,20 @@
  */
 export const MAX_DRAFTS = 5;
 
+/**
+ * Which workspace parked a plan. The two are kept apart everywhere — listed,
+ * capped and opened separately — because a generate plan and a preview plan
+ * are not interchangeable: applying a generate plan only ever ADDS people,
+ * while a preview plan is a roster per existing set and saves as a diff. One
+ * opened in the other's workspace would quietly do the wrong thing.
+ */
+export type DraftMode = "generate" | "preview";
+
+/** The mode a request names, defaulting to the generate flow (legacy rows). */
+export function parseDraftMode(raw: unknown): DraftMode {
+  return raw === "preview" ? "preview" : "generate";
+}
+
 /** How often a preview autosaves itself into its recovery slot. */
 export const AUTOSAVE_INTERVAL_MS = 60_000;
 

@@ -24,6 +24,7 @@ export interface NotificationTypeDef {
 export type NotificationType =
   | "COVER_REQUESTED"
   | "COVER_TAKEN"
+  | "COVER_DECLINED"
   | "SWAP_PROPOSED"
   | "SWAP_RESOLVED"
   | "ROSTER_CHANGE"
@@ -45,6 +46,12 @@ export const NOTIFICATION_TYPES: NotificationTypeDef[] = [
     label: "Your cover was picked up",
     description:
       "Tells the person who asked for cover that someone has taken their slot.",
+  },
+  {
+    key: "COVER_DECLINED",
+    label: "Someone passed on your cover",
+    description:
+      "Tells the person who asked for cover when an eligible player says they can't take it, with whatever note they left.",
   },
   {
     key: "SWAP_PROPOSED",

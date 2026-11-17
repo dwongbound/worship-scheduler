@@ -117,6 +117,25 @@ model Org {
   spotifyUserId       String?
   spotifyDisplayName  String?
 
+  // Per-org Google Calendar connection (lib/googleCalendar.ts): ONE shared
+  // church Google account owns the calendar holding an event per set with its
+  // roster invited — one the app creates, or another of that account's
+  // calendars picked by the admin who connected. Refresh token encrypted like the others; null
+  // = not connected (every sync no-ops). The watch channel is Google's push
+  // subscription to that calendar — how an attendee's RSVP reaches us — and
+  // the sync token is where the last read of its changes stopped.
+  googleCalRefreshToken     String?
+  googleCalEmail            String?
+  googleCalendarId          String?
+  googleCalSyncToken        String?
+  googleCalChannelId        String?   @unique
+  googleCalResourceId       String?
+  googleCalChannelExpiresAt DateTime?
+  // The chosen calendar's name, for every admin to read, and the admin who
+  // connected — the only one allowed to list the account's calendars.
+  googleCalendarName     String?
+  googleCalConnectedById String?
+
   // How many days ahead this org's daily digest looks when it counts sets that
   // still need attention — and the number the digest's own copy quotes. Per org
   // because a church running two services a week wants a different horizon than
@@ -151,6 +170,7 @@ model Org {
   availabilityRequests AvailabilityRequest[]
   reminders            WeeklyReminder[]
   scheduleDrafts       ScheduleDraft[]
+  schedulingRules      SchedulingRule[]
 
   createdAt DateTime @default(now())
 
@@ -214,13 +234,13 @@ model Team {
   // This team's role catalog — what roles exist here, how many of each a set
   // wants by default, and which are admin-only. Seeded with the built-in
   // defaults (lib/teamRoles.ts DEFAULT_TEAM_ROLES) and edited per team.
-  roles     TeamRole[]
-  members   TeamMember[]
+  roles                TeamRole[]
+  members              TeamMember[]
   // DEPRECATED: old role-less membership — see User.teams. Dropped after backfill.
-  users     User[]           @relation("TeamMembers")
-  sets      Set[]
-  templates SetTemplate[]
-  reminders WeeklyReminder[]
+  users                User[]                @relation("TeamMembers")
+  sets                 Set[]
+  templates            SetTemplate[]
+  reminders            WeeklyReminder[]
   // Availability requests aimed at this team (see AvailabilityRequest.teams).
   availabilityRequests AvailabilityRequest[] @relation("AvailabilityRequestTeams")
   // Sets this team guests on (it doesn't own them) — see SetGuestTeam.
@@ -231,6 +251,7 @@ model Team {
   // Team names only need to be unique within their org.
   @@unique([orgId, name])
   @@map("teams")
+  schedulingRules SchedulingRule[]
 }
 
 // One role in a team's catalog. Teams define their own — the built-ins below
@@ -305,8 +326,8 @@ model TeamMember {
 model WeeklyReminder {
   id String @id @default(cuid())
 
-  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
-  orgId String
+  org    Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId  String
   team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
   teamId String
 
@@ -329,6 +350,19 @@ model User {
   name         String
   email        String? @unique
 
+  // Read-only access to this person's OWN Google Calendar, granted the first
+  // time they use "Import from Google Calendar" on /schedule and remembered so
+  // later imports need no click (lib/googleAvailability.ts). An encrypted
+  // refresh token (lib/crypto.ts); null = never granted, or revoked.
+  googleImportRefreshToken String?
+
+  // Sign in with Apple's stable id for this person (the identity token's
+  // `sub`), set the first time they use it in the iOS app. Apple is matched by
+  // THIS, not by email: someone who picks "Hide My Email" hands us a relay
+  // address that matches no account, and may change it later. Null = never
+  // signed in with Apple. See lib/socialSignIn.ts.
+  appleSub String? @unique
+
   // True for an account created by an admin IMPORT (the availability form
   // roster) rather than by the person themselves — a stand-in that holds their
   // org membership and availability until they first sign in. Email is the
@@ -341,7 +375,7 @@ model User {
 
   // Musical director: can be the designated MD on a set that requires one.
   // Note: isMD is global to the person, not per-org.
-  isMD        Boolean      @default(false)
+  isMD        Boolean         @default(false)
   // DEPRECATED: roles are now per-team (see TeamMember.roles). Kept only so the
   // backfill (prisma/backfillTeamRoles.ts) can copy each person's old global
   // roles onto their teams; a follow-up migration drops this column.
@@ -353,7 +387,7 @@ model User {
   teamMembers TeamMember[]
   // DEPRECATED: the old role-less team membership. Kept alongside teamMembers
   // only so the backfill can read existing edges; a follow-up migration drops it.
-  teams       Team[]       @relation("TeamMembers")
+  teams       Team[]          @relation("TeamMembers")
 
   assignments           Assignment[]
   unavailability        Unavailability[]
@@ -368,15 +402,47 @@ model User {
   // Targeted swaps this person initiated / was offered (see SwapProposal).
   swapsRequested  SwapProposal[]    @relation("SwapRequestedBy")
   swapsReceived   SwapProposal[]    @relation("SwapRecipient")
+  // Open cover requests this person has said "not me" to (see CoverDecline).
+  coverDeclines   CoverDecline[]
   // Saved generate previews (see ScheduleDraft) this person first saved.
   scheduleDrafts  ScheduleDraft[]
   // Sets where this person is the designated musical director.
   mdSets          Set[]             @relation("SetMD")
+  // Personal access keys this person made on /profile (see AccessKey).
+  accessKeys      AccessKey[]
 
   // Daily Slack summary of what needs this person's attention (lib/digest.ts).
   // Opt-out only: the send time is fixed at DIGEST_SEND_MINUTE, so on/off is
   // the whole setting. Global to the person, like isMD.
   dailyDigest Boolean @default(true)
+
+  // Whether this person is invited to their sets' events on the org's Google
+  // Calendar (lib/googleCalendar.ts). Opt-out only, and global to the person
+  // like dailyDigest: someone who keeps their own calendar another way can
+  // switch it off and stop being added as a guest. It only removes them from
+  // the GUEST LIST — they still hold their seats and still appear in the
+  // event's roster, so the rest of the team sees who is playing.
+  calendarInvites Boolean @default(true)
+  // Where those invites are sent, when the account email isn't the right
+  // place. Google decides which of your calendars an invite lands on — the
+  // default one of whatever account it was addressed to — and an attendee
+  // can't move an invited event afterwards. A Google calendar has its own
+  // address, though, so pointing this at a secondary calendar's address puts
+  // the sets on that calendar, where they can be coloured and hidden like any
+  // other. Null = use `email`; `lib/calendarEvent.ts inviteAddress` is the
+  // one reading of it, and the RSVP comes back from the same address.
+  calendarInviteEmail String?
+  // Whether Google EMAILS this person about the events they're invited to, as
+  // opposed to just putting them on their calendar. Separate from
+  // `calendarInvites` because they are different asks: that one is "don't put
+  // my sets on my calendar", this one is "put them there, but stop mailing me
+  // about every roster change".
+  //
+  // Google's `sendUpdates` is per REQUEST, not per attendee, so this cannot
+  // be honoured in every case — see `notifyForUpdate` in
+  // `lib/calendarEvent.ts` for exactly when it is. On by default, since that
+  // is what Google does on its own.
+  calendarInviteEmails Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -446,12 +512,22 @@ model Set {
   // the per-set Drive chart folder.
   songs Song[]
 
+  // This set's practices (rehearsals): extra calendar events the whole roster
+  // is invited to, deliberately NOT shown on the app calendar and deliberately
+  // invisible to the scheduler — a practice is never a booking. Cascade-deletes
+  // with the set.
+  practices SetPractice[]
+
   // The collaborative Spotify playlist created for this set (under the org's
   // shared account), so a re-sync updates the SAME playlist instead of making a
   // duplicate. Both null until a playlist is first created. The url is the
   // shareable link posted into the set's Slack group chat.
   spotifyPlaylistId  String?
   spotifyPlaylistUrl String?
+
+  // This set's event on the org's Google Calendar (lib/googleCalendar.ts), so
+  // a re-sync patches the SAME event. Null until first synced.
+  googleEventId String?
 
   assignments Assignment[]
   history     SetHistoryEvent[]
@@ -499,6 +575,49 @@ model SetGuestTeam {
   @@map("set_guest_teams")
 }
 
+// One practice (rehearsal) on a set.
+//
+// A practice is an extra Google Calendar event for the SAME people: its roster
+// is DERIVED from the set's assignments rather than stored, so adding someone
+// to the set puts them on the practice invite too, and nobody can be on a
+// practice without being on the set. Three deliberate absences:
+//
+//   - it never appears on the app calendar (only under the set it belongs to);
+//   - it is never fed to `buildSchedule` as a booking, so auto schedule's
+//     load, spacing and availability answers are untouched by practices;
+//   - it carries no roles or capacities — the set owns the shape.
+//
+// Sets generated from a SetTemplate get their practices from
+// SetTemplatePractice at generate time, and they are editable per set
+// afterwards (the same inheritance `slotCapacities` and `groupChatLeadDays`
+// use). A practice can also be added ad hoc on ANY set, recurring or not, on
+// any date — including one nowhere near the template's weekday.
+model SetPractice {
+  id    String @id @default(cuid())
+  set   Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId String
+
+  // A practice is a start and an END, never a length: that is how an admin
+  // says it ("Wednesday 7 to 9"), and it is what the calendar event needs.
+  // Sets store a duration for historical reasons; practices deliberately
+  // don't.
+  startsAt DateTime
+  endsAt   DateTime
+
+  // This practice's event on the org's Google Calendar, so a re-sync patches
+  // the SAME event instead of making a duplicate. Null until first synced (or
+  // when the org has no calendar connected).
+  googleEventId String?
+
+  createdAt DateTime @default(now())
+
+  // Two practices on one set at the same instant are meaningless and would
+  // make two identical calendar events, so the db refuses it — and the route
+  // can say so truthfully rather than guessing at a cause.
+  @@unique([setId, startsAt])
+  @@map("set_practices")
+}
+
 // One song in a set's setlist. The worship leader enters a title and (optional)
 // musical key; `order` is the 0-based position in the list. Title feeds the
 // Spotify search (first result) and — later — the Drive chart lookup, which
@@ -520,10 +639,10 @@ model Song {
 
 // One user filling one role slot on one set.
 model Assignment {
-  id     String           @id @default(cuid())
-  set    Set              @relation(fields: [setId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  set    Set    @relation(fields: [setId], references: [id], onDelete: Cascade)
   setId  String
-  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId String
   // The TeamRole.key this slot is for. Read against the set's OWN team catalog
   // normally, or against `guestTeam`'s catalog when this is a guest seat.
@@ -533,9 +652,9 @@ model Assignment {
   // SetGuestTeam row they were seated under. Null (every pre-existing row) =
   // an ordinary seat on the set's own team. Role keys are unique only within a
   // team, so this is what disambiguates two same-keyed roles on one set.
-  guestTeam   SetGuestTeam? @relation(fields: [guestTeamId], references: [id], onDelete: SetNull)
+  guestTeam   SetGuestTeam?    @relation(fields: [guestTeamId], references: [id], onDelete: SetNull)
   guestTeamId String?
-  status AssignmentStatus @default(PENDING)
+  status      AssignmentStatus @default(PENDING)
 
   // Optional note the owner leaves when requesting cover (status
   // SWAP_REQUESTED) — shown to people who could take the set. Cleared when the
@@ -554,10 +673,41 @@ model Assignment {
   swapFrom SwapProposal[] @relation("SwapFrom")
   swapTo   SwapProposal[] @relation("SwapTo")
 
+  // Who has already said "not me" to this cover request (see CoverDecline).
+  coverDeclines CoverDecline[]
+
   // A person can hold several roles on one set (e.g. worship leader + acoustic
   // guitar) but never the same role twice.
   @@unique([setId, userId, role])
   @@map("assignments")
+}
+
+// Someone answered an OPEN cover request with "not me".
+//
+// A cover request is broadcast — every eligible player sees the same card — so
+// unlike a targeted swap there is no single recipient whose reject resolves it.
+// A decline is therefore personal: it takes the card off THAT person's Covers /
+// Swaps list and DMs the owner, while the request stays open to everyone else.
+//
+// Scoped to the current ask, not to the slot forever: requesting or cancelling
+// cover on the assignment deletes these rows (see PATCH /api/assignments/:id),
+// so asking a second time reaches the people who passed the first time.
+model CoverDecline {
+  id           String     @id @default(cuid())
+  assignment   Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  assignmentId String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId       String
+
+  // Optional "why" typed into the decline modal, relayed to the owner's DM.
+  // Null = declined without a word, which the DM simply omits.
+  note String?
+
+  createdAt DateTime @default(now())
+
+  // One answer per person per request; declining twice just updates the note.
+  @@unique([assignmentId, userId])
+  @@map("cover_declines")
 }
 
 // A targeted swap ("trade") between two assignments in the SAME role: the
@@ -620,16 +770,16 @@ enum SwapProposalStatus {
 // type means. Written alongside the assignment change it describes, never
 // edited afterwards.
 model SetHistoryEvent {
-  id     String              @id @default(cuid())
-  set    Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
-  setId  String
-  type   SetHistoryEventType
+  id    String              @id @default(cuid())
+  set   Set                 @relation(fields: [setId], references: [id], onDelete: Cascade)
+  setId String
+  type  SetHistoryEventType
   // The slot this event is about (a TeamRole.key). Null for the two set-level
   // types — SETLIST_CHANGED and NOTES_CHANGED — which concern the set's songs
   // and notes rather than any one role.
   // Kept as a bare string even if the role is later deleted — the log is a
   // record of what happened, not a live reference.
-  role   String?
+  role  String?
 
   // Human summary for events that type + people don't fully describe:
   // SETLIST_CHANGED (e.g. 'added "Who Else" (E)') and NOTES_CHANGED (e.g.
@@ -677,11 +827,25 @@ model Unavailability {
   startDate DateTime?
   endDate   DateTime?
 
+  // Dates a RECURRING rule SKIPS, as "YYYY-MM-DD" — one per day freed from the
+  // calendar (right-click / long press, or clicking a day already blocked all
+  // day). It's what keeps "every Tuesday" ONE row with a hole in it instead of
+  // two rows either side of the freed date, which is what splitting its span
+  // would mean — and why freeing a day works the same whether one weekly rule
+  // covers it or three overlapping ones. Every reader of a recurring rule
+  // honours it (lib/availability.ts recurringSkips).
+  exceptDates String[] @default([])
+
   // Set for SPECIFIC blocks (the TimeRange they belong to); null otherwise.
   request   AvailabilityRequest? @relation(fields: [requestId], references: [id], onDelete: Cascade)
   requestId String?
 
   note String?
+
+  // True for a block written by "Import from Google Calendar" on /schedule
+  // (lib/googleAvailability.ts). Re-importing replaces exactly these rows for
+  // that request, so a hand-made block is never touched by an import.
+  fromGoogle Boolean @default(false)
 
   createdAt DateTime @default(now())
 
@@ -708,6 +872,10 @@ model SetTemplate {
   // time (see Set.groupChatLeadDays). Null = off for the generated sets.
   groupChatLeadDays Int?
 
+  // The practices sets expanded from this template start with — see
+  // SetTemplatePractice. An empty list = no practices.
+  practices SetTemplatePractice[]
+
   // The org this template (and its expanded sets) belongs to.
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
@@ -719,6 +887,31 @@ model SetTemplate {
   createdAt DateTime @default(now())
 
   @@map("set_templates")
+}
+
+// One practice on a weekly SetTemplate — a WEEKDAY and a time window, the way
+// an admin says it: "Wednesdays, 7 to 9".
+//
+// A weekly set time has no date, so neither can its practices. The weekday is
+// read as "the one in the same week as the set", weeks running Mon–Sun like
+// `weekKey` in lib/schedulingRules.ts — so a Wednesday practice on a Sunday
+// 10 AM template is the Wednesday BEFORE each of its Sundays, which is what
+// makes a rehearsal a rehearsal. `lib/practices.ts practiceDates` is the one
+// resolution of that, and it is stamped onto SetPractice rows at generate
+// time; editing a template does NOT rewrite sets already generated, exactly
+// like slotCapacities.
+model SetTemplatePractice {
+  id         String      @id @default(cuid())
+  template   SetTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateId String
+
+  dayOfWeek   Int // 0 = Sunday … 6 = Saturday, within the set's own Mon–Sun week
+  startMinute Int // minutes from midnight, e.g. 19:00 = 1140
+  endMinute   Int // ditto; always after startMinute — a practice is start-to-end
+
+  createdAt DateTime @default(now())
+
+  @@map("set_template_practices")
 }
 
 // An admin's request for the team to enter their availability over a date
@@ -755,16 +948,16 @@ model AvailabilityRequest {
 // that request. Presence = complete; absence = still owes a response. Replaces
 // the old global User.scheduleCompletedAt so completion is tracked per request.
 model AvailabilityResponse {
-  id        String              @id @default(cuid())
-  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  userId    String
-  request   AvailabilityRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  requestId String
+  id          String              @id @default(cuid())
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  request     AvailabilityRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  requestId   String
   // null = the row exists but is currently marked "not submitted". The row
   // persists across un/re-submits so we can remember it was edited.
   completedAt DateTime?
   // True once re-submitted after having been un-submitted at least once.
-  edited      Boolean           @default(false)
+  edited      Boolean             @default(false)
   // Optional free-text note the person left when they submitted ("away the
   // first weekend, back for the rest"). Written from the submit-confirmation
   // modal and read by admins in the Create tab's availability status panel;
@@ -802,6 +995,13 @@ model ScheduleDraft {
   // The rolling autosave slot rather than something deliberately kept.
   isRecovery Boolean @default(false)
 
+  // WHICH workspace parked this plan: "generate" (the Create tab's run) or
+  // "preview" (the calendar's Preview Mode). The two hold different things — a
+  // generate plan proposes sets that may not exist yet, a preview plan is one
+  // roster per set that already does — so they are listed, capped and opened
+  // separately rather than sharing one pile. Legacy rows are generate plans.
+  mode String @default("generate")
+
   // The StagedPlan payload (lib/types.ts): sets, skipped, baseline.
   plan Json
 
@@ -815,10 +1015,72 @@ model ScheduleDraft {
   // honest about when the stored plan last changed.
   updatedAt DateTime @updatedAt
 
-  // The list is always "this org's drafts, newest activity first".
-  @@index([orgId, updatedAt])
-  // One recovery slot per person per org is an application rule (a partial
-  // unique index can't express it here) — see POST /api/admin/drafts.
-  @@index([orgId, createdById, isRecovery])
+  // The list is always "this org's drafts OF ONE MODE, newest activity first".
+  @@index([orgId, mode, updatedAt])
+  // One recovery slot per person per org PER MODE is an application rule (a
+  // partial unique index can't express it here) — see POST /api/admin/drafts.
+  @@index([orgId, createdById, mode, isRecovery])
   @@map("schedule_drafts")
+}
+
+// One of an org's scheduling rules — its own instructions to the auto-fill,
+// applied to every set on every team (see lib/schedulingRules.ts for the
+// vocabulary and lib/scheduler.ts for the fill that obeys them).
+//
+// `tier` is "REQUIRED" (never broken; contradictions refused on save) or
+// "PREFERENCE" (followed when possible). `position` is the list order, and
+// for preferences it IS the ranking — a higher one wins a disagreement.
+// `params` is the rule itself (`{ kind, ... }`), validated by
+// parseRuleParams on the way in AND out, so a stale row is skipped rather
+// than trusted. It refers to people, roles, recurring sets and sets by id; a
+// rule left pointing at something deleted is dropped by the next save.
+model SchedulingRule {
+  id       String  @id @default(cuid())
+  tier     String
+  enabled  Boolean @default(true)
+  position Int
+  params   Json
+
+  org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  orgId String
+
+  // Which sets this rule governs: null = every set in the org, otherwise only
+  // this team's. Deleting the team deletes its rules — a rule scoped to
+  // nothing would silently become org-wide, which is the opposite of what it
+  // said. See lib/schedulingRules.ts (scopeCovers).
+  team   Team?   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  teamId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orgId, position])
+  @@map("scheduling_rules")
+}
+
+// A personal access key: lets ONE assistant of this person's own (Jarvis) read
+// what they can already see in the app, through GET /api/agent and the MCP
+// endpoint POST /api/mcp — and, when made with `canWrite`, confirm their sets,
+// ask for and withdraw cover, and take someone else's cover AS them. The key
+// itself is shown once at creation and never stored: only its SHA-256
+// (`keyHash`, see lib/accessKeys.ts). Revoking stamps `revokedAt` and the row
+// stays, so the profile simply stops listing it. Mirrors vff-app's AccessKey.
+model AccessKey {
+  id     String @id @default(cuid())
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId String
+
+  /// The person's own label ("Jarvis").
+  name     String
+  keyHash  String  @unique
+  /// May confirm, ask for cover, withdraw that ask and take covers. Off unless
+  /// the person ticked it when making the key; fixed for the key's life.
+  canWrite Boolean @default(false)
+
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("access_keys")
 }

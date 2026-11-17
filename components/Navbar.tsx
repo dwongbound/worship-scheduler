@@ -12,6 +12,7 @@ import OrgSwitcher from "./OrgSwitcher";
 import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
 import { useOrgs } from "./OrgProvider";
+import { isChromelessPath } from "@/lib/publicPaths";
 import { setNavDirection } from "@/lib/navDirection";
 import { useSwipe } from "./SwipeProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
@@ -278,9 +279,12 @@ export default function Navbar() {
     return () => ro.disconnect();
   }, []);
 
-  // No chrome on the login or join-org pages. Placed after all hooks so hook
-  // order stays stable across renders (never return before a hook).
-  if (pathname === "/login" || pathname === "/join") return null;
+  // No chrome on the home, login, join-org or legal pages — they're read
+  // signed out (or, for /join, before you belong to an org), so there's
+  // nothing for the tabs to navigate. Placed after all hooks so hook order
+  // stays stable across renders (never return before a hook). This also keeps
+  // the guided tour off them: it's mounted below, inside this component.
+  if (isChromelessPath(pathname)) return null;
 
   const availNeedsResponse = availStatus?.needsResponse ?? false;
   // The banner spotlights the first org still waiting on me.
@@ -385,14 +389,16 @@ export default function Navbar() {
         the viewport and rides out the bounce.
         `h-16` is load-bearing — it must match the in-flow spacer below, which
         is what actually reserves the bar's space. Height is pinned rather than
-        derived from the content so the two can't drift apart. */}
-    <nav className="fixed inset-x-0 top-0 z-30 h-16 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
+        derived from the content so the two can't drift apart. Both add the
+        top safe area (the notch, on a home-screen iPhone), which the bar pads
+        itself down past; it's 0 everywhere else. */}
+    <nav className="fixed inset-x-0 top-0 z-30 h-[calc(4rem+env(safe-area-inset-top))] border-b pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800">
       {/* h-full (rather than py-3) centers the row inside the bar's fixed
           h-16 — the padding alone would leave it a few px off-centre. */}
       <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-2 px-4 sm:px-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-4">
           {/* Page logo, far left */}
-          <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
+          <Link href="/calendar" aria-label="TapWorship home" className="shrink-0">
             <Logo className="h-9 w-9" />
           </Link>
           {/* Desktop tab area — hidden on phones AND tablets, where the
@@ -587,7 +593,7 @@ export default function Navbar() {
         stack under it normally. navRef wraps both so `--app-header-h` still
         reports the full visual header height for the calendar's sizing. */}
     <div ref={navRef}>
-      <div className="h-16" aria-hidden />
+      <div className="h-[calc(4rem+env(safe-area-inset-top))]" aria-hidden />
 
       {/* Onboarding banner: shown until someone holds a role on some team, since
           the scheduler can't assign them until then. Roles are an admin's to
@@ -692,8 +698,10 @@ export default function Navbar() {
         the hand reaches the bottom far more easily than the top (the number
         behind that `lg` is lib/layout.ts BOTTOM_NAV_MAX_WIDTH).
         The top strip's dots keep the data-testids; duplicating them here
-        would break Playwright's strict single-match lookups. */}
-    <nav className="fixed inset-x-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-30 lg:hidden">
+        would break Playwright's strict single-match lookups.
+        It floats 0.5rem above the safe area (the sides keep 1rem): at 1rem
+        it sat noticeably high over the iPhone home indicator. */}
+    <nav className="fixed bottom-[calc(0.5rem+env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-[max(1rem,env(safe-area-inset-right))] z-30 lg:hidden">
       <div
         className={`mx-auto flex items-stretch rounded-full border border-gray-200/60 bg-white/50 px-1.5 py-1.5 shadow-lg backdrop-blur-xl transition-all duration-300 ease-in-out dark:border-gray-700/60 dark:bg-gray-800/50 ${
           // Scroll down → also pull the pill in horizontally (centered), so it

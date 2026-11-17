@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import {
   OTHER_SET_TYPE,
+  applyDraftSets,
   buildPreviewPlan,
   describePreviewSaves,
   previewCandidates,
@@ -34,6 +35,7 @@ const sundayTemplate: ApiSetTemplate = {
   slotCapacities: null,
   teamId: sundayTeam.id,
   team: sundayTeam,
+  practices: [],
 };
 
 // Tuesdays 7:00 PM on the Prayer Room Team.
@@ -48,6 +50,7 @@ const prayerTemplate: ApiSetTemplate = {
   slotCapacities: null,
   teamId: prayerTeam.id,
   team: prayerTeam,
+  practices: [],
 };
 
 const templates = [sundayTemplate, prayerTemplate];
@@ -208,11 +211,24 @@ describe("toStagedSet", () => {
       teamId: sundayTeam.id,
       templateId: "tpl-sunday",
       existing: true,
+      guestSeats: [],
       assignments: [
-        { userId: "u1", role: "KEYS", assignmentId: "a1", pendingFromUserId: null },
-        { userId: "u2", role: "DRUMS", assignmentId: "a2", pendingFromUserId: null },
+        { userId: "u1", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: null },
+        { userId: "u2", role: "DRUMS", assignmentId: "a2", locked: true, pendingFromUserId: null },
       ],
     });
+  });
+
+  it("opens every real seat locked, so Auto schedule only fills the gaps", () => {
+    const set = apiSet({
+      startsAt: SUNDAY,
+      assignments: [
+        { id: "a1", role: "KEYS", status: "CONFIRMED", user: { id: "u1", name: "Carol" } },
+      ],
+    });
+    expect(
+      toStagedSet(set, templates, TZ).assignments.every((a) => a.locked)
+    ).toBe(true);
   });
 
   it("keeps the owner of a seat that's waiting on an approval", () => {
@@ -231,11 +247,11 @@ describe("toStagedSet", () => {
       ],
     });
     expect(toStagedSet(set, templates, TZ).assignments).toEqual([
-      { userId: "u4", role: "KEYS", assignmentId: "a1", pendingFromUserId: "u1" },
+      { userId: "u4", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: "u1" },
     ]);
   });
 
-  it("drops borrowed guest-team seats — the card has no column for them", () => {
+  it("reports borrowed guest-team seats apart from the card's own roster", () => {
     const set = apiSet({
       startsAt: SUNDAY,
       assignments: [
@@ -254,9 +270,32 @@ describe("toStagedSet", () => {
         },
       ],
     });
-    expect(toStagedSet(set, templates, TZ).assignments).toEqual([
-      { userId: "u1", role: "KEYS", assignmentId: "a1", pendingFromUserId: null },
+    const staged = toStagedSet(set, templates, TZ);
+    // Not a seat on the card: the role belongs to the LENDING team's catalog.
+    expect(staged.assignments).toEqual([
+      { userId: "u1", role: "KEYS", assignmentId: "a1", locked: true, pendingFromUserId: null },
     ]);
+    // But still a person on the set, so the pick lists and Auto schedule can
+    // leave them out instead of proposing a seat the db would refuse.
+    expect(staged.guestSeats).toEqual([{ userId: "u3", role: "CHOIR" }]);
+  });
+
+  it("never diffs a borrowed seat away on save", () => {
+    const set = apiSet({
+      id: "set-1",
+      startsAt: SUNDAY,
+      assignments: [
+        {
+          id: "a2",
+          role: "CHOIR",
+          status: "PENDING",
+          user: { id: "u3", name: "Guest" },
+          guestTeamId: "gt-1",
+        },
+      ],
+    });
+    const before = toStagedSet(set, templates, TZ);
+    expect(previewSaves([before], [before])).toEqual([]);
   });
 
   it("keeps same-time sets distinct via their real ids", () => {
@@ -422,6 +461,51 @@ describe("previewSaves", () => {
     expect(previewSaves(two, after).map((s) => s.setId)).toEqual(["set-1"]);
   });
 
+  it("a re-proposed person in their own seat is no change at all", () => {
+    // Auto schedule / Clear all rebuild rosters without row ids. Putting Carol
+    // back on keys must not delete and re-insert her seat.
+    expect(
+      previewSaves(
+        opened,
+        edited([
+          { userId: "u1", role: "KEYS" },
+          { userId: "u2", role: "DRUMS", assignmentId: "a2" },
+        ])
+      )
+    ).toEqual([]);
+  });
+
+  it("a different person in a dropped seat's role is a reassignment", () => {
+    const [save] = previewSaves(
+      opened,
+      edited([
+        { userId: "u1", role: "KEYS", assignmentId: "a1" },
+        { userId: "u7", role: "DRUMS" },
+      ])
+    );
+    expect(save.ops).toEqual({
+      removed: [],
+      reassigned: [{ id: "a2", userId: "u7" }],
+      added: [],
+    });
+  });
+
+  it("clear all then refill: matches people back, reassigns the rest", () => {
+    const [save] = previewSaves(
+      opened,
+      edited([
+        { userId: "u2", role: "DRUMS" }, // same as before
+        { userId: "u5", role: "KEYS" }, // keys changed hands
+        { userId: "u6", role: "BASS" }, // a seat that wasn't there
+      ])
+    );
+    expect(save.ops).toEqual({
+      removed: [],
+      reassigned: [{ id: "a1", userId: "u5" }],
+      added: [{ role: "BASS", userId: "u6" }],
+    });
+  });
+
   it("never diffs away a guest seat it was never shown", () => {
     // toStagedSet drops borrowed seats, so they're absent from BOTH sides and
     // can't end up in `removed` — the one way a preview save could quietly
@@ -477,5 +561,101 @@ describe("describePreviewSaves", () => {
         },
       ])
     ).toBe("1 roster change across 1 set");
+  });
+});
+
+describe("applyDraftSets", () => {
+  // A set as it is on the calendar right now, with one live seat per role.
+  const live = (
+    id: string,
+    seats: { role: string; userId: string; assignmentId: string }[],
+    mdUserId: string | null = null
+  ): StagedSet => ({
+    stagingId: id,
+    startsAt: "2026-11-01T17:00:00.000Z",
+    label: "Sunday Service",
+    durationMinutes: 90,
+    requiresMD: true,
+    mdUserId,
+    slotCapacities: null,
+    groupChatLeadDays: null,
+    teamId: "team-sun",
+    existing: true,
+    assignments: seats.map((s) => ({ ...s, locked: true })),
+  });
+
+  // What a draft stores: the same set id, the admin's roster, no live row ids
+  // that can be trusted by the time it is reopened.
+  const saved = (
+    id: string,
+    seats: { role: string; userId: string }[],
+    mdUserId: string | null = null
+  ): StagedSet => ({
+    ...live(id, []),
+    mdUserId,
+    assignments: seats.map((s) => ({ ...s, locked: true })),
+  });
+
+  it("puts the draft's roster and MD onto the set that still exists", () => {
+    const { sets, missing } = applyDraftSets(
+      [live("s1", [{ role: "DRUMS", userId: "u-old", assignmentId: "a1" }], "u-old")],
+      [saved("s1", [{ role: "DRUMS", userId: "u-new" }], "u-new")]
+    );
+    expect(missing).toEqual([]);
+    expect(sets[0].assignments).toEqual([
+      { role: "DRUMS", userId: "u-new", locked: true },
+    ]);
+    expect(sets[0].mdUserId).toBe("u-new");
+    // The set's own identity is the calendar's, never the draft's.
+    expect(sets[0].stagingId).toBe("s1");
+    expect(sets[0].label).toBe("Sunday Service");
+  });
+
+  it("drops the draft's row ids so the save reads as a reassignment", () => {
+    const before = [
+      live("s1", [{ role: "DRUMS", userId: "u-old", assignmentId: "a1" }]),
+    ];
+    const { sets } = applyDraftSets(before, [
+      saved("s1", [{ role: "DRUMS", userId: "u-new" }]),
+    ]);
+    // previewSaves folds an id-less seat in the same role back into an update
+    // of the live row, which is what keeps the seat's history and its DM sane.
+    expect(previewSaves(before, sets)).toEqual([
+      {
+        setId: "s1",
+        ops: { removed: [], reassigned: [{ id: "a1", userId: "u-new" }], added: [] },
+      },
+    ]);
+  });
+
+  it("leaves sets the draft never mentioned exactly as they are", () => {
+    const untouched = live("s2", [
+      { role: "KEYS", userId: "u-k", assignmentId: "a2" },
+    ]);
+    const { sets } = applyDraftSets(
+      [live("s1", []), untouched],
+      [saved("s1", [{ role: "DRUMS", userId: "u-new" }])]
+    );
+    expect(sets[1]).toBe(untouched);
+    expect(previewSaves([live("s1", []), untouched], sets)).toHaveLength(1);
+  });
+
+  it("reports a draft's sets that are no longer on the calendar", () => {
+    const gone = saved("deleted-set", [{ role: "BASS", userId: "u-b" }]);
+    const { sets, missing } = applyDraftSets(
+      [live("s1", [])],
+      [saved("s1", [{ role: "DRUMS", userId: "u-new" }]), gone]
+    );
+    expect(sets).toHaveLength(1);
+    expect(missing).toEqual([gone]);
+  });
+
+  it("restores a roster the draft emptied", () => {
+    const before = [
+      live("s1", [{ role: "DRUMS", userId: "u-old", assignmentId: "a1" }]),
+    ];
+    const { sets } = applyDraftSets(before, [saved("s1", [])]);
+    expect(sets[0].assignments).toEqual([]);
+    expect(previewSaves(before, sets)[0].ops.removed).toEqual(["a1"]);
   });
 });

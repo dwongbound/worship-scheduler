@@ -33,7 +33,7 @@ type Step = {
 // order should end it knowing how a set gets from "proposed" to "yours".
 const COMMON_STEPS: Step[] = [
   {
-    title: "Welcome to Worship Scheduler",
+    title: "Welcome to TapWorship",
     body: "Plan worship teams, track who's free, and hand sets off when you can't make one. Here's how a set gets from an admin's plan onto your calendar.",
   },
   {

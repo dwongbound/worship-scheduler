@@ -11,7 +11,7 @@
 // many sets each member is on within that range (see STAT_RANGES).
 import { useSession } from "next-auth/react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -32,6 +32,7 @@ import TeamMembersModal from "@/components/TeamMembersModal";
 import { TEAMS_CHANGED_EVENT } from "@/components/Navbar";
 import { useOrgs } from "@/components/OrgProvider";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
+import { replaceUrl } from "@/lib/urlParam";
 import { type Instrument } from "@/lib/constants";
 import { DEFAULT_TEAM_ROLES, MD_KEY, orderedRoles } from "@/lib/teamRoles";
 import { STAT_RANGES, rangeForDays } from "@/lib/stats";
@@ -194,7 +195,6 @@ function UsersPageInner() {
   // scrolls that person's card into view and rings it briefly (username keeps
   // the URL readable instead of exposing an opaque id). `handledHighlight`
   // remembers which one we've already acted on so re-renders don't re-scroll.
-  const router = useRouter();
   const searchParams = useSearchParams();
   const highlightParam = searchParams.get("user");
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
@@ -308,8 +308,10 @@ function UsersPageInner() {
       .getElementById(`user-card-${match.id}`)
       ?.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightedId(match.id);
-    router.replace("/users", { scroll: false });
-  }, [highlightParam, users, router]);
+    // Through `replaceUrl`: Next drops a navigation to the pathname already
+    // on screen, so `router.replace` left ?user= in the URL (lib/urlParam.ts).
+    replaceUrl("/users");
+  }, [highlightParam, users]);
 
   // Fade the highlight ring a few seconds after it lands.
   useEffect(() => {
@@ -644,9 +646,9 @@ function UsersPageInner() {
                 heading containing "Team" would collide with it. */}
             <p className="font-semibold">Teams</p>
             <InfoTooltip
-              text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page (desktop only)."
+              text="Every set belongs to a team, and only that team’s members are scheduled on it. Click a team below to manage its members and Slack channel; scheduled weekly reminders live on the Org settings page, under Teams (desktop only)."
             />
-            {/* Creating a team lives on the Org settings page
+            {/* Creating a team lives on the Org settings page's Teams tab
                 (OrgTeamsManager); this panel only manages teams that already
                 exist, so link out rather than duplicating that form here. */}
             <Link
@@ -662,8 +664,12 @@ function UsersPageInner() {
           <div className="flex w-full items-center gap-2 sm:w-auto">
             {/* All cover/swap/approval activity across the org, filterable. */}
             <Button
-              size="sm"
               variant="secondary"
+              // Sized to the Select beside it, not to the small buttons in the
+              // rows below: text-base on phones is what Select carries (it is
+              // what stops iOS zooming a focused field), so matching it is the
+              // only way the two line up at every width.
+              className="whitespace-nowrap text-base sm:text-sm"
               onClick={() => setActivityOpen(true)}
             >
               Team Activity
@@ -710,7 +716,7 @@ function UsersPageInner() {
             >
               Org settings
             </Link>{" "}
-            page.
+            page, under Teams.
           </p>
         ) : (
           <ul className="divide-y divide-gray-100 dark:divide-gray-700/50">
@@ -760,7 +766,7 @@ function UsersPageInner() {
                       title={
                         team.slackChannelId
                           ? undefined
-                          : "Add a Slack channel ID on the Org settings page first."
+                          : "Add a Slack channel ID on the Org settings page (Teams tab) first."
                       }
                     >
                       {sendingTeamId === team.id ? (
@@ -812,7 +818,7 @@ function UsersPageInner() {
                           onClick={() => setEditingSlackFor(null)}
                           className="text-xs text-gray-500 hover:underline dark:text-gray-400"
                         >
-                          Cancel
+                          Close
                         </button>
                         {slackError && (
                           <span className="text-xs text-red-600">{slackError}</span>
@@ -1178,7 +1184,7 @@ function UsersPageInner() {
                 onClick={() => setDetailsFor(null)}
                 disabled={savingDetails}
               >
-                Cancel
+                Close
               </Button>
               <Button size="sm" onClick={saveDetails} disabled={savingDetails}>
                 {savingDetails ? <LoadingDots size="sm" /> : "Save"}
@@ -1226,7 +1232,7 @@ function UsersPageInner() {
                 variant="secondary"
                 onClick={() => setAdminConfirm(null)}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"
@@ -1274,7 +1280,7 @@ function UsersPageInner() {
                 onClick={() => setRemoveConfirm(null)}
                 disabled={removing}
               >
-                Cancel
+                Close
               </Button>
               <Button
                 size="sm"

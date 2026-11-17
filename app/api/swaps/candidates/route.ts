@@ -8,15 +8,23 @@
 // picture before proposing:
 //   youAvailable  — am I free for THEIR set's date (I'd take it)?
 //   theyAvailable — are they free for MY set's date (they'd take it)?
-//   theyMarkedUnavailable — did they *explicitly* block my set's date in an
-//                            availability response ("previously marked
-//                            unavailable"), as opposed to a recurring block?
+//                   One flag whatever the shape of the block: a standing
+//                   weekly rule and a date they typed into an availability
+//                   response both mean "they've said they can't".
 //   theyInactive  — are they marked inactive on this team (still swappable,
 //                   but flagged so you know they've stepped back)?
+//   theyAlsoOnYourSet / youAlsoOnTheirSet — roles either side ALREADY holds on
+//                   the other's set. A person can legitimately play two roles
+//                   on one set, so this never blocks the trade; it's flagged
+//                   because accepting would quietly hand someone a double
+//                   shift they never asked for (see lib/sets.ts §5). This is
+//                   the picker's RED warning — an availability block is an
+//                   intention, but a seat they already hold is a fact.
 import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { inactiveMemberIds } from "@/lib/roster";
+import { rolesHeldOn, seatIndex } from "@/lib/sets";
 import {
   isUserAvailable,
   type SchedulerSet,
@@ -67,10 +75,27 @@ export async function GET(req: NextRequest) {
   // on a different upcoming set, and not already frozen in another trade. We
   // also skip sets where I already hold this role (a swap there would collide
   // with the setId+userId+role unique key).
-  const [myRolesBySet, counterparts] = await Promise.all([
+  const [mySeats, myRoster, counterparts] = await Promise.all([
+    // EVERY seat I hold on an upcoming set of this team — not just ones in the
+    // traded role. The role filter answers "which sets are ineligible"; the
+    // rest answer "which would double-book me" (lib/sets.ts §5). Candidates
+    // are all upcoming sets on this org + team, so scoping the query the same
+    // way keeps it to the handful of rows that can possibly match.
     prisma.assignment.findMany({
-      where: { userId: user.id, role: mine.role },
-      select: { setId: true },
+      where: {
+        userId: user.id,
+        set: {
+          orgId: mine.set.orgId,
+          teamId: mine.set.teamId,
+          startsAt: { gte: new Date() },
+        },
+      },
+      select: { setId: true, userId: true, role: true },
+    }),
+    // My set's whole roster — who else is already on the set I'm offering.
+    prisma.assignment.findMany({
+      where: { setId: mine.setId },
+      select: { setId: true, userId: true, role: true },
     }),
     prisma.assignment.findMany({
       where: {
@@ -101,9 +126,15 @@ export async function GET(req: NextRequest) {
     }),
   ]);
 
-  // Sets I already play this role on → can't swap into them.
-  const mySetIds = new Set(myRolesBySet.map((a) => a.setId));
+  // Sets I already play THIS role on → can't swap into them.
+  const mySetIds = new Set(
+    mySeats.filter((a) => a.role === mine.role).map((a) => a.setId)
+  );
   const eligible = counterparts.filter((c) => !mySetIds.has(c.setId));
+
+  // The two "already sitting there" lookups, indexed once for the whole page.
+  const mySeatsIndex = seatIndex(mySeats);
+  const myRosterIndex = seatIndex(myRoster);
 
   // Page the eligible list (offset paging is plenty for infinite scroll here).
   const page = eligible.slice(skip, skip + take);
@@ -123,6 +154,7 @@ export async function GET(req: NextRequest) {
         endMinute: true,
         startDate: true,
         endDate: true,
+        exceptDates: true, // days freed out of a weekly rule
       },
     }),
     // Who on this page is still ACTIVE. Every candidate set shares my set's
@@ -138,9 +170,6 @@ export async function GET(req: NextRequest) {
   ]);
   const inactiveUserIds = inactiveMemberIds(memberships);
   const rules: UnavailabilityRule[] = blocks.map((b) => ({ ...b }));
-  // Only the explicit (non-recurring) blocks count as "previously marked
-  // unavailable" for a specific date.
-  const explicitRules = rules.filter((r) => r.type !== "RECURRING");
 
   const mySet: SchedulerSet = {
     id: mine.set.id,
@@ -172,8 +201,17 @@ export async function GET(req: NextRequest) {
       youAvailable: isUserAvailable(user.id, theirSet, rules),
       // They'd take my set:
       theyAvailable: isUserAvailable(c.user.id, mySet, rules),
-      theyMarkedUnavailable: !isUserAvailable(c.user.id, mySet, explicitRules),
       theyInactive: inactiveUserIds.has(c.user.id),
+      // Roles they'd be adding MY set's slot on top of. `mine.role` can't be
+      // among them (I hold it), but passing it keeps the call honest.
+      theyAlsoOnYourSet: rolesHeldOn(
+        myRosterIndex,
+        mine.setId,
+        c.user.id,
+        mine.role
+      ),
+      // …and the mirror: roles I already hold on the set I'd be taking on.
+      youAlsoOnTheirSet: rolesHeldOn(mySeatsIndex, c.set.id, user.id),
     };
   });
 

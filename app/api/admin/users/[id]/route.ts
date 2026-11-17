@@ -9,6 +9,7 @@ import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { getTeamCatalog } from "@/lib/teamRoleStore";
 import { isOrgSlackConnected } from "@/lib/slack";
+import { isGoogleCalendarAppConfigured, syncSetsAfterResponse } from "@/lib/googleCalendar";
 
 export async function PATCH(
   req: NextRequest,
@@ -262,6 +263,13 @@ export async function DELETE(
   }
 
   const now = new Date();
+  // The sets they're leaving, so those events drop them as a guest.
+  const leaving = isGoogleCalendarAppConfigured()
+    ? await prisma.assignment.findMany({
+        where: { userId: id, set: { orgId: admin.orgId, startsAt: { gte: now } } },
+        select: { setId: true },
+      })
+    : [];
   await prisma.$transaction([
     // Upcoming sets only — a set that already happened keeps its roster.
     prisma.assignment.deleteMany({
@@ -287,5 +295,6 @@ export async function DELETE(
     prisma.orgMembership.delete({ where: { id: membership.id } }),
   ]);
 
+  syncSetsAfterResponse(...leaving.map((a) => a.setId));
   return NextResponse.json({ ok: true });
 }

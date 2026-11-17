@@ -34,7 +34,11 @@ export default function Select({
   ...props
 }: SelectProps) {
   return (
-    <label className="block">
+    // min-w-0: a grid/flex item defaults to min-width:auto, so a field with a
+    // wide intrinsic size (a `type="time"` input above all) refuses to shrink
+    // and pushes the row past its container — which is how the set form's
+    // Start/End times ran off the side of a phone.
+    <label className="block min-w-0">
       <span
         className={
           hideLabel

@@ -12,6 +12,7 @@ import {
   clearBusyBlocks,
   gotoReady,
   login,
+  openSetByLabel,
   pickSingleDay,
   requestAvailability,
   sectionByHeading,
@@ -25,6 +26,14 @@ test("phone shows the bottom tab bar and navigates with it", async ({ page }) =>
   const setsTab = page.getByRole("link", { name: "My Sets", exact: true });
   await expect(setsTab).toHaveCount(1);
   await expect(setsTab).toBeVisible();
+
+  // The pill floats just 0.5rem (8px) above the bottom edge plus the safe
+  // area, which device emulation reports as 0.
+  const bar = page.locator("nav", { has: setsTab });
+  const box = await bar.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box && viewport && Math.round(viewport.height - (box.y + box.height))).toBe(8);
+
   await setsTab.click();
 
   await expect(page).toHaveURL(/\/set-manager/);
@@ -115,7 +124,7 @@ test("phone: a team-scoped cover shows only to the set's team", async ({ page })
 test("phone: the set modal's staged edits and sticky footer work on a phone", async ({
   page,
 }) => {
-  // The detail modal stages every edit behind a sticky Delete · Cancel · Save
+  // The detail modal stages every edit behind a sticky Delete · Close · Save
   // row. On a phone that row is the only way to commit or back out — there's no
   // room for it to scroll away — so it's worth proving it's reachable and that
   // the discard guard still names what would be lost.
@@ -143,7 +152,7 @@ test("phone: the set modal's staged edits and sticky footer work on a phone", as
   await expect(save).toBeEnabled();
 
   // Backing out warns, and names the change.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   const warning = page
     .getByRole("dialog")
     .filter({ hasText: "Discard your changes?" })
@@ -232,9 +241,12 @@ test("phone week strip blocks a day with one tap", async ({ page }) => {
   await expect(blockEntry.first()).toBeVisible();
   await expect(todayCell).toHaveAttribute("aria-pressed", "true");
 
-  // Tapping it again clears it — the same toggle the calendar's click has.
+  // Tapping it again clears the day completely — the same toggle the calendar's
+  // click has. (A press-and-hold, or the right-click it stands in for, frees a
+  // day whatever is on it; this is the tap-twice path.)
   await todayCell.click();
   await expect(blockEntry).toHaveCount(0);
+  await expect(todayCell).toHaveAttribute("aria-pressed", "false");
 });
 
 test("phone: adds and deletes a recurring weekly block via the single-panel adder", async ({
@@ -293,14 +305,56 @@ test("phone: submits an availability response and re-opens it for changes", asyn
   // Nothing blocked → the modal says so.
   await expect(modal.getByText(/available the whole time/)).toBeVisible();
   await modal.getByRole("button", { name: "Confirm" }).click();
-  // The card flips to a "Completed" badge.
-  await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+  // The card reports the date it went, in place of the old status pill.
+  await expect(page.getByText(/· sent /)).toBeVisible();
 
   // "Make changes" re-opens it (unsubmits) so the response can be edited.
   await page.getByRole("button", { name: "Make changes" }).click();
   await expect(
     page.getByRole("button", { name: "Submit response" })
   ).toBeVisible();
+});
+
+test("phone: the selected request card keeps its text whole and its actions on one row", async ({
+  page,
+}) => {
+  await requestAvailability(page);
+  await login(page, "carol");
+  // Two buttons, the case that crushed the card: the import only shows where
+  // Google is configured, which the test environment isn't — so say it is.
+  await page.route("**/api/availability", async (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: { ...body, googleImport: true } });
+  });
+  await gotoReady(page, "/schedule");
+
+  const actions = page.getByTestId("request-actions");
+  await expect(actions).toBeVisible();
+  const importBtn = actions.getByTestId("import-google");
+  const submit = actions.getByRole("button", { name: "Submit response" });
+  const card = actions.locator("xpath=../..");
+  const text = actions.locator("xpath=preceding-sibling::div[1]");
+  const [cardBox, textBox, rowBox, importBox, submitBox, eyeBox] = await Promise.all([
+    card.boundingBox(),
+    text.boundingBox(),
+    actions.boundingBox(),
+    importBtn.boundingBox(),
+    submit.boundingBox(),
+    card.getByText("Shown on the calendar below").boundingBox(),
+  ]);
+  // The text gets the card's full width rather than a sliver beside the
+  // buttons, its calendar note reads on one line, and the actions sit BELOW.
+  expect(textBox!.width).toBeGreaterThan(cardBox!.width * 0.8);
+  expect(eyeBox!.height).toBeLessThan(30);
+  expect(rowBox!.y).toBeGreaterThanOrEqual(textBox!.y + textBox!.height - 1);
+  // One full-width row of 44px buttons, sharing a height, confirm on the right.
+  expect(rowBox!.width).toBeGreaterThan(cardBox!.width * 0.8);
+  expect(Math.round(importBox!.height)).toBe(Math.round(submitBox!.height));
+  expect(submitBox!.height).toBeGreaterThanOrEqual(44);
+  expect(Math.abs(importBox!.y - submitBox!.y)).toBeLessThan(1);
+  expect(submitBox!.x).toBeGreaterThan(importBox!.x);
 });
 
 test("phone: confirmation modal lists a blocked day, and the date picker marks it", async ({
@@ -362,14 +416,32 @@ test("phone: confirmation modal lists a blocked day, and the date picker marks i
 /**
  * Sets up a targeted swap proposed TO `toName` by `fromUsername`, entirely over
  * the API so it doesn't depend on which sets earlier specs have already traded.
- * Returns the accepting user's username.
+ *
+ * IDEMPOTENT, and that is the point. Proposing is a write, so an attempt that
+ * dies anywhere AFTER the POST — a slow login, a slow first render, anything
+ * that trips the 30s test timeout — leaves the proposal PENDING. That ties up
+ * the proposer's slot, so on the retry `toName` is no longer a swap CANDIDATE
+ * and the setup used to fail with a different error than the one that started
+ * it ("no swap candidate named …"), taking both retries and the next spec down
+ * with it. One transient miss became four hard failures. So when no candidate
+ * is on offer, check whether that is because the proposal this helper wants
+ * already exists, and treat it as the setup already done.
+ *
+ * `toUsername` is the recipient's login, needed only for that check: the
+ * pending proposal is visible to the person being asked, not the asker.
  */
 async function proposeSwapTo(
   page: import("@playwright/test").Page,
   fromUsername: string,
-  toName: string
+  toName: string,
+  toUsername: string
 ) {
   await login(page, fromUsername);
+
+  // My display name, which is how the recipient's incoming list identifies me.
+  const me = (await (await page.request.get("/api/me")).json()) as {
+    name: string;
+  };
 
   // Every assignment of mine, newest API shape: { id, role, set: {...} }.
   const mine = (await (await page.request.get("/api/assignments")).json()) as {
@@ -398,10 +470,23 @@ async function proposeSwapTo(
       break;
     }
   }
-  expect(
-    fromAssignmentId,
-    `no swap candidate named "${toName}" for ${fromUsername}`
-  ).toBeTruthy();
+  if (!fromAssignmentId) {
+    // No candidate on offer. Either a previous attempt already proposed this
+    // very trade (see the note above), in which case the setup is done, or the
+    // seed genuinely can't make it.
+    await login(page, toUsername);
+    const incoming = (await (
+      await page.request.get("/api/swaps/proposals/incoming")
+    ).json()) as { requestedBy: { name: string } }[];
+    const already = (incoming ?? []).some(
+      (p) => p.requestedBy.name === me.name
+    );
+    expect(
+      already,
+      `no swap candidate named "${toName}" for ${fromUsername}, and no pending proposal from ${me.name} either`
+    ).toBeTruthy();
+    return;
+  }
 
   const proposed = await page.request.post("/api/swaps/propose", {
     data: { fromAssignmentId, toAssignmentId },
@@ -412,7 +497,7 @@ async function proposeSwapTo(
 test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async ({
   page,
 }) => {
-  await proposeSwapTo(page, "erin", "Omar Osei");
+  await proposeSwapTo(page, "erin", "Omar Osei", "omar");
 
   await login(page, "omar");
   await page.goto("/set-manager");
@@ -436,7 +521,7 @@ test("phone: tapping Accept on a Cover Request resolves it (no freeze)", async (
 test("phone: tapping Reject on a Cover Request dismisses it (no freeze)", async ({
   page,
 }) => {
-  await proposeSwapTo(page, "erin", "Omar Osei");
+  await proposeSwapTo(page, "erin", "Omar Osei", "omar");
 
   await login(page, "omar");
   await page.goto("/set-manager");
@@ -515,7 +600,7 @@ test("phone: sending a note posts it immediately and shows it in the log", async
 
   // It really reached the server — reopening the set (a fresh fetch) still
   // shows it, and the composer comes back empty rather than pre-filled.
-  await modal.getByRole("button", { name: "Cancel", exact: true }).click();
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
   await expect(modal).not.toBeVisible();
   await page.getByText("Wednesday Night").filter({ visible: true }).first().click();
   await expect(
@@ -536,4 +621,312 @@ test("phone calendar hides the desktop-only Preview Mode button", async ({
   // is desktop-only — the phone gets My Sets instead. It's in the DOM (the
   // wrapper is `hidden md:block`) but never shown.
   await expect(page.getByRole("button", { name: "Preview Mode" })).toBeHidden();
+});
+
+// Drag a finger straight down from the top of the page and report whether the
+// pull-to-refresh spinner came out, checked BEFORE letting go. CDP touch input,
+// so Chromium only — the WebKit project skips the tests that use it.
+async function pullDownShowsSpinner(page: import("@playwright/test").Page) {
+  const cdp = await page.context().newCDPSession(page);
+  const x = 200;
+  const touch = (type: "touchStart" | "touchMove" | "touchEnd", y: number) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints: type === "touchEnd" ? [] : [{ x, y }],
+    });
+  await touch("touchStart", 260);
+  for (let y = 270; y <= 460; y += 15) await touch("touchMove", y);
+  const shown = await page.getByTestId("pull-indicator").count();
+  await touch("touchEnd", 460);
+  return shown > 0;
+}
+
+test("phone: pull-to-refresh only on pages with live data", async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "CDP touch input is Chromium-only");
+  await login(page, "bob");
+
+  // The calendar's sets come straight from the db: pulling refreshes them.
+  await gotoReady(page, "/calendar");
+  expect(await pullDownShowsSpinner(page)).toBe(true);
+
+  // A profile has nothing a pull would update, so the gesture doesn't engage —
+  // and in particular doesn't full-reload the page through the splash screen.
+  await gotoReady(page, "/profile");
+  await page.evaluate(() => ((window as unknown as { __kept: boolean }).__kept = true));
+  expect(await pullDownShowsSpinner(page)).toBe(false);
+  await page.waitForTimeout(800);
+  expect(
+    await page.evaluate(() => (window as unknown as { __kept?: boolean }).__kept)
+  ).toBe(true);
+});
+
+test("phone My Sets: a pending card's buttons share one height", async ({ page }) => {
+  // On a narrow phone "Request cover" wraps to two lines; Swap and Confirm
+  // must grow with it rather than sit shorter, centred beside it.
+  await login(page, "henry");
+  await page.goto("/set-manager");
+  const cover = page.getByRole("button", { name: "Request cover" }).first();
+  await expect(cover).toBeVisible();
+  const row = cover.locator("xpath=..");
+  const heights = await Promise.all(
+    ["Request cover", "Swap", "Confirm"].map(async (name) =>
+      Math.round((await row.getByRole("button", { name, exact: true }).boundingBox())!.height)
+    )
+  );
+  expect(new Set(heights).size).toBe(1);
+});
+
+test("phone availability: the week view fits the screen", async ({ page }) => {
+  await login(page, "carol");
+  await page.goto("/schedule");
+  await page.getByRole("button", { name: "Week", exact: true }).click();
+  const week = page.getByTestId("availability-week-view");
+  await expect(week).toBeVisible();
+  // Seven day columns and no sideways scroll on a phone.
+  const box = (await week.boundingBox())!;
+  const viewport = page.viewportSize()!;
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+    viewport.width
+  );
+});
+
+test("phone turns away a Preview Mode draft link", async ({ page }) => {
+  // The Preview Mode button isn't rendered at this width, so a ?draft= link
+  // is the only way the review workspace could be reached on a phone — and
+  // it's the form of it made to be pasted into a message. It has to say why
+  // it won't open rather than look broken.
+  await login(page, "admin");
+  await page.goto("/calendar?draft=some-saved-plan");
+
+  await expect(
+    page.getByText(/too wide for a phone screen/i)
+  ).toBeVisible();
+  // And nothing of the workspace itself: no dialog, and no sign it tried.
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText(/doesn't match a saved plan/i)).toHaveCount(0);
+});
+
+test("the set modal's overflow menu opens fully inside the screen", async ({
+  page,
+}) => {
+  // The bug this guards: the action bar used to carry a 176px load-window
+  // picker, which on a phone took the first row by itself and wrapped the
+  // "⋮" onto a second row at the FAR LEFT. Its menu hangs leftward from its
+  // trigger, so the panel's left edge landed ~86px off the side of the screen
+  // and five rows lost their first letters. Two things keep it on screen now —
+  // the picker is gone, so the bar is one row again, and lib/dropdownPosition
+  // clamps the panel into the viewport whatever the trigger's position.
+  await login(page, "paul"); // admin, so the menu has its full set of rows
+  const modal = await openSetByLabel(page, "Sunday Morning");
+
+  const viewport = page.viewportSize()!;
+  const bar = modal.getByRole("button", { name: "Auto schedule" });
+  await expect(bar).toBeVisible();
+
+  await modal.getByRole("button", { name: "More actions" }).click();
+
+  // The menu is portaled to document.body, so it is looked up on the page.
+  const item = page.getByRole("button", { name: "Change Roles" });
+  await expect(item).toBeVisible();
+  const menu = page.locator("div.fixed.z-\\[60\\]").filter({ has: item });
+  const box = (await menu.boundingBox())!;
+
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+
+  // And the rows really are readable, not merely in the box.
+  const itemBox = (await item.boundingBox())!;
+  expect(itemBox.x).toBeGreaterThanOrEqual(0);
+});
+
+test("the set modal's overflow trigger stays at the right edge", async ({
+  page,
+}) => {
+  // Not "one row": at 360px the four controls are about ten pixels too wide to
+  // share one, and that is fine. What matters is that the group they wrap into
+  // is pinned RIGHT. Left-aligned — which is what the parent's justify-between
+  // gave it — the "\u22ee" sat near the left of the screen, and a menu that hangs
+  // leftward from its trigger had nowhere to go.
+  await login(page, "paul");
+  const modal = await openSetByLabel(page, "Sunday Morning");
+
+  const more = (await modal
+    .getByRole("button", { name: "More actions" })
+    .boundingBox())!;
+  const bar = (await modal
+    .locator("div.mb-3.flex.flex-wrap")
+    .first()
+    .boundingBox())!;
+
+  // Its right edge sits on the bar's, give or take the border.
+  expect(Math.abs(bar.x + bar.width - (more.x + more.width))).toBeLessThan(4);
+
+  // And the group chat button now says what it does.
+  await expect(
+    modal.getByRole("button", { name: "Create Group" })
+  ).toBeVisible();
+});
+
+test("the weekly set time form fits a phone: one row of days, a footer in reach", async ({
+  page,
+}) => {
+  // The Create tab's "weekly set time" form was the densest screen on a phone:
+  // seven full-word day checkboxes wrapped into three ragged rows of 16px
+  // targets, and its Close/Save buttons sat at the end of the scrolling body
+  // rather than in the pinned footer. Both are layout facts worth pinning —
+  // they only go wrong at this width, where nobody looks.
+  await login(page, "admin");
+  await gotoReady(page, "/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  // Exactly the seven days, named in full for anyone who can't see the two
+  // letters on the button. (Anchored, or "Sunday" would also match the
+  // "Sunday Team" chip.)
+  const days = modal.getByRole("checkbox", {
+    name: /^(Sun|Mon|Tues|Wednes|Thurs|Fri|Satur)day$/,
+  });
+  await expect(days).toHaveCount(7);
+
+  const boxes = [];
+  for (let i = 0; i < 7; i++) boxes.push((await days.nth(i).boundingBox())!);
+  const viewport = page.viewportSize()!;
+
+  // One row: every day shares a top edge, and the last one ends on screen.
+  const tops = boxes.map((b) => Math.round(b.y));
+  expect(new Set(tops).size).toBe(1);
+  expect(boxes[0].x).toBeGreaterThanOrEqual(0);
+  const last = boxes[6];
+  expect(last.x + last.width).toBeLessThanOrEqual(viewport.width);
+
+  // Apple's 44px minimum — a day is a tap target here, not a 16px tick.
+  for (const [i, b] of boxes.entries()) {
+    expect({ i, tall: b.height >= 44 }).toEqual({ i, tall: true });
+  }
+
+  // The actions are in the modal's pinned footer, so they're reachable
+  // without scrolling the form to its end, and they carry the phone row's
+  // full height.
+  const submit = page.locator(".modal-footer").getByRole("button", {
+    name: "Add template",
+  });
+  await expect(submit).toBeVisible();
+  expect((await submit.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+
+  // The Slack-channel number and the team chips share one row, half each:
+  // a two-digit number and a few short names don't each need a full row, and
+  // on a phone a row saved is a row of scrolling saved.
+  const lead = modal.getByLabel("Auto Create Slack Channel");
+  const team = modal.getByLabel("Team");
+  const leadBox = (await lead.boundingBox())!;
+  const teamBox = (await team.boundingBox())!;
+  // Side by side, not stacked.
+  expect(teamBox.x).toBeGreaterThan(leadBox.x + leadBox.width - 1);
+  // Neither column takes much over half the form's width.
+  expect(leadBox.width).toBeLessThan(viewport.width * 0.55);
+
+  // The two time fields are STACKED here, each the full width of the form:
+  // a `type="time"` control has a wide intrinsic size (Safari won't draw one
+  // narrower than its own "09:00 AM"), so two of them in half a phone's width
+  // is what ran off the side of the modal. They go back side by side at `sm`,
+  // which tablet.spec.ts checks.
+  const start = (await modal.getByLabel("Start time").boundingBox())!;
+  const end = (await modal.getByLabel("End time").boundingBox())!;
+  expect(end.y).toBeGreaterThan(start.y + start.height - 1);
+  expect(Math.round(end.width)).toBe(Math.round(start.width));
+
+  // And nothing in the form runs off the side of the modal.
+  const overflowing = await modal.evaluate((dialog: HTMLElement) => {
+    const right = dialog.getBoundingClientRect().right;
+    return [...dialog.querySelectorAll("input, select")]
+      .filter((el) => el.getBoundingClientRect().right > right + 1)
+      .map((el) => (el as HTMLElement).getAttribute("type") ?? el.tagName);
+  });
+  expect(overflowing).toEqual([]);
+});
+
+test("the weekly set time form's times and team shape line up on a phone", async ({
+  page,
+}) => {
+  // On an iPhone the Start/End time boxes ran past the modal's right edge
+  // (iOS draws a native time field wider than its box), which also let the
+  // whole dialog body be dragged sideways. And the team-shape number boxes
+  // were ragged: a long role name ("Worship Leader") squeezed its box, so no
+  // two boxes in a column started at the same x.
+  await login(page, "admin");
+  await gotoReady(page, "/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+  await modal.getByRole("button", { name: "Customize team shape" }).click();
+
+  // The time fields sit inside the form's own width, not just the modal's:
+  // they end where the Label field ends.
+  const labelBox = (await modal.getByLabel("Label").boundingBox())!;
+  for (const name of ["Start time", "End time"]) {
+    const box = (await modal.getByLabel(name).boundingBox())!;
+    expect({ name, right: Math.round(box.x + box.width) }).toEqual({
+      name,
+      right: Math.round(labelBox.x + labelBox.width),
+    });
+  }
+
+  // The dialog body never scrolls sideways.
+  const body = modal.locator(".overflow-y-auto").first();
+  expect(
+    await body.evaluate((el) => getComputedStyle(el).overflowX)
+  ).toBe("hidden");
+  expect(
+    await body.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+  ).toBe(true);
+
+  // Team shape: every number box is the same width, and the boxes form two
+  // clean columns — one left edge per column, whatever the label beside it.
+  // (The Slack-channel lead days is a number field too, higher up the form;
+  // it isn't part of the shape, so only boxes below the times count.)
+  const below = (await modal.getByLabel("End time").boundingBox())!;
+  const shape = modal.getByRole("spinbutton");
+  const boxes = [];
+  for (let i = 0; i < (await shape.count()); i++) {
+    const b = (await shape.nth(i).boundingBox())!;
+    if (b.y > below.y + below.height) boxes.push(b);
+  }
+  expect(boxes.length).toBeGreaterThan(3);
+  const widths = new Set(boxes.map((b) => Math.round(b.width)));
+  expect(widths.size).toBe(1);
+  const lefts = new Set(boxes.map((b) => Math.round(b.x)));
+  expect(lefts.size).toBe(2);
+});
+
+test("phone profile: the access keys card fits, with full-width 44px controls", async ({ page }) => {
+  // Making a key, its once-only panel and a listed row, all on a phone.
+  await login(page, "tess");
+  await page.goto("/profile");
+  const card = page.getByTestId("access-keys");
+  await card.getByLabel("Name for a new key").fill("Phone e2e");
+  const create = card.getByRole("button", { name: "Create key" });
+  await create.click();
+  await expect(card.getByTestId("new-access-key")).toBeVisible();
+
+  const viewport = page.viewportSize()!;
+  const box = (await card.boundingBox())!;
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 1);
+  // The long key wraps instead of pushing the page sideways.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+
+  for (const name of ["Copy key", "Create key", "Revoke"]) {
+    const control = card.getByRole("button", { name, exact: true });
+    expect(Math.round((await control.boundingBox())!.height)).toBeGreaterThanOrEqual(44);
+  }
+
+  // Tidy up so the desktop spec starts from an empty card.
+  const keys = (await (await page.request.get("/api/access-keys")).json()) as { id: string }[];
+  for (const k of keys) await page.request.delete(`/api/access-keys/${k.id}`);
 });
