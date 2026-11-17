@@ -41,9 +41,12 @@ else
   fi
 
   # An xcconfig reads // as a comment, so the slashes are split with $().
+  # Done with sed, not ${url//…}: macOS's bash 3.2 keeps the backslashes from
+  # that replacement, which wrote http:\/\/localhost and the app ignored it.
+  xcurl="$(printf '%s' "$url" | sed 's#//#/$()/#g')"
   {
     echo "// Written by ./use-env $name. Not committed."
-    echo "TAPWORSHIP_API_URL = ${url//\/\//\/\$()\/}"
+    echo "TAPWORSHIP_API_URL = $xcurl"
     echo "GOOGLE_IOS_CLIENT_ID = $google"
   } > "$out"
   echo "Debug builds now talk to $url (from env/$name.env)."
