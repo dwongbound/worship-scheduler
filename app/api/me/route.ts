@@ -6,7 +6,17 @@ import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { TEAM_ROLE_FIELDS } from "@/lib/teamRoleStore";
 import { calendarResyncNeeded, resolveProfileEmail } from "@/lib/profile";
-import { isGoogleCalendarAppConfigured, syncSetsAfterResponse } from "@/lib/googleCalendar";
+import {
+  disconnectOrg,
+  isGoogleCalendarAppConfigured,
+  syncSetsAfterResponse,
+} from "@/lib/googleCalendar";
+import {
+  DELETE_CONFIRM_PHRASE,
+  confirmationMatches,
+  strandedMessage,
+  strandedOrgs,
+} from "@/lib/accountDeletion";
 
 /**
  * Loose enough for a Google calendar address (`…@group.calendar.google.com`)
@@ -238,4 +248,85 @@ export async function PUT(req: NextRequest) {
       { status: 400 }
     );
   }
+}
+
+// DELETE /api/me — delete my own account, for good. Body: { confirm: "DELETE" }
+// (lib/accountDeletion.ts). Both the web's /profile and the iOS app call this.
+//
+// Refused while I'm the only admin of an org that still has other people in
+// it. Otherwise the User row goes and its cascade takes everything that hangs
+// off it; two references that are plain id columns (no FK) are cleared by hand
+// first so nothing is left pointing at a person who no longer exists.
+export async function DELETE(req: NextRequest) {
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  const body = await req.json().catch(() => ({}));
+  if (!confirmationMatches(body?.confirm)) {
+    return NextResponse.json(
+      { error: `Type ${DELETE_CONFIRM_PHRASE} to confirm.` },
+      { status: 400 }
+    );
+  }
+
+  const memberships = await prisma.orgMembership.findMany({
+    where: { userId: user.id },
+    select: {
+      orgId: true,
+      isAdmin: true,
+      org: {
+        select: {
+          name: true,
+          _count: { select: { memberships: true } },
+          memberships: { where: { isAdmin: true }, select: { userId: true } },
+        },
+      },
+    },
+  });
+  const stranded = strandedOrgs(
+    memberships.map((m) => ({
+      orgId: m.orgId,
+      orgName: m.org.name,
+      isAdmin: m.isAdmin,
+      adminCount: m.org.memberships.length,
+      memberCount: m.org._count.memberships,
+    }))
+  );
+  if (stranded.length > 0) {
+    return NextResponse.json(
+      { error: strandedMessage(stranded), stranded },
+      { status: 409 }
+    );
+  }
+
+  // Their upcoming sets, read BEFORE the rows go, so each set's calendar event
+  // drops them as a guest afterwards.
+  const upcoming = isGoogleCalendarAppConfigured()
+    ? await prisma.assignment.findMany({
+        where: { userId: user.id, set: { startsAt: { gte: new Date() } } },
+        select: { setId: true },
+      })
+    : [];
+
+  // An org calendar connected with MY Google account stops using it: the
+  // connection is my credential, and a deleted account keeps none. Events
+  // already on calendars stay; an admin reconnects with their own account.
+  const connected = await prisma.org.findMany({
+    where: { googleCalConnectedById: user.id },
+    select: { id: true },
+  });
+  for (const org of connected) await disconnectOrg(org.id);
+
+  await prisma.$transaction([
+    // A seat mid-handoff FROM me: the taker keeps it, there's no one to hand back to.
+    prisma.assignment.updateMany({
+      where: { pendingCoverFromUserId: user.id },
+      data: { pendingCoverFromUserId: null },
+    }),
+    prisma.user.delete({ where: { id: user.id } }),
+  ]);
+
+  syncSetsAfterResponse(...new Set(upcoming.map((a) => a.setId)));
+  return NextResponse.json({ ok: true });
 }
