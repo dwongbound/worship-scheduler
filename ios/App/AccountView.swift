@@ -22,6 +22,7 @@ struct AccountView: View {
         Section {
           NavigationLink {
             ProfileView()
+              .pausesTabSwipe()
           } label: {
             Label("Profile", systemImage: "person.text.rectangle")
           }

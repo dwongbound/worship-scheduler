@@ -114,6 +114,10 @@ final class AppModel {
   /// The orgs I administer, by name, from GET /api/me. nil until loaded; the
   /// token's own `isAdmin` hints decide the tabs until then, so they don't
   /// pop in a beat after launch.
+  /// How many pushed screens are showing; tab swipes are off while any is.
+  var tabSwipePauses = 0
+  var tabSwipePaused: Bool { tabSwipePauses > 0 }
+
   private(set) var adminOrgs: [ApiMyOrg]?
   /// Which org the admin tabs are looking at. Shared, so switching on one
   /// tab switches the other — two tabs on two orgs would read as a bug.

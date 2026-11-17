@@ -40,6 +40,7 @@ struct MySetsView: View {
             proposeSwap: { swapFor = $0 },
             withdrawSwap: withdraw
           )
+          .pausesTabSwipe()
         }
         .refreshable { await load() }
         .task { if phase == .loading { await load() } }

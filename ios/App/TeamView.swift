@@ -32,6 +32,7 @@ struct TeamView: View {
             users: $users,
             teams: teams
           )
+          .pausesTabSwipe()
         }
         .searchable(text: $query, prompt: "Name or username")
         .refreshable { await load() }

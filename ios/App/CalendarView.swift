@@ -13,6 +13,7 @@ struct CalendarView: View {
   /// refresh runs behind it.
   @State private var loaded: [String: [ApiSet]] = [:]
   @State private var phase: Phase = .loading
+  @State private var creatingSet = false
 
   enum Phase: Equatable { case loading, loaded, failed(String) }
 
@@ -42,9 +43,22 @@ struct CalendarView: View {
         ToolbarItem(placement: .topBarTrailing) {
           Button("Today") { goToToday() }
         }
+        if model.isAdminAnywhere {
+          ToolbarItem(placement: .topBarTrailing) {
+            Button {
+              creatingSet = true
+            } label: {
+              Label("New set", systemImage: "plus")
+            }
+          }
+        }
+      }
+      .sheet(isPresented: $creatingSet) {
+        NewSetSheet(day: SetCalendar.date(ymd: selected, calendar: calendar) ?? Date(), created: load)
       }
       .navigationDestination(for: SetLink.self) { link in
-        SetDetailView(set: allSets.first { $0.id == link.id })
+        SetDetailView(set: allSets.first { $0.id == link.id }, reload: load)
+          .pausesTabSwipe()
       }
       .refreshable { await load() }
       .task(id: monthKey) { await load() }
@@ -238,10 +252,22 @@ struct CalendarSetRow: View {
 /// notes, the practices.
 struct SetDetailView: View {
   @Environment(AppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
   let set: ApiSet?
+  /// Refetches the calendar after an edit, so this page shows the saved set.
+  var reload: () async -> Void = {}
+
+  @State private var editingSetlist = false
+  @State private var editingRoster = false
+  @State private var addingPractice = false
+  @State private var deletingPractice: ApiPractice?
+  @State private var confirmDelete = false
+  @State private var working = false
+  @State private var actionError: String?
 
   var body: some View {
     if let set {
+      let isAdmin = model.isAdmin(of: set.org?.id)
       List {
         Section {
           LabeledContent("Date", value: set.startsAt.formatted(.dateTime.weekday(.wide).month(.wide).day()))
@@ -255,7 +281,7 @@ struct SetDetailView: View {
           .accessibilityElement(children: .combine)
         }
 
-        Section("Roster") {
+        Section {
           let rows = SetCalendar.roster(set)
           if rows.isEmpty {
             Text("No roles on this set yet").foregroundStyle(.secondary)
@@ -263,20 +289,48 @@ struct SetDetailView: View {
           ForEach(rows) { row in
             RosterRowView(row: row, set: set)
           }
+        } header: {
+          SectionHeader(title: "Roster", action: isAdmin ? ("Edit", { editingRoster = true }) : nil)
         }
 
-        if let songs = set.songs, !songs.isEmpty {
-          Section("Songs") {
-            ForEach(songs.sorted { $0.order < $1.order }) { song in
+        let songs = (set.songs ?? []).sorted { $0.order < $1.order }
+        let canEditSongs = Setlist.canEdit(set, userId: model.session?.user.id, isOrgAdmin: isAdmin)
+        if !songs.isEmpty || canEditSongs {
+          Section {
+            if songs.isEmpty {
+              Text("No songs yet").foregroundStyle(.secondary)
+            }
+            ForEach(songs) { song in
               LabeledContent(song.title, value: song.key ?? "")
             }
+          } header: {
+            SectionHeader(title: "Songs", action: canEditSongs ? ("Edit", { editingSetlist = true }) : nil)
           }
         }
 
-        if let practices = set.practices, !practices.isEmpty {
-          Section("Practices") {
-            ForEach(practices.sorted { $0.startsAt < $1.startsAt }) { practice in
+        let practices = (set.practices ?? []).sorted { $0.startsAt < $1.startsAt }
+        if !practices.isEmpty || isAdmin {
+          Section {
+            ForEach(practices) { practice in
               PracticeRow(setId: set.id, practice: practice)
+                .swipeActions {
+                  if isAdmin {
+                    Button("Delete", role: .destructive) { deletingPractice = practice }
+                  }
+                }
+            }
+            if isAdmin {
+              Button {
+                addingPractice = true
+              } label: {
+                Label("Add practice", systemImage: "plus")
+              }
+            }
+          } header: {
+            Text("Practices")
+          } footer: {
+            if isAdmin && !practices.isEmpty {
+              Text("Swipe left on a practice to cancel it.")
             }
           }
         }
@@ -284,8 +338,30 @@ struct SetDetailView: View {
         SetNotesSection(
           setId: set.id,
           currentNotes: set.notes,
-          canPost: SetNotes.canPost(on: set, userId: model.session?.user.id, isOrgAdmin: model.isAdmin(of: set.org?.id))
+          canPost: SetNotes.canPost(on: set, userId: model.session?.user.id, isOrgAdmin: isAdmin)
         )
+
+        if isAdmin {
+          Section {
+            Button("Delete set", role: .destructive) { confirmDelete = true }
+              .disabled(working)
+              // On the button, so the dialog points at it rather than the list.
+              .confirmationDialog("Delete this set?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete set", role: .destructive) {
+                  Task {
+                    await run { try await model.api.deleteSet(set.id) }
+                    if actionError == nil { dismiss() }
+                  }
+                }
+              } message: {
+                Text("Its roster, songs, notes and practices go too, and calendar invites are cancelled. This can't be undone.")
+              }
+          } footer: {
+            if let actionError {
+              Label(actionError, systemImage: "exclamationmark.circle").foregroundStyle(.red)
+            }
+          }
+        }
       }
       .listStyle(.insetGrouped)
       .navigationTitle(set.label ?? "Set")
@@ -295,8 +371,53 @@ struct SetDetailView: View {
           AddToCalendarButton { CalendarEventDraft(set: set) }
         }
       }
+      .sheet(isPresented: $editingSetlist) { SetlistEditorSheet(set: set, saved: reload) }
+      .sheet(isPresented: $editingRoster) { RosterEditorSheet(set: set, saved: reload) }
+      .sheet(isPresented: $addingPractice) { AddPracticeSheet(set: set, saved: reload) }
+      .confirmationDialog(
+        "Cancel this practice?",
+        isPresented: Binding(get: { deletingPractice != nil }, set: { if !$0 { deletingPractice = nil } }),
+        titleVisibility: .visible,
+        presenting: deletingPractice
+      ) { practice in
+        Button("Cancel practice", role: .destructive) {
+          Task { await run { try await model.api.deletePractice(setId: set.id, practiceId: practice.id) } }
+        }
+      } message: { _ in
+        Text("Everyone on the set gets a calendar cancellation.")
+      }
     } else {
       ContentUnavailableView("This set is no longer on the calendar", systemImage: "calendar.badge.minus")
+    }
+  }
+
+  private func run(_ action: () async throws -> Void) async {
+    working = true
+    actionError = nil
+    do {
+      try await action()
+      await reload()
+    } catch {
+      actionError = model.handle(error)
+    }
+    working = false
+  }
+}
+
+/// A section title with an optional button on the right ("Edit").
+struct SectionHeader: View {
+  let title: String
+  var action: (String, () -> Void)?
+
+  var body: some View {
+    HStack {
+      Text(title)
+      Spacer()
+      if let action {
+        Button(action.0, action: action.1)
+          .font(.subheadline.weight(.semibold))
+          .textCase(nil)
+      }
     }
   }
 }

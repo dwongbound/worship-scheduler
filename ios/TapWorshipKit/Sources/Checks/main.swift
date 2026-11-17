@@ -624,6 +624,49 @@ do {
   print("  ✗ profile threw: \(error)")
 }
 
+section("set editing")
+do {
+  let setJSON = #"{"id":"s1","label":"Sunday","startsAt":"2026-11-01T17:00:00.000Z","durationMinutes":90,"notes":null,"requiresMD":false,"isPrivate":false,"mdUserId":null,"slotCapacities":null,"groupChatLeadDays":null,"teamId":"t1","team":null,"org":null,"assignments":[{"id":"a1","role":"BASS","status":"PENDING","user":{"id":"u1","name":"Dave"},"guestTeamId":null,"pendingFromUser":null},{"id":"a2","role":"KEYS","status":"CONFIRMED","user":{"id":"u2","name":"Ivy"},"guestTeamId":null,"pendingFromUser":null}],"songs":[{"id":"x2","title":"Second","key":"G","order":1},{"id":"x1","title":"First","key":null,"order":0}],"spotifyPlaylistUrl":null,"practices":[],"guestTeams":[]}"#
+  let set = try TapWorship.makeDecoder().decode(ApiSet.self, from: Data(setJSON.utf8))
+  check("anyone on the set may edit its setlist", Setlist.canEdit(set, userId: "u1", isOrgAdmin: false) && !Setlist.canEdit(set, userId: "zz", isOrgAdmin: false))
+  let drafts = Setlist.drafts(from: set.songs)
+  check("setlist opens in its saved order", drafts.map(\.title) == ["First", "Second"])
+  check("an untouched setlist isn't a change", !Setlist.changed(drafts, from: set.songs))
+  var edited = drafts + [Setlist.Draft(title: "   ", key: nil), Setlist.Draft(title: " Third ", key: "H#")]
+  edited.swapAt(0, 1)
+  check("blank songs dropped, titles trimmed, bad keys cleared", Setlist.body(edited) == [.init(title: "Second", key: "G"), .init(title: "First", key: nil), .init(title: "Third", key: nil)])
+  check("a reorder is a change", Setlist.changed(edited, from: set.songs))
+
+  var seats = RosterEditing.seats(of: set)
+  check("no edit, no diff", RosterEditing.diff(original: set, edited: seats).isEmpty)
+  seats.removeAll { $0.assignmentId == "a2" }
+  seats[0].userId = "u9"; seats[0].name = "Zed"
+  seats.append(SeatDraft(assignmentId: nil, role: "DRUMS", userId: "u3", name: "Ruth", guestTeamId: nil))
+  let diff = RosterEditing.diff(original: set, edited: seats)
+  check("diff: removed, reassigned, added", diff.removed == ["a2"] && diff.reassigned == [.init(id: "a1", userId: "u9")] && diff.added == [.init(role: "DRUMS", userId: "u3", guestTeamId: nil)])
+  check("diff summary", RosterEditing.summary(diff) == "1 added, 1 changed, 1 removed")
+
+  let users = [
+    ApiAdminUser(id: "u1", name: "Dave", username: "dave", isMD: false, isAdmin: false, teams: [.init(id: "t1", name: "Sunday", roles: ["BASS"], active: true)]),
+    ApiAdminUser(id: "u4", name: "Abe", username: "abe", isMD: false, isAdmin: false, teams: [.init(id: "t1", name: "Sunday", roles: ["BASS"], active: false)]),
+    ApiAdminUser(id: "u5", name: "Bea", username: "bea", isMD: false, isAdmin: false, teams: [.init(id: "t2", name: "Youth", roles: ["BASS"], active: true)]),
+    ApiAdminUser(id: "u6", name: "Cy", username: "cy", isMD: false, isAdmin: false, teams: [.init(id: "t1", name: "Sunday", roles: ["BASS"], active: true)]),
+  ]
+  let options = RosterEditing.candidates(users: users, role: "BASS", teamId: "t1", taken: ["u1"])
+  check("candidates: this team's players, not already seated, paused last", options.map(\.name) == ["Cy", "Abe"] && options.last?.inactive == true)
+  check("a set with no team draws on every team", RosterEditing.candidates(users: users, role: "BASS", teamId: nil, taken: []).count == 4)
+
+  let start = Date(timeIntervalSince1970: 1_800_000_000)
+  check("a new set's duration comes from its end", NewSet(label: "  ", startsAt: start, endsAt: start.addingTimeInterval(5400), teamId: "t1").durationMinutes == 90)
+  check("a blank label is none, a backwards set is refused", NewSet(label: " ", startsAt: start, endsAt: start, teamId: "t1").label == nil && NewSet(label: nil, startsAt: start, endsAt: start, teamId: "t1").problem != nil)
+  check("practice must end after it starts", PracticeRules.problem(start: start, end: start) != nil && PracticeRules.problem(start: start, end: start.addingTimeInterval(60)) == nil)
+  let body = String(data: try TapWorship.makeEncoder().encode(NewSet(label: "Easter", startsAt: start, endsAt: start.addingTimeInterval(3600), teamId: "t1")), encoding: .utf8) ?? ""
+  check("a new set's start is sent as an ISO date", body.contains("\"startsAt\":\"2027-01-15T08:00:00"))
+} catch {
+  failures += 1
+  print("  ✗ set editing threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

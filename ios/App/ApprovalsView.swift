@@ -33,6 +33,7 @@ struct ApprovalsView: View {
             decide: decide,
             askReject: { confirmReject = $0 }
           )
+          .pausesTabSwipe()
         }
         .refreshable { await load() }
         .task(id: model.adminOrgID) { await load() }
