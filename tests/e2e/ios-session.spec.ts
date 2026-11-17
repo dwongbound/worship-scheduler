@@ -109,3 +109,70 @@ test("an admin's bearer token reaches the admin routes for their org only", asyn
   expect((await api.get("/api/admin/users", { headers: admin })).status()).toBe(403);
   await api.dispose();
 });
+
+test("the member tabs' routes answer a bearer token: calendar, availability, covers and swaps", async ({
+  playwright,
+  baseURL,
+}) => {
+  const api = await playwright.request.newContext({ baseURL });
+  const signIn = await api.post("/api/mobile/session", {
+    data: { username: "bob", password: "password123" },
+  });
+  const headers = { Authorization: `Bearer ${(await signIn.json()).token}` };
+
+  // Calendar: a window of sets, each with the roster the app draws.
+  const sets = await api.get("/api/sets?from=2020-01-01&to=2035-12-31", { headers });
+  expect(sets.status()).toBe(200);
+  const setRows = await sets.json();
+  expect(Array.isArray(setRows)).toBe(true);
+  for (const row of setRows.slice(0, 3)) {
+    expect(typeof row.startsAt).toBe("string");
+    expect(Array.isArray(row.assignments)).toBe(true);
+    expect(Array.isArray(row.practices)).toBe(true);
+    expect(Array.isArray(row.guestTeams)).toBe(true);
+  }
+
+  // My Sets' two extra lists.
+  const covers = await api.get("/api/swaps", { headers });
+  expect(covers.status()).toBe(200);
+  expect(Array.isArray(await covers.json())).toBe(true);
+  const incoming = await api.get("/api/swaps/proposals/incoming", { headers });
+  expect(incoming.status()).toBe(200);
+  expect(Array.isArray(await incoming.json())).toBe(true);
+
+  // Availability: tap a day (far enough out that no other spec cares), see
+  // it blocked all day, tap it again, see it gone.
+  const day = "2031-01-15";
+  const blocksOn = async () => {
+    const res = await api.get("/api/availability", { headers });
+    expect(res.status()).toBe(200);
+    const body = await res.json();
+    expect(Array.isArray(body.requests)).toBe(true);
+    expect(Array.isArray(body.responses)).toBe(true);
+    return (body.entries as { type: string; startDate: string | null; startMinute: number | null; endMinute: number | null }[]).filter(
+      (e) => e.type === "SPECIFIC" && e.startDate && new Date(e.startDate).getFullYear() === 2031
+    );
+  };
+  expect(await blocksOn()).toHaveLength(0);
+  const paint = await api.post("/api/availability/block-days", {
+    headers,
+    data: { start: day, end: day, blocked: true },
+  });
+  expect(paint.status()).toBe(200);
+  const painted = await blocksOn();
+  expect(painted).toHaveLength(1);
+  expect(painted[0].startMinute).toBe(0);
+  expect(painted[0].endMinute).toBe(24 * 60);
+  const free = await api.post("/api/availability/block-days", {
+    headers,
+    data: { start: day, end: day, blocked: false },
+  });
+  expect(free.status()).toBe(200);
+  expect(await blocksOn()).toHaveLength(0);
+
+  // None of it answers without the token.
+  for (const path of ["/api/sets?from=2031-01-01&to=2031-01-31", "/api/availability", "/api/swaps", "/api/swaps/proposals/incoming"]) {
+    expect((await api.get(path)).status()).toBe(401);
+  }
+  await api.dispose();
+});

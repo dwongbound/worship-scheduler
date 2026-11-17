@@ -34,9 +34,11 @@ struct RootView: View {
   }
 }
 
-/// Admins get Approvals and Team between their own tabs. The web's Create
-/// tab stays on the web: generating a schedule is a big-screen job, and the
-/// web refuses its review workspace at phone widths too.
+/// Five tabs at most, which is what a tab bar holds without a "More" list:
+/// My Sets, Calendar, Availability, Account, and Admin for someone who is one
+/// (Approvals and Team share it). The web's Create tab stays on the web:
+/// generating a schedule is a big-screen job, and the web refuses its review
+/// workspace at phone widths too.
 struct MainTabView: View {
   @Environment(AppModel.self) private var model
 
@@ -44,18 +46,25 @@ struct MainTabView: View {
     TabView {
       MySetsView()
         .tabItem { Label("My Sets", systemImage: "music.note.list") }
+      CalendarView()
+        .tabItem { Label("Calendar", systemImage: "calendar") }
+      AvailabilityView()
+        .tabItem { Label("Availability", systemImage: "calendar.badge.clock") }
       if model.isAdminAnywhere {
-        ApprovalsView()
-          .tabItem { Label("Approvals", systemImage: "checkmark.seal") }
+        AdminView()
+          .tabItem { Label("Admin", systemImage: "checkmark.seal") }
           .badge(model.pendingApprovals)
-        TeamView()
-          .tabItem { Label("Team", systemImage: "person.3") }
       }
       AccountView()
         .tabItem { Label("Account", systemImage: "person.crop.circle") }
     }
     .task { await model.refreshAdminOrgs() }
   }
+}
+
+#Preview("Tabs · member") {
+  MainTabView()
+    .environment(AppModel.fullPreview())
 }
 
 #Preview("Tabs · admin") {

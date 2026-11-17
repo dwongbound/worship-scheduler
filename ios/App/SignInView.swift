@@ -158,6 +158,12 @@ struct SignInView: View {
       Text("Your sets, your swaps, your team.")
         .font(.subheadline)
         .foregroundStyle(.secondary)
+      if AppConfig.isDevServer {
+        // A dev build must never pass for the real thing.
+        Text("Development build · \(AppConfig.baseURL.host ?? "dev server")")
+          .font(.footnote.weight(.medium))
+          .foregroundStyle(.orange)
+      }
     }
     .frame(maxWidth: .infinity)
     .padding(.vertical, 8)

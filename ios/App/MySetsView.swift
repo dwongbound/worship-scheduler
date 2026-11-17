@@ -4,7 +4,9 @@ import TapWorshipKit
 /// The sets I'm on, soonest first — the phone's version of the web's My Sets.
 /// Sets that still need my answer get their own section on top, which is the
 /// web's "Unconfirmed first" sort made the default: on a phone, that's the
-/// reason to open the app.
+/// reason to open the app. Above those sit the things other people are
+/// waiting on me for: a trade someone proposed, and open cover requests in a
+/// role I play.
 struct MySetsView: View {
   @Environment(AppModel.self) private var model
 
@@ -12,6 +14,15 @@ struct MySetsView: View {
   @State private var phase: Phase = .loading
   @State private var actionError: String?
   @State private var coverFor: ApiMyAssignment?
+  @State private var covers: [ApiOpenCover] = []
+  @State private var proposals: [ApiSwapProposal] = []
+  @State private var swapFor: ApiMyAssignment?
+  @State private var takeCover: ApiOpenCover?
+  @State private var declineCover: ApiOpenCover?
+  @State private var declineNote = ""
+  /// The cover or proposal a request is out for.
+  @State private var busyID: String?
+  @State private var done = 0
 
   enum Phase: Equatable { case loading, loaded, failed(String) }
 
@@ -23,7 +34,12 @@ struct MySetsView: View {
       content
         .navigationTitle("My Sets")
         .navigationDestination(for: MySets.SetGroup.self) { group in
-          SetSeatsView(groupID: group.id, groups: groups, act: act, requestCover: { coverFor = $0 })
+          SetSeatsView(
+            groupID: group.id, groups: groups, act: act,
+            requestCover: { coverFor = $0 },
+            proposeSwap: { swapFor = $0 },
+            withdrawSwap: withdraw
+          )
         }
         .refreshable { await load() }
         .task { if phase == .loading { await load() } }
@@ -32,6 +48,32 @@ struct MySetsView: View {
             await act(seat, .requestSwap, reason: reason)
           }
         }
+        .sheet(item: $swapFor) { seat in
+          SwapPickerSheet(seat: seat) { await load() }
+        }
+        .confirmationDialog(
+          "Take this set?",
+          isPresented: Binding(get: { takeCover != nil }, set: { if !$0 { takeCover = nil } }),
+          titleVisibility: .visible,
+          presenting: takeCover
+        ) { cover in
+          Button("Take it") { Task { await take(cover) } }
+          Button("Close", role: .cancel) {}
+        } message: { cover in
+          Text("You'll play \(RoleLabels.label(for: cover.role)) for \(cover.user.name) on \(cover.set.startsAt.formatted(.dateTime.weekday(.wide).month().day())). An admin approves it before it's final.")
+        }
+        .alert(
+          "Not me",
+          isPresented: Binding(get: { declineCover != nil }, set: { if !$0 { declineCover = nil } }),
+          presenting: declineCover
+        ) { cover in
+          TextField("Note (optional)", text: $declineNote)
+          Button("Send") { Task { await decline(cover) } }
+          Button("Close", role: .cancel) {}
+        } message: { cover in
+          Text("\(cover.user.name) is told you can't take it. It stays open for everyone else.")
+        }
+        .sensoryFeedback(.success, trigger: done)
         .alert("Couldn't save that", isPresented: Binding(
           get: { actionError != nil },
           set: { if !$0 { actionError = nil } }
@@ -58,7 +100,7 @@ struct MySetsView: View {
           .buttonStyle(.borderedProminent)
       }
     default:
-      if groups.isEmpty {
+      if groups.isEmpty && covers.isEmpty && proposals.isEmpty {
         ContentUnavailableView {
           Label("No upcoming sets", systemImage: "calendar")
         } description: {
@@ -74,6 +116,40 @@ struct MySetsView: View {
 
   private var list: some View {
     List {
+      if !proposals.isEmpty {
+        Section {
+          ForEach(proposals) { proposal in
+            SwapProposalRow(proposal: proposal, busy: busyID == proposal.id) { answer in
+              Task { await respond(proposal, answer) }
+            }
+            .disabled(busyID != nil)
+          }
+        } header: {
+          Text("Swap requests")
+        } footer: {
+          Text("Accepting trades your set for theirs once an admin approves it.")
+        }
+      }
+      if !covers.isEmpty {
+        Section {
+          ForEach(covers) { cover in
+            OpenCoverRow(
+              cover: cover,
+              busy: busyID == cover.id,
+              take: { takeCover = cover },
+              decline: {
+                declineNote = ""
+                declineCover = cover
+              }
+            )
+            .disabled(busyID != nil)
+          }
+        } header: {
+          Text("Cover needed")
+        } footer: {
+          Text("These are in a role you play.")
+        }
+      }
       if !needsAnswer.isEmpty {
         Section {
           ForEach(needsAnswer) { group in
@@ -101,8 +177,21 @@ struct MySetsView: View {
   }
 
   private func load() async {
+    let api = model.api
     do {
-      groups = MySets.grouped(try await model.api.myAssignments())
+      async let mine = api.myAssignments()
+      async let open = api.openCovers()
+      async let asks = api.incomingSwaps()
+      let assignments = try await mine
+      // The two lists on top are extras: one of them failing shouldn't cost
+      // the sets themselves, so each keeps what it had.
+      let freshCovers = (try? await open) ?? covers
+      let freshAsks = (try? await asks) ?? proposals
+      withAnimation(.smooth) {
+        groups = MySets.grouped(assignments)
+        covers = freshCovers
+        proposals = freshAsks
+      }
       phase = .loaded
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
@@ -113,6 +202,38 @@ struct MySetsView: View {
     for seat in group.seats where seat.status == .pending {
       await act(seat, .confirm, reason: nil)
     }
+  }
+
+  private func take(_ cover: ApiOpenCover) async {
+    await send(cover.id) { try await model.api.takeCover(cover.id) }
+  }
+
+  private func decline(_ cover: ApiOpenCover) async {
+    let note = Swaps.cleanNote(declineNote)
+    await send(cover.id) { try await model.api.declineCover(cover.id, note: note) }
+  }
+
+  private func respond(_ proposal: ApiSwapProposal, _ answer: SwapAnswer) async {
+    await send(proposal.id) { try await model.api.answerSwap(proposal.id, answer) }
+  }
+
+  private func withdraw(_ seat: ApiMyAssignment) async {
+    guard let id = seat.pendingSwap?.proposalId else { return }
+    await send(id) { try await model.api.withdrawSwap(id) }
+  }
+
+  /// One request about a cover or a trade, then the server's version of
+  /// everything: any of these can move a seat on or off my list.
+  private func send(_ id: String, _ action: () async throws -> Void) async {
+    busyID = id
+    do {
+      try await action()
+      done += 1
+    } catch {
+      actionError = model.handle(error)
+    }
+    await load()
+    busyID = nil
   }
 
   /// Acts, then reloads from the server rather than guessing the new state:
@@ -186,6 +307,8 @@ struct SetSeatsView: View {
   let groups: [MySets.SetGroup]
   let act: (ApiMyAssignment, AssignmentAction, String?) async -> Void
   let requestCover: (ApiMyAssignment) -> Void
+  let proposeSwap: (ApiMyAssignment) -> Void
+  let withdrawSwap: (ApiMyAssignment) async -> Void
 
   @State private var busy: String?
   @State private var confirmCancel: ApiMyAssignment?
@@ -227,6 +350,40 @@ struct SetSeatsView: View {
                 .frame(minHeight: 44)
               }
               .disabled(busy != nil)
+            }
+            if MySets.canProposeSwap(seat.status) {
+              Button {
+                proposeSwap(seat)
+              } label: {
+                HStack {
+                  Text("Swap with someone")
+                  Spacer()
+                }
+                .frame(minHeight: 44)
+              }
+              .disabled(busy != nil)
+            }
+            if seat.status == .pendingSwap, seat.pendingSwap?.isRequester == true {
+              Button(role: .destructive) {
+                busy = seat.id
+                Task {
+                  await withdrawSwap(seat)
+                  busy = nil
+                }
+              } label: {
+                HStack {
+                  Text("Cancel swap")
+                  Spacer()
+                  if busy == seat.id { ProgressView() }
+                }
+                .frame(minHeight: 44)
+              }
+              .disabled(busy != nil)
+            }
+            if let note = MySets.frozenNote(seat) {
+              Text(note)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             }
           }
         }
@@ -324,6 +481,11 @@ struct RequestCoverSheet: View {
     .environment(AppModel.preview(signedIn: true))
     .preferredColorScheme(.dark)
     .dynamicTypeSize(.accessibility5)
+}
+
+#Preview("My Sets · covers and swaps") {
+  MySetsView()
+    .environment(AppModel.fullPreview())
 }
 
 #Preview("My Sets · empty") {

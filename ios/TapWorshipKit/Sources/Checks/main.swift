@@ -323,6 +323,260 @@ do {
   print("  ✗ admin request threw: \(error)")
 }
 
+// ── Calendar ────────────────────────────────────────────────────────────
+section("calendar: days, roster, status")
+
+var la = Calendar(identifier: .gregorian)
+la.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+la.firstWeekday = 1
+var tokyo = Calendar(identifier: .gregorian)
+tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+
+func at(_ iso: String) -> Date { TapWorship.parseISO8601(iso)! }
+
+// 6:30 PM Saturday in LA is already Sunday in Tokyo: the day a set sits on
+// is the calendar's, never UTC's.
+let lateSaturday = at("2026-11-08T02:30:00.000Z")
+check("ymd reads the calendar's zone", SetCalendar.ymd(lateSaturday, calendar: la) == "2026-11-07")
+check("the same instant is the next day in Tokyo", SetCalendar.ymd(lateSaturday, calendar: tokyo) == "2026-11-08")
+check("ymd round-trips through date(ymd:)", SetCalendar.ymd(SetCalendar.date(ymd: "2026-03-08", calendar: la)!, calendar: la) == "2026-03-08")
+check("a malformed day is nil", SetCalendar.date(ymd: "2026-03", calendar: la) == nil)
+
+let november = SetCalendar.date(ymd: "2026-11-17", calendar: la)!
+let cells = SetCalendar.monthCells(november, calendar: la)
+check("November 2026 starts on a Sunday: no leading blanks", cells.first.flatMap { $0 }.map { SetCalendar.ymd($0, calendar: la) } == "2026-11-01")
+check("grid is whole weeks", cells.count == 35 && cells.compactMap { $0 }.count == 30)
+let october = SetCalendar.monthCells(SetCalendar.date(ymd: "2026-10-05", calendar: la)!, calendar: la)
+check("October 2026 leads with four blanks (starts Thursday)", october.prefix(4).allSatisfy { $0 == nil } && october[4] != nil)
+// The fall-back night has 25 hours; a day stepped by 86,400s would repeat.
+check("a DST month has every day once", Set(cells.compactMap { $0 }.map { SetCalendar.ymd($0, calendar: la) }).count == 30)
+check("sets path", SetCalendar.path(from: cells[0]!, to: cells[29]!, orgId: "o1", calendar: la) == "/api/sets?from=2026-11-01&to=2026-11-30&orgId=o1")
+
+func makeSet(_ json: String) -> ApiSet { try! decoder.decode(ApiSet.self, from: Data(json.utf8)) }
+
+let rosterSet = makeSet("""
+{ "id": "s9", "label": "Sunday", "startsAt": "2026-11-08T18:00:00.000Z", "durationMinutes": 90,
+  "notes": null, "requiresMD": true, "isPrivate": false, "mdUserId": "u2",
+  "slotCapacities": { "VOCALS": 2, "KEYS": 1, "DRUMS": 1, "ACOUSTIC_GUITAR": 1 },
+  "teamId": "t1",
+  "team": { "id": "t1", "name": "Band", "roles": [
+    { "key": "VOCALS", "label": "Singers", "defaultCount": 3, "adminOnly": false, "order": 1 },
+    { "key": "KEYS", "label": "Keys", "defaultCount": 1, "adminOnly": false, "order": 0 },
+    { "key": "DRUMS", "label": "Drums", "defaultCount": 1, "adminOnly": false, "order": 2 },
+    { "key": "ACOUSTIC_GUITAR", "label": "Acoustic", "defaultCount": 1, "adminOnly": false, "order": 3 },
+    { "key": "MD", "label": "MD", "defaultCount": 1, "adminOnly": true, "order": 4 }
+  ] },
+  "assignments": [
+    { "id": "a1", "role": "KEYS", "status": "CONFIRMED", "user": { "id": "u2", "name": "Priya" } },
+    { "id": "a2", "role": "VOCALS", "status": "PENDING", "user": { "id": "u3", "name": "Sam" } },
+    { "id": "a3", "role": "CHOIR", "status": "CONFIRMED", "guestTeamId": "g1", "user": { "id": "u4", "name": "Ana" } },
+    { "id": "a4", "role": "TRIANGLE", "status": "CONFIRMED", "user": { "id": "u5", "name": "Lee" } }
+  ],
+  "guestTeams": [ { "id": "g1", "teamId": "t2",
+    "roles": [ { "role": "CHOIR", "allAvailable": true }, { "role": "STRINGS", "count": 2 } ],
+    "team": { "id": "t2", "name": "Choir" } } ],
+  "practices": [ { "id": "p1", "startsAt": "2026-11-05T03:00:00.000Z", "endsAt": "2026-11-05T04:30:00.000Z" } ]
+}
+""")
+let rows = SetCalendar.roster(rosterSet)
+check("roster follows the catalog's order, MD is not a seat", rows.prefix(4).map(\.id) == ["KEYS", "VOCALS", "DRUMS", "ACOUSTIC_GUITAR"])
+check("a role wears the team's label", rows[1].label == "Singers")
+check("the set's own shape beats the team default", rows[1].open == 1)
+check("an empty role still shows its open seat", rows[2].people.isEmpty && rows[2].open == 1)
+check("guest roles follow, named for their team", rows[4].guestTeam == "Choir" && rows[4].people.map(\.user.name) == ["Ana"])
+check("an unbounded guest seat is never short", rows[4].open == 0)
+check("a counted guest seat is", rows[5].id == "g1:STRINGS" && rows[5].open == 2)
+check("nobody is dropped: a deleted role's seat still shows", rows.last?.label == "Triangle" && rows.last?.people.count == 1)
+check("empty acoustic is never a hole", SetCalendar.openSlots(rosterSet) == 4)
+check("open seats make a set understaffed", SetCalendar.status(rosterSet) == .understaffed)
+check("practices decode", rosterSet.practices?.first?.endsAt == at("2026-11-05T04:30:00.000Z"))
+check("the MD is marked by id", SetCalendar.isMD(rosterSet.assignments[0], on: rosterSet) && !SetCalendar.isMD(rosterSet.assignments[1], on: rosterSet))
+check("my seats on a set", SetCalendar.seats(of: "u3", on: rosterSet).map(\.id) == ["a2"] && SetCalendar.seats(of: nil, on: rosterSet).isEmpty)
+
+func fullSet(_ statuses: [String]) -> ApiSet {
+  let seats = statuses.enumerated().map { i, s in
+    #"{ "id": "a\#(i)", "role": "KEYS", "status": "\#(s)", "user": { "id": "u\#(i)", "name": "P\#(i)" } }"#
+  }.joined(separator: ",")
+  return makeSet("""
+  { "id": "s", "label": null, "startsAt": "2026-11-08T18:00:00.000Z", "durationMinutes": 60, "notes": null,
+    "requiresMD": false, "isPrivate": false, "mdUserId": null, "slotCapacities": { "KEYS": \(statuses.count) },
+    "team": { "id": "t", "name": "T", "roles": [ { "key": "KEYS", "label": "Keys", "defaultCount": 1, "adminOnly": false, "order": 0 } ] },
+    "assignments": [\(seats)] }
+  """)
+}
+check("everyone confirmed", SetCalendar.status(fullSet(["CONFIRMED", "CONFIRMED"])) == .confirmed)
+check("one pending", SetCalendar.status(fullSet(["CONFIRMED", "PENDING"])) == .unconfirmed)
+check("waiting on an admin is unconfirmed too", SetCalendar.status(fullSet(["PENDING_APPROVAL"])) == .unconfirmed)
+check("a cover request outranks everything", SetCalendar.status(fullSet(["SWAP_REQUESTED", "PENDING"])) == .cover)
+check("an empty set needs people", SetCalendar.status(fullSet([])) == .understaffed)
+check("a set with no team falls back to the built-in shape", SetCalendar.roster(makeSet(thin)).map(\.id).first == "WORSHIP_LEADER")
+let grouped = SetCalendar.byDay([rosterSet, fullSet(["CONFIRMED"])], calendar: la)
+check("sets group under their local day", grouped["2026-11-08"]?.count == 2 && grouped.count == 1)
+
+// ── Availability ────────────────────────────────────────────────────────
+section("availability")
+
+// The server stores a day as ITS midnight: Nov 10 in LA is 08:00Z.
+func laDay(_ ymd: String) -> Date { SetCalendar.date(ymd: ymd, calendar: la)! }
+let everyTuesday = ApiUnavailability(id: "r1", type: .recurring, dayOfWeek: 2, startMinute: 0, endMinute: 1440)
+let tuesdayEvenings = ApiUnavailability(id: "r2", type: .recurring, dayOfWeek: 2, startMinute: 18 * 60, endMinute: 21 * 60,
+                                        startDate: laDay("2026-11-01"), endDate: laDay("2026-11-30"), exceptDates: ["2026-11-17"])
+let trip = ApiUnavailability(id: "d1", type: .specific, startMinute: 0, endMinute: 1440, startDate: laDay("2026-11-12"), endDate: laDay("2026-11-14"))
+let morning = ApiUnavailability(id: "d2", type: .specific, startMinute: 9 * 60, endMinute: 12 * 60, startDate: laDay("2026-11-20"))
+let legacy = ApiUnavailability(id: "d3", type: .dateRange, startDate: laDay("2026-12-24"), endDate: laDay("2026-12-26"))
+
+check("an all-day weekly rule blocks its weekday", Availability.level([everyTuesday], on: "2026-11-10", calendar: la) == .full)
+check("and no other day", Availability.level([everyTuesday], on: "2026-11-11", calendar: la) == nil)
+check("a timed rule is partial", Availability.level([tuesdayEvenings], on: "2026-11-10", calendar: la) == .partial)
+check("a freed date is a hole in the rule", Availability.level([tuesdayEvenings], on: "2026-11-17", calendar: la) == nil)
+check("a rule stops at its last day", Availability.level([tuesdayEvenings], on: "2026-12-01", calendar: la) == nil)
+check("and doesn't start early", Availability.level([tuesdayEvenings], on: "2026-10-27", calendar: la) == nil)
+check("full wins over partial", Availability.level([tuesdayEvenings, everyTuesday], on: "2026-11-10", calendar: la) == .full)
+check("a range covers its last day", Availability.level([trip], on: "2026-11-14", calendar: la) == .full)
+check("but not the day after", Availability.level([trip], on: "2026-11-15", calendar: la) == nil)
+check("a morning block is partial", Availability.level([morning], on: "2026-11-20", calendar: la) == .partial)
+check("a legacy range is always all day", Availability.level([legacy], on: "2026-12-25", calendar: la) == .full)
+// The phone's own zone must not move a day: read in Tokyo, LA's midnight is
+// late afternoon, so a range would slide.
+check("days are judged on the app's clock, not the phone's", Availability.level([trip], on: "2026-11-11", calendar: la) == nil)
+check("repeat marker", Availability.isRepeating([everyTuesday, trip], on: "2026-11-10", calendar: la) && !Availability.isRepeating([everyTuesday, trip], on: "2026-11-12", calendar: la))
+
+let allDay = Availability.allDayBlockedDays([everyTuesday, trip, morning, legacy], calendar: la)
+check("only dated all-day blocks are tap-to-clear", allDay == ["2026-11-12", "2026-11-13", "2026-11-14", "2026-12-24", "2026-12-25", "2026-12-26"])
+check("a tap blocks a free day", Availability.tapBlocks([trip], on: "2026-11-20", calendar: la))
+check("a tap blocks over a weekly repeat", Availability.tapBlocks([everyTuesday], on: "2026-11-10", calendar: la))
+check("a tap clears a day blocked by hand", !Availability.tapBlocks([trip], on: "2026-11-13", calendar: la))
+let painted = Availability.applyingTap([morning], on: "2026-11-20", block: true, calendar: la)
+check("optimistic block reads full at once", Availability.level(painted, on: "2026-11-20", calendar: la) == .full)
+let freed = Availability.applyingTap([everyTuesday, morning], on: "2026-11-10", block: false, calendar: la)
+check("optimistic free punches the weekly rule", Availability.level(freed, on: "2026-11-10", calendar: la) == nil && Availability.level(freed, on: "2026-11-17", calendar: la) == .full)
+check("and leaves other days alone", Availability.level(freed, on: "2026-11-20", calendar: la) == .partial)
+check("blocks on a day", Availability.blocks(on: "2026-11-10", in: [everyTuesday, tuesdayEvenings, trip], calendar: la).map(\.id) == ["r1", "r2"])
+
+let older = ApiAvailabilityRequest(id: "q1", startDate: laDay("2026-10-01"), endDate: laDay("2026-10-31"), orgId: "o1", createdAt: at("2026-09-01T00:00:00Z"))
+let newer = ApiAvailabilityRequest(id: "q2", name: "Advent", startDate: laDay("2026-11-10"), endDate: laDay("2026-11-20"), orgId: "o1", createdAt: at("2026-11-01T00:00:00Z"))
+let otherOrg = ApiAvailabilityRequest(id: "q3", startDate: laDay("2026-11-01"), endDate: laDay("2026-11-30"), orgId: "o2", createdAt: at("2026-10-15T00:00:00Z"))
+check("each org's newest request is the active one", Availability.activeRequests([older, otherOrg, newer]).map(\.id) == ["q2", "q3"])
+let answers = [ApiAvailabilityResponse(requestId: "q2", completedAt: at("2026-11-02T00:00:00Z")), ApiAvailabilityResponse(requestId: "q3", completedAt: nil, note: "kept")]
+let mine = ApiAvailability(entries: [], requests: [older, newer, otherOrg], responses: answers)
+check("an un-submitted row still owes", Availability.owed(mine).map(\.id) == ["q3"])
+check("an old request is never owed", !Availability.owed(mine).contains { $0.id == "q1" })
+let inWindow = Availability.blockedDays([everyTuesday, trip, morning], from: newer.startDate, to: newer.endDate, calendar: la)
+check("blocked days inside a request's window", inWindow.map(\.ymd) == ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-17", "2026-11-20"])
+check("with their levels", inWindow.last?.level == .partial && inWindow.first?.level == .full)
+
+check("times read like the web's", Availability.timeLabel(18 * 60) == "6 PM" && Availability.timeLabel(9 * 60 + 30) == "9:30 AM" && Availability.timeLabel(0) == "12 AM" && Availability.timeLabel(12 * 60) == "12 PM")
+check("window words", Availability.windowLabel(everyTuesday) == "All day" && Availability.windowLabel(tuesdayEvenings) == "6 PM – 9 PM")
+check("weekly rules sort by day then time", Availability.weeklyRules([tuesdayEvenings, trip, everyTuesday]).map(\.id) == ["r1", "r2"])
+check("weekly title", Availability.weeklyTitle(everyTuesday) == "Every Tuesday")
+check("timed blocks list only part-day, upcoming ones", Availability.timedBlocks([trip, morning, everyTuesday], now: laDay("2026-11-18"), calendar: la).map(\.id) == ["d2"]
+      && Availability.timedBlocks([morning], now: laDay("2026-11-21"), calendar: la).isEmpty)
+check("a weekly block needs a day", Availability.weeklyProblem(days: [], startMinute: 0, endMinute: 1440) != nil)
+check("and an end after its start", Availability.weeklyProblem(days: [2], startMinute: 600, endMinute: 600) != nil && Availability.weeklyProblem(days: [2], startMinute: 0, endMinute: 1440) == nil)
+
+do {
+  let wire = """
+  { "entries": [
+      { "id": "e1", "userId": "u1", "type": "RECURRING", "dayOfWeek": 2, "startMinute": 1080, "endMinute": 1260,
+        "startDate": null, "endDate": "2026-12-01T08:00:00.000Z", "exceptDates": ["2026-11-17"],
+        "requestId": null, "fromGoogle": false, "note": null, "createdAt": "2026-10-01T00:00:00.000Z" },
+      { "id": "e2", "type": "SPECIFIC", "dayOfWeek": null, "startMinute": 0, "endMinute": 1440,
+        "startDate": "2026-11-12T08:00:00.000Z", "endDate": null, "exceptDates": [], "requestId": "q2", "fromGoogle": true, "note": null } ],
+    "requests": [ { "id": "q2", "name": null, "startDate": "2026-11-10T08:00:00.000Z", "endDate": "2026-11-20T08:00:00.000Z",
+                    "orgId": "o1", "createdAt": "2026-11-01T00:00:00.000Z", "org": { "id": "o1", "name": "Grace Chapel" } } ],
+    "responses": [ { "requestId": "q2", "completedAt": null, "edited": false, "note": null } ],
+    "googleImport": true }
+  """
+  let got = try decoder.decode(ApiAvailability.self, from: Data(wire.utf8))
+  check("availability decodes", got.entries.count == 2 && got.requests.first?.org?.name == "Grace Chapel")
+  check("the server's midnight is the right LA day", Availability.level(got.entries, on: "2026-11-12", calendar: la) == .full)
+  check("a rule's last day counts", Availability.level(got.entries, on: "2026-12-01", calendar: la) == .partial)
+
+  let paint = try signedIn.makeRequest("POST", "/api/availability/block-days", body: ["start": "2026-11-12", "end": "2026-11-12"])
+  check("writes carry the bearer", paint.value(forHTTPHeaderField: "Authorization") == "Bearer tok123")
+  let weekly = try TapWorship.makeEncoder().encode([WeeklyBlockInput(dayOfWeek: 2, startMinute: 0, endMinute: 1440)])
+  let weeklyText = String(decoding: weekly, as: UTF8.self)
+  check("an open-ended weekly block sends no dates", !weeklyText.contains("startDate") && !weeklyText.contains("endDate"))
+} catch {
+  failures += 1
+  print("  ✗ availability threw: \(error)")
+}
+
+// ── Swaps ───────────────────────────────────────────────────────────────
+section("covers and swaps")
+
+do {
+  let coversWire = """
+  [ { "id": "a7", "role": "BASS", "status": "SWAP_REQUESTED", "reason": "Out of town", "swapReason": "Out of town",
+      "userId": "u9", "setId": "s3",
+      "set": { "id": "s3", "label": "Sunday", "startsAt": "2026-11-22T18:00:00.000Z", "durationMinutes": 90,
+               "notes": null, "isPrivate": false, "teamId": "t1", "org": { "id": "o1", "name": "Grace Chapel" } },
+      "user": { "id": "u9", "name": "Marcus Bell" } } ]
+  """
+  let covers = try decoder.decode([ApiOpenCover].self, from: Data(coversWire.utf8))
+  check("open cover decodes", covers.first?.user.name == "Marcus Bell" && covers.first?.reason == "Out of town" && covers.first?.set.org?.name == "Grace Chapel")
+
+  let incomingWire = """
+  [ { "id": "p1", "role": "KEYS", "requestedBy": { "id": "u2", "name": "Priya" }, "reason": null,
+      "giveUp": { "id": "s1", "label": "Sunday", "startsAt": "2026-11-22T18:00:00.000Z", "org": { "id": "o1", "name": "Grace" } },
+      "receive": { "id": "s2", "label": null, "startsAt": "2026-11-29T18:00:00.000Z", "org": { "id": "o1", "name": "Grace" } } } ]
+  """
+  let incoming = try decoder.decode([ApiSwapProposal].self, from: Data(incomingWire.utf8))
+  check("incoming swap decodes", incoming.first?.requestedBy.name == "Priya" && incoming.first?.receive.label == nil)
+  check("waiting count", Swaps.waitingCount(covers: covers, proposals: incoming) == 2)
+
+  let pageWire = """
+  { "items": [ { "toAssignmentId": "b1", "role": "KEYS", "status": "CONFIRMED",
+      "counterparty": { "id": "u2", "name": "Priya" },
+      "set": { "id": "s2", "label": "Sunday", "startsAt": "2026-11-29T18:00:00.000Z", "durationMinutes": 90, "team": { "id": "t1", "name": "Band" } },
+      "youAvailable": true, "theyAvailable": false, "theyInactive": false,
+      "theyAlsoOnYourSet": [], "youAlsoOnTheirSet": ["VOCALS"] } ], "hasMore": true }
+  """
+  let page = try decoder.decode(SwapCandidatePage.self, from: Data(pageWire.utf8))
+  let warned = Swaps.warnings(for: page.items[0])
+  check("candidates decode", page.hasMore && page.items.count == 1)
+  check("a seat already held is the red warning, and comes first", warned.first?.severity == .fact && warned.first?.text == "You're already on that set (Vox)")
+  check("availability is the amber one", warned.last?.severity == .intention && warned.count == 2)
+} catch {
+  failures += 1
+  print("  ✗ swaps threw: \(error)")
+}
+
+func candidate(_ id: String, _ iso: String, youFree: Bool = true, double: [RoleKey] = [], inactive: Bool = false) -> ApiSwapCandidate {
+  ApiSwapCandidate(toAssignmentId: id, role: "KEYS", counterparty: ApiUserRef(id: "u", name: "Kim"),
+                   set: SwapCandidateSet(id: "s\(id)", startsAt: at(iso), durationMinutes: 60),
+                   youAvailable: youFree, theyInactive: inactive, theyAlsoOnYourSet: double)
+}
+let pool = [
+  candidate("double", "2026-11-01T18:00:00Z", double: ["BASS"]),
+  candidate("busy", "2026-11-02T18:00:00Z", youFree: false),
+  candidate("late", "2026-11-20T18:00:00Z"),
+  candidate("soon", "2026-11-05T18:00:00Z", inactive: true),
+]
+check("clean trades first, then amber, then red", Swaps.ranked(pool).map(\.id) == ["soon", "late", "busy", "double"])
+check("a clean trade has no warnings", Swaps.warnings(for: pool[2]).isEmpty)
+check("inactive is a note, not a warning colour", Swaps.warnings(for: pool[3]).map(\.severity) == [.note])
+check("their double shift names them", Swaps.warnings(for: pool[0]).first?.text == "Kim is already on your set (Bass)")
+check("a seat mid-handoff offers no buttons", MySets.actions(for: .pendingSwap).isEmpty && MySets.actions(for: .pendingApproval).isEmpty)
+check("only a settled seat can be traded", MySets.canProposeSwap(.confirmed) && MySets.canProposeSwap(.pending) && !MySets.canProposeSwap(.swapRequested) && !MySets.canProposeSwap(.pendingSwap))
+check("candidates path", Swaps.candidatesPath(assignmentId: "a1", skip: 20) == "/api/swaps/candidates?assignmentId=a1&skip=20&take=20")
+check("a blank note is no note", Swaps.cleanNote("  \n ") == nil && Swaps.cleanNote(" hi ") == "hi")
+check("a note is capped like the server's", Swaps.cleanNote(String(repeating: "x", count: 600))?.count == 500)
+
+// ── Dev server ──────────────────────────────────────────────────────────
+section("debug builds: which servers")
+
+check("the local dev server", DevServer.url("http://localhost:3000")?.absoluteString == "http://localhost:3000")
+check("this Mac by address, and a LAN address", DevServer.url("http://127.0.0.1:3000") != nil && DevServer.url("http://192.168.68.94:3000") != nil)
+check("a .local name", DevServer.url("http://macbook.local:3000") != nil)
+check("https anywhere", DevServer.url(" https://staging.example.com ")?.host == "staging.example.com")
+check("never plain http to the internet", DevServer.url("http://tapworship.com") == nil && DevServer.url("http://8.8.8.8") == nil)
+check("172.16–31 is private, 172.32 is not", DevServer.url("http://172.20.1.1") != nil && DevServer.url("http://172.32.1.1") == nil)
+check("blank or unset stays on production", DevServer.url("") == nil && DevServer.url(nil) == nil && DevServer.url("   ") == nil)
+check("not a URL", DevServer.url("localhost:3000") == nil && DevServer.url("ftp://localhost") == nil)
+check("client id", DevServer.clientID(" 123-abc.apps.googleusercontent.com ") == "123-abc.apps.googleusercontent.com")
+check("an unfilled build setting is no client id", DevServer.clientID("$(GOOGLE_IOS_CLIENT_ID)") == nil && DevServer.clientID("") == nil)
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

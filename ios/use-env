@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Point DEBUG builds of the iOS app at one of the web app's environments.
+#
+#   ./use-env dev      read ../env/dev.env  → your local `npm run dev`
+#   ./use-env staging  read ../env/staging.env, if you keep one
+#   ./use-env prod     forget it: debug builds talk to tapworship.com again
+#
+# Only two values are copied out of the env file, because they're the only two
+# the app needs and neither is a secret: NEXTAUTH_URL (where the server is) and
+# GOOGLE_IOS_CLIENT_ID (ships in every copy of the app anyway). Database URLs,
+# NEXTAUTH_SECRET and the rest never leave env/. The result is
+# Config/Local.xcconfig, which is gitignored. Release builds ignore all of it.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+name="${1:-dev}"
+out="Config/Local.xcconfig"
+
+if [ "$name" = "prod" ]; then
+  rm -f "$out"
+  echo "Debug builds now talk to https://tapworship.com."
+else
+  file="../env/$name.env"
+  if [ ! -f "$file" ]; then
+    echo "No $file. Expected the web app's env file there." >&2
+    exit 1
+  fi
+
+  # The last assignment wins, quotes and trailing comments stripped: what
+  # dotenv would read.
+  read_var() {
+    { grep -E "^[[:space:]]*(export[[:space:]]+)?$1=" "$file" || true; } | tail -n 1 \
+      | sed -E "s/^[^=]*=//; s/[[:space:]]+#.*$//; s/^[\"']//; s/[\"'][[:space:]]*$//"
+  }
+
+  url="$(read_var NEXTAUTH_URL)"
+  google="$(read_var GOOGLE_IOS_CLIENT_ID)"
+  if [ -z "$url" ]; then
+    echo "$file has no NEXTAUTH_URL, so there's nowhere to point the app." >&2
+    exit 1
+  fi
+
+  # An xcconfig reads // as a comment, so the slashes are split with $().
+  {
+    echo "// Written by ./use-env $name. Not committed."
+    echo "TAPWORSHIP_API_URL = ${url//\/\//\/\$()\/}"
+    echo "GOOGLE_IOS_CLIENT_ID = $google"
+  } > "$out"
+  echo "Debug builds now talk to $url (from env/$name.env)."
+  [ -n "$google" ] || echo "No GOOGLE_IOS_CLIENT_ID there, so the Google button stays hidden."
+fi
+
+if command -v xcodegen >/dev/null 2>&1; then
+  xcodegen >/dev/null && echo "Regenerated TapWorship.xcodeproj. Build again in Xcode."
+else
+  echo "Now run xcodegen, then build again in Xcode."
+fi
