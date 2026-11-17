@@ -12,11 +12,11 @@ vi.mock("@/lib/prisma", () => ({
     set: { findMany: vi.fn(), update: vi.fn() },
     assignment: {
       findMany: vi.fn(),
-      delete: vi.fn((q) => ({ op: "delete", q })),
+      deleteMany: vi.fn((q) => ({ op: "deleteMany", q })),
       update: vi.fn((q) => ({ op: "update", q })),
-      create: vi.fn((q) => ({ op: "create", q })),
+      createMany: vi.fn((q) => ({ op: "createMany", q })),
     },
-    setHistoryEvent: { create: vi.fn((q) => ({ op: "history", q })) },
+    setHistoryEvent: { createMany: vi.fn((q) => ({ op: "history", q })) },
     orgMembership: { findMany: vi.fn() },
     setGuestTeam: { findMany: vi.fn() },
     $transaction: vi.fn(),
@@ -46,7 +46,11 @@ import { prisma } from "@/lib/prisma";
 import { requireOrgAdminFor } from "@/lib/org";
 import { loadForMD } from "@/lib/setMd";
 import { notifyRosterChanges, notifySetChange } from "@/lib/slack";
-import { isEmptyOps, parseRosterOps } from "@/lib/rosterDiff";
+import {
+  isEmptyOps,
+  parseRosterOps,
+  ROSTER_TX_TIMEOUT_MS,
+} from "@/lib/rosterDiff";
 
 type Mock = ReturnType<typeof vi.fn>;
 const m = (f: unknown) => f as Mock;
@@ -104,8 +108,13 @@ describe("PUT /api/admin/sets/roster", () => {
     });
     expect(res.status).toBe(200);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    // A delete + its history row, an update + its history row.
-    expect(m(prisma.$transaction).mock.calls[0][0]).toHaveLength(4);
+    // FOLDED across both sets: one deleteMany, s2's update, one history
+    // createMany. Not a statement per seat — see the batching test below.
+    expect(m(prisma.$transaction).mock.calls[0][0]).toEqual([
+      { op: "deleteMany", q: { where: { id: { in: ["a1"] } } } },
+      { op: "update", q: expect.objectContaining({ where: { id: "a2" } }) },
+      { op: "history", q: { data: expect.any(Array) } },
+    ]);
     expect(await res.json()).toMatchObject({ ok: true, applied: 2, sets: 2 });
     // One grouped notice per set.
     expect(notifySetChange).toHaveBeenCalledTimes(2);
@@ -140,8 +149,8 @@ describe("PUT /api/admin/sets/roster", () => {
     expect(res.status).toBe(200);
     // Her existing seat is left exactly as it is — status, confirmation and
     // any cover request on it intact — and nothing is inserted.
-    expect(prisma.assignment.create).not.toHaveBeenCalled();
-    expect(prisma.assignment.delete).not.toHaveBeenCalled();
+    expect(prisma.assignment.createMany).not.toHaveBeenCalled();
+    expect(prisma.assignment.deleteMany).not.toHaveBeenCalled();
     expect(m(prisma.$transaction).mock.calls[0][0]).toHaveLength(0);
     // Nobody is told about a change that didn't happen.
     expect(m(notifyRosterChanges).mock.calls[0][1]).toEqual([]);
@@ -175,13 +184,22 @@ describe("PUT /api/admin/sets/roster", () => {
     });
     expect(res.status).toBe(200);
     expect(prisma.assignment.update).toHaveBeenCalledTimes(1);
-    expect(prisma.assignment.delete).toHaveBeenCalledTimes(1);
-    expect(prisma.assignment.create).toHaveBeenCalledTimes(1);
-    // Both people are still in VOCALS afterwards, just in each other's seats.
-    expect(m(prisma.assignment.create).mock.calls[0][0].data).toMatchObject({
-      setId: "s1",
-      role: "VOCALS",
+    expect(m(prisma.assignment.deleteMany).mock.calls[0][0]).toEqual({
+      where: { id: { in: ["v1"] } },
     });
+    // Both people are still in VOCALS afterwards, just in each other's seats.
+    expect(m(prisma.assignment.createMany).mock.calls[0][0].data).toEqual([
+      expect.objectContaining({ setId: "s1", role: "VOCALS", userId: "u2" }),
+    ]);
+    // The rebuilt seat's row is dropped BEFORE the surviving seat moves into
+    // the key it was holding.
+    const writes = m(prisma.$transaction).mock.calls[0][0] as { op: string }[];
+    expect(writes.map((w) => w.op)).toEqual([
+      "deleteMany",
+      "update",
+      "createMany",
+      "history",
+    ]);
   });
 
   it("writes nothing when any set in the batch is stale", async () => {
@@ -249,6 +267,74 @@ describe("PUT /api/admin/sets/roster", () => {
     });
     // No roster ops → no transaction.
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // The 500 this fixes. A quarter of Sunday rosters saved as a write per seat
+  // was 428 statements in one transaction, which ran past Prisma's five-second
+  // default and failed the whole save — reported, wrongly, as a duplicate seat.
+  // What matters is that the statement count does NOT grow with the batch.
+  it("folds a big batch into a handful of statements", async () => {
+    const ids = Array.from({ length: 40 }, (_, i) => `b${i}`);
+    setsInDb(ids.map((id) => ({ id, orgId: "org1", teamId: "t1" })));
+    m(prisma.assignment.findMany).mockImplementation(async ({ where }) => [
+      {
+        id: `seat-${where.setId}`,
+        setId: where.setId,
+        role: "KEYS",
+        userId: "u1",
+        user: { name: "Carol" },
+      },
+    ]);
+    const res = await put({
+      sets: ids.map((id) => ({
+        setId: id,
+        removed: [`seat-${id}`],
+        added: [{ role: "DRUMS", userId: "u9" }],
+      })),
+    });
+    expect(res.status).toBe(200);
+    // 40 sets, 80 seat changes: one deleteMany, one createMany, one history
+    // createMany. No reassignments here, so no per-row updates either.
+    const writes = m(prisma.$transaction).mock.calls[0][0] as { op: string }[];
+    expect(writes.map((w) => w.op)).toEqual([
+      "deleteMany",
+      "createMany",
+      "history",
+    ]);
+    expect(m(prisma.assignment.deleteMany).mock.calls[0][0].where.id.in).toHaveLength(40);
+    expect(m(prisma.assignment.createMany).mock.calls[0][0].data).toHaveLength(40);
+    expect(m(prisma.setHistoryEvent.createMany).mock.calls[0][0].data).toHaveLength(80);
+  });
+
+  it("gives the transaction longer than prisma's own default", async () => {
+    await put({ sets: [{ setId: "s1", removed: ["a1"] }] });
+    expect(m(prisma.$transaction).mock.calls[0][1]).toEqual({
+      timeout: ROSTER_TX_TIMEOUT_MS,
+    });
+    // The point of the constant: Prisma's default is 5s.
+    expect(ROSTER_TX_TIMEOUT_MS).toBeGreaterThan(5_000);
+  });
+
+  it("only blames a duplicate seat when the db actually says so", async () => {
+    const body = { sets: [{ setId: "s1", removed: ["a1"] }] };
+
+    m(prisma.$transaction).mockRejectedValueOnce(
+      Object.assign(new Error("Unique constraint failed"), { code: "P2002" })
+    );
+    const dup = await put(body);
+    expect(dup.status).toBe(400);
+    expect((await dup.json()).error).toMatch(/already in this role/i);
+
+    // A timeout is OURS, not the admin's. Saying "already in this role" sent
+    // us hunting for a clash that was never there — twice.
+    m(prisma.$transaction).mockRejectedValueOnce(
+      Object.assign(new Error("Transaction already closed"), { code: "P2028" })
+    );
+    const slow = await put(body);
+    expect(slow.status).toBe(500);
+    const said = (await slow.json()).error;
+    expect(said).not.toMatch(/already in this role/i);
+    expect(said).toMatch(/nothing was changed/i);
   });
 
   it("rejects an empty or duplicated batch", async () => {

@@ -95,6 +95,9 @@ interface PlayerSelectProps {
   // Assignable candidates (excludes whoever is already in `selected`), already
   // sorted available-first by the caller.
   options: PlayerOption[];
+  // What window the ×n counts were measured over, named for the badge's
+  // title. The caller owns the window, so it owns the words too.
+  countWindow?: string;
   // Called with the chosen user id, or "" to clear the slot (None).
   onChange: (userId: string) => void;
   disabled?: boolean;
@@ -129,6 +132,7 @@ interface PlayerSelectProps {
 export default function PlayerSelect({
   selected,
   options,
+  countWindow = "the selected window",
   onChange,
   disabled,
   dashed,
@@ -330,6 +334,7 @@ export default function PlayerSelect({
                 />
               }
               count={selected.count}
+              countWindow={countWindow}
               active
               onClick={() => choose(selected.id)}
               onHover={(hovering) => onHoverChange?.(hovering ? selected.id : null)}
@@ -349,6 +354,7 @@ export default function PlayerSelect({
                 />
               }
               count={o.count}
+              countWindow={countWindow}
               // Unavailable/inactive people are dimmed but still selectable —
               // an admin can deliberately override and assign them anyway.
               muted={!o.available || o.inactive}
@@ -452,6 +458,7 @@ function OptionRow({
   disabled,
   muted,
   count,
+  countWindow,
   onClick,
   onHover,
 }: {
@@ -464,9 +471,12 @@ function OptionRow({
   // Dimmed but still clickable (e.g. an unavailable person an admin may
   // override). `disabled` blocks selection; `muted` only greys the row.
   muted?: boolean;
-  // Times already scheduled in the caller's chosen window; shown as a muted
+  // Times already scheduled in the window the caller counted; shown as a muted
   // badge so admins can see why the list is ordered the way it is.
   count?: number;
+  // That window, named, for the badge's title — "October", or "the selected
+  // window" where the caller offers a picker instead of a fixed month.
+  countWindow?: string;
   onClick: () => void;
   // Pointer entered (true) or left (false) this row. The caller turns that into
   // the person it represents — "None" has none, so it reports a plain clear.
@@ -498,9 +508,10 @@ function OptionRow({
         {count !== undefined && count > 0 && (
           <span
             className="shrink-0 text-xs text-gray-400 dark:text-gray-500"
-            // The window itself is the caller's to choose (the set detail
-            // modal has a picker for it), so this just states the number.
-            title={`Scheduled ${count} time${count === 1 ? "" : "s"} in the selected window`}
+            // Which window was counted is the caller's business — a fixed
+            // month in the set detail modal, the admin's pick in the review
+            // workspace — so the caller names it and this only says how many.
+            title={`Already on ${count} set${count === 1 ? "" : "s"} in ${countWindow}`}
           >
             ×{count}
           </span>

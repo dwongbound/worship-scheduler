@@ -48,6 +48,11 @@ const READ_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
 // every one of them.
 const LIST_SCOPE = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
 const SCOPES = ["openid", "email", READ_SCOPE, LIST_SCOPE].join(" ");
+// The /profile picker only names a calendar, so it asks for the list alone.
+// Google counts READ_SCOPE as sensitive and LIST_SCOPE as not, so leaving the
+// events out keeps the picker clear of the "unverified app" screen; an import
+// later adds them on its own consent (include_granted_scopes keeps both).
+const PICKER_SCOPES = ["openid", "email", LIST_SCOPE].join(" ");
 
 // A person's own calendars, which is what the import reads. Anything they
 // merely SUBSCRIBE to is deliberately left out: holidays, a sports fixture
@@ -78,16 +83,23 @@ export async function importableRequest(userId: string, requestId: string) {
   });
 }
 
+/**
+ * The consent screen for reading this person's own calendars.
+ *
+ * `requestId` names the availability request an import is for; null is the
+ * /profile picker, which needs only the calendar list (PICKER_SCOPES) and
+ * comes back to /profile.
+ */
 export function importAuthorizeUrl(
   userId: string,
-  requestId: string,
+  requestId: string | null,
   email: string | null
 ): string {
   const params = new URLSearchParams({
     client_id: clientId() ?? "",
     redirect_uri: redirectUri(),
     response_type: "code",
-    scope: SCOPES,
+    scope: requestId ? SCOPES : PICKER_SCOPES,
     // Offline + consent: Google only returns a refresh token on a consent
     // screen, and that token is what lets every later import skip this one.
     access_type: "offline",
@@ -268,8 +280,13 @@ type AccessToken =
  * operations do. A refused refresh (revoked in their Google account, or
  * expired) forgets it and answers needsConsent, so the caller sends them to
  * Google and the modal picks up where it left off.
+ *
+ * `needs` is the scope the caller is about to use. A permission granted from
+ * the /profile picker covers only the list, so an import on it answers
+ * needsConsent (keeping the token, which the picker still uses) instead of
+ * failing on the first events read.
  */
-async function accessTokenFor(userId: string): Promise<AccessToken> {
+async function accessTokenFor(userId: string, needs: string): Promise<AccessToken> {
   const row = await prisma.user.findUnique({
     where: { id: userId },
     select: { googleImportRefreshToken: true },
@@ -299,7 +316,12 @@ async function accessTokenFor(userId: string): Promise<AccessToken> {
     await forgetAccess(userId);
     return { ok: false, error: "access revoked", needsConsent: true };
   }
-  const { access_token } = (await res.json()) as { access_token: string };
+  const { access_token, scope } = (await res.json()) as { access_token: string; scope?: string };
+  // Google names the granted scopes on a refresh; without the field, let the
+  // read itself find out.
+  if (scope && !scope.split(" ").includes(needs)) {
+    return { ok: false, error: "permission doesn't cover this", needsConsent: true };
+  }
   return { ok: true, token: access_token };
 }
 
@@ -313,10 +335,17 @@ export type CalendarsResult =
  * Failing to LIST them is `needsConsent`, not an error: a token remembered
  * from before the list scope existed looks exactly like this, and one more
  * consent screen fixes it for good.
+ *
+ * `needs` defaults to what an import reads, so the import modal sends someone
+ * who granted only the picker's list back to Google before showing calendars
+ * it couldn't then read; the picker passes CALENDAR_LIST_SCOPE.
  */
-export async function listImportCalendars(userId: string): Promise<CalendarsResult> {
+export async function listImportCalendars(
+  userId: string,
+  needs: string = READ_SCOPE
+): Promise<CalendarsResult> {
   try {
-    const access = await accessTokenFor(userId);
+    const access = await accessTokenFor(userId, needs);
     if (!access.ok) return access;
     const calendars = await fetchOwnCalendars(access.token);
     if (!calendars) {
@@ -357,7 +386,7 @@ export async function previewImport(
     const request = await importableRequest(userId, requestId);
     if (!request) return { ok: false, error: "request not found for this person" };
     if (calendarIds.length === 0) return { ok: true, windows: [] };
-    const access = await accessTokenFor(userId);
+    const access = await accessTokenFor(userId, READ_SCOPE);
     if (!access.ok) return access;
     const [timeMin, timeMax] = readRange(request);
     const events = await fetchEvents(access.token, calendarIds, timeMin, timeMax);
@@ -390,7 +419,7 @@ export async function runImportFor(
     if (!request) return { ok: false, error: "request not found for this person" };
     let windows: BusyWindow[] = [];
     if (calendarIds.length > 0) {
-      const access = await accessTokenFor(userId);
+      const access = await accessTokenFor(userId, READ_SCOPE);
       if (!access.ok) return access;
       const [timeMin, timeMax] = readRange(request);
       const events = await fetchEvents(access.token, calendarIds, timeMin, timeMax);
@@ -421,14 +450,21 @@ export async function runImportFor(
   }
 }
 
+/** Which scope a consent trip had to come back with to have been worth it. */
+export const IMPORT_SCOPE = READ_SCOPE;
+export const CALENDAR_LIST_SCOPE = LIST_SCOPE;
+
 /**
  * The consent trip's only job: swap the callback's code for tokens and
  * remember the refresh token. It imports NOTHING — the person is sent back to
- * the modal they started in, with their calendars now readable.
+ * where they started, with their calendars now readable.
+ *
+ * `needs` is the scope that trip was for; see the check below.
  */
 export async function rememberAccessFromCode(
   userId: string,
-  code: string
+  code: string,
+  needs: string = READ_SCOPE
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const res = await fetch(TOKEN, {
@@ -446,7 +482,11 @@ export async function rememberAccessFromCode(
       return { ok: false, error: `token exchange ${res.status}: ${await res.text()}` };
     }
     const tokens = (await res.json()) as { refresh_token?: string; scope?: string };
-    if (!tokens.scope?.includes(READ_SCOPE)) {
+    // Google's consent screen lets the two scopes be granted separately, so
+    // the check is for the one THIS trip was for: an import needs the events,
+    // the /profile picker needs the calendar list. Granting only the other
+    // one isn't a usable permission for the thing that asked.
+    if (!tokens.scope?.includes(needs)) {
       return { ok: false, error: "calendar access wasn't granted on the consent screen" };
     }
     if (!tokens.refresh_token) {

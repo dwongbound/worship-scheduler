@@ -268,6 +268,13 @@ export const DAY_ABBRS = [
   "Sat",
 ];
 
+// Two-letter day names, for a control that has to fit all seven ACROSS a phone
+// (the weekly set time form's day picker). One letter would be ambiguous —
+// S/T/T/S repeat — and DAY_ABBRS' "Thurs" is too wide for a seventh of a
+// 390px screen, so this is the only spelling narrow enough to stay one row.
+// Always paired with the full name as the control's accessible label.
+export const DAY_INITIALS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
 export const DAY_LABELS = [
   "Sunday",
   "Monday",

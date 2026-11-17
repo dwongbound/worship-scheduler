@@ -46,9 +46,12 @@ export const LOAD_METRICS: LoadMetricChoice[] = [
 // plan first — that's the thing being edited; the set detail modal has no plan,
 // so it opens on the set's own calendar month.
 export const PLAN_LOAD_METRICS = LOAD_METRICS;
-export const SET_LOAD_METRICS = LOAD_METRICS.filter((m) => !m.planOnly);
 export const DEFAULT_PLAN_METRIC: LoadMetric = "plan";
-export const DEFAULT_SET_METRIC: LoadMetric = "calendar-month";
+// The set detail modal doesn't offer a choice: ONE set belongs to one month,
+// and a picker there was a wide control for a question nobody asks of a single
+// set. It isn't a default — it's the whole answer, which is why the ×N can name
+// its month in words.
+export const SET_LOAD_METRIC: LoadMetric = "calendar-month";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -111,4 +114,24 @@ export function loadMetricRange(
 /** The picker's label for a metric (falls back to the first choice's). */
 export function metricLabel(metric: LoadMetric): string {
   return LOAD_METRICS.find((m) => m.metric === metric)?.label ?? LOAD_METRICS[0].label;
+}
+
+/**
+ * The month a set falls in, named — "October 2026", or just "October" within
+ * the current year, since that's how anyone looking at next Sunday says it.
+ *
+ * The set detail modal's ×N is always counted over this month (SET_LOAD_METRIC),
+ * so its tooltip has to name the month rather than describe a window the reader
+ * can no longer choose.
+ */
+export function serveMonthLabel(
+  startsAt: Date | string,
+  now: Date = new Date()
+): string {
+  const d = typeof startsAt === "string" ? new Date(startsAt) : startsAt;
+  if (Number.isNaN(d.getTime())) return "this month";
+  return d.toLocaleDateString(undefined, {
+    month: "long",
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  });
 }

@@ -103,6 +103,14 @@ npx playwright install chromium            # first time only
 npm run test:e2e                           # boots the app, needs the test db
 ```
 
+`npm run test:e2e` serves the app with `next dev`. CI serves a production
+build instead, which is closer to what users run and never compiles a route
+mid-test; to reproduce a CI run locally:
+
+```bash
+npm run e2e:build && E2E_PROD=1 npm run test:e2e
+```
+
 Playwright's global setup (`tests/e2e/global-setup.ts`) force-resets and
 reseeds the test database before every run, so e2e runs are deterministic
 and never touch dev data.
@@ -151,6 +159,8 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SEED_ADMIN_USERNAME` / `_PASSWORD` | used by `npm run db:seed` | — (don't seed) | — (**never** seed prod) |
 | `SLACK_DRY_RUN` | `1` (log, never send) | `1` (optional) | unset (send for real) |
 | `GOOGLE_CLIENT_ID` / `_SECRET` | optional² | optional² | optional² (also offers Google Calendar⁷) |
+| `GOOGLE_IOS_CLIENT_ID` | optional⁸ | optional⁸ | set to offer Google sign-in in the iOS app⁸ |
+| `APPLE_BUNDLE_ID` | optional⁸ | optional⁸ | the iOS app's bundle id, to offer Sign in with Apple⁸ |
 | `GOOGLE_CALENDAR_REDIRECT_URI` | only if not `<NEXTAUTH_URL>/api/google-calendar/callback`⁷ | unset | unset |
 | `GOOGLE_CALENDAR_WEBHOOK_URL` | your HTTPS tunnel's `…/api/google-calendar/webhook`⁷ | unset | unset |
 | `SLACK_CLIENT_ID` / `_SECRET` | optional³ | optional³ | set to enable Slack³ |
@@ -158,6 +168,7 @@ env file** — set their variables in the Vercel dashboard per deployment
 | `SPOTIFY_DRY_RUN` | `1` (fake playlists) | `1` (optional) | unset (create for real) |
 | `CRON_SECRET` | optional⁶ | `openssl rand -base64 24` (unique) | `openssl rand -base64 24` (unique, ≠ staging)⁶ |
 | `NEXT_PUBLIC_LEGAL_CONTACT_EMAIL` | optional⁸ | optional⁸ | the address on /privacy + /terms⁸ |
+| `NEXT_PUBLIC_CONTACT_EMAIL` | optional⁹ | optional⁹ | the address on the home page⁹ |
 | `SUPERADMIN_EMAILS` | your email | your email | your email (create orgs, rotate keys)⁴ |
 | `POSTGRES_USER` / `_PASSWORD` / `_DB` | local Docker db creds | n/a (managed by Neon) | n/a (managed by Neon) |
 
@@ -185,6 +196,12 @@ mailbox someone actually reads, since it's where deletion requests go; unset it
 falls back to `privacy@tapworship.com`. Inlined at build, so a change needs a
 redeploy. Wording lives in `lib/legal.ts` + `app/{privacy,terms}/page.tsx`.
 
+⁹ The address the public home page (`app/page.tsx`) asks people to write to so
+their organization can be set up — deliberately a different mailbox from ⁸,
+which is quoted in the privacy policy as where deletion requests go. Shown as
+selectable text beside a copy button; unset it falls back to the maintainer's
+own address in `lib/legal.ts`. Inlined at build, so a change needs a redeploy.
+
 ⁷ Google Calendar is a **per-org integration** riding on the same Google OAuth
 client as "Continue with Google" — see [Google Calendar](#google-calendar).
 With that client set, org admins see a *Connect Google Calendar* button in Org
@@ -194,6 +211,16 @@ Calendar*); its refresh token is stored encrypted on the `Org` row. Redirect
 URI: `…/api/google-calendar/callback`. RSVPs come back through Google's push
 channel at `…/api/google-calendar/webhook`, which must be public HTTPS, so on
 `localhost` set `GOOGLE_CALENDAR_WEBHOOK_URL` to a tunnel (or skip write-back).
+
+⁸ **iOS app sign-in** (`ios/`, `POST /api/mobile/session/social`). The app
+sends the provider's ID token and the server checks it is addressed to OUR
+app, so each needs that app's identity here. `GOOGLE_IOS_CLIENT_ID` is the
+**iOS** OAuth client (Google Cloud → Credentials → Create OAuth client ID →
+iOS, with the app's bundle id; a different client from the web's
+`GOOGLE_CLIENT_ID`), and the same id goes in `ios/App/AppConfig.swift`.
+`APPLE_BUNDLE_ID` is the app's bundle id, with Sign in with Apple ticked on it
+in the Apple Developer portal. Comma-separate several (a debug and a release
+build). Unset = that button's requests are refused with a 503.
 
 ### Deploying (Vercel + Neon, free tier)
 
@@ -506,6 +533,30 @@ Gotchas: the refresh token is encrypted with a key derived from
 must reconnect**. First-search-result matching is approximate for worship songs
 with many versions — the playlist is collaborative precisely so the worship
 leader can fix it by hand.
+
+## Personal access keys (Jarvis / MCP)
+
+Anyone can make a **personal access key** on /profile → *Personal access keys*
+so an assistant of their own (Jarvis) can read TapWorship as them. Same design
+as vff-app's keys.
+
+- A key looks like `tw_…`, is shown **once** when made, and only its SHA-256 is
+  stored (`access_keys` table). Up to 5 live keys per person; revoke any time
+  and it stops working on the next request.
+- **Read-only by default.** It reads the person's own upcoming sets (with the
+  roster, songs and practices), the next 30 days of their orgs' sets they can
+  see, covers they could take, and their availability requests. Never anyone's
+  email or availability.
+- Ticking *Also let this key confirm my sets, ask for cover and take covers for
+  me* when making it adds four writing tools. They call the app's own routes
+  (`PATCH /api/assignments/[id]`, `POST /api/swaps/[id]/take`), so ownership,
+  cover eligibility, history and Slack messages are unchanged. A key never
+  reaches an admin route: `getSessionUser` doesn't read keys.
+- Connect it as an MCP server at `https://<host>/api/mcp` with the header
+  `Authorization: Bearer tw_…` (stateless Streamable HTTP, tools only), or read
+  everything in one go from `GET /api/agent`.
+
+No environment variables. The migration is `20261113000000_access_keys`.
 
 ## Timezones
 

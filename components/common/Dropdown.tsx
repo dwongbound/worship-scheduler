@@ -9,6 +9,11 @@
 // either of which would clip it — a menu that opens near the bottom of a modal
 // would be cut off with no way to reach its items. At body level nothing clips
 // it, and a z-index above the modal's keeps it on top of the backdrop too.
+//
+// The portal alone doesn't make the menu VISIBLE, only unclipped: a panel hung
+// off the trigger can still land past the edge of the window. Where it ends up
+// is `lib/dropdownPosition.ts placeMenu`, which clamps it inside the viewport
+// and flips it above the trigger when there's no room below.
 import {
   ReactNode,
   useCallback,
@@ -18,6 +23,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { placeMenu, type Placement } from "@/lib/dropdownPosition";
 
 interface DropdownProps {
   // What you click to open the menu. Pass a function to react to the open
@@ -38,19 +44,16 @@ interface DropdownProps {
   widthClassName?: string;
 }
 
-// Where the portaled panel sits: always pinned under the trigger, anchored by
-// whichever edge `align` names.
-interface MenuPosition {
-  top: number;
-  left?: number;
-  right?: number;
-}
-
 // How long the menu survives the pointer leaving it, in hover mode. The trigger
 // and the panel are in different DOM trees now, so moving between them fires a
 // real mouseleave; without this grace period the menu would close before the
 // pointer ever arrived.
 const HOVER_CLOSE_MS = 120;
+
+// The gap between trigger and panel, as padding on the wrapper rather than a
+// margin, so the pointer can cross it without leaving the hoverable area. It's
+// part of the panel's footprint, so placeMenu has to be told about it.
+const TRIGGER_GAP = 8;
 
 export default function Dropdown({
   trigger,
@@ -61,9 +64,15 @@ export default function Dropdown({
   widthClassName = "w-48",
 }: DropdownProps) {
   const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState<MenuPosition | null>(null);
+  // Null until the panel has been measured. The panel is in the DOM before
+  // then — it has to be, since its own size is half of where it goes — but
+  // hidden, so it never flashes at an unplaced position.
+  const [placement, setPlacement] = useState<Placement | null>(null);
   const ref = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  // The panel itself, inside menuRef's wrapper: the box whose size decides
+  // where the whole thing can go.
+  const panelRef = useRef<HTMLDivElement>(null);
   // A click on the trigger LATCHES the menu open: hover alone should close as
   // soon as the pointer leaves, but a menu you deliberately clicked has to stay
   // put while you read it. A latched menu ignores mouseleave and closes on the
@@ -75,19 +84,33 @@ export default function Dropdown({
   // Close for good: drops the latch so the next click opens cleanly.
   const close = useCallback(() => {
     latched.current = false;
+    setPlacement(null);
     setOpen(false);
   }, []);
 
-  // Measure the trigger and pin the panel under it. Called on open and again
-  // whenever anything moves the trigger under it.
+  // Measure BOTH boxes — the trigger's position and the panel's own size — and
+  // hand them to placeMenu. The panel's size is measured from its natural
+  // layout, so this runs with maxHeight cleared (see the inline style below);
+  // measuring a panel already capped to a scroll box would shrink it a little
+  // more on every reposition.
   const measure = useCallback(() => {
     const el = ref.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    setPosition(
-      align === "right"
-        ? { top: rect.bottom, right: window.innerWidth - rect.right }
-        : { top: rect.bottom, left: rect.left }
+    const panel = panelRef.current;
+    if (!el || !panel) return;
+    const trigger = el.getBoundingClientRect();
+    setPlacement(
+      placeMenu({
+        trigger,
+        menu: {
+          width: panel.offsetWidth,
+          // scrollHeight, not offsetHeight: once a cramped panel is capped to
+          // a scroll box, its offset height IS the cap, so re-measuring would
+          // ratchet it smaller. scrollHeight stays the content's full height.
+          height: panel.scrollHeight + TRIGGER_GAP,
+        },
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        align,
+      })
     );
   }, [align]);
 
@@ -160,27 +183,44 @@ export default function Dropdown({
     setOpen(true);
   };
 
-  const menu =
-    open && position ? (
-      // The `pt-2` (rather than a margin) keeps the gap below the trigger part
-      // of the hoverable area, so the pointer can travel from trigger into the
-      // panel without crossing dead space.
+  const menu = open ? (
+    // The gap is padding (rather than a margin) so it stays part of the
+    // hoverable area and the pointer can travel from trigger into the panel
+    // without crossing dead space. It sits on whichever side the trigger is on.
+    <div
+      ref={menuRef}
+      style={{
+        // Rendered before it has been placed so its size can be measured;
+        // hidden until then, so it never flashes at the wrong coordinates.
+        top: placement?.top ?? 0,
+        left: placement?.left ?? 0,
+        visibility: placement ? undefined : "hidden",
+        paddingTop: placement?.above ? 0 : TRIGGER_GAP,
+        paddingBottom: placement?.above ? TRIGGER_GAP : 0,
+      }}
+      className="fixed z-[60]"
+      {...hoverHandlers}
+    >
       <div
-        ref={menuRef}
-        style={{ top: position.top, left: position.left, right: position.right }}
-        className="fixed z-[60] pt-2"
-        {...hoverHandlers}
+        ref={panelRef}
+        // Clicks inside the menu (e.g. "Log out") close it too.
+        onClick={close}
+        // A panel too tall for either side of the trigger scrolls instead of
+        // running off the screen. `overflow-y-auto` has to win over
+        // menuClassName's `overflow-visible` (set where a row opens a
+        // submenu), so it's applied inline and only when there's a cap.
+        style={
+          placement?.maxHeight === undefined
+            ? undefined
+            : { maxHeight: placement.maxHeight, overflowY: "auto" }
+        }
+        className={`${widthClassName} rounded-lg border border-gray-200 bg-white py-1
+          shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
       >
-        <div
-          // Clicks inside the menu (e.g. "Log out") close it too.
-          onClick={close}
-          className={`${widthClassName} rounded-lg border border-gray-200 bg-white py-1
-            shadow-lg dark:border-gray-700 dark:bg-gray-800 ${menuClassName}`}
-        >
-          {children}
-        </div>
+        {children}
       </div>
-    ) : null;
+    </div>
+  ) : null;
 
   return (
     <div className="relative" ref={ref} {...hoverHandlers}>

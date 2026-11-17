@@ -313,8 +313,7 @@ test("re-running the preview settles MDs on a plan that requires them", async ({
   // Sunday Team holds every seeded user, which is where the two musical
   // directors (jack + paul, both on keys) live.
   await modal.getByLabel("Team").selectOption({ label: "Sunday Team" });
-  // By role: getByLabel("Sunday") also matches the Team select, whose
-  // accessible name concatenates its option text.
+  // By role, for the same reason as above.
   await modal.getByRole("checkbox", { name: "Sunday" }).check();
   await modal.getByLabel("Start time").fill("14:00");
   await modal.getByLabel("End time").fill("15:30");

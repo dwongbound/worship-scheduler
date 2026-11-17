@@ -22,7 +22,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { isBottomNavWidth } from "@/lib/layout";
-import { LEGAL_LINKS } from "@/lib/legal";
+import { isChromelessPath } from "@/lib/publicPaths";
 import { consumeNavDirection } from "@/lib/navDirection";
 import { gestureAxis, shouldCommit, swipeProgress, swipeTarget } from "@/lib/swipeNav";
 import { useSwipe } from "./SwipeProvider";
@@ -181,9 +181,8 @@ export default function SwipePager({ children }: { children: React.ReactNode }) 
       // with that bar, so the two share one width (lib/layout.ts).
       if (e.touches.length !== 1 || !isBottomNavWidth()) return;
       const p = window.location.pathname;
-      // No tabs on the auth or legal pages.
-      if (p === "/login" || p === "/join") return;
-      if (LEGAL_LINKS.some((l) => p === l.href)) return;
+      // No tabs on the home, auth or legal pages.
+      if (isChromelessPath(p)) return;
       // Don't hijack touches while a dialog is open — its own scroll and
       // controls should win.
       if (document.querySelector('[role="dialog"]')) return;

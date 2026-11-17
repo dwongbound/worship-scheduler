@@ -13,7 +13,7 @@
 // order). Toggles, deletes and reorders are optimistic and roll back if the
 // API refuses; the builder waits for the save so a refusal stays on screen
 // next to the rule it's about.
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   DndContext,
   closestCenter,
@@ -196,6 +196,12 @@ export default function OrgRules({ orgId }: { orgId: string }) {
   // null = not loaded yet.
   const [rules, setRules] = useState<SchedulingRule[] | null>(null);
   const [options, setOptions] = useState<RuleOptions | null>(null);
+  // The fingerprint of the list as the server last gave it to us. Sent with
+  // every save: these rules are the ORG's, so another admin may have changed
+  // them since, and a save built on this copy would revert their work. The
+  // server refuses that and hands back the current list, which we take.
+  const [version, setVersion] = useState<string | null>(null);
+  const staleRef = useRef(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   // The builder: open with a draft, and the id of the rule being edited (null
@@ -216,6 +222,7 @@ export default function OrgRules({ orgId }: { orgId: string }) {
           return;
         }
         setRules(data.rules ?? []);
+        setVersion(typeof data.version === "string" ? data.version : null);
         setOptions(data.options ?? null);
       })
       .catch(() => !cancelled && setError("Could not load the rules."));
@@ -247,6 +254,7 @@ export default function OrgRules({ orgId }: { orgId: string }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          ...(version ? { version } : {}),
           rules: next.map((r) => ({
             tier: r.tier,
             enabled: r.enabled,
@@ -257,12 +265,22 @@ export default function OrgRules({ orgId }: { orgId: string }) {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
+        // Someone else saved while this copy was open. Nothing was written, so
+        // take the list the server sent and show it: reverting to our own copy
+        // would put their change back out of sight.
+        if (res.status === 409 && data.stale) {
+          staleRef.current = true;
+          if (Array.isArray(data.rules)) setRules(data.rules as SchedulingRule[]);
+          if (typeof data.version === "string") setVersion(data.version);
+          return data.error ?? "Those rules changed while you had them open.";
+        }
         const at = typeof data.index === "number" ? next[data.index] : null;
         return at
           ? `${data.error ?? "Could not save."} (“${ruleSentence(at.params, names)}”)`
           : (data.error ?? "Could not save the rules.");
       }
       setRules(data.rules ?? next);
+      if (typeof data.version === "string") setVersion(data.version);
       return null;
     } catch {
       return "Could not save the rules.";
@@ -272,14 +290,18 @@ export default function OrgRules({ orgId }: { orgId: string }) {
   }
 
   // Toggle / delete / reorder: the list moves at once, and goes back if the
-  // save is refused.
+  // save is refused — except when it was refused as stale, where going back
+  // would hide the change that refused it.
   async function optimistic(next: SchedulingRule[]) {
     const previous = rules ?? [];
+    staleRef.current = false;
     setRules(next);
     setError("");
     const err = await persist(next);
     if (err) {
-      setRules(previous);
+      // A stale refusal has already put the CURRENT list on screen; rolling
+      // back to our own copy here would hide the very change that refused us.
+      if (!staleRef.current) setRules(previous);
       setError(err);
     }
   }
@@ -341,6 +363,7 @@ export default function OrgRules({ orgId }: { orgId: string }) {
     teamId: string | null
   ) {
     setBuilderError("");
+    staleRef.current = false;
     const err = await persist(withDraft(params, tier, teamId));
     if (err) {
       setBuilderError(err);

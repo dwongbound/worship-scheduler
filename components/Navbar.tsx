@@ -12,7 +12,7 @@ import OrgSwitcher from "./OrgSwitcher";
 import GuidedTour from "./GuidedTour";
 import { useBeginNavigation } from "./LoadingProvider";
 import { useOrgs } from "./OrgProvider";
-import { LEGAL_LINKS } from "@/lib/legal";
+import { isChromelessPath } from "@/lib/publicPaths";
 import { setNavDirection } from "@/lib/navDirection";
 import { useSwipe } from "./SwipeProvider";
 import { applyTheme, getStoredTheme, storeTheme, type Theme } from "@/lib/theme";
@@ -279,11 +279,12 @@ export default function Navbar() {
     return () => ro.disconnect();
   }, []);
 
-  // No chrome on the login, join-org or legal pages (the last of those are read
-  // signed out, where there's no org to navigate). Placed after all hooks so
-  // hook order stays stable across renders (never return before a hook).
-  if (pathname === "/login" || pathname === "/join") return null;
-  if (LEGAL_LINKS.some((l) => pathname === l.href)) return null;
+  // No chrome on the home, login, join-org or legal pages — they're read
+  // signed out (or, for /join, before you belong to an org), so there's
+  // nothing for the tabs to navigate. Placed after all hooks so hook order
+  // stays stable across renders (never return before a hook). This also keeps
+  // the guided tour off them: it's mounted below, inside this component.
+  if (isChromelessPath(pathname)) return null;
 
   const availNeedsResponse = availStatus?.needsResponse ?? false;
   // The banner spotlights the first org still waiting on me.
@@ -397,7 +398,7 @@ export default function Navbar() {
       <div className="mx-auto flex h-full max-w-7xl items-center justify-between gap-2 px-4 sm:px-6 lg:px-8">
         <div className="flex min-w-0 items-center gap-4">
           {/* Page logo, far left */}
-          <Link href="/calendar" aria-label="Worship Scheduler home" className="shrink-0">
+          <Link href="/calendar" aria-label="TapWorship home" className="shrink-0">
             <Logo className="h-9 w-9" />
           </Link>
           {/* Desktop tab area — hidden on phones AND tablets, where the

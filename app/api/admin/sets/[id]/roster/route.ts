@@ -26,12 +26,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import {
-  DUPLICATE_SEAT,
   isEmptyOps,
   isRosterError,
   parseRosterOps,
   prepareRosterDiff,
   rosterAftermath,
+  rosterSaveError,
+  rosterWrites,
+  ROSTER_TX_TIMEOUT_MS,
 } from "@/lib/rosterDiff";
 
 export async function PATCH(
@@ -74,16 +76,16 @@ export async function PATCH(
 
   // One transaction: either the whole save lands or none of it does.
   try {
-    await prisma.$transaction(prepared.writes);
+    await prisma.$transaction(rosterWrites([prepared]), {
+      timeout: ROSTER_TX_TIMEOUT_MS,
+    });
   } catch (err) {
-    // The answer to the admin stays the plain sentence, but the database's own
-    // error names the set, the person and the role — without it in the log
-    // there is nothing to go on when a save fails in production.
+    // The admin gets a sentence; the log gets the database's own error, which
+    // names the set, the person and the role — without it in the log there is
+    // nothing to go on when a save fails in production.
     console.error("[roster] save failed", { setId, error: err });
-    return NextResponse.json(
-      { error: DUPLICATE_SEAT.error },
-      { status: DUPLICATE_SEAT.status }
-    );
+    const fail = rosterSaveError(err);
+    return NextResponse.json({ error: fail.error }, { status: fail.status });
   }
 
   await rosterAftermath(prepared);

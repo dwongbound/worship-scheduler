@@ -372,7 +372,7 @@ export async function createOrSyncSetPlaylist(
         name,
         public: false, // required: a collaborative playlist must be private
         collaborative: true, // the whole team can edit it from the link
-        description: "Auto-created by Worship Scheduler.",
+        description: "Auto-created by TapWorship.",
       }
     );
     if (!created?.id) {

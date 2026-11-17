@@ -24,7 +24,7 @@ const figtree = Figtree({
 });
 
 export const metadata: Metadata = {
-  title: "Worship Scheduler",
+  title: "TapWorship",
   description: "Schedule worship teams, cover sets, and manage availability.",
   // "Add to Home Screen" on iOS: open standalone (no Safari chrome) with a
   // short icon label. The manifest (app/manifest.ts) covers Android; older

@@ -134,6 +134,6 @@ test("only an admin or someone on the set can message its team on Slack", async 
   action = modal.getByTestId("slack-team-action");
   await expect(action).toHaveAttribute("title", PERMISSION_REASON);
   await expect(
-    action.getByRole("button", { name: "Slack Team" })
+    action.getByRole("button", { name: "Create Group" })
   ).toBeDisabled();
 });

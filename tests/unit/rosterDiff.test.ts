@@ -2,7 +2,7 @@
 // roster it means. The 400 these cover is real — a guest-team seat Preview Mode
 // never showed, seated again in the role its holder already had.
 import { describe, expect, it } from "vitest";
-import { collapseByPersonRole } from "@/lib/rosterDiff";
+import { collapseByPersonRole, rosterSaveError } from "@/lib/rosterDiff";
 
 const seat = (id: string, userId: string, role: string) => ({ id, userId, role });
 
@@ -288,5 +288,30 @@ describe("shuffles inside one multi-seat role", () => {
     expect(out.rebuilt).toEqual([]);
     const final = replay(out, roster);
     expect(final.map((s) => s.userId).sort()).toEqual(["bo", "cy"]);
+  });
+});
+
+// Which failure gets which sentence. This was a catch-all once: every write
+// error came back as "already in this role", so a transaction that merely ran
+// out of time looked like a seat clash and we went looking for one twice.
+describe("rosterSaveError", () => {
+  it("names a duplicate seat only for the unique constraint", () => {
+    const e = rosterSaveError({ code: "P2002" });
+    expect(e.status).toBe(400);
+    expect(e.error).toMatch(/already in this role/i);
+  });
+
+  it("says plainly that nothing was saved for anything else", () => {
+    for (const err of [
+      { code: "P2028" }, // transaction timed out
+      { code: "P1001" }, // couldn't reach the database
+      new Error("boom"),
+      null,
+    ]) {
+      const e = rosterSaveError(err);
+      expect(e.status).toBe(500);
+      expect(e.error).not.toMatch(/already in this role/i);
+      expect(e.error).toMatch(/nothing was changed/i);
+    }
   });
 });

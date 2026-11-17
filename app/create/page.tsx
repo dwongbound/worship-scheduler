@@ -3,7 +3,7 @@
 // auto-scheduler, and see who has finished entering availability.
 import { useSession } from "next-auth/react";
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import AttentionDot from "@/components/common/AttentionDot";
 import Badge from "@/components/common/Badge";
 import Button from "@/components/common/Button";
@@ -31,6 +31,7 @@ import {
   draftSearch,
   draftSlug,
 } from "@/lib/draftLink";
+import { replaceUrl } from "@/lib/urlParam";
 import { DAY_LABELS } from "@/lib/constants";
 import {
   DEFAULT_TEAM_ROLES,
@@ -38,7 +39,15 @@ import {
   resolveTeamCapacities,
   type TeamRoleDef,
 } from "@/lib/teamRoles";
-import { minutesToTimeLabel, shortRangeLabel } from "@/lib/dates";
+import {
+  minutesToShortTimeLabel,
+  minutesToTimeLabel,
+  shortRangeLabel,
+} from "@/lib/dates";
+import {
+  describeTemplatePractice,
+  practiceCountBadge,
+} from "@/lib/practices";
 import { fetchJsonArray, orgHeaders } from "@/lib/api";
 import { requestAudienceFor } from "@/lib/availabilityTargets";
 import { fetchSlackStatus } from "@/lib/slackStatus";
@@ -87,7 +96,6 @@ export default function CreatePage() {
 }
 
 function CreateView() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   // ?draft=<slug>: the plan a link names, and the slugs already followed — a
@@ -203,13 +211,14 @@ function CreateView() {
 
   // Mirror the open draft into ?draft=<slug>, or clear it. Through
   // `draftSearch` so any other param this page carries survives either way.
+  // Writing the slug is NOT following a link, so it's marked as followed
+  // first — see the deep-link effect below, which reads the same param.
   const setDraftParam = useCallback(
     (slug: string | null) => {
-      router.replace(`${pathname}${draftSearch(searchParams.toString(), slug)}`, {
-        scroll: false,
-      });
+      if (slug) followedDraftLinks.current.add(slug);
+      replaceUrl(`${pathname}${draftSearch(searchParams.toString(), slug)}`);
     },
-    [router, pathname, searchParams]
+    [pathname, searchParams]
   );
 
   /**
@@ -807,6 +816,28 @@ function CreateView() {
                     <td className="py-2 pr-4">
                       {/* Plural — it recurs every week (e.g. "Thursdays"). */}
                       {DAY_LABELS[t.dayOfWeek]}s · {minutesToTimeLabel(t.startMinute)}
+                      {/* One "+" per practice this time hands down, so a
+                          Sunday with a Wednesday and a Saturday rehearsal
+                          reads "+2". Its title names them, since the badge
+                          alone says how many and not when. */}
+                      {practiceCountBadge((t.practices ?? []).length) && (
+                        <span
+                          title={(t.practices ?? [])
+                            .map((p) =>
+                              describeTemplatePractice(
+                                p,
+                                (d) => DAY_LABELS[d],
+                                minutesToShortTimeLabel
+                              )
+                            )
+                            .join(" · ")}
+                          className="ml-1.5 cursor-help rounded border border-indigo-200 bg-indigo-50 px-1
+                            py-0.5 align-middle font-mono text-[11px] font-semibold text-indigo-600
+                            dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-300"
+                        >
+                          {practiceCountBadge((t.practices ?? []).length)}
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 text-right whitespace-nowrap">
                       {/* Edit reopens the add form on this row — same fields

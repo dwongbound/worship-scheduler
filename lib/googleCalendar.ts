@@ -33,13 +33,18 @@ import { setLinkPath } from "./setLink";
 import { getTeamCatalog } from "./teamRoleStore";
 import { pendingOwners } from "./pendingHandoff";
 import {
+  PRACTICE_ID_PROPERTY,
   SET_ID_PROPERTY,
-  attendeesChanged,
   eventAttendees,
   eventDescription,
   eventTimes,
   eventTitle,
+  inviteAddress,
+  notifyForUpdate,
+  practiceTimes,
+  practiceTitle,
   seatsToConfirm,
+  splitInviteEmails,
   type CalendarAttendee,
 } from "./calendarEvent";
 
@@ -142,9 +147,24 @@ export function verifyState(token: string): { orgId: string; userId: string } | 
 // The member-side "Import from Google Calendar" (lib/googleAvailability.ts)
 // shares this callback, so its state is signed the same way under a purpose of
 // its own: neither flow's state verifies as the other's.
-type ImportState = { p: "gimport"; userId: string; requestId: string; exp: number };
+//
+// `requestId` is the availability request the import is for — and it is
+// OPTIONAL, because the same permission is what /profile's "send my invites
+// to" picker reads the person's calendars with, and that has no request
+// behind it. A state with no request is the profile flow, and the callback
+// returns there instead.
+type ImportState = {
+  p: "gimport";
+  userId: string;
+  requestId?: string | null;
+  exp: number;
+};
 
-export function signImportState(userId: string, requestId: string, ttlSec = 600): string {
+export function signImportState(
+  userId: string,
+  requestId: string | null,
+  ttlSec = 600
+): string {
   const body: ImportState = {
     p: "gimport",
     userId,
@@ -155,13 +175,15 @@ export function signImportState(userId: string, requestId: string, ttlSec = 600)
   return `${payload}.${sign(payload, "gimport-state")}`;
 }
 
-export function verifyImportState(token: string): { userId: string; requestId: string } | null {
+export function verifyImportState(
+  token: string
+): { userId: string; requestId: string | null } | null {
   try {
     const [payload, sig] = token.split(".");
     if (!payload || !sig || !safeEqual(sig, sign(payload, "gimport-state"))) return null;
     const body = JSON.parse(Buffer.from(payload, "base64url").toString()) as ImportState;
     if (body.p !== "gimport" || body.exp < Math.floor(Date.now() / 1000)) return null;
-    return { userId: body.userId, requestId: body.requestId };
+    return { userId: body.userId, requestId: body.requestId ?? null };
   } catch {
     return null;
   }
@@ -508,6 +530,92 @@ export async function selectCalendar(
  * Create or update a set's event so it matches the db. Safe to call after any
  * change, any number of times; a no-op for an unconnected org or a past set.
  */
+/**
+ * Create-or-patch ONE event: the set's own, or one of its practices. They are
+ * the same write with a different title, window and id property, and keeping
+ * it in one place is what stops a rehearsal's event drifting from the
+ * service's (a missing guest, an un-renamed title, a time that didn't move).
+ *
+ * `remember` is called only when a NEW event is made, with the id to store.
+ */
+async function syncOneEvent(
+  org: OrgCal,
+  ev: {
+    eventId: string | null;
+    summary: string;
+    description: string;
+    times: ReturnType<typeof eventTimes>;
+    /** The event's start, for deciding whether it moved. */
+    startsAt: Date;
+    seats: Parameters<typeof eventAttendees>[0];
+    properties: Record<string, string>;
+    remember: (eventId: string) => Promise<unknown>;
+  }
+): Promise<void> {
+  if (ev.eventId) {
+    const current = await gapi(org, "GET", `${cal(org)}/events/${encodeURIComponent(ev.eventId)}`);
+    if (current?.ok && current.json.status !== "cancelled") {
+      const before = (current.json.attendees as CalendarAttendee[] | undefined) ?? [];
+      const attendees = eventAttendees(ev.seats, before);
+      const start = (current.json.start as { dateTime?: string } | undefined)?.dateTime;
+      const moved = !start || new Date(start).getTime() !== ev.startsAt.getTime();
+      // Email guests only when it matters to them — someone added or dropped,
+      // or the time moved. A setlist edit just updates the event quietly. And
+      // nobody is mailed about people joining who all asked not to be mailed:
+      // `notifyForUpdate` is the whole rule, and says where a per-person
+      // answer can't be honoured against a per-request parameter.
+      const notify = notifyForUpdate(before, attendees, ev.seats, moved);
+      await gapi(
+        org,
+        "PATCH",
+        `${cal(org)}/events/${encodeURIComponent(ev.eventId)}?sendUpdates=${notify}`,
+        { summary: ev.summary, description: ev.description, ...ev.times, attendees }
+      );
+      return;
+    }
+    if (current === null) return; // no token; try again on the next change
+    // Gone (deleted by hand in Google) — fall through and make a new one.
+  }
+
+  // A new event is where the invite email people actually notice comes from,
+  // so it is worth the second call to get right. `sendUpdates` is per request,
+  // so a MIXED roster is written in two passes: the guests who want an email
+  // are invited with one, then the rest are added quietly. Doing it in one
+  // call would either mail someone who asked not to be mailed or silence the
+  // invite for the whole team.
+  const attendees = eventAttendees(ev.seats);
+  const { emailed, silent } = splitInviteEmails(attendees, ev.seats);
+  const twoPass = emailed.length > 0 && silent.length > 0;
+  const made = await gapi(
+    org,
+    "POST",
+    `${cal(org)}/events?sendUpdates=${emailed.length > 0 ? "all" : "none"}`,
+    {
+      summary: ev.summary,
+      description: ev.description,
+      ...ev.times,
+      attendees: twoPass ? emailed : attendees,
+      guestsCanModify: false,
+      guestsCanInviteOthers: false,
+      extendedProperties: { private: ev.properties },
+    }
+  );
+  if (made?.ok && typeof made.json.id === "string") {
+    // Remember the id BEFORE the second pass: if that call fails, the event
+    // exists and the next sync adds the missing guests — an unremembered id
+    // would instead leave a duplicate event behind.
+    await ev.remember(made.json.id);
+    if (twoPass) {
+      await gapi(
+        org,
+        "PATCH",
+        `${cal(org)}/events/${encodeURIComponent(made.json.id)}?sendUpdates=none`,
+        { attendees }
+      );
+    }
+  }
+}
+
 export async function syncSetCalendar(setId: string): Promise<void> {
   if (!isGoogleCalendarAppConfigured()) return;
   try {
@@ -521,7 +629,17 @@ export async function syncSetCalendar(setId: string): Promise<void> {
         orgId: true,
         teamId: true,
         googleEventId: true,
+        // Who is leading, so the roster in the invite says so (eventDescription).
+        mdUserId: true,
         songs: { select: { title: true, key: true }, orderBy: { order: "asc" } },
+        // Practices ride along: they're the same people and the same setlist,
+        // so one load serves the set's event and every rehearsal's. That's
+        // also why every caller of syncSetCalendar keeps practices in step for
+        // free — a roster change moves the rehearsal invites with it.
+        practices: {
+          select: { id: true, startsAt: true, endsAt: true, googleEventId: true },
+          orderBy: { startsAt: "asc" },
+        },
         assignments: {
           select: {
             id: true,
@@ -529,7 +647,15 @@ export async function syncSetCalendar(setId: string): Promise<void> {
             status: true,
             pendingCoverFromUserId: true,
             userId: true,
-            user: { select: { name: true, email: true } },
+            user: {
+              select: {
+                name: true,
+                email: true,
+                calendarInviteEmail: true,
+                calendarInvites: true,
+                calendarInviteEmails: true,
+              },
+            },
           },
         },
       },
@@ -542,57 +668,85 @@ export async function syncSetCalendar(setId: string): Promise<void> {
     // the person handing it over, so the invite stays theirs until an admin
     // approves — a rejected handoff then never bounced anyone's invite.
     const owners = await pendingOwners(set.assignments);
-    const ownerEmails = new Map(
+    const ownerById = new Map(
       (
         await prisma.user.findMany({
           where: { id: { in: [...owners.values()].map((o) => o.id) } },
-          select: { id: true, email: true },
+          select: {
+            id: true,
+            email: true,
+            calendarInviteEmail: true,
+            calendarInvites: true,
+            calendarInviteEmails: true,
+          },
         })
-      ).map((u) => [u.id, u.email])
+      ).map((u) => [u.id, u] as const)
     );
     const seats = set.assignments.map((a) => {
       const owner = owners.get(a.id);
+      // A seat mid-handoff is invited in its OLD owner's name, so it's their
+      // preference that decides, not the taker's.
+      const held = owner ? ownerById.get(owner.id) : null;
       return owner
-        ? { role: a.role, userId: owner.id, name: owner.name, email: ownerEmails.get(owner.id) ?? null }
-        : { role: a.role, userId: a.userId, name: a.user.name, email: a.user.email };
+        ? {
+            role: a.role,
+            userId: owner.id,
+            name: owner.name,
+            email: held ? inviteAddress(held) : null,
+            calendarInvites: held?.calendarInvites ?? true,
+            calendarInviteEmails: held?.calendarInviteEmails ?? true,
+          }
+        : {
+            role: a.role,
+            userId: a.userId,
+            name: a.user.name,
+            email: inviteAddress(a.user),
+            calendarInvites: a.user.calendarInvites,
+            calendarInviteEmails: a.user.calendarInviteEmails,
+          };
     });
     const catalog = await getTeamCatalog(set.teamId);
-    const description = eventDescription(seats, set.songs, catalog, `${baseUrl()}${setLinkPath(set.id)}`);
-    const times = eventTimes(set, APP_TZ);
+    // One description for the set and its practices alike: the same roster,
+    // the same setlist (which is what a rehearsal is for) and the same link
+    // back to the set.
+    const description = eventDescription(
+      seats,
+      set.songs,
+      catalog,
+      `${baseUrl()}${setLinkPath(set.id)}`,
+      set.mdUserId
+    );
 
-    if (set.googleEventId) {
-      const current = await gapi(org, "GET", `${cal(org)}/events/${encodeURIComponent(set.googleEventId)}`);
-      if (current?.ok && current.json.status !== "cancelled") {
-        const before = (current.json.attendees as CalendarAttendee[] | undefined) ?? [];
-        const attendees = eventAttendees(seats, before);
-        const start = (current.json.start as { dateTime?: string } | undefined)?.dateTime;
-        const moved = !start || new Date(start).getTime() !== set.startsAt.getTime();
-        // Email guests only when it matters to them — someone added or dropped,
-        // or the time moved. A setlist edit just updates the event quietly.
-        const notify = moved || attendeesChanged(before, attendees) ? "all" : "none";
-        await gapi(
-          org,
-          "PATCH",
-          `${cal(org)}/events/${encodeURIComponent(set.googleEventId)}?sendUpdates=${notify}`,
-          { summary: eventTitle(set), description, ...times, attendees }
-        );
-        return;
-      }
-      if (current === null) return; // no token; try again on the next change
-      // Gone (deleted by hand in Google) — fall through and make a new one.
-    }
-
-    const made = await gapi(org, "POST", `${cal(org)}/events?sendUpdates=all`, {
+    await syncOneEvent(org, {
+      eventId: set.googleEventId,
       summary: eventTitle(set),
       description,
-      ...times,
-      attendees: eventAttendees(seats),
-      guestsCanModify: false,
-      guestsCanInviteOthers: false,
-      extendedProperties: { private: { [SET_ID_PROPERTY]: set.id } },
+      times: eventTimes(set, APP_TZ),
+      startsAt: set.startsAt,
+      seats,
+      // Only the set's own event carries SET_ID_PROPERTY — that is what
+      // applyRsvps keys off, and accepting a REHEARSAL invite must not
+      // confirm somebody's seat on the service.
+      properties: { [SET_ID_PROPERTY]: set.id },
+      remember: (eventId) =>
+        prisma.set.update({ where: { id: set.id }, data: { googleEventId: eventId } }),
     });
-    if (made?.ok && typeof made.json.id === "string") {
-      await prisma.set.update({ where: { id: set.id }, data: { googleEventId: made.json.id } });
+
+    for (const practice of set.practices) {
+      // A practice usually sits before its set, so an upcoming set can have a
+      // rehearsal already behind it. Skip that one rather than the whole set.
+      if (practice.endsAt.getTime() < Date.now()) continue;
+      await syncOneEvent(org, {
+        eventId: practice.googleEventId,
+        summary: practiceTitle(set),
+        description,
+        times: practiceTimes(practice, APP_TZ),
+        startsAt: practice.startsAt,
+        seats,
+        properties: { [PRACTICE_ID_PROPERTY]: practice.id },
+        remember: (eventId) =>
+          prisma.setPractice.update({ where: { id: practice.id }, data: { googleEventId: eventId } }),
+      });
     }
   } catch (err) {
     console.error(`[gcal] sync of set ${setId} failed:`, err);
@@ -610,21 +764,47 @@ export async function syncUpcomingSets(orgId: string): Promise<void> {
 }
 
 /**
- * Read a set's event id BEFORE deleting the set; hand it to
- * deleteSetCalendarEvent afterwards. Null when there's nothing to delete.
+ * Every event a set owns — its own and each of its practices' — read BEFORE
+ * the set row goes. The practices cascade away with it, so without this their
+ * rehearsal events would be left on the calendar with nothing behind them.
  */
-export async function calendarEventOf(
+export async function calendarEventsOfSet(
   setId: string
-): Promise<{ orgId: string; eventId: string } | null> {
-  if (!isGoogleCalendarAppConfigured()) return null;
+): Promise<{ orgId: string; eventId: string }[]> {
+  if (!isGoogleCalendarAppConfigured()) return [];
   const set = await prisma.set.findUnique({
     where: { id: setId },
-    select: { orgId: true, googleEventId: true },
+    select: {
+      orgId: true,
+      googleEventId: true,
+      practices: { select: { googleEventId: true } },
+    },
   });
-  return set?.googleEventId ? { orgId: set.orgId, eventId: set.googleEventId } : null;
+  if (!set) return [];
+  return [set.googleEventId, ...set.practices.map((p) => p.googleEventId)]
+    .filter((eventId): eventId is string => !!eventId)
+    .map((eventId) => ({ orgId: set.orgId, eventId }));
 }
 
-/** Cancel a deleted set's event; Google emails the guests the cancellation. */
+/**
+ * Read a practice's event id BEFORE deleting the row, same as
+ * `calendarEventsOfSet` does for a set. Hand the result to
+ * `deleteSetCalendarEvent`, which doesn't care which kind of event it is.
+ */
+export async function calendarEventOfPractice(
+  practiceId: string
+): Promise<{ orgId: string; eventId: string } | null> {
+  if (!isGoogleCalendarAppConfigured()) return null;
+  const practice = await prisma.setPractice.findUnique({
+    where: { id: practiceId },
+    select: { googleEventId: true, set: { select: { orgId: true } } },
+  });
+  return practice?.googleEventId
+    ? { orgId: practice.set.orgId, eventId: practice.googleEventId }
+    : null;
+}
+
+/** Cancel a deleted set's (or practice's) event; Google emails the guests. */
 export async function deleteSetCalendarEvent(
   ref: { orgId: string; eventId: string } | null
 ): Promise<void> {
@@ -744,13 +924,36 @@ type GoogleEvent = {
 async function applyRsvps(ev: GoogleEvent): Promise<void> {
   const setId = ev.extendedProperties?.private?.[SET_ID_PROPERTY];
   if (!setId || ev.status === "cancelled" || !ev.attendees?.length) return;
+  // Accepting a REHEARSAL invite confirms nothing: the seat being confirmed is
+  // a seat on the service. Practice events carry only PRACTICE_ID_PROPERTY, so
+  // this is belt and braces — an event carrying both is somebody else's.
+  if (ev.extendedProperties?.private?.[PRACTICE_ID_PROPERTY]) return;
   const seats = await prisma.assignment.findMany({
     where: { setId, status: "PENDING" },
-    select: { id: true, role: true, status: true, userId: true, user: { select: { email: true } } },
+    select: {
+      id: true,
+      role: true,
+      status: true,
+      userId: true,
+      user: {
+        select: {
+          email: true,
+          calendarInviteEmail: true,
+          calendarInvites: true,
+        },
+      },
+    },
   });
   const ids = seatsToConfirm(
     ev.attendees,
-    seats.map((s) => ({ id: s.id, status: s.status, email: s.user.email }))
+    seats.map((s) => ({
+      id: s.id,
+      status: s.status,
+      // The RSVP comes back from whatever address we invited, so the seat is
+      // matched on that same reading.
+      email: inviteAddress(s.user),
+      calendarInvites: s.user.calendarInvites,
+    }))
   );
   if (ids.length === 0) return;
   const confirmed = seats.filter((s) => ids.includes(s.id));

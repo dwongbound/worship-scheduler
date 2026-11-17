@@ -21,7 +21,6 @@ import { isValidMD } from "@/lib/md";
 import { requireOrgAdminFor } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import {
-  DUPLICATE_SEAT,
   INVALID_ROSTER,
   isEmptyOps,
   isRosterError,
@@ -29,6 +28,9 @@ import {
   prepareRosterDiff,
   rosterAftermath,
   rosterDms,
+  rosterSaveError,
+  rosterWrites,
+  ROSTER_TX_TIMEOUT_MS,
   type PreparedRoster,
 } from "@/lib/rosterDiff";
 import { notifyRosterChanges } from "@/lib/slack";
@@ -108,7 +110,12 @@ export async function PUT(req: NextRequest) {
 
   if (prepared.length > 0) {
     try {
-      await prisma.$transaction(prepared.flatMap((p) => p.writes));
+      // `rosterWrites` folds the WHOLE batch into a handful of statements: a
+      // quarter of Sunday rosters as a write per seat was 428 of them, which
+      // ran past Prisma's five-second transaction limit and failed the save.
+      await prisma.$transaction(rosterWrites(prepared), {
+        timeout: ROSTER_TX_TIMEOUT_MS,
+      });
     } catch (err) {
       // See the single-set route: the admin gets the sentence, the log gets
       // the database's own message, which is the only thing that names the
@@ -117,7 +124,8 @@ export async function PUT(req: NextRequest) {
         setIds: prepared.map((p) => p.setId),
         error: err,
       });
-      return NextResponse.json(DUPLICATE_SEAT, { status: DUPLICATE_SEAT.status });
+      const fail = rosterSaveError(err);
+      return NextResponse.json({ error: fail.error }, { status: fail.status });
     }
     for (const p of prepared) await rosterAftermath(p, { sendDms: false });
     // ONE DM per person across the whole batch: filling a month of one role

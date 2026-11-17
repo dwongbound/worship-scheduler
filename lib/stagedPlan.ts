@@ -593,3 +593,18 @@ export function planFixedSets(
     ...baseline.filter((f) => !(f.setId && planIds.has(f.setId))),
   ];
 }
+
+/**
+ * How long the pointer has to rest on a name before every OTHER seat that
+ * person holds lights up.
+ *
+ * The highlight exists to answer "where else is this person playing?", which
+ * is a question you ask deliberately. Without a delay it answers it for every
+ * name the cursor crosses on the way somewhere else, and a plan is a wall of
+ * names — the whole grid flickers while you reach for a dropdown. Two seconds
+ * is long enough that only a deliberate rest triggers it.
+ *
+ * Only the ARRIVAL waits. Leaving clears at once: a highlight that outlived
+ * the pointer would be answering about somebody you'd stopped looking at.
+ */
+export const HOVER_HIGHLIGHT_DELAY_MS = 2000;

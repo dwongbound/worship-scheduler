@@ -1,15 +1,16 @@
 // NextAuth configuration: username + password (credentials), plus optional
 // Google OAuth. Slack is NOT a login provider — it's a per-org integration
 // connected after login (see lib/slack + the /api/slack/* routes).
-import type { NextAuthOptions } from "next-auth";
+import type { NextAuthOptions, Session } from "next-auth";
 import { getServerSession } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { claimPlaceholder, findUserByEmail } from "./accountClaim";
 import { DUPLICATE_NAME_COOKIE, nameConflictRedirect } from "./nameConflict";
 import { findNameConflicts } from "./nameConflictStore";
+import { parseBearer, readMobileToken } from "./mobileToken";
 import { linkSlackIdForUser } from "./slack";
 import { prisma } from "./prisma";
 
@@ -31,40 +32,11 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials) {
         if (!credentials?.username || !credentials.password) return null;
-
-        // Exact match first, so an existing account always resolves to itself.
-        // Failing that, retry ignoring case: people type "Name.Kim@Gmail.com"
-        // at the login form for an account stored as "name.kim@gmail.com" —
-        // and every claimed placeholder has its lowercased email as username,
-        // which makes that mismatch the common case rather than a rare one.
-        // Google sign-in already matches case-insensitively (see signIn).
-        const identifier = credentials.username.trim();
-        const user =
-          (await prisma.user.findFirst({
-            where: { OR: [{ username: identifier }, { email: identifier }] },
-          })) ??
-          (await prisma.user.findFirst({
-            where: {
-              OR: [
-                { username: { equals: identifier, mode: "insensitive" } },
-                { email: { equals: identifier, mode: "insensitive" } },
-              ],
-            },
-          }));
-        if (!user) return null;
-
-        // A placeholder (imported roster row) has no usable password and isn't
-        // a real account yet — it's claimed by signing UP with its email, not
-        // signed into. bcrypt would reject its empty hash anyway; this just
-        // makes the intent explicit.
-        if (user.isPlaceholder) return null;
-
-        const passwordOk = await bcrypt.compare(
-          credentials.password,
-          user.passwordHash
+        const user = await verifyCredentials(
+          credentials.username,
+          credentials.password
         );
-        if (!passwordOk) return null;
-
+        if (!user) return null;
         // Whatever we return here lands in the `user` arg of the jwt
         // callback below on first sign-in.
         return {
@@ -194,10 +166,61 @@ export const authOptions: NextAuthOptions = {
   },
 };
 
-/** Convenience: current session user (or null) for API routes. */
+/**
+ * The account a username-or-email + password signs into, or null. ONE check
+ * shared by the web's credentials provider and the iOS app's
+ * `POST /api/mobile/session`, so the two doors can't come to disagree about
+ * who may sign in (case-insensitive retry, placeholders refused, bcrypt).
+ */
+export async function verifyCredentials(
+  identifier: string,
+  password: string
+) {
+  // Exact match first, so an existing account always resolves to itself.
+  // Failing that, retry ignoring case: people type "Name.Kim@Gmail.com"
+  // at the login form for an account stored as "name.kim@gmail.com" —
+  // and every claimed placeholder has its lowercased email as username,
+  // which makes that mismatch the common case rather than a rare one.
+  // Google sign-in already matches case-insensitively (see signIn).
+  const id = identifier.trim();
+  const user =
+    (await prisma.user.findFirst({
+      where: { OR: [{ username: id }, { email: id }] },
+    })) ??
+    (await prisma.user.findFirst({
+      where: {
+        OR: [
+          { username: { equals: id, mode: "insensitive" } },
+          { email: { equals: id, mode: "insensitive" } },
+        ],
+      },
+    }));
+  if (!user) return null;
+
+  // A placeholder (imported roster row) has no usable password and isn't
+  // a real account yet — it's claimed by signing UP with its email, not
+  // signed into. bcrypt would reject its empty hash anyway; this just
+  // makes the intent explicit.
+  if (user.isPlaceholder) return null;
+
+  const passwordOk = await bcrypt.compare(
+    password,
+    user.passwordHash
+  );
+  if (!passwordOk) return null;
+
+  return user;
+}
+
+/**
+ * Convenience: current session user (or null) for API routes. The web app's
+ * cookie session first; failing that, the iOS app's `Authorization: Bearer`
+ * token (lib/mobileToken.ts), which is the same NextAuth JWT carried in a
+ * header — so every route serves the app without knowing it exists.
+ */
 export async function getSessionUser() {
   const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return null;
+  if (!session?.user?.id) return getBearerUser();
   // The JWT stays cryptographically valid even after its user row is gone
   // (e.g. the account was deleted, or a dev reseed rebuilt the table with new
   // ids). Re-check the id against the db so a "ghost" session is treated as
@@ -209,6 +232,37 @@ export async function getSessionUser() {
   });
   if (!exists) return null;
   return session.user;
+}
+
+/**
+ * The user an `Authorization: Bearer` token names, held to the same rule as a
+ * cookie session: a token whose user row is gone is signed out. Outside a
+ * request scope (`headers()` throws) there is no header, so no user.
+ */
+async function getBearerUser(): Promise<Session["user"] | null> {
+  let header: string | null = null;
+  try {
+    header = (await headers()).get("authorization");
+  } catch {
+    return null;
+  }
+  const user = await readMobileToken(
+    parseBearer(header),
+    process.env.NEXTAUTH_SECRET
+  );
+  if (!user) return null;
+  const exists = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { id: true },
+  });
+  if (!exists) return null;
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    memberships: user.memberships,
+    isSuperAdmin: isSuperAdmin(user.email),
+  };
 }
 
 // Admin checks are per-org now — see requireOrgAdmin / requireOrgAdminFor in
