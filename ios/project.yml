@@ -40,7 +40,16 @@ targets:
       properties:
         com.apple.developer.applesignin:
           - Default
+    # Debug only: where the API lives while developing (`./use-env dev`).
+    configFiles:
+      Debug: Config/Debug.xcconfig
     settings:
+      configs:
+        Debug:
+          # Merged with the generated Info.plist. Carries the dev server's URL
+          # and the one ATS allowance that lets the simulator reach
+          # http://localhost. Release has neither.
+          INFOPLIST_FILE: Config/Info-Debug.plist
       base:
         # CHANGE THIS before you touch App Store Connect — the bundle id is
         # the app's identity there and can never be reused once registered.

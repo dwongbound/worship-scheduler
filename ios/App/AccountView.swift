@@ -22,10 +22,17 @@ struct AccountView: View {
           Button {
             openURL(AppConfig.baseURL.appending(path: "profile"))
           } label: {
-            Label("Edit profile on tapworship.com", systemImage: "safari")
+            Label("Edit profile on the web", systemImage: "safari")
           }
         } footer: {
-          Text("Availability, calendar invites, Slack and your password are managed on the web for now.")
+          Text("Calendar invites, Slack and your password are managed on the web for now.")
+        }
+        if AppConfig.isDevServer {
+          Section {
+            LabeledContent("Server", value: AppConfig.baseURL.absoluteString)
+          } footer: {
+            Text("This is a development build. It isn't talking to tapworship.com.")
+          }
         }
         Section {
           Button("Sign out", role: .destructive) { confirmSignOut = true }

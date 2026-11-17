@@ -23,6 +23,8 @@ struct ApprovalsView: View {
     NavigationStack {
       content
         .navigationTitle("Approvals")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { AdminSectionPicker() }
         .toolbar { AdminOrgPicker() }
         .navigationDestination(for: String.self) { id in
           ApprovalDetailView(
@@ -258,6 +260,39 @@ struct SetRefRow: View {
   }
 }
 
+/// Approvals · Team, in the navigation bar where the title would be. Both
+/// halves of the Admin tab carry it, so it stays put while the list under it
+/// changes.
+struct AdminSectionPicker: ToolbarContent {
+  @Environment(AppModel.self) private var model
+
+  var body: some ToolbarContent {
+    ToolbarItem(placement: .principal) {
+      Picker("Section", selection: Binding(get: { model.adminSection }, set: { model.adminSection = $0 })) {
+        ForEach(AdminSection.allCases) { section in
+          Text(section == .approvals && model.pendingApprovals > 0 ? "Approvals (\(model.pendingApprovals))" : section.rawValue)
+            .tag(section)
+        }
+      }
+      .pickerStyle(.segmented)
+      .frame(maxWidth: 260)
+    }
+  }
+}
+
+/// Approvals and Team as one tab, so the app stays at five. Each half keeps
+/// its own navigation stack; the picker in the bar switches between them.
+struct AdminView: View {
+  @Environment(AppModel.self) private var model
+
+  var body: some View {
+    switch model.adminSection {
+    case .approvals: ApprovalsView()
+    case .team: TeamView()
+    }
+  }
+}
+
 /// The org switcher both admin tabs share. Hidden with one org, since a menu
 /// of one choice is noise.
 struct AdminOrgPicker: ToolbarContent {
@@ -278,6 +313,11 @@ struct AdminOrgPicker: ToolbarContent {
       }
     }
   }
+}
+
+#Preview("Admin tab") {
+  AdminView()
+    .environment(AppModel.adminPreview())
 }
 
 #Preview("Approvals") {

@@ -1,0 +1,9 @@
+// Debug builds only: where the app's API lives while developing.
+//
+// Empty here means "production". `./use-env dev` writes Local.xcconfig next to
+// this file from the web app's env/dev.env, and that file (gitignored) wins.
+// Release builds never read any of this.
+TAPWORSHIP_API_URL =
+GOOGLE_IOS_CLIENT_ID =
+
+#include? "Local.xcconfig"

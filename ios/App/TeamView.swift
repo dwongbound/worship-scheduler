@@ -23,6 +23,8 @@ struct TeamView: View {
     NavigationStack {
       content
         .navigationTitle("Team")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { AdminSectionPicker() }
         .toolbar { AdminOrgPicker() }
         .navigationDestination(for: String.self) { id in
           MemberDetailView(

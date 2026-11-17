@@ -7,6 +7,13 @@ import TapWorshipKit
 /// A 401 from ANY request lands in `handle(_:)`, which signs out — the token
 /// expired, was revoked by a secret rotation, or its account is gone, and in
 /// every case the only way forward is the sign-in screen.
+/// The two things an admin does from a phone, as one tab.
+enum AdminSection: String, CaseIterable, Identifiable {
+  case approvals = "Approvals"
+  case team = "Team"
+  var id: String { rawValue }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -84,6 +91,7 @@ final class AppModel {
     adminOrgs = nil
     adminOrgID = nil
     pendingApprovals = 0
+    adminSection = .approvals
   }
 
   // MARK: Admin
@@ -95,8 +103,10 @@ final class AppModel {
   /// Which org the admin tabs are looking at. Shared, so switching on one
   /// tab switches the other — two tabs on two orgs would read as a bug.
   var adminOrgID: String?
-  /// The Approvals tab's badge.
+  /// The Admin tab's badge.
   var pendingApprovals = 0
+  /// Which half of the Admin tab is showing.
+  var adminSection = AdminSection.approvals
 
   var isAdminAnywhere: Bool {
     if let adminOrgs { return !adminOrgs.isEmpty }

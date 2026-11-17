@@ -13,7 +13,17 @@ struct SessionStore: Sendable {
   private let service = "com.tapworship.session"
   private let account = "current"
 
+  /// The session this launch signed in with, held in memory as well. If the
+  /// Keychain write fails (an unsigned build, or a locked keychain) the app
+  /// still has its token until it quits, instead of signing in and then
+  /// 401ing on every request.
+  private static let memory = MemoryCopy()
+
   func load() -> MobileSession? {
+    keychainLoad() ?? Self.memory.value
+  }
+
+  private func keychainLoad() -> MobileSession? {
     var query = baseQuery
     query[kSecReturnData as String] = true
     query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -25,8 +35,9 @@ struct SessionStore: Sendable {
   }
 
   func save(_ session: MobileSession) {
-    guard let data = try? TapWorship.makeEncoder().encode(session) else { return }
     clear()
+    Self.memory.value = session
+    guard let data = try? TapWorship.makeEncoder().encode(session) else { return }
     var item = baseQuery
     item[kSecValueData as String] = data
     item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
@@ -34,6 +45,7 @@ struct SessionStore: Sendable {
   }
 
   func clear() {
+    Self.memory.value = nil
     SecItemDelete(baseQuery as CFDictionary)
   }
 
@@ -43,5 +55,17 @@ struct SessionStore: Sendable {
       kSecAttrService as String: service,
       kSecAttrAccount as String: account,
     ]
+  }
+}
+
+/// A lock-guarded slot, so the API client's token closure can read it from
+/// any thread.
+private final class MemoryCopy: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: MobileSession?
+
+  var value: MobileSession? {
+    get { lock.withLock { stored } }
+    set { lock.withLock { stored = newValue } }
   }
 }

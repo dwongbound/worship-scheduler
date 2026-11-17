@@ -126,8 +126,39 @@ public struct ApiSet: Codable, Hashable, Identifiable, Sendable {
   public let assignments: [ApiAssignment]
   public let songs: [ApiSong]?
   public let spotifyPlaylistUrl: String?
+  /// Rehearsals. Never drawn on the calendar; a set's page is their one home.
+  public let practices: [ApiPractice]?
+  /// Teams lending people to this set (lib/guestTeams.ts).
+  public let guestTeams: [ApiGuestTeam]?
 
   /// When the set ends — the server stores a start plus a duration, never an
   /// end, so every reader derives this the same way.
   public var endsAt: Date { startsAt.addingTimeInterval(TimeInterval(durationMinutes * 60)) }
+}
+
+/// One rehearsal on a set: a start and an END, never a duration.
+public struct ApiPractice: Codable, Hashable, Identifiable, Sendable {
+  public let id: String
+  public let startsAt: Date
+  public let endsAt: Date
+}
+
+/// One borrowed role: a fixed count of seats, or everyone who's free.
+public struct GuestRoleSpec: Codable, Hashable, Sendable {
+  public let role: RoleKey
+  public let count: Int?
+  public let allAvailable: Bool?
+
+  /// Seats still empty. An unbounded seat has no target, so it is never short.
+  public func openSeats(filled: Int) -> Int {
+    if allAvailable == true { return 0 }
+    return max(0, (count ?? 0) - filled)
+  }
+}
+
+public struct ApiGuestTeam: Codable, Hashable, Identifiable, Sendable {
+  public let id: String
+  public let teamId: String
+  public let roles: [GuestRoleSpec]
+  public let team: ApiTeam?
 }
