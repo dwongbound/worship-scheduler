@@ -599,6 +599,31 @@ do {
   print("  ✗ set page extras threw: \(error)")
 }
 
+section("profile")
+do {
+  let meJSON = #"{"username":"bob","name":"Bob Baker","email":"bob@example.com","dailyDigest":true,"calendarInvites":true,"calendarInviteEmails":false,"calendarInviteEmail":null,"hasPassword":true,"memberships":[{"orgId":"o1","orgName":"Sunday Church","isAdmin":false,"slackUserId":null,"orgSlackConnected":false}],"teams":[{"id":"t1","name":"Sunday Team","orgId":"o1","roles":["DRUMS","WORSHIP_LEADER","GONE"],"catalog":[{"key":"WORSHIP_LEADER","label":"Worship Leader","defaultCount":1,"adminOnly":false,"order":0},{"key":"DRUMS","label":"Drums","defaultCount":1,"adminOnly":false,"order":3}],"active":false}]}"#
+  let me = try TapWorship.makeDecoder().decode(ApiProfile.self, from: Data(meJSON.utf8))
+  check("/api/me decodes", me.name == "Bob Baker" && me.hasPassword && me.teams.first?.active == false)
+  check("my roles in the team's order, a deleted one still named", me.teams[0].roleLabels.prefix(2) == ["Worship Leader", "Drums"] && me.teams[0].roleLabels.count == 3)
+  check("invites go to the email unless overridden", me.inviteAddress == "bob@example.com")
+  check("team's org by name", me.orgName(for: me.teams[0]) == "Sunday Church")
+  var update = ProfileUpdate(keeping: me)
+  update.dailyDigest = false
+  let body = String(data: try TapWorship.makeEncoder().encode(update), encoding: .utf8) ?? ""
+  check("a switch save keeps name and email, sends only that switch",
+        body.contains("\"name\":\"Bob Baker\"") && body.contains("bob@example.com") && body.contains("\"dailyDigest\":false") && !body.contains("calendarInvites") && !body.contains("password"))
+  var noEmail = update; noEmail.email = nil
+  let nullBody = String(data: try TapWorship.makeEncoder().encode(noEmail), encoding: .utf8) ?? ""
+  check("no email is sent as null, not left out", nullBody.contains("\"email\":null"))
+  check("password rules", ProfileRules.passwordProblem("short", confirm: "short") != nil
+        && ProfileRules.passwordProblem("longenough", confirm: "different") != nil
+        && ProfileRules.passwordProblem("longenough", confirm: "longenough") == nil)
+  check("blank name refused, blank email is none", ProfileRules.cleanName("  ") == nil && ProfileRules.cleanEmail(" ") == nil && ProfileRules.cleanName(" Bob ") == "Bob")
+} catch {
+  failures += 1
+  print("  ✗ profile threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

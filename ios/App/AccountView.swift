@@ -5,7 +5,6 @@ import TapWorshipKit
 /// lives on the web's /profile for now — linked rather than half-copied.
 struct AccountView: View {
   @Environment(AppModel.self) private var model
-  @Environment(\.openURL) private var openURL
   @State private var confirmSignOut = false
   @State private var deleting = false
   @State private var joining = false
@@ -21,13 +20,13 @@ struct AccountView: View {
           }
         }
         Section {
-          Button {
-            openURL(AppConfig.baseURL.appending(path: "profile"))
+          NavigationLink {
+            ProfileView()
           } label: {
-            Label("Edit profile on the web", systemImage: "safari")
+            Label("Profile", systemImage: "person.text.rectangle")
           }
         } footer: {
-          Text("Calendar invites, Slack and your password are managed on the web for now.")
+          Text("Name, email, password, your teams, calendar invites and the morning summary.")
         }
         Section {
           Button {

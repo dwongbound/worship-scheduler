@@ -63,6 +63,19 @@ final class AppModel {
 
   /// Redeem an org key. The token's memberships are only hints, so the new
   /// one is added to the saved session here rather than minting a new token.
+  /// After a name change on Profile, so Account shows it without signing in
+  /// again (the token's name is only a hint; the server already has it).
+  func renameSession(to name: String) {
+    guard let current = session else { return }
+    let updated = MobileSession(
+      token: current.token,
+      expiresAt: current.expiresAt,
+      user: SessionUser(id: current.user.id, name: name, email: current.user.email, memberships: current.user.memberships)
+    )
+    store.save(updated)
+    session = updated
+  }
+
   @discardableResult
   func joinOrg(key: String) async throws -> ApiOrgRef {
     let org = try await api.joinOrg(key: key)
