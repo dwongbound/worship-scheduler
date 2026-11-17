@@ -109,3 +109,37 @@ test("tablet follows a Preview Mode draft link", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText(/too wide for a phone screen/i)).toHaveCount(0);
 });
+
+test("the set time form keeps its two-column rows at tablet width", async ({
+  page,
+}) => {
+  // The other half of the phone fix: the Start/End times stack below `sm` so
+  // a phone's wide `type="time"` control can't run off the modal, and they
+  // must go back SIDE BY SIDE from `sm` up — which is every tablet and every
+  // desktop. Checked here because this is the narrowest width where that is
+  // still true.
+  await login(page, "admin");
+  await page.goto("/create");
+  await page.getByRole("button", { name: "Add weekly set time" }).click();
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  const start = (await modal.getByLabel("Start time").boundingBox())!;
+  const end = (await modal.getByLabel("End time").boundingBox())!;
+  expect(end.x).toBeGreaterThan(start.x + start.width - 1);
+  expect(Math.round(end.y)).toBe(Math.round(start.y));
+
+  // Same row for the Slack channel lead time and the team, and nothing in the
+  // form runs off the side of the modal at this width either.
+  const lead = (await modal.getByLabel("Auto Create Slack Channel").boundingBox())!;
+  const team = (await modal.getByLabel("Team").boundingBox())!;
+  expect(team.x).toBeGreaterThan(lead.x + lead.width - 1);
+
+  const overflowing = await modal.evaluate((dialog: HTMLElement) => {
+    const right = dialog.getBoundingClientRect().right;
+    return [...dialog.querySelectorAll("input, select")]
+      .filter((el) => el.getBoundingClientRect().right > right + 1)
+      .map((el) => (el as HTMLElement).getAttribute("type") ?? el.tagName);
+  });
+  expect(overflowing).toEqual([]);
+});

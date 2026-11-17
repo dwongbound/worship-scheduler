@@ -4,7 +4,7 @@
 // set-manager points at the set's ROW, so the button on it (take, accept,
 // confirm) is what you land next to.
 import { expect, test } from "@playwright/test";
-import { login } from "./helpers";
+import { gotoReady, login } from "./helpers";
 
 test("a ?set= link rings the row on My Sets instead of opening it", async ({
   page,
@@ -49,4 +49,65 @@ test("a link to a set nobody can see explains itself", async ({ page }) => {
   // calendar with no explanation.
   await expect(page.getByText("That set couldn't be opened")).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("a set opened by a ?set= link can be closed again", async ({ page }) => {
+  // The calendar-invite case. The modal's every exit drops the param, and
+  // dropping it is what closes the modal — so a navigation the router quietly
+  // discards leaves the set open with no way out (lib/urlParam.ts).
+  await login(page, "carol");
+  await page.goto("/set-manager");
+  const setId = await page
+    .locator("[data-set-row]")
+    .first()
+    .getAttribute("data-set-row");
+
+  await page.goto(`/calendar?set=${setId}`);
+  const modal = page.getByRole("dialog");
+  await expect(modal).toBeVisible();
+
+  await modal.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  // And the param is gone, so a refresh doesn't reopen what you just closed.
+  await expect.poll(() => new URL(page.url()).search).toBe("");
+});
+
+test("Escape closes a linked set too", async ({ page }) => {
+  // Same guard for the other exits: the ✕, Escape and the backdrop all run
+  // the same close, so one of them standing in for the rest is enough.
+  await login(page, "carol");
+  await page.goto("/set-manager");
+  const setId = await page
+    .locator("[data-set-row]")
+    .first()
+    .getAttribute("data-set-row");
+
+  await page.goto(`/calendar?set=${setId}`);
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("a set opened from the grid puts its link in the address bar", async ({
+  page,
+}) => {
+  // The other half: opening a set MIRRORS its id into the URL, which is what
+  // makes the address bar shareable — and the same discarded navigation meant
+  // the modal opened over an unchanged URL.
+  await login(page, "admin");
+  await gotoReady(page, "/calendar");
+
+  // A set's own chip, by the title it carries ("<label> · <time>") — a day
+  // cell holds an admin's "add a set" button too, and that opens a different
+  // modal. The wait is for the sets to arrive rather than an empty month.
+  const chip = page.locator('[data-date] button[title*="\u00b7"]').first();
+  await expect(chip).toBeVisible();
+  await chip.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect.poll(() => new URL(page.url()).searchParams.get("set")).toBeTruthy();
+
+  // And closing clears it again.
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect.poll(() => new URL(page.url()).search).toBe("");
 });

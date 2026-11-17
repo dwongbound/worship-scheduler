@@ -25,6 +25,26 @@ describe("teamRosterText", () => {
   it("returns an empty string for no assignments", () => {
     expect(teamRosterText([])).toBe("");
   });
+
+  it("marks the set's MD, in whichever role they are playing", () => {
+    const roster = [
+      { role: "KEYS", user: { id: "u1", name: "Bob" } },
+      { role: "VOCALS", user: { id: "u2", name: "Carol" } },
+    ];
+    const text = teamRosterText(roster, undefined, undefined, "u1");
+    expect(text).toContain("Bob (MD)");
+    // Only the MD is marked, and only once.
+    expect(text).not.toContain("Carol (MD)");
+    expect(text.match(/\(MD\)/g)).toHaveLength(1);
+  });
+
+  it("marks nobody when the set has no MD, or the names carry no ids", () => {
+    const roster = [{ role: "KEYS", user: { id: "u1", name: "Bob" } }];
+    expect(teamRosterText(roster, undefined, undefined, null)).not.toContain("(MD)");
+    expect(
+      teamRosterText([{ role: "KEYS", user: { name: "Bob" } }], undefined, undefined, "u1")
+    ).not.toContain("(MD)");
+  });
 });
 
 describe("weeklySummaryText", () => {

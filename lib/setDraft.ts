@@ -196,7 +196,7 @@ export function describeSetChanges(
     lines.push(after.isPrivate ? "Made the set private" : "Made the set visible to the org");
   }
   if (before.groupChatLeadDays !== after.groupChatLeadDays) {
-    lines.push(`Auto group chat: ${leadLabel(after.groupChatLeadDays)}`);
+    lines.push(`Auto Create Slack Channel: ${leadLabel(after.groupChatLeadDays)}`);
   }
 
   return lines;
