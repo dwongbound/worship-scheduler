@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(FoundationNetworking)
+// Linux keeps URLSession/URLRequest in a separate module; on Apple platforms
+// they're part of Foundation and this import doesn't exist.
+import FoundationNetworking
+#endif
 import TapWorshipKit
 
 // The suite, as an executable. See Package.swift for why this isn't XCTest.
@@ -109,6 +114,214 @@ check("milliseconds parse", withMs != nil)
 check("plain parses", noMs != nil)
 check("same instant", withMs == noMs)
 check("nonsense is rejected, not silently zero", TapWorship.parseISO8601("not a date") == nil)
+
+// ── Sign-in ─────────────────────────────────────────────────────────────
+// What POST /api/mobile/session answers (app/api/mobile/session/route.ts).
+section("decoding MobileSession")
+let sessionJSON = """
+{ "token": "eyJ.abc.def", "expiresAt": "2026-12-11T02:00:00.000Z",
+  "user": { "id": "u_1", "name": "Bob Baker", "email": null,
+            "memberships": [ { "orgId": "o_1", "isAdmin": false } ] } }
+"""
+do {
+  let s = try decoder.decode(MobileSession.self, from: Data(sessionJSON.utf8))
+  check("token", s.token == "eyJ.abc.def")
+  check("null email", s.user.email == nil)
+  check("membership", s.user.memberships.first?.orgId == "o_1")
+  check("not expired before expiresAt", !s.isExpired(now: s.expiresAt.addingTimeInterval(-1)))
+  check("expired at expiresAt", s.isExpired(now: s.expiresAt))
+  check("has an org", !s.user.hasNoOrg)
+  // The Keychain stores it as JSON through our own encoder; it must come back.
+  let again = try decoder.decode(MobileSession.self, from: TapWorship.makeEncoder().encode(s))
+  check("round-trips through the app's encoder", again == s)
+} catch {
+  failures += 1
+  print("  ✗ session failed to decode: \(error)")
+}
+
+// ── Requests ────────────────────────────────────────────────────────────
+section("APIClient.makeRequest")
+let base = URL(string: "https://tapworship.example")!
+let signedIn = APIClient(baseURL: base, token: { "tok123" }, transport: { _ in fatalError("no network in Checks") })
+let signedOut = APIClient(baseURL: base, token: { nil }, transport: { _ in fatalError("no network in Checks") })
+do {
+  let get = try signedIn.makeRequest("GET", "/api/assignments")
+  check("absolute url", get.url?.absoluteString == "https://tapworship.example/api/assignments")
+  check("bearer header", get.value(forHTTPHeaderField: "Authorization") == "Bearer tok123")
+  check("GET has no body", get.httpBody == nil)
+  let anonymous = try signedOut.makeRequest("GET", "/api/me")
+  check("no token, no header", anonymous.value(forHTTPHeaderField: "Authorization") == nil)
+  let login = try signedIn.makeRequest("POST", "/api/mobile/session", body: ["username": "bob"], authorized: false)
+  check("sign-in never sends an old token", login.value(forHTTPHeaderField: "Authorization") == nil)
+  check("json content type", login.value(forHTTPHeaderField: "Content-Type") == "application/json")
+} catch {
+  failures += 1
+  print("  ✗ makeRequest threw: \(error)")
+}
+
+section("APIClient.check (status codes)")
+func thrown(_ status: Int, _ body: String = "", authorized: Bool = true) -> APIError? {
+  do { try APIClient.check(status: status, data: Data(body.utf8), authorized: authorized); return nil }
+  catch { return error as? APIError }
+}
+check("200 passes", thrown(200) == nil)
+check("204 passes", thrown(204) == nil)
+check("401 signs out", thrown(401, #"{"error":"Unauthorized"}"#) == .unauthorized)
+check("401 on sign-in keeps the server's words",
+      thrown(401, #"{"error":"That username or password isn't right"}"#, authorized: false)
+        == .server(status: 401, message: "That username or password isn't right"))
+check("400 keeps the message", thrown(400, #"{"error":"Unknown action"}"#) == .server(status: 400, message: "Unknown action"))
+check("500 without json", thrown(500, "<html>") == .server(status: 500, message: nil))
+check("a server message is shown as-is", APIError.server(status: 400, message: "Nope").message == "Nope")
+check("no message falls back to words", !APIError.server(status: 500, message: nil).message.isEmpty)
+
+// ── My Sets ─────────────────────────────────────────────────────────────
+// GET /api/assignments: the set row WITHOUT a roster, plus `pendingSwap`.
+section("My Sets")
+let mineJSON = """
+[
+  { "id": "a_1", "role": "KEYS", "status": "PENDING", "pendingSwap": null,
+    "setId": "set_1", "userId": "u_1",
+    "set": { "id": "set_1", "label": "Sunday", "startsAt": "2026-11-15T17:00:00.000Z",
+             "durationMinutes": 90, "notes": null, "isPrivate": false,
+             "org": { "id": "o_1", "name": "Grace Chapel" } } },
+  { "id": "a_2", "role": "VOCALS", "status": "CONFIRMED", "pendingSwap": null,
+    "set": { "id": "set_1", "label": "Sunday", "startsAt": "2026-11-15T17:00:00.000Z",
+             "durationMinutes": 90, "notes": null, "isPrivate": false,
+             "org": { "id": "o_1", "name": "Grace Chapel" } } },
+  { "id": "a_3", "role": "SOUND_BOOTH", "status": "PENDING_SWAP",
+    "pendingSwap": { "proposalId": "p_1", "isRequester": true },
+    "set": { "id": "set_0", "label": null, "startsAt": "2026-11-12T03:00:00Z",
+             "durationMinutes": 60, "notes": "Bring a capo" } }
+]
+"""
+do {
+  let mine = try decoder.decode([ApiMyAssignment].self, from: Data(mineJSON.utf8))
+  check("three seats", mine.count == 3)
+  check("pendingSwap", mine[2].pendingSwap?.isRequester == true)
+  check("org absent is fine", mine[2].set.org == nil)
+  let groups = MySets.grouped(mine)
+  check("two sets, one per set", groups.count == 2)
+  check("soonest first", groups.first?.set.id == "set_0")
+  check("both roles on one set", groups.last?.seats.map(\.role) == ["KEYS", "VOCALS"])
+  check("a pending seat flags its set", groups.last?.needsAttention == true)
+  check("no pending seat, no flag", groups.first?.needsAttention == false)
+} catch {
+  failures += 1
+  print("  ✗ my assignments failed to decode: \(error)")
+}
+check("pending: confirm + request cover", MySets.actions(for: .pending) == [.confirm, .requestSwap])
+check("confirmed: request cover", MySets.actions(for: .confirmed) == [.requestSwap])
+check("asking: cancel cover", MySets.actions(for: .swapRequested) == [.cancelSwap])
+check("status words match the web", MySets.statusLabel(.pending) == "Pending confirmation")
+check("built-in role label", RoleLabels.label(for: "VOCALS") == "Vox")
+check("unknown role is humanized", RoleLabels.label(for: "SOUND_BOOTH") == "Sound Booth")
+check("the team's own label wins", RoleLabels.label(for: "KEYS", in: [
+  TeamRoleDef(key: "KEYS", label: "Piano", defaultCount: 1, adminOnly: false, order: 0),
+]) == "Piano")
+check("PATCH body uses the server's action names", AssignmentAction.requestSwap.rawValue == "requestSwap")
+
+// ── Google, Apple, deletion ─────────────────────────────────────────────
+section("Google OAuth (PKCE)")
+let gid = "123-abc.apps.googleusercontent.com"
+check("redirect scheme is the reversed client id", GoogleOAuth.redirectScheme(clientID: gid) == "com.googleusercontent.apps.123-abc")
+check("redirect uri", GoogleOAuth.redirectURI(clientID: gid) == "com.googleusercontent.apps.123-abc:/oauthredirect")
+let authURL = GoogleOAuth.authorizationURL(clientID: gid, codeChallenge: "chal", state: "st8")
+let authItems = URLComponents(url: authURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+func item(_ n: String) -> String? { authItems.first { $0.name == n }?.value }
+check("auth url host", authURL.host == "accounts.google.com")
+check("S256 challenge", item("code_challenge_method") == "S256" && item("code_challenge") == "chal")
+check("asks for openid + email", item("scope") == "openid email profile")
+check("carries state", item("state") == "st8")
+let cb = URL(string: "com.googleusercontent.apps.123-abc:/oauthredirect?state=st8&code=4/0Ab+x")!
+check("reads the code", GoogleOAuth.readCallback(cb, expectedState: "st8") == .code("4/0Ab+x"))
+check("wrong state is refused", GoogleOAuth.readCallback(cb, expectedState: "other") == .failed)
+check("access_denied is a cancel", GoogleOAuth.readCallback(URL(string: "x:/r?error=access_denied")!, expectedState: "st8") == .cancelled)
+let form = String(decoding: GoogleOAuth.tokenRequestBody(clientID: gid, code: "4/0Ab+x", codeVerifier: "v"), as: UTF8.self)
+check("token body escapes +", form.contains("code=4/0Ab%2Bx"))
+check("token body has the verifier, no secret", form.contains("code_verifier=v") && !form.contains("secret"))
+check("base64url drops padding and swaps alphabet", GoogleOAuth.base64URL(Data([0xfb, 0xff])) == "-_8")
+
+section("social sign-in + deletion")
+check("409 with nameConflicts is its own error",
+      thrown(409, #"{"error":"exists","nameConflicts":[{"name":"Sam R","email":"sam@x.com"}]}"#, authorized: false)
+        == .nameConflicts([ExistingAccount(name: "Sam R", email: "sam@x.com")]))
+check("a plain 409 stays a server error", thrown(409, #"{"error":"Only admin"}"#) == .server(status: 409, message: "Only admin"))
+check("deletion phrase", AccountDeletion.matches(" DELETE ") && !AccountDeletion.matches("delete"))
+do {
+  let del = try signedIn.makeRequest("DELETE", "/api/me", body: ["confirm": AccountDeletion.phrase])
+  check("delete sends the phrase", String(decoding: del.httpBody ?? Data(), as: UTF8.self).contains("DELETE"))
+  check("delete is authorized", del.value(forHTTPHeaderField: "Authorization") == "Bearer tok123")
+} catch {
+  failures += 1
+  print("  ✗ delete request threw: \(error)")
+}
+
+section("admin: approvals, team")
+let approvalsJSON = """
+[
+  {"kind":"swap","id":"p1","role":"BASS","reason":"Away","createdAt":"2026-11-01T00:00:00.000Z",
+   "requester":{"id":"u1","name":"Ana"},"recipient":{"id":"u2","name":"Ben"},
+   "receive":{"id":"s1","label":null,"startsAt":"2026-11-22T17:00:00.000Z"},
+   "giveUp":{"id":"s2","label":"Youth","startsAt":"2026-11-15T17:00:00.000Z"}},
+  {"kind":"cover","id":"a9","role":"KEYS","reason":null,"createdAt":"2026-11-02T00:00:00.000Z",
+   "taker":{"id":"u3","name":"Cy"},"originalOwner":null,
+   "set":{"id":"s3","label":null,"startsAt":"2026-11-29T17:00:00.000Z"}}
+]
+"""
+do {
+  let items = try decoder.decode([ApiApproval].self, from: Data(approvalsJSON.utf8))
+  check("decodes both kinds", items.map(\.kind) == ["swap", "cover"])
+  check("swap's first date is the earlier set", ISO8601DateFormatter().string(from: items[0].firstDate) == "2026-11-15T17:00:00Z")
+  check("swap summary", items[0].summary.hasPrefix("Ana and Ben are trading"))
+  check("cover with no owner reads as someone", items[1].summary.hasPrefix("Cy is covering someone on"))
+  check("approval id", items[1].id == "a9")
+} catch {
+  failures += 1
+  print("  ✗ approvals threw: \(error)")
+}
+check("an unknown kind is refused",
+      (try? decoder.decode([ApiApproval].self, from: Data(#"[{"kind":"trade","id":"x","role":"BASS"}]"#.utf8))) == nil)
+
+let meJSON = #"{"name":"Dee","email":null,"hasPassword":true,"memberships":[{"orgId":"o2","orgName":"zion","isAdmin":true},{"orgId":"o1","orgName":"Grace","isAdmin":true},{"orgId":"o3","orgName":"Hope","isAdmin":false}]}"#
+if let me = try? decoder.decode(ApiMe.self, from: Data(meJSON.utf8)) {
+  check("adminOrgs drops non-admin orgs and sorts by name", me.adminOrgs.map(\.orgId) == ["o1", "o2"])
+} else {
+  failures += 1
+  print("  ✗ ApiMe didn't decode")
+}
+
+let band = ApiOrgTeam(id: "t1", name: "Band", orgId: "o1", roles: [])
+let youth = ApiOrgTeam(id: "t2", name: "Youth", orgId: "o1", roles: [])
+let people = [
+  ApiAdminUser(id: "u1", name: "José Ruiz", username: "jose", isMD: false, isAdmin: false,
+               teams: [ApiMemberTeam(id: "t1", name: "Band", roles: ["BASS"], active: false)]),
+  ApiAdminUser(id: "u2", name: "Kim", username: "kimk", isMD: true, isAdmin: true,
+               teams: [ApiMemberTeam(id: "t1", name: "Band", roles: ["KEYS"], active: true),
+                       ApiMemberTeam(id: "t2", name: "Youth", roles: [], active: true)]),
+  ApiAdminUser(id: "u3", name: "Lee", username: "lee", isMD: false, isAdmin: false, teams: []),
+]
+check("search ignores accents and case", TeamList.filter(people, query: " jose ").map(\.id) == ["u1"])
+check("search matches username", TeamList.filter(people, query: "KIMK").map(\.id) == ["u2"])
+check("blank search is everyone", TeamList.filter(people, query: "  ").count == 3)
+let sections = TeamList.byTeam(people, teams: [band, youth])
+check("sections by team, teamless last", sections.map(\.title) == ["Band", "Youth", "On no team"])
+check("someone on two teams shows in both", sections[0].members.count == 2 && sections[1].members.map(\.id) == ["u2"])
+check("empty teams are dropped", TeamList.byTeam([people[2]], teams: [band]).map(\.title) == ["On no team"])
+check("inactive everywhere", people[0].isInactiveEverywhere && !people[1].isInactiveEverywhere && !people[2].isInactiveEverywhere)
+
+do {
+  let patch = MemberPatch(teamActive: [.init(teamId: "t1", active: false)])
+  let req = try signedIn.makeRequest("PATCH", "/api/admin/users/u1", body: patch, orgId: "o1")
+  let body = String(decoding: req.httpBody ?? Data(), as: UTF8.self)
+  check("patch sends only what changed", body.contains("teamActive") && !body.contains("isAdmin") && !body.contains("teamIds"))
+  check("admin calls name their org", req.value(forHTTPHeaderField: "x-org-id") == "o1")
+  let plain = try signedIn.makeRequest("GET", "/api/assignments")
+  check("other calls carry no org header", plain.value(forHTTPHeaderField: "x-org-id") == nil)
+} catch {
+  failures += 1
+  print("  ✗ admin request threw: \(error)")
+}
 
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
