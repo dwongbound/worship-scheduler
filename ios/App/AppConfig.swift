@@ -64,4 +64,18 @@ enum AppConfig {
   /// True when this build isn't talking to production: the sign-in screen
   /// says so, so a dev build is never mistaken for the real thing.
   static var isDevServer: Bool { baseURL != productionURL }
+
+  /// Flip to true when the app is ready to change things on tapworship.com.
+  /// Until then a build pointed at production is a read-only preview: the
+  /// API client refuses every write (TapWorshipKit `ReadOnly`) and the
+  /// screens hide the buttons that would make one. Dev servers are unaffected.
+  static let allowProductionWrites = false
+
+  static var readOnly: Bool {
+    #if DEBUG
+    // Try the preview against a dev server: TAPWORSHIP_READ_ONLY=1 on the scheme.
+    if ProcessInfo.processInfo.environment["TAPWORSHIP_READ_ONLY"] == "1" { return true }
+    #endif
+    return !isDevServer && !allowProductionWrites
+  }
 }

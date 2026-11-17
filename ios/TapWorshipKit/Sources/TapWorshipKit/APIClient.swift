@@ -20,6 +20,9 @@ public enum APIError: Error, Equatable, Sendable {
   /// An answer arrived that doesn't match the shapes in Models.swift — a bug,
   /// on one side or the other.
   case decoding(String)
+  /// A read-only build refused to send a write (see `ReadOnly`). Nothing
+  /// reached the server.
+  case readOnly
   /// A new Google/Apple sign-in whose name matches someone already here —
   /// most likely the same person on another address. Ask before going on.
   case nameConflicts([ExistingAccount])
@@ -33,6 +36,7 @@ public enum APIError: Error, Equatable, Sendable {
     case .network: "Can't reach TapWorship. Check your connection and try again."
     case .decoding: "TapWorship sent something this version of the app doesn't understand. Updating the app may fix it."
     case .nameConflicts: "An account with that name already exists."
+    case .readOnly: "This is a read-only preview of TapWorship. Make this change on tapworship.com for now."
     }
   }
 }
@@ -42,15 +46,19 @@ public typealias HTTPTransport = @Sendable (URLRequest) async throws -> (Data, U
 
 public struct APIClient: Sendable {
   public let baseURL: URL
+  /// Refuse every write before it leaves the phone (see `ReadOnly`).
+  public let readOnly: Bool
   private let token: @Sendable () -> String?
   private let transport: HTTPTransport
 
   public init(
     baseURL: URL,
+    readOnly: Bool = false,
     token: @escaping @Sendable () -> String?,
     transport: @escaping HTTPTransport = { try await URLSession.shared.data(for: $0) }
   ) {
     self.baseURL = baseURL
+    self.readOnly = readOnly
     self.token = token
     self.transport = transport
   }
@@ -153,6 +161,7 @@ public struct APIClient: Sendable {
     authorized: Bool = true,
     orgId: String? = nil
   ) async throws -> T {
+    if readOnly && !ReadOnly.allows(method: method, path: path) { throw APIError.readOnly }
     let request = try makeRequest(method, path, body: body, authorized: authorized, orgId: orgId)
     let data: Data
     let response: URLResponse
@@ -182,5 +191,20 @@ public struct APIClient: Sendable {
       throw APIError.nameConflicts(conflicts)
     }
     throw APIError.server(status: status, message: message)
+  }
+}
+
+/// The read-only preview: what a build that mustn't write may still send.
+/// Reads, and signing in (which writes nothing but a token on the phone).
+/// Every other request is refused in `send` before it reaches the network,
+/// so a button the UI forgot to hide still can't change production.
+public enum ReadOnly {
+  static let signInPaths: Set<String> = ["/api/mobile/session", "/api/mobile/session/social"]
+
+  public static func allows(method: String, path: String) -> Bool {
+    let verb = method.uppercased()
+    if verb == "GET" || verb == "HEAD" { return true }
+    let bare = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
+    return verb == "POST" && signInPaths.contains(bare)
   }
 }

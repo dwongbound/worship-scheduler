@@ -43,7 +43,7 @@ struct CalendarView: View {
         ToolbarItem(placement: .topBarTrailing) {
           Button("Today") { goToToday() }
         }
-        if model.isAdminAnywhere {
+        if model.isAdminAnywhere && !model.readOnly {
           ToolbarItem(placement: .topBarTrailing) {
             Button {
               creatingSet = true
@@ -267,7 +267,9 @@ struct SetDetailView: View {
 
   var body: some View {
     if let set {
-      let isAdmin = model.isAdmin(of: set.org?.id)
+      // Everything below that writes is an admin's, so a read-only preview
+      // simply doesn't count anyone as one here.
+      let isAdmin = model.isAdmin(of: set.org?.id) && !model.readOnly
       List {
         Section {
           LabeledContent("Date", value: set.startsAt.formatted(.dateTime.weekday(.wide).month(.wide).day()))
@@ -294,7 +296,7 @@ struct SetDetailView: View {
         }
 
         let songs = (set.songs ?? []).sorted { $0.order < $1.order }
-        let canEditSongs = Setlist.canEdit(set, userId: model.session?.user.id, isOrgAdmin: isAdmin)
+        let canEditSongs = !model.readOnly && Setlist.canEdit(set, userId: model.session?.user.id, isOrgAdmin: isAdmin)
         if !songs.isEmpty || canEditSongs {
           Section {
             if songs.isEmpty {
@@ -338,7 +340,7 @@ struct SetDetailView: View {
         SetNotesSection(
           setId: set.id,
           currentNotes: set.notes,
-          canPost: SetNotes.canPost(on: set, userId: model.session?.user.id, isOrgAdmin: isAdmin)
+          canPost: !model.readOnly && SetNotes.canPost(on: set, userId: model.session?.user.id, isOrgAdmin: isAdmin)
         )
 
         if isAdmin {

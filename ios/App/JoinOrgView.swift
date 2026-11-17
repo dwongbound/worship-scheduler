@@ -11,7 +11,7 @@ struct JoinOrgView: View {
   @State private var errorTick = 0
   @FocusState private var focused: Bool
 
-  private var canJoin: Bool { !key.trimmingCharacters(in: .whitespaces).isEmpty && !joining }
+  private var canJoin: Bool { !key.trimmingCharacters(in: .whitespaces).isEmpty && !joining && !model.readOnly }
 
   var body: some View {
     NavigationStack {
@@ -20,7 +20,9 @@ struct JoinOrgView: View {
           VStack(alignment: .leading, spacing: 6) {
             Text("Join your team")
               .font(.title2.bold())
-            Text("Ask your worship team's admin for your organization's key, then enter it here.")
+            Text(model.readOnly
+                 ? "This read-only preview can't join an org. Join with your org's key on tapworship.com, then sign in here again."
+                 : "Ask your worship team's admin for your organization's key, then enter it here.")
               .font(.subheadline)
               .foregroundStyle(.secondary)
           }

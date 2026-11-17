@@ -33,9 +33,11 @@ struct AvailabilityView: View {
       content
         .navigationTitle("Availability")
         .toolbar {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button { adding = true } label: { Label("Add a block", systemImage: "plus") }
-              .disabled(phase != .loaded)
+          if !model.readOnly {
+            ToolbarItem(placement: .topBarTrailing) {
+              Button { adding = true } label: { Label("Add a block", systemImage: "plus") }
+                .disabled(phase != .loaded)
+            }
           }
         }
         .refreshable { await load() }
@@ -135,6 +137,14 @@ struct AvailabilityView: View {
               Label("Submitted", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .font(.subheadline.weight(.medium))
+            }
+            if model.readOnly {
+              if !done {
+                Label("Not submitted yet", systemImage: "circle.dashed")
+                  .foregroundStyle(.secondary)
+                  .font(.subheadline.weight(.medium))
+              }
+            } else if done {
               Button {
                 Task { await toggle(request, note: nil) }
               } label: {
@@ -156,7 +166,9 @@ struct AvailabilityView: View {
       } header: {
         Text("Asked for")
       } footer: {
-        Text("Block the days you can't serve in that window, then submit so your admin knows you're done.")
+        Text(model.readOnly
+             ? "Read-only preview: block days and submit on tapworship.com."
+             : "Block the days you can't serve in that window, then submit so your admin knows you're done.")
       }
     }
   }
@@ -206,9 +218,9 @@ struct AvailabilityView: View {
       .opacity(past ? 0.4 : 1)
     }
     .buttonStyle(.plain)
-    .disabled(past)
+    .disabled(past || model.readOnly)
     .contextMenu {
-      if !past {
+      if !past && !model.readOnly {
         if level != .full || Availability.tapBlocks(data.entries, on: ymd, calendar: calendar) {
           Button { setDay(ymd, blocked: true) } label: { Label("Block all day", systemImage: "nosign") }
         }
@@ -270,13 +282,15 @@ struct AvailabilityView: View {
         .frame(minHeight: 44, alignment: .leading)
         .accessibilityElement(children: .combine)
         .swipeActions(edge: .trailing) {
-          Button("Delete", role: .destructive) { delete(rule) }
+          if !model.readOnly {
+            Button("Delete", role: .destructive) { delete(rule) }
+          }
         }
       }
     } header: {
       Text("Every week")
     } footer: {
-      if !rules.isEmpty { Text("Swipe left on a block to delete it.") }
+      if !rules.isEmpty && !model.readOnly { Text("Swipe left on a block to delete it.") }
     }
   }
 
@@ -303,7 +317,9 @@ struct AvailabilityView: View {
           .frame(minHeight: 44, alignment: .leading)
           .accessibilityElement(children: .combine)
           .swipeActions(edge: .trailing) {
-            Button("Delete", role: .destructive) { delete(block) }
+            if !model.readOnly {
+              Button("Delete", role: .destructive) { delete(block) }
+            }
           }
         }
       }

@@ -123,7 +123,7 @@ struct MySetsView: View {
             SwapProposalRow(proposal: proposal, busy: busyID == proposal.id) { answer in
               Task { await respond(proposal, answer) }
             }
-            .disabled(busyID != nil)
+            .disabled(busyID != nil || model.readOnly)
           }
         } header: {
           Text("Swap requests")
@@ -143,7 +143,7 @@ struct MySetsView: View {
                 declineCover = cover
               }
             )
-            .disabled(busyID != nil)
+            .disabled(busyID != nil || model.readOnly)
           }
         } header: {
           Text("Cover needed")
@@ -156,13 +156,15 @@ struct MySetsView: View {
           ForEach(needsAnswer) { group in
             NavigationLink(value: group) { SetRow(group: group) }
               .swipeActions(edge: .leading) {
-                Button("Confirm") { Task { await confirmAll(group) } }
-                  .tint(.green)
+                if !model.readOnly {
+                  Button("Confirm") { Task { await confirmAll(group) } }
+                    .tint(.green)
+                }
               }
           }
           // The web's "Confirm all": one tap for every pending seat, offered
           // once there's more than one to answer.
-          if pendingCount > 1 {
+          if pendingCount > 1 && !model.readOnly {
             Button {
               Task { await confirmEverything() }
             } label: {
@@ -177,7 +179,7 @@ struct MySetsView: View {
         } header: {
           Text("Needs your answer")
         } footer: {
-          Text("Swipe right on a set to confirm it.")
+          Text(model.readOnly ? "Read-only preview: confirm on tapworship.com." : "Swipe right on a set to confirm it.")
         }
       }
       if !upcoming.isEmpty {
@@ -356,7 +358,7 @@ struct SetSeatsView: View {
               Spacer()
               StatusPill(status: seat.status)
             }
-            ForEach(MySets.actions(for: seat.status), id: \.self) { action in
+            ForEach(model.readOnly ? [] : MySets.actions(for: seat.status), id: \.self) { action in
               Button(role: action == .cancelSwap ? .destructive : nil) {
                 switch action {
                 case .confirm: run(seat, .confirm)
@@ -373,7 +375,7 @@ struct SetSeatsView: View {
               }
               .disabled(busy != nil)
             }
-            if MySets.canProposeSwap(seat.status) {
+            if !model.readOnly && MySets.canProposeSwap(seat.status) {
               Button {
                 proposeSwap(seat)
               } label: {
@@ -385,7 +387,7 @@ struct SetSeatsView: View {
               }
               .disabled(busy != nil)
             }
-            if seat.status == .pendingSwap, seat.pendingSwap?.isRequester == true {
+            if !model.readOnly, seat.status == .pendingSwap, seat.pendingSwap?.isRequester == true {
               Button(role: .destructive) {
                 busy = seat.id
                 Task {
@@ -414,7 +416,7 @@ struct SetSeatsView: View {
         SetNotesSection(
           setId: group.set.id,
           currentNotes: group.set.notes,
-          canPost: group.seats.contains { $0.role == "WORSHIP_LEADER" } || model.isAdmin(of: group.set.org?.id)
+          canPost: !model.readOnly && (group.seats.contains { $0.role == "WORSHIP_LEADER" } || model.isAdmin(of: group.set.org?.id))
         )
       }
       .listStyle(.insetGrouped)

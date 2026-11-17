@@ -667,6 +667,30 @@ do {
   print("  ✗ set editing threw: \(error)")
 }
 
+section("read-only preview")
+check("reads pass", ReadOnly.allows(method: "GET", path: "/api/sets?from=x") && ReadOnly.allows(method: "get", path: "/api/me"))
+check("signing in passes", ReadOnly.allows(method: "POST", path: "/api/mobile/session") && ReadOnly.allows(method: "POST", path: "/api/mobile/session/social"))
+check("every write is refused", !ReadOnly.allows(method: "PATCH", path: "/api/assignments/a1") && !ReadOnly.allows(method: "DELETE", path: "/api/me")
+      && !ReadOnly.allows(method: "PUT", path: "/api/me") && !ReadOnly.allows(method: "POST", path: "/api/orgs/join")
+      && !ReadOnly.allows(method: "POST", path: "/api/mobile/session/other"))
+do {
+  final class Box: @unchecked Sendable { var hits = 0 }
+  let box = Box()
+  let api = APIClient(baseURL: URL(string: "https://tapworship.com")!, readOnly: true, token: { "t" }) { request in
+    box.hits += 1
+    return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+  }
+  let semaphore = DispatchSemaphore(value: 0)
+  final class Result: @unchecked Sendable { var error: APIError? }
+  let result = Result()
+  Task {
+    do { try await api.deleteAccount(confirm: "DELETE") } catch let e as APIError { result.error = e } catch {}
+    semaphore.signal()
+  }
+  semaphore.wait()
+  check("a refused write never reaches the network", result.error == .readOnly && box.hits == 0)
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

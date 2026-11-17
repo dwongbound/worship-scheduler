@@ -54,19 +54,22 @@ struct ProfileView: View {
       Section {
         TextField("Name", text: $name)
           .textContentType(.name)
+          .disabled(model.readOnly)
           .submitLabel(.done)
         TextField("Email", text: $email)
           .textContentType(.emailAddress)
           .keyboardType(.emailAddress)
           .textInputAutocapitalization(.never)
           .autocorrectionDisabled()
-          .disabled(!me.hasPassword)
+          .disabled(!me.hasPassword || model.readOnly)
           .foregroundStyle(me.hasPassword ? .primary : .secondary)
       } header: {
         Text("Name and email")
       } footer: {
         if let saveError {
           Label(saveError, systemImage: "exclamationmark.circle").foregroundStyle(.red)
+        } else if model.readOnly {
+          Text("Read-only preview: edit your profile on tapworship.com.")
         } else if !me.hasPassword {
           Text("You sign in with Google or Apple, so your email comes from that account.")
         } else {
@@ -74,7 +77,7 @@ struct ProfileView: View {
         }
       }
 
-      if me.hasPassword {
+      if me.hasPassword && !model.readOnly {
         Section {
           Button("Change password") { changingPassword = true }
         }
@@ -119,11 +122,13 @@ struct ProfileView: View {
             get: { profile?.calendarInvites ?? true },
             set: { on in Task { await setInvites(on) } }
           ))
+          .disabled(model.readOnly)
           if me.calendarInvites {
             Toggle("Email me about changes", isOn: Binding(
               get: { profile?.calendarInviteEmails ?? true },
               set: { on in Task { await save { $0.calendarInviteEmails = on } } }
             ))
+            .disabled(model.readOnly)
           }
         } header: {
           Text("Google Calendar")
@@ -141,6 +146,7 @@ struct ProfileView: View {
           get: { profile?.dailyDigest ?? true },
           set: { on in Task { await save { $0.dailyDigest = on } } }
         ))
+        .disabled(model.readOnly)
       } footer: {
         Text("A message each morning when you're on a set that week.")
       }
@@ -159,7 +165,7 @@ struct ProfileView: View {
       ToolbarItem(placement: .confirmationAction) {
         if saving {
           ProgressView()
-        } else if nameChanged {
+        } else if nameChanged && !model.readOnly {
           Button("Save") { Task { await saveNameAndEmail() } }
             .disabled(ProfileRules.cleanName(name) == nil)
         }

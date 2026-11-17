@@ -29,7 +29,7 @@ final class AppModel {
     self.session = live
     // The client reads the token through the store rather than capturing it,
     // so signing in or out never needs a new client.
-    self.api = APIClient(baseURL: baseURL, token: { store.load()?.token })
+    self.api = APIClient(baseURL: baseURL, readOnly: AppConfig.readOnly, token: { store.load()?.token })
   }
 
   /// For previews: a model that is already signed in and never touches the
@@ -114,6 +114,9 @@ final class AppModel {
   /// The orgs I administer, by name, from GET /api/me. nil until loaded; the
   /// token's own `isAdmin` hints decide the tabs until then, so they don't
   /// pop in a beat after launch.
+  /// A read-only preview of production: screens hide what would write.
+  var readOnly: Bool { api.readOnly }
+
   /// How many pushed screens are showing; tab swipes are off while any is.
   var tabSwipePauses = 0
   var tabSwipePaused: Bool { tabSwipePauses > 0 }

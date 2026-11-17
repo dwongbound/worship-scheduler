@@ -29,6 +29,14 @@ struct AccountView: View {
         } footer: {
           Text("Name, email, password, your teams, calendar invites and the morning summary.")
         }
+        if model.readOnly {
+          Section {
+            LabeledContent("Mode", value: "Read-only preview")
+          } footer: {
+            Text("This build can look at everything on tapworship.com but can't change anything. Make changes on the website for now.")
+          }
+        }
+        if !model.readOnly {
         Section {
           Button {
             joining = true
@@ -41,6 +49,7 @@ struct AccountView: View {
           } else {
             Text("Got a key from another church or ministry? Enter it to join their team too.")
           }
+        }
         }
         if AppConfig.isDevServer {
           Section {
@@ -58,10 +67,12 @@ struct AccountView: View {
               Button("Sign out", role: .destructive) { model.signOut() }
             }
         }
-        Section {
-          Button("Delete account", role: .destructive) { deleting = true }
-        } footer: {
-          Text("Permanently deletes your account and everything on it.")
+        if !model.readOnly {
+          Section {
+            Button("Delete account", role: .destructive) { deleting = true }
+          } footer: {
+            Text("Permanently deletes your account and everything on it.")
+          }
         }
       }
       .listStyle(.insetGrouped)

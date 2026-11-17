@@ -187,6 +187,8 @@ struct MemberDetailView: View {
       Form {
         Section {
           LabeledContent("Username", value: user.username)
+        } footer: {
+          if model.readOnly { Text("Read-only preview: change access, teams and roles on tapworship.com.") }
         }
 
         Section {
@@ -203,6 +205,7 @@ struct MemberDetailView: View {
           teamSection(team, user: user)
         }
 
+        if !model.readOnly {
         Section {
           Button("Remove from Org", role: .destructive) { confirmRemove = true }
             .frame(minHeight: 44)
@@ -212,7 +215,9 @@ struct MemberDetailView: View {
                ? "To leave this org, ask another admin to remove you."
                : "Takes \(user.name) off every team and upcoming set in this org. Their account stays.")
         }
+        }
       }
+      .disabled(model.readOnly)
       .navigationTitle(user.name)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

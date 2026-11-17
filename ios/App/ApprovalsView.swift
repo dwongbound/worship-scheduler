@@ -89,12 +89,16 @@ struct ApprovalsView: View {
                 ApprovalRow(approval: approval, busy: busy.contains(approval.id))
               }
               .swipeActions(edge: .leading) {
-                Button("Approve") { Task { await decide(approval, .approve) } }
-                  .tint(.green)
+                if !model.readOnly {
+                  Button("Approve") { Task { await decide(approval, .approve) } }
+                    .tint(.green)
+                }
               }
               .swipeActions(edge: .trailing) {
-                Button("Reject") { confirmReject = approval }
-                  .tint(.red)
+                if !model.readOnly {
+                  Button("Reject") { confirmReject = approval }
+                    .tint(.red)
+                }
               }
               .disabled(busy.contains(approval.id))
             }
@@ -183,6 +187,7 @@ struct ApprovalRow: View {
 /// One handoff in full, with the two answers as real buttons for anyone who
 /// doesn't swipe.
 struct ApprovalDetailView: View {
+  @Environment(AppModel.self) private var model
   let approval: ApiApproval?
   let busy: Bool
   let decide: (ApiApproval, ApprovalDecision) async -> Void
@@ -211,6 +216,12 @@ struct ApprovalDetailView: View {
           Section("\(recipient.name) takes") { SetRefRow(set: receive) }
           Section("\(requester.name) takes") { SetRefRow(set: giveUp) }
         }
+        if model.readOnly {
+          Section {
+          } footer: {
+            Text("Read-only preview: approve or reject on tapworship.com.")
+          }
+        } else {
         Section {
           Button {
             Task { await decide(approval, .approve) }
@@ -234,6 +245,7 @@ struct ApprovalDetailView: View {
         }
         .disabled(busy)
         .listRowSeparator(.hidden)
+        }
       }
       .listStyle(.insetGrouped)
       .navigationTitle(approval.kind == "swap" ? "Swap" : "Cover")
