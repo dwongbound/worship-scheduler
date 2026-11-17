@@ -35,29 +35,31 @@ struct RootView: View {
 }
 
 /// Five tabs at most, which is what a tab bar holds without a "More" list:
-/// My Sets, Calendar, Availability, Account, and Admin for someone who is one
+/// Calendar, My Sets, Availability, Account, and Admin for someone who is one
 /// (Approvals and Team share it). The web's Create tab stays on the web:
 /// generating a schedule is a big-screen job, and the web refuses its review
 /// workspace at phone widths too.
 struct MainTabView: View {
   @Environment(AppModel.self) private var model
+  // Opens on My Sets even though Calendar sits first in the bar.
   @State private var selection: AppTab = .mySets
 
-  /// The tabs in bar order, Admin only for someone who is one.
+  /// The tabs in bar order — the web navbar's order (Calendar, My Sets,
+  /// Availability), Admin only for someone who is one.
   private var tabs: [AppTab] {
     model.isAdminAnywhere
-      ? [.mySets, .calendar, .availability, .admin, .account]
-      : [.mySets, .calendar, .availability, .account]
+      ? [.calendar, .mySets, .availability, .admin, .account]
+      : [.calendar, .mySets, .availability, .account]
   }
 
   var body: some View {
     TabView(selection: $selection) {
-      MySetsView()
-        .tabItem { Label("My Sets", systemImage: "music.note.list") }
-        .tag(AppTab.mySets)
       CalendarView()
         .tabItem { Label("Calendar", systemImage: "calendar") }
         .tag(AppTab.calendar)
+      MySetsView()
+        .tabItem { Label("My Sets", systemImage: "music.note.list") }
+        .tag(AppTab.mySets)
       AvailabilityView()
         .tabItem { Label("Availability", systemImage: "calendar.badge.clock") }
         .tag(AppTab.availability)
