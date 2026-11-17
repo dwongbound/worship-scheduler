@@ -52,50 +52,95 @@ struct MainTabView: View {
       : [.calendar, .mySets, .availability, .account]
   }
 
+  /// How far the visible tab is dragged sideways. Follows the finger during
+  /// a tab swipe, then slides the page out and the next one in.
+  @State private var dragX: CGFloat = 0
+  /// Decided once per drag: is this a tab swipe (sideways) or a scroll?
+  @State private var dragIsSwipe: Bool?
+  @State private var width: CGFloat = 400
+
   var body: some View {
     TabView(selection: $selection) {
-      CalendarView()
+      page(CalendarView())
         .tabItem { Label("Calendar", systemImage: "calendar") }
         .tag(AppTab.calendar)
-      MySetsView()
+      page(MySetsView())
         .tabItem { Label("My Sets", systemImage: "music.note.list") }
         .tag(AppTab.mySets)
-      AvailabilityView()
+      page(AvailabilityView())
         .tabItem { Label("Availability", systemImage: "calendar.badge.clock") }
         .tag(AppTab.availability)
       if model.isAdminAnywhere {
-        AdminView()
+        page(AdminView())
           .tabItem { Label("Admin", systemImage: "checkmark.seal") }
           .badge(model.pendingApprovals)
           .tag(AppTab.admin)
       }
-      AccountView()
+      page(AccountView())
         .tabItem { Label("Account", systemImage: "person.crop.circle") }
         .tag(AppTab.account)
     }
+    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     // Swipe left/right anywhere on a tab to move to the next/previous one,
     // like the web's SwipePager. Simultaneous, so scrolling and row swipe
     // actions keep working; TabSwipe decides whether a drag was a tab swipe.
     .simultaneousGesture(
       DragGesture(minimumDistance: 24)
+        .onChanged { value in
+          if dragIsSwipe == nil {
+            dragIsSwipe = TabSwipe.isSideways(start: value.startLocation, translation: value.translation)
+          }
+          guard dragIsSwipe == true else { return }
+          // Resist at the ends, where there's no tab to go to.
+          let dx = value.translation.width
+          dragX = neighbour(dx < 0 ? 1 : -1) == nil ? dx * 0.25 : dx
+        }
         .onEnded { value in
-          guard let step = TabSwipe.step(
+          defer { dragIsSwipe = nil }
+          guard dragIsSwipe == true else { return }
+          if let step = TabSwipe.step(
             start: value.startLocation,
             translation: value.translation,
             predicted: value.predictedEndTranslation
-          ) else { return }
-          move(by: step)
+          ), let next = neighbour(step) {
+            slide(to: next, step: step)
+          } else {
+            withAnimation(.snappy) { dragX = 0 }
+          }
         }
     )
     .sensoryFeedback(.selection, trigger: selection)
     .task { await model.refreshAdminOrgs() }
   }
 
-  private func move(by step: Int) {
-    guard let index = tabs.firstIndex(of: selection) else { return }
+  /// One tab's content, moved by the swipe.
+  private func page<V: View>(_ content: V) -> some View {
+    content
+      .offset(x: dragX)
+      .opacity(1 - min(abs(dragX) / max(width, 1), 1) * 0.35)
+  }
+
+  private func neighbour(_ step: Int) -> AppTab? {
+    guard let index = tabs.firstIndex(of: selection) else { return nil }
     let next = index + step
-    guard tabs.indices.contains(next) else { return }
-    withAnimation(.smooth) { selection = tabs[next] }
+    return tabs.indices.contains(next) ? tabs[next] : nil
+  }
+
+  /// The current page leaves the way the finger went, the next one comes in
+  /// from the other side.
+  private func slide(to next: AppTab, step: Int) {
+    let out: CGFloat = step > 0 ? -width : width
+    withAnimation(.easeIn(duration: 0.12)) {
+      dragX = out
+    } completion: {
+      var still = Transaction()
+      still.disablesAnimations = true
+      withTransaction(still) {
+        selection = next
+        dragX = -out
+      }
+      withAnimation(.smooth(duration: 0.28)) { dragX = 0 }
+    }
   }
 }
 
@@ -115,6 +160,11 @@ enum TabSwipe {
   /// Drags starting this close to the left edge belong to the system's
   /// back-swipe in a pushed screen.
   static let edgeGuard: CGFloat = 24
+
+  /// Early in a drag: sideways enough, and not from the back-swipe edge.
+  static func isSideways(start: CGPoint, translation: CGSize) -> Bool {
+    start.x >= edgeGuard && abs(translation.width) > abs(translation.height) * axisRatio
+  }
 
   /// +1 for the next tab (finger moved left), -1 for the previous, nil if
   /// the drag wasn't a tab swipe.
