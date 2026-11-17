@@ -14,6 +14,8 @@ import Badge from "@/components/common/Badge";
 import Banner from "@/components/common/Banner";
 import Button from "@/components/common/Button";
 import Card from "@/components/common/Card";
+import AccessKeysCard from "@/components/AccessKeysCard";
+import DeleteAccount from "@/components/DeleteAccount";
 import Checkbox from "@/components/common/Checkbox";
 import AttentionDot from "@/components/common/AttentionDot";
 import InfoTooltip from "@/components/common/InfoTooltip";
@@ -821,6 +823,12 @@ export default function ProfilePage() {
           </div>
         )}
       </Card>
+
+      {/* Personal access keys for an assistant (Jarvis), just above the
+          one card that ends an account. */}
+      <AccessKeysCard />
+
+      <DeleteAccount />
 
       {/* Switching invites off settles future sets on its own; the events
           already on someone's calendar are a separate question, and only a

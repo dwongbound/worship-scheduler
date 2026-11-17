@@ -187,6 +187,11 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   `@@unique([setId, teamId])`. Vocabulary in `lib/guestTeams.ts`. This is what
   replaced the hardcoded choir: `Set.choirEnabled` is **gone**, and CHOIR is an
   ordinary counted role.
+- **AccessKey** — a person's personal access key for their own assistant
+  (Jarvis): `name`, `keyHash` (SHA-256; the `tw_…` key itself is shown once and
+  never stored), `canWrite` (fixed for the key's life), `lastUsedAt` (written at
+  most every 5 min), `revokedAt` (revoked rows stay, unlisted). Mirrors
+  vff-app's. See API → Access keys.
 - **SchedulingRule** — one of an org's rules for Auto schedule (ORG-wide,
   never per team): `tier` REQUIRED|PREFERENCE, `enabled`, `position` (list
   order = the preference ranking), `params: Json` (the kind + its ids; see
@@ -318,6 +323,34 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
 
 - Auth: `auth/[...nextauth]`, `auth/allow-duplicate-name` (consent cookie for
   the duplicate-name warning on the Google path), `signup`, `me`.
+  `mobile/session` (POST) is the iOS app's sign-in: `verifyCredentials` (the
+  web form's own check, shared) → a bearer token that IS a NextAuth JWT
+  (`lib/mobileToken.ts`). `getSessionUser` reads the cookie, then the
+  `Authorization: Bearer` header, so every route serves the app unchanged.
+  `mobile/session/social` (POST) is Google/Apple from the app: the provider's
+  ID token is VERIFIED first (`lib/socialToken.ts` — JWKS signature, issuer,
+  audience = `GOOGLE_IOS_CLIENT_ID` / `APPLE_BUNDLE_ID`), then
+  `lib/socialSignIn.ts` picks the account: Apple by `User.appleSub`, either by
+  verified email (claiming a placeholder), else a NEW account — after one 409
+  `nameConflicts`, like the web's Google path. `me` DELETE deletes my own
+  account (`lib/accountDeletion.ts`: body must carry `confirm: "DELETE"`;
+  refused while I'm an org's only admin and others remain; disconnects any org
+  Google Calendar connected with my account; then the User cascade).
+- Access keys: `access-keys` (GET list / POST `{name, canWrite?}` → the key,
+  ONCE; session only) and `access-keys/[id]` (DELETE = revoke). `agent` (GET,
+  the whole read snapshot) and `mcp` (POST, stateless MCP JSON-RPC, tools only;
+  GET 405) take `Authorization: Bearer tw_…` and NOTHING else. Protocol in
+  `lib/mcp.ts`, tools in `lib/agentTools.ts`, reads in `lib/agentSnapshot.ts`
+  (db) + `lib/agentView.ts` (pure shapes; no emails, role LABELS, the
+  `assignmentId` beside each seat). A `canWrite` key's four writers
+  (confirm_set, request_cover, cancel_cover_request, take_cover) call
+  `assignments/[id]` PATCH and `swaps/[id]/take` POST with the same key; those
+  two routes read the caller with `lib/accessKeyAuth.ts getActingUser` (session
+  first, then a canWrite key with NO memberships). **`getSessionUser` never
+  reads a key** (it only reads the iOS JWT), so no other route accepts one;
+  `tests/unit/agentView.test.ts` fails if any other route names the key helpers.
+  Open covers are ONE reading, `lib/openCovers.ts`, shared with `GET /api/swaps`.
+  /profile's card is `components/AccessKeysCard.tsx`. ✅tested
 - Sets/assignments: `sets`, `sets/[id]` (GET = ONE set in the same shape a
   list row has — what a `?set=` deep link resolves through), `assignments`,
   `assignments/[id]`, `assignments/confirm-all`.
@@ -849,7 +882,15 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   two places that param can't reach: Google's duplicate-name bounce back through
   /login, and the /join gate a brand-new account passes through. So a set link
   followed while signed out still opens that set afterwards.
-- `auth.ts` — `authOptions`, `getSessionUser()`, `getAdminUser()`.
+- `auth.ts` — `authOptions`, `getSessionUser()` (cookie, then bearer),
+  `verifyCredentials()` (the ONE username/password check, both doors).
+- `accountDeletion.ts` — `DELETE_CONFIRM_PHRASE`, `confirmationMatches`,
+  `strandedOrgs` (sole admin of an org with others = refused). ✅tested
+  `components/DeleteAccount.tsx` is /profile's last card + its modal.
+- `socialToken.ts` / `socialSignIn.ts` — the app's Google/Apple sign-in. ✅tested
+- `mobileToken.ts` — the iOS app's bearer token: `parseBearer`,
+  `mintMobileToken`/`readMobileToken` (NextAuth `encode`/`decode`, same secret,
+  claims and 30-day life as a web session — no token table). ✅tested
 - `api.ts` — `fetchJsonArray<T>` client helper.
 - `theme.ts` — light/dark/**system** source of truth (mirror in layout script).
 - `prisma.ts` — singleton client from generated output.
@@ -1026,6 +1067,15 @@ roles. The **start + end times stack below `sm`** and sit side by side from
 one narrower than its own "09:00 AM"), so two of them in half a phone's width
 ran off the side of the modal. `tests/e2e/mobile.spec.ts` pins the stacking
 and `tablet.spec.ts` the two columns, both asserting nothing overflows.
+Stacking alone wasn't enough on a real iPhone: iOS draws a native time field
+wider than its `width: 100%` box, so the boxes still ran past the modal's
+edge. `app/globals.css` drops the native appearance on every date/time input
+(`appearance: none`, `min-width: 0`, `max-width: 100%`), and the `Modal` body is
+`overflow-x-hidden`, so no dialog body can be dragged sideways on a phone.
+`SlotCapacityEditor` rows are a two-track grid (label `1fr`, box a fixed 4rem)
+so the team-shape boxes form two even columns however long a role's name is.
+Number fields have NO spinner arrows anywhere (`app/globals.css`, Dylan
+2026-11-12: people retype the count), pinned by `tests/unit/globalStyles.test.ts`.
 
 ## Slack / chat message house style (`lib/slack.ts`)
 
