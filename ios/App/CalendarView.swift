@@ -304,13 +304,18 @@ struct RosterRowView: View {
   let set: ApiSet
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(alignment: .firstTextBaseline) {
-        Text(row.label).font(.subheadline.weight(.semibold))
+    VStack(alignment: .leading, spacing: 4) {
+      // The role is a small secondary label above the names (like Contacts'
+      // "mobile" above a number), so role and person never read as one line.
+      HStack(alignment: .firstTextBaseline, spacing: 6) {
+        Text(row.label)
+          .font(.caption.weight(.semibold))
+          .textCase(.uppercase)
+          .foregroundStyle(.secondary)
         if let guest = row.guestTeam {
-          Text(guest)
+          Text("· \(guest)")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.tertiary)
         }
       }
       ForEach(row.people) { seat in
