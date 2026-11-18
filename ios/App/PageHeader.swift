@@ -1,9 +1,9 @@
 import SwiftUI
 
-// The top of a tab's main page: its title on the left and the page's buttons
-// on the right, all in the bar's own row. No large-title row underneath, so
-// there's no empty band between the status bar and the title, and the title
-// never shifts as the page scrolls.
+// A tab's main page. The tab strip across the top already names the page, so
+// the page has no title bar of its own (its title is still set, for VoiceOver
+// and for the Back button of anything pushed from it). Its action buttons —
+// + and friends — float at the bottom right, where a thumb reaches them.
 
 extension View {
   func pageHeader<Actions: View>(_ title: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
@@ -17,46 +17,30 @@ struct PageHeader<Actions: View>: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      // Still set, for the back button and VoiceOver; the bar shows the
-      // leading title below instead of a centered one.
       .navigationTitle(title)
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
-        ToolbarItemGroup(placement: .topBarTrailing) { actions() }
+      .toolbar(.hidden, for: .navigationBar)
+      .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
+        HStack(spacing: 10) { actions() }
+          .modifier(FloatingButtonStyle())
+          .padding(.trailing, 16)
+          .padding(.bottom, 12)
       }
-      .modifier(LeadingTitle(title: title))
   }
 }
 
-/// The title as the bar's leading item, without the glass capsule iOS 26
-/// draws behind bar items.
-private struct LeadingTitle: ViewModifier {
-  let title: String
-
-  private var label: some View {
-    Text(title)
-      .font(.title.bold())
-      .lineLimit(1)
-      .fixedSize()
-      .accessibilityAddTraits(.isHeader)
-  }
-
+/// Glass on iOS 26, a plain bordered capsule before it.
+private struct FloatingButtonStyle: ViewModifier {
   func body(content: Content) -> some View {
     if #available(iOS 26.0, *) {
-      content.toolbar {
-        ToolbarItem(placement: .topBarLeading) { label }
-          .sharedBackgroundVisibility(.hidden)
-      }
+      content.buttonStyle(.glass).controlSize(.large)
     } else {
-      content.toolbar {
-        ToolbarItem(placement: .topBarLeading) { label }
-      }
+      content.buttonStyle(.bordered).controlSize(.large).buttonBorderShape(.capsule)
     }
   }
 }
 
-/// An icon button for the header: in the bar, iOS draws its round glass.
+/// The page's main action as a round button at the bottom: tinted glass,
+/// a thumb's width across.
 struct HeaderIconButton: View {
   let label: String
   let systemImage: String
@@ -64,7 +48,22 @@ struct HeaderIconButton: View {
 
   var body: some View {
     Button(action: action) {
-      Label(label, systemImage: systemImage)
+      Image(systemName: systemImage)
+        .font(.title2.weight(.semibold))
+        .frame(width: 32, height: 32)
+    }
+    .modifier(Prominent())
+    .buttonBorderShape(.circle)
+    .accessibilityLabel(label)
+  }
+
+  private struct Prominent: ViewModifier {
+    func body(content: Content) -> some View {
+      if #available(iOS 26.0, *) {
+        content.buttonStyle(.glassProminent)
+      } else {
+        content.buttonStyle(.borderedProminent)
+      }
     }
   }
 }

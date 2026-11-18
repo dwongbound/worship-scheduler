@@ -68,6 +68,15 @@ struct MainTabView: View {
   private var offsetX: CGFloat { pull + slideX }
 
   var body: some View {
+    // The tabs live in a strip across the top, with the pages below it; the
+    // bottom of the screen belongs to each page's action buttons.
+    VStack(spacing: 0) {
+      TopTabBar(items: tabItems, selection: $selection)
+      pages
+    }
+  }
+
+  private var pages: some View {
     TabView(selection: $selection) {
       page(CalendarView(), .calendar)
         .tabItem { Label("Calendar", systemImage: "calendar") }
@@ -153,6 +162,19 @@ struct MainTabView: View {
     content
       .offset(x: tab == selection ? offsetX : 0)
       .environment(\.appTab, tab)
+      .toolbar(.hidden, for: .tabBar)
+  }
+
+  private var tabItems: [TopTabBar.Item] {
+    tabs.map { tab in
+      switch tab {
+      case .calendar: TopTabBar.Item(tab: tab, title: "Calendar", systemImage: "calendar", badge: 0)
+      case .mySets: TopTabBar.Item(tab: tab, title: "My Sets", systemImage: "music.note.list", badge: model.swapBadge)
+      case .availability: TopTabBar.Item(tab: tab, title: "Unavailabilities", systemImage: "calendar.badge.clock", badge: model.availabilityBadge)
+      case .admin: TopTabBar.Item(tab: tab, title: "Admin", systemImage: "checkmark.seal", badge: model.pendingApprovals)
+      case .account: TopTabBar.Item(tab: tab, title: "Account", systemImage: "person.crop.circle", badge: 0)
+      }
+    }
   }
 
   private func neighbour(_ step: Int) -> AppTab? {
