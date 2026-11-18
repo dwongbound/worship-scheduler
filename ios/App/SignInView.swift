@@ -86,38 +86,57 @@ struct SignInView: View {
           .disabled(!canSubmit)
         }
 
+        // "or" between the password form and the two sign-in providers.
         Section {
-          SignInWithAppleButton(.signIn) { request in
-            request.requestedScopes = [.fullName, .email]
-          } onCompletion: { result in
-            handleApple(result)
+          HStack(spacing: 12) {
+            VStack { Divider() }
+            Text("or")
+              .font(.subheadline)
+              .foregroundStyle(.secondary)
+            VStack { Divider() }
           }
-          .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-          .frame(height: SignInButtonStyle.height)
-          .clipShape(Capsule())
+          .accessibilityHidden(true)
           .listRowInsets(EdgeInsets())
-          .disabled(busy != nil)
-          .opacity(busy == .apple ? 0.5 : 1)
+          .listRowBackground(Color.clear)
+        }
 
-          if let clientID = AppConfig.googleIOSClientID {
-            Button {
-              runGoogle(clientID: clientID)
-            } label: {
-              HStack(spacing: 8) {
-                if busy == .google {
-                  ProgressView()
-                } else {
-                  Image(systemName: "globe")
-                    .imageScale(.medium)
-                    .accessibilityHidden(true)
-                }
-                Text("Sign in with Google")
-              }
+        Section {
+          // One row, so the two provider buttons sit the same 12pt apart as
+          // everything else on this screen (list rows with zero insets touch).
+          VStack(spacing: 12) {
+            SignInWithAppleButton(.signIn) { request in
+              request.requestedScopes = [.fullName, .email]
+            } onCompletion: { result in
+              handleApple(result)
             }
-            .buttonStyle(SignInButtonStyle(kind: .secondary))
-            .listRowInsets(EdgeInsets())
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(height: SignInButtonStyle.height)
+            .clipShape(Capsule())
             .disabled(busy != nil)
+            .opacity(busy == .apple ? 0.5 : 1)
+
+            if let clientID = AppConfig.googleIOSClientID {
+              Button {
+                runGoogle(clientID: clientID)
+              } label: {
+                HStack(spacing: 10) {
+                  if busy == .google {
+                    ProgressView()
+                  } else {
+                    // Google's own "G", as its branding guidelines require.
+                    Image("GoogleG")
+                      .resizable()
+                      .frame(width: 18, height: 18)
+                      .accessibilityHidden(true)
+                  }
+                  Text("Sign in with Google")
+                }
+              }
+              .buttonStyle(SignInButtonStyle(kind: .google))
+              .disabled(busy != nil)
+            }
           }
+          .listRowInsets(EdgeInsets())
         } footer: {
           Text("New to TapWorship? Signing in with Apple or Google creates your account. Then enter your team's org key.")
         }
@@ -265,7 +284,7 @@ struct SignInView: View {
 /// `.borderedProminent` adds its own padding around the label, which made the
 /// password button visibly thicker than Apple's.
 struct SignInButtonStyle: ButtonStyle {
-  enum Kind { case primary, secondary }
+  enum Kind { case primary, google }
   static let height: CGFloat = 50
   let kind: Kind
   @Environment(\.isEnabled) private var isEnabled
@@ -273,15 +292,38 @@ struct SignInButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(.body.weight(.semibold))
-      .foregroundStyle(kind == .primary ? Color.white : Color.primary)
+      .foregroundStyle(foreground)
       .frame(maxWidth: .infinity)
       .frame(height: Self.height)
-      .background(
-        Capsule().fill(kind == .primary
-                       ? (isEnabled ? Color.accentColor : Color.secondary.opacity(0.35))
-                       : Color(.secondarySystemFill))
-      )
+      .background(Capsule().fill(background))
+      // Google's button: white with a thin grey outline (#747775), dark
+      // (#131314) with #8E918F in dark mode — its sign-in branding guidelines.
+      .overlay {
+        if kind == .google { Capsule().strokeBorder(googleBorder, lineWidth: 1) }
+      }
       .opacity(configuration.isPressed ? 0.75 : 1)
       .contentShape(Capsule())
+  }
+
+  @Environment(\.colorScheme) private var colorScheme
+
+  private var foreground: Color {
+    switch kind {
+    case .primary: .white
+    case .google: colorScheme == .dark ? Color(white: 0.89) : Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255)
+    }
+  }
+
+  private var background: Color {
+    switch kind {
+    case .primary: isEnabled ? .accentColor : Color.secondary.opacity(0.35)
+    case .google: colorScheme == .dark ? Color(red: 0x13 / 255, green: 0x13 / 255, blue: 0x14 / 255) : .white
+    }
+  }
+
+  private var googleBorder: Color {
+    colorScheme == .dark
+      ? Color(red: 0x8E / 255, green: 0x91 / 255, blue: 0x8F / 255)
+      : Color(red: 0x74 / 255, green: 0x77 / 255, blue: 0x75 / 255)
   }
 }
