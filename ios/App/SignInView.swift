@@ -2,30 +2,112 @@ import AuthenticationServices
 import SwiftUI
 import TapWorshipKit
 
-/// The way in: username-or-email + password (the web's /login), Sign in with
-/// Apple, and Google. Apple and Google can also CREATE an account, as the
-/// web's Google sign-in does; a brand-new account then lands on JoinOrgView.
-///
-/// Apple sits first among the two buttons and is the same size as Google's,
-/// which is what App Store rule 4.8 asks of an app offering both.
+/// Signing in with a username or email and a password (the web's /login),
+/// pushed from the landing screen's Sign in button. Apple and Google live on
+/// the landing itself (SocialSignInButtons).
 struct SignInView: View {
+  @Environment(AppModel.self) private var model
+
+  @State private var username = ""
+  @State private var password = ""
+  @State private var busy = false
+  @State private var errorMessage: String?
+  @State private var errorTick = 0
+  @FocusState private var focus: Field?
+
+  private enum Field { case username, password }
+
+  private var canSubmit: Bool {
+    !username.trimmingCharacters(in: .whitespaces).isEmpty && !password.isEmpty && !busy
+  }
+
+  var body: some View {
+    Form {
+      Section {
+        TextField("Username or email", text: $username)
+          .textContentType(.username)
+          .keyboardType(.emailAddress)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .submitLabel(.next)
+          .focused($focus, equals: .username)
+          .onSubmit { focus = .password }
+        SecureField("Password", text: $password)
+          .textContentType(.password)
+          .submitLabel(.go)
+          .focused($focus, equals: .password)
+          .onSubmit(submitPassword)
+      } footer: {
+        if let errorMessage {
+          Label(errorMessage, systemImage: "exclamationmark.circle")
+            .foregroundStyle(.red)
+            .font(.footnote)
+            .transition(.opacity)
+        }
+      }
+
+      Section {
+        Button(action: submitPassword) {
+          ZStack {
+            // The label keeps its space while the spinner shows, so the
+            // button never changes size mid-press.
+            Text("Sign in").opacity(busy ? 0 : 1)
+            if busy { ProgressView().tint(.white).accessibilityLabel("Signing in") }
+          }
+        }
+        .buttonStyle(SignInButtonStyle(kind: .primary))
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color.clear)
+        .disabled(!canSubmit)
+      }
+    }
+    .navigationTitle("Sign in")
+    .navigationBarTitleDisplayMode(.inline)
+    .animation(.default, value: errorMessage)
+    .sensoryFeedback(.error, trigger: errorTick)
+    .onAppear { if username.isEmpty { focus = .username } }
+    .safeAreaInset(edge: .top) {
+      if AppConfig.isDevServer { DevServerBadge().padding(.bottom, 4) }
+    }
+  }
+
+  private func submitPassword() {
+    guard canSubmit else { return }
+    focus = nil
+    errorMessage = nil
+    busy = true
+    Task {
+      defer { busy = false }
+      do {
+        try await model.signIn(username: username.trimmingCharacters(in: .whitespaces), password: password)
+      } catch {
+        password = ""
+        errorMessage = (error as? APIError)?.message ?? APIError.network("").message
+        errorTick += 1
+        focus = .password
+      }
+    }
+  }
+}
+
+/// Google and Apple, stacked 12pt apart at the same height. Either can also
+/// CREATE an account, as the web's Google sign-in does; a brand-new account
+/// then lands on JoinOrgView. Both offered at the same size is what App Store
+/// rule 4.8 asks of an app that offers Google.
+struct SocialSignInButtons: View {
   @Environment(AppModel.self) private var model
   @Environment(\.webAuthenticationSession) private var webAuthSession
   @Environment(\.colorScheme) private var colorScheme
 
-  @State private var username = ""
-  @State private var password = ""
-  @State private var busy: Busy?
+  @State private var busy: Provider?
   @State private var errorMessage: String?
   @State private var errorTick = 0
   @State private var conflict: PendingConflict?
-  @FocusState private var focus: Field?
 
-  private enum Field { case username, password }
-  private enum Busy { case password, apple, google }
+  private enum Provider { case apple, google }
 
-  /// A social sign-in waiting on "is that you?" — kept so "Not me" can retry
-  /// with the same token instead of sending the person through the sheet again.
+  /// A sign-in waiting on "is that you?", kept so "Not me" can retry with
+  /// the same token instead of sending the person through the sheet again.
   private struct PendingConflict: Identifiable {
     let id = UUID()
     let provider: SocialProvider
@@ -34,151 +116,62 @@ struct SignInView: View {
     let accounts: [ExistingAccount]
   }
 
-  private var canSubmit: Bool {
-    !username.trimmingCharacters(in: .whitespaces).isEmpty && !password.isEmpty && busy == nil
-  }
-
   var body: some View {
-      Form {
-
-        Section {
-          TextField("Username or email", text: $username)
-            .textContentType(.username)
-            .keyboardType(.emailAddress)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-            .submitLabel(.next)
-            .focused($focus, equals: .username)
-            .onSubmit { focus = .password }
-          SecureField("Password", text: $password)
-            .textContentType(.password)
-            .submitLabel(.go)
-            .focused($focus, equals: .password)
-            .onSubmit(submitPassword)
-        } footer: {
-          if let errorMessage {
-            Label(errorMessage, systemImage: "exclamationmark.circle")
-              .foregroundStyle(.red)
-              .font(.footnote)
-              .transition(.opacity)
-          }
-        }
-
-        Section {
-          Button(action: submitPassword) {
-            ZStack {
-              // The label keeps its space while the spinner shows, so the
-              // button never changes size mid-press.
-              Text("Sign in").bold().opacity(busy == .password ? 0 : 1)
-              if busy == .password {
-                ProgressView().accessibilityLabel("Signing in")
-              }
+    VStack(spacing: 12) {
+      if let clientID = AppConfig.googleIOSClientID {
+        Button {
+          runGoogle(clientID: clientID)
+        } label: {
+          HStack(spacing: 10) {
+            if busy == .google {
+              ProgressView()
+            } else {
+              // Google's own "G", as its branding guidelines require.
+              Image("GoogleG")
+                .resizable()
+                .frame(width: 18, height: 18)
+                .accessibilityHidden(true)
             }
+            Text("Sign in with Google")
           }
-          .buttonStyle(SignInButtonStyle(kind: .primary))
-          .listRowInsets(EdgeInsets())
-          .listRowBackground(Color.clear)
-          .disabled(!canSubmit)
         }
-
-        // "or" between the password form and the two sign-in providers.
-        Section {
-          HStack(spacing: 12) {
-            VStack { Divider() }
-            Text("or")
-              .font(.subheadline)
-              .foregroundStyle(.secondary)
-            VStack { Divider() }
-          }
-          .accessibilityHidden(true)
-          .listRowInsets(EdgeInsets())
-          .listRowBackground(Color.clear)
-        }
-
-        Section {
-          // One row, so the two provider buttons sit the same 12pt apart as
-          // everything else on this screen (list rows with zero insets touch).
-          VStack(spacing: 12) {
-            SignInWithAppleButton(.signIn) { request in
-              request.requestedScopes = [.fullName, .email]
-            } onCompletion: { result in
-              handleApple(result)
-            }
-            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-            .frame(height: SignInButtonStyle.height)
-            .clipShape(Capsule())
-            .disabled(busy != nil)
-            .opacity(busy == .apple ? 0.5 : 1)
-
-            if let clientID = AppConfig.googleIOSClientID {
-              Button {
-                runGoogle(clientID: clientID)
-              } label: {
-                HStack(spacing: 10) {
-                  if busy == .google {
-                    ProgressView()
-                  } else {
-                    // Google's own "G", as its branding guidelines require.
-                    Image("GoogleG")
-                      .resizable()
-                      .frame(width: 18, height: 18)
-                      .accessibilityHidden(true)
-                  }
-                  Text("Sign in with Google")
-                }
-              }
-              .buttonStyle(SignInButtonStyle(kind: .google))
-              .disabled(busy != nil)
-            }
-          }
-          .listRowInsets(EdgeInsets())
-        } footer: {
-          Text("New to TapWorship? Signing in with Apple or Google creates your account. Then enter your team's org key.")
-        }
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
-        .listSectionSpacing(12)
+        .buttonStyle(SignInButtonStyle(kind: .google))
+        .disabled(busy != nil)
       }
-      .navigationTitle("Sign in")
-      .navigationBarTitleDisplayMode(.inline)
-      .animation(.default, value: errorMessage)
-      .sensoryFeedback(.error, trigger: errorTick)
-      .onAppear { if username.isEmpty { focus = .username } }
-      .safeAreaInset(edge: .top) {
-        if AppConfig.isDevServer { DevServerBadge().padding(.bottom, 4) }
-      }
-      .alert(
-        "Is this you?",
-        isPresented: Binding(get: { conflict != nil }, set: { if !$0 { conflict = nil } }),
-        presenting: conflict
-      ) { pending in
-        Button("It's me, I'll sign in with that account") { conflict = nil }
-        Button("Not me, create my account") {
-          conflict = nil
-          Task { await finishSocial(pending.provider, pending.idToken, name: pending.name, allowDuplicateName: true) }
-        }
-      } message: { pending in
-        let first = pending.accounts.first
-        Text("Someone named \(first?.name ?? "this") already has an account (\(first?.email ?? "another address")). If that's you, sign in with it instead so your sets stay in one place.")
-      }
-  }
 
-  // MARK: Actions
-
-  private func submitPassword() {
-    guard canSubmit else { return }
-    focus = nil
-    errorMessage = nil
-    busy = .password
-    Task {
-      defer { busy = nil }
-      do {
-        try await model.signIn(username: username.trimmingCharacters(in: .whitespaces), password: password)
-      } catch {
-        password = ""
-        show(error)
-        focus = .password
+      SignInWithAppleButton(.signIn) { request in
+        request.requestedScopes = [.fullName, .email]
+      } onCompletion: { result in
+        handleApple(result)
       }
+      .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+      .frame(height: SignInButtonStyle.height)
+      .clipShape(Capsule())
+      .disabled(busy != nil)
+      .opacity(busy == .apple ? 0.5 : 1)
+
+      if let errorMessage {
+        Label(errorMessage, systemImage: "exclamationmark.circle")
+          .font(.footnote)
+          .foregroundStyle(.red)
+          .transition(.opacity)
+      }
+    }
+    .animation(.default, value: errorMessage)
+    .sensoryFeedback(.error, trigger: errorTick)
+    .alert(
+      "Is this you?",
+      isPresented: Binding(get: { conflict != nil }, set: { if !$0 { conflict = nil } }),
+      presenting: conflict
+    ) { pending in
+      Button("It's me, I'll sign in with that account") { conflict = nil }
+      Button("Not me, create my account") {
+        conflict = nil
+        Task { await finishSocial(pending.provider, pending.idToken, name: pending.name, allowDuplicateName: true) }
+      }
+    } message: { pending in
+      let first = pending.accounts.first
+      Text("Someone named \(first?.name ?? "this") already has an account (\(first?.email ?? "another address")). If that's you, sign in with it instead so your sets stay in one place.")
     }
   }
 
@@ -241,6 +234,19 @@ struct SignInView: View {
   }
 }
 
+/// "—— or ——".
+struct OrDivider: View {
+  var body: some View {
+    HStack(spacing: 12) {
+      VStack { Divider() }
+      Text("or")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+      VStack { Divider() }
+    }
+    .accessibilityHidden(true)
+  }
+}
 
 /// The logo, name and tagline, on the landing screen.
 struct BrandHeader: View {

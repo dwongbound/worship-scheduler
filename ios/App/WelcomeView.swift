@@ -1,8 +1,9 @@
 import SwiftUI
 import TapWorshipKit
 
-/// The first screen for someone signed out: the brand, then Sign up and
-/// Sign in. Each opens its own screen, so the landing never shows a form.
+/// The first screen for someone signed out: the brand; Sign in (opens the
+/// password form), "or", Google and Apple; and Sign up at the bottom. The
+/// landing itself never shows a text field.
 struct WelcomeView: View {
   @Environment(AppModel.self) private var model
   @Environment(\.openURL) private var openURL
@@ -18,6 +19,27 @@ struct WelcomeView: View {
         Spacer()
         VStack(spacing: 12) {
           Button {
+            path.append(.signIn)
+          } label: {
+            Text("Sign in")
+          }
+          .buttonStyle(SignInButtonStyle(kind: .primary))
+
+          OrDivider()
+            .padding(.vertical, 4)
+
+          SocialSignInButtons()
+        }
+        .padding(.horizontal, 20)
+
+        Spacer()
+
+        // New here? Sign up sits apart at the bottom, as the less common path.
+        VStack(spacing: 6) {
+          Text("New to TapWorship?")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+          Button {
             if model.readOnly {
               // The preview can't create accounts on tapworship.com; the
               // website can.
@@ -28,24 +50,16 @@ struct WelcomeView: View {
           } label: {
             Text("Sign up")
           }
-          .buttonStyle(SignInButtonStyle(kind: .primary))
-
-          Button {
-            path.append(.signIn)
-          } label: {
-            Text("Sign in")
-          }
           .buttonStyle(SignInButtonStyle(kind: .outline))
-
           if model.readOnly {
-            Text("Sign up opens tapworship.com. This preview can't create accounts.")
+            Text("Opens tapworship.com. This preview can't create accounts.")
               .font(.footnote)
               .foregroundStyle(.secondary)
               .multilineTextAlignment(.center)
           }
         }
         .padding(.horizontal, 20)
-        .padding(.bottom, 24)
+        .padding(.bottom, 16)
       }
       .background(Color(.systemGroupedBackground))
       .navigationDestination(for: Route.self) { route in
