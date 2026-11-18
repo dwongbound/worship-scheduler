@@ -127,9 +127,11 @@ final class AppModel {
   /// Matched on height only: the frame is the row's content, but a list row
   /// (and its swipe) spans the screen's width. The padding covers the row's
   /// own insets above and below its content.
-  func ownsSideSwipe(at point: CGPoint, on tab: AppTab) -> Bool {
+  /// Rows parked off to the side (Admin's other half) don't count.
+  func ownsSideSwipe(at point: CGPoint, on tab: AppTab, width: CGFloat) -> Bool {
     sideSwipeZones.values.contains {
-      $0.tab == tab && point.y >= $0.frame.minY - 12 && point.y <= $0.frame.maxY + 12
+      $0.tab == tab && $0.frame.maxX > 0 && $0.frame.minX < width
+        && point.y >= $0.frame.minY - 12 && point.y <= $0.frame.maxY + 12
     }
   }
   var tabSwipePaused: Bool { tabSwipePauses > 0 }

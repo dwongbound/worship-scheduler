@@ -278,7 +278,10 @@ struct AdminSectionPicker: ToolbarContent {
 
   var body: some ToolbarContent {
     ToolbarItem(placement: .principal) {
-      Picker("Section", selection: Binding(get: { model.adminSection }, set: { model.adminSection = $0 })) {
+      Picker("Section", selection: Binding(
+        get: { model.adminSection },
+        set: { section in withAnimation(.smooth(duration: 0.3)) { model.adminSection = section } }
+      )) {
         ForEach(AdminSection.allCases) { section in
           Text(section == .approvals && model.pendingApprovals > 0 ? "Approvals (\(model.pendingApprovals))" : section.rawValue)
             .tag(section)
@@ -290,15 +293,21 @@ struct AdminSectionPicker: ToolbarContent {
   }
 }
 
-/// Approvals and Team as one tab, so the app stays at five. Each half keeps
-/// its own navigation stack; the picker in the bar switches between them.
+/// Approvals and Team as one tab, so the app stays at five. The two halves
+/// sit side by side as pages and both stay loaded, so switching (picker or
+/// swipe) slides the other one in instead of building it from scratch; a
+/// tab swipe's pull drags the real neighbour into view.
 struct AdminView: View {
   @Environment(AppModel.self) private var model
 
   var body: some View {
-    switch model.adminSection {
-    case .approvals: ApprovalsView()
-    case .team: TeamView()
+    GeometryReader { proxy in
+      let width = proxy.size.width
+      HStack(spacing: 0) {
+        ApprovalsView().frame(width: width)
+        TeamView().frame(width: width)
+      }
+      .offset(x: model.adminSection == .approvals ? 0 : -width)
     }
   }
 }

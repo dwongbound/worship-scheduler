@@ -98,7 +98,7 @@ struct MainTabView: View {
       DragGesture(minimumDistance: 24, coordinateSpace: .global)
         .updating($pull) { value, pull, _ in
           guard !model.tabSwipePaused,
-                !model.ownsSideSwipe(at: value.startLocation, on: selection),
+                !model.ownsSideSwipe(at: value.startLocation, on: selection, width: width),
                 TabSwipe.isSideways(start: value.startLocation, translation: value.translation)
           else { return }
           // Resist at the ends, where there's nothing to go to.
@@ -108,7 +108,7 @@ struct MainTabView: View {
         }
         .onEnded { value in
           guard !model.tabSwipePaused,
-                !model.ownsSideSwipe(at: value.startLocation, on: selection),
+                !model.ownsSideSwipe(at: value.startLocation, on: selection, width: width),
                 let step = TabSwipe.step(
                   start: value.startLocation,
                   translation: value.translation,
@@ -117,7 +117,9 @@ struct MainTabView: View {
           else { return }
           // Inside Admin, Approvals and Team come before the next tab.
           if let section = adminStep(step) {
-            slide(step: step) { model.adminSection = section }
+            // Both halves are already laid out side by side: just glide
+            // from wherever the finger left the page.
+            withAnimation(.smooth(duration: 0.3)) { model.adminSection = section }
           } else if let next = neighbour(step) {
             slide(step: step) {
               selection = next
