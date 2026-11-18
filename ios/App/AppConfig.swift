@@ -17,7 +17,7 @@ enum AppConfig {
   /// `123-abc.apps.googleusercontent.com`. Not a secret: it ships in every
   /// copy of the app. The server must list the same id in
   /// `GOOGLE_IOS_CLIENT_ID`. Nil hides the Google button.
-  static let releaseGoogleIOSClientID: String? = nil
+  static let releaseGoogleIOSClientID: String? = "949911152393-hmgacu1hs1ssr0dbakbe8khafa4v4kqq.apps.googleusercontent.com"
 
   /// A debug build uses the one `./use-env` copied out of the env file, so a
   /// dev server and the app agree without editing this file.
