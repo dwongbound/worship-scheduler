@@ -77,7 +77,7 @@ struct MainTabView: View {
         .badge(model.swapBadge)
         .tag(AppTab.mySets)
       page(AvailabilityView(), .availability)
-        .tabItem { Label("Availability", systemImage: "calendar.badge.clock") }
+        .tabItem { Label("Unavailabilities", systemImage: "calendar.badge.clock") }
         .badge(model.availabilityBadge)
         .tag(AppTab.availability)
       if model.isAdminAnywhere {
@@ -95,25 +95,36 @@ struct MainTabView: View {
     // tab, like the web's SwipePager. Off on pushed screens (a set's page,
     // Profile…), where a sideways drag belongs to rows and to Back.
     .simultaneousGesture(
-      DragGesture(minimumDistance: 24)
+      DragGesture(minimumDistance: 24, coordinateSpace: .global)
         .updating($pull) { value, pull, _ in
           guard !model.tabSwipePaused,
+                !model.ownsSideSwipe(at: value.startLocation, on: selection),
                 TabSwipe.isSideways(start: value.startLocation, translation: value.translation)
           else { return }
-          // Resist at the ends, where there's no tab to go to.
+          // Resist at the ends, where there's nothing to go to.
           let dx = value.translation.width
-          pull = neighbour(dx < 0 ? 1 : -1) == nil ? dx * 0.25 : dx
+          let step = dx < 0 ? 1 : -1
+          pull = neighbour(step) == nil && adminStep(step) == nil ? dx * 0.25 : dx
         }
         .onEnded { value in
           guard !model.tabSwipePaused,
+                !model.ownsSideSwipe(at: value.startLocation, on: selection),
                 let step = TabSwipe.step(
                   start: value.startLocation,
                   translation: value.translation,
                   predicted: value.predictedEndTranslation
-                ),
-                let next = neighbour(step)
+                )
           else { return }
-          slide(to: next, step: step, from: value.translation.width)
+          // Inside Admin, Approvals and Team come before the next tab.
+          if let section = adminStep(step) {
+            slide(step: step) { model.adminSection = section }
+          } else if let next = neighbour(step) {
+            slide(step: step) {
+              selection = next
+              // Arriving on Admin from the right lands on its right half.
+              if next == .admin { model.adminSection = step > 0 ? .approvals : .team }
+            }
+          }
         }
     )
     .sensoryFeedback(.selection, trigger: selection)
@@ -139,6 +150,7 @@ struct MainTabView: View {
   private func page<V: View>(_ content: V, _ tab: AppTab) -> some View {
     content
       .offset(x: tab == selection ? offsetX : 0)
+      .environment(\.appTab, tab)
   }
 
   private func neighbour(_ step: Int) -> AppTab? {
@@ -153,15 +165,25 @@ struct MainTabView: View {
   /// didn't fire (a second swipe, a tab tap mid-slide) the page was left
   /// parked off-screen and the tab looked black. Now nothing waits: the new
   /// page is placed a little to the side and always animates to 0.
-  private func slide(to next: AppTab, step: Int, from released: CGFloat) {
+  private func slide(step: Int, change: () -> Void) {
     let entry: CGFloat = (step > 0 ? 1 : -1) * min(width * 0.35, 140)
     var still = Transaction()
     still.disablesAnimations = true
     withTransaction(still) {
-      selection = next
+      change()
       slideX = entry
     }
     withAnimation(.smooth(duration: 0.3)) { slideX = 0 }
+  }
+
+  /// The Admin half a swipe moves to before leaving the tab, if any.
+  private func adminStep(_ step: Int) -> AdminSection? {
+    guard selection == .admin else { return nil }
+    switch (model.adminSection, step) {
+    case (.approvals, 1): return .team
+    case (.team, -1): return .approvals
+    default: return nil
+    }
   }
 }
 
@@ -176,8 +198,35 @@ struct PausesTabSwipe: ViewModifier {
   }
 }
 
+/// Marks a row whose own sideways swipe does something (swipe actions): a
+/// drag that starts on it is the row's, and doesn't switch tabs. The row
+/// reports where it is on screen; a gesture on the row itself never hears
+/// the touch, since List hands it straight to the swipe actions.
+struct OwnsSideSwipe: ViewModifier {
+  @Environment(AppModel.self) private var model
+  @Environment(\.appTab) private var tab
+  let enabled: Bool
+  @State private var id = UUID().uuidString
+
+  func body(content: Content) -> some View {
+    content
+      .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+        guard enabled, let tab else { model.sideSwipeZones[id] = nil; return }
+        model.sideSwipeZones[id] = (tab, frame)
+      }
+      .onDisappear { model.sideSwipeZones[id] = nil }
+  }
+}
+
+extension EnvironmentValues {
+  /// Which tab a view lives in (nil outside the tab bar, e.g. in a sheet).
+  @Entry var appTab: AppTab? = nil
+}
+
 extension View {
   func pausesTabSwipe() -> some View { modifier(PausesTabSwipe()) }
+  /// `enabled: false` when the row has no swipe actions right now (read-only).
+  func ownsSideSwipe(_ enabled: Bool = true) -> some View { modifier(OwnsSideSwipe(enabled: enabled)) }
 }
 
 enum AppTab: Hashable {

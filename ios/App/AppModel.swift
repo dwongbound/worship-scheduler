@@ -121,6 +121,17 @@ final class AppModel {
 
   /// How many pushed screens are showing; tab swipes are off while any is.
   var tabSwipePauses = 0
+  /// Where rows with their own swipe actions sit on screen, per tab. A tab
+  /// swipe that starts inside one belongs to the row, not the tab bar.
+  @ObservationIgnored var sideSwipeZones: [String: (tab: AppTab, frame: CGRect)] = [:]
+  /// Matched on height only: the frame is the row's content, but a list row
+  /// (and its swipe) spans the screen's width. The padding covers the row's
+  /// own insets above and below its content.
+  func ownsSideSwipe(at point: CGPoint, on tab: AppTab) -> Bool {
+    sideSwipeZones.values.contains {
+      $0.tab == tab && point.y >= $0.frame.minY - 12 && point.y <= $0.frame.maxY + 12
+    }
+  }
   var tabSwipePaused: Bool { tabSwipePauses > 0 }
 
   private(set) var adminOrgs: [ApiMyOrg]?

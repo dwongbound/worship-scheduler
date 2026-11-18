@@ -465,6 +465,15 @@ let inWindow = Availability.blockedDays([everyTuesday, trip, morning], from: new
 check("blocked days inside a request's window", inWindow.map(\.ymd) == ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-17", "2026-11-20"])
 check("with their levels", inWindow.last?.level == .partial && inWindow.first?.level == .full)
 
+check("a range lists every day", Availability.ymds(from: laDay("2026-11-29"), through: laDay("2026-12-02"), calendar: la) == ["2026-11-29", "2026-11-30", "2026-12-01", "2026-12-02"])
+check("a backwards range is empty", Availability.ymds(from: laDay("2026-12-02"), through: laDay("2026-11-29"), calendar: la).isEmpty)
+check("range problems", Availability.rangeProblem(from: laDay("2026-12-02"), through: laDay("2026-11-29"), startMinute: 0, endMinute: 1440, calendar: la) != nil
+      && Availability.rangeProblem(from: laDay("2026-01-01"), through: laDay("2026-06-01"), startMinute: 0, endMinute: 1440, calendar: la) != nil
+      && Availability.rangeProblem(from: laDay("2026-11-29"), through: laDay("2026-11-29"), startMinute: 0, endMinute: 1440, calendar: la) == nil)
+let runs = Availability.runs(inWindow, calendar: la)
+check("back-to-back days fold into runs", runs.map(\.days) == [1, 3, 1, 1] && runs[1].level == .full)
+check("a different level starts a new run", Availability.runs(inWindow, calendar: la).last?.level == .partial)
+check("day details put all-day first", Availability.dayDetails([tuesdayEvenings, everyTuesday], on: "2026-11-10", calendar: la).map(\.id) == ["r1", "r2"])
 check("times read like the web's", Availability.timeLabel(18 * 60) == "6 PM" && Availability.timeLabel(9 * 60 + 30) == "9:30 AM" && Availability.timeLabel(0) == "12 AM" && Availability.timeLabel(12 * 60) == "12 PM")
 check("window words", Availability.windowLabel(everyTuesday) == "All day" && Availability.windowLabel(tuesdayEvenings) == "6 PM – 9 PM")
 check("weekly rules sort by day then time", Availability.weeklyRules([tuesdayEvenings, trip, everyTuesday]).map(\.id) == ["r1", "r2"])

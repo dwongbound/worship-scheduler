@@ -99,6 +99,7 @@ struct ApprovalsView: View {
                     .tint(.red)
                 }
               }
+              .ownsSideSwipe(!model.readOnly)
               .disabled(busy.contains(approval.id))
             }
           } footer: {

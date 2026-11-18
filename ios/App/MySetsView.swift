@@ -160,6 +160,7 @@ struct MySetsView: View {
                     .tint(.green)
                 }
               }
+              .ownsSideSwipe(!model.readOnly)
           }
           // The web's "Confirm all": one tap for every pending seat, offered
           // once there's more than one to answer.

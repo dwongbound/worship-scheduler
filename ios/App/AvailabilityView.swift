@@ -1,10 +1,10 @@
 import SwiftUI
 import TapWorshipKit
 
-/// When I can't serve: the web's /schedule. Tap a day to block it all day,
-/// tap it again to clear it; weekly blocks and part-day blocks live in their
-/// own lists underneath; an open request from an admin sits on top until it's
-/// submitted.
+/// When I can't serve: the web's /schedule, called Unavailabilities here.
+/// Tap a day to open its drawer (what's blocked, and block or free it);
+/// weekly blocks and part-day blocks live in their own lists underneath; an
+/// open request from an admin sits on top until it's submitted.
 ///
 /// Days are read on the app's clock (`AppConfig.appCalendar`), not the
 /// phone's: that's the clock the scheduler judges them on.
@@ -22,6 +22,10 @@ struct AvailabilityView: View {
   @State private var adding = false
   @State private var submitting: ApiAvailabilityRequest?
   @State private var busyRequest: String?
+  /// The day whose drawer is open.
+  @State private var openDay: OpenDay?
+
+  struct OpenDay: Identifiable { let ymd: String; let date: Date; var id: String { ymd } }
 
   enum Phase: Equatable { case loading, loaded, failed(String) }
 
@@ -32,7 +36,7 @@ struct AvailabilityView: View {
     NavigationStack {
       content
         .animation(.smooth(duration: 0.3), value: phase)
-        .navigationTitle("Availability")
+        .navigationTitle("Unavailabilities")
         .toolbar {
           if !model.readOnly {
             ToolbarItem(placement: .topBarTrailing) {
@@ -45,6 +49,19 @@ struct AvailabilityView: View {
         .task { if phase == .loading { await load() } }
         .sheet(isPresented: $adding) {
           AddBlockSheet { await write($0) }
+        }
+        .sheet(item: $openDay) { day in
+          DayDrawer(
+            date: day.date,
+            blocks: Availability.dayDetails(data.entries, on: day.ymd, calendar: calendar),
+            canBlockAllDay: Availability.tapBlocks(data.entries, on: day.ymd, calendar: calendar),
+            readOnly: model.readOnly,
+            onBlockAllDay: { setDay(day.ymd, blocked: true) },
+            onFree: { setDay(day.ymd, blocked: false) },
+            onAddTime: { start, end in
+              await write { try await model.api.addTimed(date: day.ymd, startMinute: start, endMinute: end) }
+            }
+          )
         }
         .sheet(item: $submitting) { request in
           SubmitAvailabilitySheet(
@@ -101,7 +118,7 @@ struct AvailabilityView: View {
         .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
       } footer: {
         VStack(alignment: .leading, spacing: 6) {
-          Text("Tap a day to block it all day. Tap a blocked day to clear it.")
+          Text("Tap a day to see what's blocked, and to block or free it.")
           AvailabilityLegend()
         }
       }
@@ -193,7 +210,8 @@ struct AvailabilityView: View {
     let repeating = Availability.isRepeating(data.entries, on: ymd, calendar: calendar)
     let past = ymd < today
     return Button {
-      tap(ymd)
+      taps += 1
+      openDay = OpenDay(ymd: ymd, date: date)
     } label: {
       VStack(spacing: 2) {
         Text("\(calendar.component(.day, from: date))")
@@ -220,7 +238,7 @@ struct AvailabilityView: View {
       .opacity(past ? 0.4 : 1)
     }
     .buttonStyle(.plain)
-    .disabled(past || model.readOnly)
+    .disabled(past)
     .contextMenu {
       if !past && !model.readOnly {
         if level != .full || Availability.tapBlocks(data.entries, on: ymd, calendar: calendar) {
@@ -232,7 +250,7 @@ struct AvailabilityView: View {
       }
     }
     .accessibilityLabel(dayLabel(date, level: level, repeating: repeating))
-    .accessibilityHint(past ? "" : (Availability.tapBlocks(data.entries, on: ymd, calendar: calendar) ? "Blocks this day" : "Clears this day"))
+    .accessibilityHint(past ? "" : "Shows this day's details")
   }
 
   private func dayLabel(_ date: Date, level: Availability.Level?, repeating: Bool) -> String {
@@ -245,10 +263,6 @@ struct AvailabilityView: View {
     case nil: state = "free"
     }
     return "\(date.formatted(style)), \(state)\(repeating ? ", repeats weekly" : "")"
-  }
-
-  private func tap(_ ymd: String) {
-    setDay(ymd, blocked: Availability.tapBlocks(data.entries, on: ymd, calendar: calendar))
   }
 
   /// Shows the change at once, then lets the server have the last word.
@@ -286,6 +300,7 @@ struct AvailabilityView: View {
             Button("Delete", role: .destructive) { delete(rule) }
           }
         }
+        .ownsSideSwipe(!model.readOnly)
       }
     } header: {
       Text("Every week")
@@ -320,6 +335,7 @@ struct AvailabilityView: View {
               Button("Delete", role: .destructive) { delete(block) }
             }
           }
+          .ownsSideSwipe(!model.readOnly)
         }
       }
     }
@@ -410,8 +426,10 @@ struct AvailabilityLegend: View {
   }
 }
 
-/// The last look before submitting: what's blocked in the window, and a note
-/// for the admin.
+/// The last look before submitting: a one-line count, the note for the
+/// admin, then the unavailabilities themselves, folded into back-to-back runs
+/// ("Thu, Nov 12 – Sat, Nov 14 · All day") and grouped by month, so a long
+/// window still reads in a glance.
 struct SubmitAvailabilitySheet: View {
   let request: ApiAvailabilityRequest
   let blocked: [(ymd: String, date: Date, level: Availability.Level)]
@@ -433,32 +451,75 @@ struct SubmitAvailabilitySheet: View {
     _note = State(initialValue: note)
   }
 
+  private var calendar: Calendar { AppConfig.appCalendar }
+
+  /// The runs, grouped under the month each one starts in.
+  private var months: [(title: String, runs: [Availability.BlockedRun])] {
+    var out: [(title: String, runs: [Availability.BlockedRun])] = []
+    var style = Date.FormatStyle.dateTime.month(.wide).year()
+    style.timeZone = calendar.timeZone
+    for run in Availability.runs(blocked, calendar: calendar) {
+      let title = run.first.formatted(style)
+      if out.last?.title == title { out[out.count - 1].runs.append(run) } else { out.append((title, [run])) }
+    }
+    return out
+  }
+
+  private var summary: String {
+    let full = blocked.filter { $0.level == .full }.count
+    let part = blocked.count - full
+    var parts: [String] = []
+    if full > 0 { parts.append("\(full) all day") }
+    if part > 0 { parts.append("\(part) part of the day") }
+    return "\(blocked.count) \(blocked.count == 1 ? "day" : "days") · " + parts.joined(separator: ", ")
+  }
+
   var body: some View {
     NavigationStack {
       Form {
         Section {
           if blocked.isEmpty {
             Label("You're free every day in this window", systemImage: "checkmark.circle")
+          } else {
+            Label(summary, systemImage: "calendar.badge.exclamationmark")
           }
-          ForEach(blocked, id: \.ymd) { day in
-            LabeledContent(dayText(day.date), value: day.level == .full ? "All day" : "Part of the day")
-          }
+          TextField("Note for your admin (optional)", text: $note, axis: .vertical)
+            .lineLimit(2...6)
         } header: {
-          Text("Days you can't serve")
+          Text("\(dayText(request.startDate)) – \(dayText(request.endDate))")
         } footer: {
-          Text("Close this and tap the calendar if anything is missing.")
+          if note.count > 400 {
+            Text("\(note.count)/500").foregroundStyle(note.count > 500 ? .red : .secondary)
+          }
         }
-        Section {
-          TextField("Optional, e.g. \"Mornings only after the 15th\"", text: $note, axis: .vertical)
-            .lineLimit(3...6)
-        } header: {
-          Text("Note for your admin")
-        } footer: {
-          Text("\(note.count)/500")
-            .foregroundStyle(note.count > 500 ? .red : .secondary)
+
+        ForEach(months, id: \.title) { month in
+          Section(month.title) {
+            ForEach(month.runs, id: \.first) { run in
+              HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(run.days == 1 ? dayText(run.first) : "\(dayText(run.first)) – \(dayText(run.last))")
+                  if run.days > 1 {
+                    Text("\(run.days) days").font(.footnote).foregroundStyle(.secondary)
+                  }
+                }
+                Spacer()
+                Text(run.level == .full ? "All day" : "Part of the day")
+                  .font(.subheadline)
+                  .foregroundStyle(run.level == .full ? .red : .orange)
+              }
+              .accessibilityElement(children: .combine)
+            }
+          }
+        }
+
+        if !blocked.isEmpty {
+          Section {} footer: {
+            Text("Something missing? Close this and tap the day on the calendar.")
+          }
         }
       }
-      .navigationTitle(request.name ?? "Submit availability")
+      .navigationTitle("Unavailabilities")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
@@ -492,7 +553,137 @@ struct SubmitAvailabilitySheet: View {
   }
 }
 
-/// A new block: one that repeats every week, or one day.
+/// One day, opened from the calendar: whether it's free, each block on it
+/// (with where it came from), and the actions — block all day, free it, or
+/// block part of it.
+struct DayDrawer: View {
+  let date: Date
+  let blocks: [ApiUnavailability]
+  let canBlockAllDay: Bool
+  let readOnly: Bool
+  let onBlockAllDay: () -> Void
+  let onFree: () -> Void
+  /// Saves a part-day block; says whether it worked.
+  let onAddTime: (Int, Int) async -> Bool
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var addingTime = false
+  @State private var from = AddBlockSheet.time(hour: 9)
+  @State private var to = AddBlockSheet.time(hour: 12)
+  @State private var saving = false
+
+  private var allDay: Bool { blocks.contains(where: \.isAllDay) }
+
+  private var status: (text: String, icon: String, color: Color) {
+    if blocks.isEmpty { return ("Free all day", "checkmark.circle.fill", .green) }
+    if allDay { return ("Unavailable all day", "nosign", .red) }
+    let windows = blocks.map { Availability.windowLabel($0) }.joined(separator: ", ")
+    return ("Unavailable \(windows)", "clock.badge.exclamationmark", .orange)
+  }
+
+  private func source(_ block: ApiUnavailability) -> String {
+    if block.type == .recurring { return Availability.weeklyTitle(block) }
+    if block.fromGoogle == true { return "From Google Calendar" }
+    return "Added by you"
+  }
+
+  private func minutes(_ date: Date) -> Int {
+    let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+    return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
+  }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          Label(status.text, systemImage: status.icon)
+            .foregroundStyle(status.color)
+            .font(.headline)
+          ForEach(blocks) { block in
+            LabeledContent {
+              Text(source(block))
+            } label: {
+              Text(Availability.windowLabel(block))
+            }
+          }
+        }
+
+        if !readOnly {
+          Section {
+            if canBlockAllDay {
+              Button {
+                onBlockAllDay()
+                dismiss()
+              } label: {
+                Label("Block all day", systemImage: "nosign")
+              }
+            }
+            if !blocks.isEmpty {
+              Button(role: .destructive) {
+                onFree()
+                dismiss()
+              } label: {
+                Label("Free this day", systemImage: "checkmark.circle")
+              }
+            }
+            if !allDay {
+              Button {
+                withAnimation(.smooth) { addingTime.toggle() }
+              } label: {
+                Label("Block part of the day", systemImage: "clock")
+              }
+              if addingTime {
+                HStack {
+                  DatePicker("From", selection: $from, displayedComponents: .hourAndMinute).labelsHidden()
+                  Text("–").foregroundStyle(.secondary)
+                  DatePicker("To", selection: $to, displayedComponents: .hourAndMinute).labelsHidden()
+                  Spacer()
+                  Button {
+                    saving = true
+                    Task {
+                      let saved = await onAddTime(minutes(from), minutes(to))
+                      saving = false
+                      if saved { dismiss() }
+                    }
+                  } label: {
+                    if saving { ProgressView() } else { Text("Add") }
+                  }
+                  .buttonStyle(.borderedProminent)
+                  .controlSize(.small)
+                  .disabled(saving || minutes(from) >= minutes(to))
+                }
+                .transition(.opacity)
+              }
+            }
+          } footer: {
+            if blocks.contains(where: { $0.type == .recurring }) && !blocks.isEmpty {
+              Text("Freeing a day only skips it; your weekly block keeps repeating.")
+            }
+          }
+        }
+      }
+      .listStyle(.insetGrouped)
+      .navigationTitle(title)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { dismiss() }
+        }
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private var title: String {
+    var style = Date.FormatStyle.dateTime.weekday(.wide).month(.abbreviated).day()
+    style.timeZone = AppConfig.appTimeZone
+    return date.formatted(style)
+  }
+}
+
+/// A new block: one that repeats every week, or a run of dates (one day is
+/// a run of one).
 struct AddBlockSheet: View {
   /// Runs the save and says whether it worked; the sheet stays up if not.
   let save: (@escaping () async throws -> Void) async -> Bool
@@ -502,7 +693,7 @@ struct AddBlockSheet: View {
 
   enum Kind: String, CaseIterable, Identifiable {
     case weekly = "Every week"
-    case oneDay = "One day"
+    case dates = "Dates"
     var id: String { rawValue }
   }
 
@@ -514,6 +705,7 @@ struct AddBlockSheet: View {
   @State private var ends = false
   @State private var until = Date().addingTimeInterval(28 * 86_400)
   @State private var day = Date()
+  @State private var lastDay = Date()
   @State private var sending = false
 
   static func time(hour: Int) -> Date {
@@ -532,7 +724,7 @@ struct AddBlockSheet: View {
   private var problem: String? {
     switch kind {
     case .weekly: Availability.weeklyProblem(days: days, startMinute: startMinute, endMinute: endMinute)
-    case .oneDay: startMinute >= endMinute ? "The end time has to be after the start." : nil
+    case .dates: Availability.rangeProblem(from: day, through: lastDay, startMinute: startMinute, endMinute: endMinute, calendar: .current)
     }
   }
 
@@ -554,10 +746,19 @@ struct AddBlockSheet: View {
             WeekdayPicker(selection: $days)
               .padding(.vertical, 4)
           } else {
-            DatePicker("Day", selection: $day, in: Date()..., displayedComponents: .date)
+            DatePicker("From", selection: $day, in: Date()..., displayedComponents: .date)
+            DatePicker("Through", selection: $lastDay, in: day..., displayedComponents: .date)
           }
         } header: {
-          Text(kind == .weekly ? "Days" : "Day")
+          Text(kind == .weekly ? "Days" : "Dates")
+        } footer: {
+          if kind == .dates {
+            Text("For one day, leave From and Through on the same date.")
+          }
+        }
+        .onChange(of: day) { _, first in
+          // Moving the first day past the last drags the last along.
+          if lastDay < first { lastDay = first }
         }
 
         Section {
@@ -622,6 +823,8 @@ struct AddBlockSheet: View {
     // A day picked on the phone is the day the person saw, so it's spelled on
     // the phone's calendar.
     let dayYmd = SetCalendar.ymd(day, calendar: .current)
+    let lastYmd = SetCalendar.ymd(lastDay, calendar: .current)
+    let rangeYmds = Availability.ymds(from: day, through: lastDay, calendar: .current, limit: Availability.maxRangeDays)
     let untilYmd = ends ? SetCalendar.ymd(until, calendar: .current) : nil
     let blocks = days.sorted().map {
       WeeklyBlockInput(dayOfWeek: $0, startMinute: start, endMinute: end, endDate: untilYmd)
@@ -633,11 +836,14 @@ struct AddBlockSheet: View {
         switch kind {
         case .weekly:
           try await api.addWeekly(blocks)
-        case .oneDay:
+        case .dates:
           if allDay {
-            try await api.blockDays(start: dayYmd, end: dayYmd, blocked: true)
+            try await api.blockDays(start: dayYmd, end: lastYmd, blocked: true)
           } else {
-            try await api.addTimed(date: dayYmd, startMinute: start, endMinute: end)
+            // Part of each day: one block per day, like the web's form.
+            for ymd in rangeYmds {
+              try await api.addTimed(date: ymd, startMinute: start, endMinute: end)
+            }
           }
         }
       }
