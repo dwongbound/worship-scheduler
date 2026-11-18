@@ -79,8 +79,14 @@ struct SignInView: View {
                 ProgressView().accessibilityLabel("Signing in")
               }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 50)
           }
+          // The same full-width, 50pt shape as the Apple and Google buttons
+          // below, rather than a plain list row next to two big buttons.
+          .buttonStyle(.borderedProminent)
+          .buttonBorderShape(.capsule)
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
           .disabled(!canSubmit)
         }
 
@@ -92,6 +98,7 @@ struct SignInView: View {
           }
           .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
           .frame(height: 50)
+          .clipShape(Capsule())
           .listRowInsets(EdgeInsets())
           .disabled(busy != nil)
           .opacity(busy == .apple ? 0.5 : 1)
@@ -113,6 +120,7 @@ struct SignInView: View {
               .frame(maxWidth: .infinity, minHeight: 50)
             }
             .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
             .tint(.primary)
             .listRowInsets(EdgeInsets())
             .disabled(busy != nil)
