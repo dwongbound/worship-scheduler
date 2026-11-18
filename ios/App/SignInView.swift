@@ -145,6 +145,10 @@ struct SocialSignInButtons: View {
         handleApple(result)
       }
       .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+      // Apple's button is a UIKit view that keeps the style it was made
+      // with; rebuild it when the theme flips (the app's own Light/Dark
+      // setting lands just after launch), or it draws black on black.
+      .id(colorScheme)
       .frame(height: ActionButtonStyle.height)
       .clipShape(Capsule())
       .disabled(busy != nil)

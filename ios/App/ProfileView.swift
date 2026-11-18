@@ -29,7 +29,7 @@ struct ProfileView: View {
   var body: some View {
     Group {
       if let profile {
-        form(profile)
+        form(profile).loadedContent()
       } else if let loadError {
         ContentUnavailableView {
           Label("Couldn't load your profile", systemImage: "wifi.exclamationmark")
@@ -39,9 +39,22 @@ struct ProfileView: View {
           Button("Try again") { Task { await load() } }
         }
       } else {
-        ProgressView()
+        // The profile's own shape, greyed and shimmering, while it loads.
+        Form {
+          Section("Name and email") {
+            Text("Firstname Lastname")
+            Text("someone@example.com")
+          }
+          Section("My teams") {
+            Text("Sunday Team")
+            Text("Worship Leader, Vox")
+          }
+          Section { Text("Morning summary") }
+        }
+        .skeleton("Loading your profile")
       }
     }
+    .animation(.smooth(duration: 0.35), value: profile == nil)
     .navigationTitle("Profile")
     .navigationBarTitleDisplayMode(.inline)
     .task { if profile == nil { await load() } }

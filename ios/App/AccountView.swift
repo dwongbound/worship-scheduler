@@ -8,6 +8,7 @@ struct AccountView: View {
   @State private var confirmSignOut = false
   @State private var deleting = false
   @State private var joining = false
+  @AppStorage(AppTheme.storageKey) private var theme = AppTheme.system
   @State private var joinedName: String?
 
   var body: some View {
@@ -58,6 +59,19 @@ struct AccountView: View {
             Text("This is a development build. It isn't talking to tapworship.com.")
           }
         }
+        Section {
+          Picker("Appearance", selection: $theme) {
+            ForEach(AppTheme.allCases) { Text($0.title).tag($0) }
+          }
+          .pickerStyle(.segmented)
+          .listRowBackground(Color.clear)
+          .listRowInsets(EdgeInsets())
+        } header: {
+          Text("Appearance")
+        } footer: {
+          Text("Device follows your iPhone's Light or Dark setting.")
+        }
+
         // Plain List rows: a List row is already at least 44pt, so an extra
         // minHeight frame here only made these two rows taller than the rest.
         Section {

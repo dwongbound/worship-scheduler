@@ -191,9 +191,17 @@ struct PracticeFreeView: View {
             Button("Try again") { Task { await load() } }
           }
         } else {
-          ProgressView()
+          List {
+            Section("Free") {
+              ForEach(0..<4, id: \.self) { _ in
+                Label("Firstname Lastname", systemImage: "checkmark.circle.fill")
+              }
+            }
+          }
+          .skeleton("Loading who's free")
         }
       }
+      .animation(.smooth(duration: 0.35), value: people == nil)
       .navigationTitle(practice.startsAt.formatted(.dateTime.weekday(.abbreviated).month().day().hour().minute()))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

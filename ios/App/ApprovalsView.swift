@@ -63,9 +63,7 @@ struct ApprovalsView: View {
     switch phase {
     case .loading where items.isEmpty:
       List { ForEach(AdminPreviewData.approvals) { ApprovalRow(approval: $0) } }
-        .redacted(reason: .placeholder)
-        .disabled(true)
-        .accessibilityLabel("Loading approvals")
+        .skeleton("Loading approvals")
     case .failed(let message) where items.isEmpty:
       ContentUnavailableView {
         Label("Couldn't load approvals", systemImage: "wifi.exclamationmark")

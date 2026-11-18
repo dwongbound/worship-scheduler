@@ -115,10 +115,15 @@ struct CalendarView: View {
     Section {
       switch phase {
       case .loading where loaded[monthKey] == nil:
-        HStack {
-          ProgressView()
-          Text("Loading sets").foregroundStyle(.secondary)
+        ForEach(0..<2, id: \.self) { _ in
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Sunday Morning Worship").font(.headline)
+            Text("9:00 – 10:30").font(.subheadline)
+            Text("Sunday Team").font(.footnote)
+          }
+          .padding(.vertical, 2)
         }
+        .skeleton("Loading sets")
       case .failed(let message) where loaded[monthKey] == nil:
         VStack(alignment: .leading, spacing: 8) {
           Label("Couldn't load sets", systemImage: "wifi.exclamationmark")

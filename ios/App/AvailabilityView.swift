@@ -75,9 +75,7 @@ struct AvailabilityView: View {
           }
         }
       }
-      .redacted(reason: .placeholder)
-      .disabled(true)
-      .accessibilityLabel("Loading your availability")
+      .skeleton("Loading your availability")
     case .failed(let message):
       ContentUnavailableView {
         Label("Couldn't load your availability", systemImage: "wifi.exclamationmark")
@@ -88,7 +86,7 @@ struct AvailabilityView: View {
           .buttonStyle(.borderedProminent)
       }
     case .loaded:
-      list
+      list.loadedContent()
     }
   }
 

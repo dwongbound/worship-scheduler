@@ -8,6 +8,7 @@ struct TapWorshipApp: App {
     WindowGroup {
       RootView()
         .environment(model)
+        .modifier(ThemedWindow())
     }
   }
 }
@@ -57,7 +58,9 @@ struct MainTabView: View {
   /// snaps back to 0 by itself when iOS cancels the drag (a row's own swipe
   /// action, a scroll taking over) — a plain @State never heard about the
   /// cancel and left the page stuck off-screen.
-  @GestureState private var pull: CGFloat = 0
+  /// Snaps back with its own animation, scoped to the pull alone (an
+  /// `.animation` on the TabView also animated whatever the tab switch did).
+  @GestureState(resetTransaction: Transaction(animation: .snappy)) private var pull: CGFloat = 0
   /// The slide-out / slide-in after a swipe commits.
   @State private var slideX: CGFloat = 0
   @State private var width: CGFloat = 400
@@ -66,24 +69,24 @@ struct MainTabView: View {
 
   var body: some View {
     TabView(selection: $selection) {
-      page(CalendarView())
+      page(CalendarView(), .calendar)
         .tabItem { Label("Calendar", systemImage: "calendar") }
         .tag(AppTab.calendar)
-      page(MySetsView())
+      page(MySetsView(), .mySets)
         .tabItem { Label("My Sets", systemImage: "music.note.list") }
         .badge(model.swapBadge)
         .tag(AppTab.mySets)
-      page(AvailabilityView())
+      page(AvailabilityView(), .availability)
         .tabItem { Label("Availability", systemImage: "calendar.badge.clock") }
         .badge(model.availabilityBadge)
         .tag(AppTab.availability)
       if model.isAdminAnywhere {
-        page(AdminView())
+        page(AdminView(), .admin)
           .tabItem { Label("Admin", systemImage: "checkmark.seal") }
           .badge(model.pendingApprovals)
           .tag(AppTab.admin)
       }
-      page(AccountView())
+      page(AccountView(), .account)
         .tabItem { Label("Account", systemImage: "person.crop.circle") }
         .tag(AppTab.account)
     }
@@ -113,24 +116,29 @@ struct MainTabView: View {
           slide(to: next, step: step, from: value.translation.width)
         }
     )
-    .animation(.snappy, value: pull == 0)
     .sensoryFeedback(.selection, trigger: selection)
     .task {
       await model.refreshAdminOrgs()
       await model.refreshBadges()
     }
     // Badges follow what you just did on a tab, and catch up on return.
-    .onChange(of: selection) { Task { await model.refreshBadges() } }
+    .onChange(of: selection) {
+      // Belt and braces: whatever changed the tab, the page ends up in place.
+      if slideX != 0 && abs(slideX) > width * 0.5 { slideX = 0 }
+      Task { await model.refreshBadges() }
+    }
     .onChange(of: scenePhase) { _, phase in
       if phase == .active { Task { await model.refreshBadges() } }
     }
   }
 
-  /// One tab's content, moved by the swipe.
-  private func page<V: View>(_ content: V) -> some View {
+  /// One tab's content, moved by the swipe. Only the tab on screen moves:
+  /// every page used to share the offset (and a fade), so a tab switched to
+  /// mid-slide could appear already pushed aside and dimmed, which read as a
+  /// black screen. Nothing fades now; the page only slides.
+  private func page<V: View>(_ content: V, _ tab: AppTab) -> some View {
     content
-      .offset(x: offsetX)
-      .opacity(1 - min(abs(offsetX) / max(width, 1), 1) * 0.35)
+      .offset(x: tab == selection ? offsetX : 0)
   }
 
   private func neighbour(_ step: Int) -> AppTab? {
@@ -139,23 +147,21 @@ struct MainTabView: View {
     return tabs.indices.contains(next) ? tabs[next] : nil
   }
 
-  /// The current page leaves the way the finger went, the next one comes in
-  /// from the other side. Starts from where the finger let go, since the
-  /// gesture's own pull resets to 0 the moment it ends.
+  /// Switch tabs and let the new page glide in from the side the finger
+  /// came from. The old version slid the old page out first and waited on an
+  /// animation's completion to bring the new one in; when that completion
+  /// didn't fire (a second swipe, a tab tap mid-slide) the page was left
+  /// parked off-screen and the tab looked black. Now nothing waits: the new
+  /// page is placed a little to the side and always animates to 0.
   private func slide(to next: AppTab, step: Int, from released: CGFloat) {
-    let out: CGFloat = step > 0 ? -width : width
+    let entry: CGFloat = (step > 0 ? 1 : -1) * min(width * 0.35, 140)
     var still = Transaction()
     still.disablesAnimations = true
-    withTransaction(still) { slideX = released }
-    withAnimation(.easeIn(duration: 0.12)) {
-      slideX = out
-    } completion: {
-      withTransaction(still) {
-        selection = next
-        slideX = -out
-      }
-      withAnimation(.smooth(duration: 0.28)) { slideX = 0 }
+    withTransaction(still) {
+      selection = next
+      slideX = entry
     }
+    withAnimation(.smooth(duration: 0.3)) { slideX = 0 }
   }
 }
 
@@ -215,4 +221,40 @@ enum TabSwipe {
 #Preview("Tabs · admin") {
   MainTabView()
     .environment(AppModel.adminPreview())
+}
+
+/// Light, dark, or whatever the phone is set to (the default), chosen on the
+/// Account tab and remembered on this device. Mirrors the web's theme switch
+/// (lib/theme.ts: light / dark / system).
+enum AppTheme: String, CaseIterable, Identifiable {
+  case system, light, dark
+  static let storageKey = "appearance.theme"
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .system: "Device"
+    case .light: "Light"
+    case .dark: "Dark"
+    }
+  }
+
+  /// nil = follow the device.
+  var colorScheme: ColorScheme? {
+    switch self {
+    case .system: nil
+    case .light: .light
+    case .dark: .dark
+    }
+  }
+}
+
+/// Applies the chosen theme to the whole app, sheets included.
+struct ThemedWindow: ViewModifier {
+  @AppStorage(AppTheme.storageKey) private var theme = AppTheme.system
+  func body(content: Content) -> some View {
+    content
+      .preferredColorScheme(theme.colorScheme)
+      .animation(.smooth(duration: 0.3), value: theme)
+  }
 }

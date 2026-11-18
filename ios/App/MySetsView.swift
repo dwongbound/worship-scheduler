@@ -89,9 +89,7 @@ struct MySetsView: View {
     switch phase {
     case .loading where groups.isEmpty:
       List { ForEach(PreviewData.groups) { SetRow(group: $0) } }
-        .redacted(reason: .placeholder)
-        .disabled(true)
-        .accessibilityLabel("Loading your sets")
+        .skeleton("Loading your sets")
     case .failed(let message) where groups.isEmpty:
       ContentUnavailableView {
         Label("Couldn't load your sets", systemImage: "wifi.exclamationmark")
@@ -111,7 +109,7 @@ struct MySetsView: View {
                : "When you're scheduled on a set, it shows up here.")
         }
       } else {
-        list
+        list.loadedContent()
       }
     }
   }

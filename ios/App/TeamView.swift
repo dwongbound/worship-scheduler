@@ -49,9 +49,7 @@ struct TeamView: View {
           ForEach(AdminPreviewData.users) { MemberRow(user: $0, teamID: "t1") }
         }
       }
-      .redacted(reason: .placeholder)
-      .disabled(true)
-      .accessibilityLabel("Loading your team")
+      .skeleton("Loading your team")
     case .failed(let message) where users.isEmpty:
       ContentUnavailableView {
         Label("Couldn't load the team", systemImage: "wifi.exclamationmark")
