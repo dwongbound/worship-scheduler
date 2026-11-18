@@ -40,8 +40,6 @@ struct CalendarView: View {
       .listStyle(.insetGrouped)
       .pageHeader("Calendar") {
         Button("Today") { goToToday() }
-          .buttonStyle(.bordered)
-          .buttonBorderShape(.capsule)
         if model.isAdminAnywhere && !model.readOnly {
           HeaderIconButton(label: "New set", systemImage: "plus") { creatingSet = true }
         }

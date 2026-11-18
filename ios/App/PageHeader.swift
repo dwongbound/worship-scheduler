@@ -1,10 +1,9 @@
 import SwiftUI
 
-// The top of a tab's main page: its big title with the page's buttons on the
-// same line (the + sits beside "Unavailabilities", not floating above it).
-// On iOS 26 this uses the bar's own large-title slot, so it still shrinks into
-// the bar on scroll like any other title; earlier iOS keeps the buttons in the
-// bar's corner.
+// The top of a tab's main page: its title on the left and the page's buttons
+// on the right, all in the bar's own row. No large-title row underneath, so
+// there's no empty band between the status bar and the title, and the title
+// never shifts as the page scrolls.
 
 extension View {
   func pageHeader<Actions: View>(_ title: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
@@ -17,35 +16,47 @@ struct PageHeader<Actions: View>: ViewModifier {
   let actions: () -> Actions
 
   func body(content: Content) -> some View {
+    content
+      // Still set, for the back button and VoiceOver; the bar shows the
+      // leading title below instead of a centered one.
+      .navigationTitle(title)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
+        ToolbarItemGroup(placement: .topBarTrailing) { actions() }
+      }
+      .modifier(LeadingTitle(title: title))
+  }
+}
+
+/// The title as the bar's leading item, without the glass capsule iOS 26
+/// draws behind bar items.
+private struct LeadingTitle: ViewModifier {
+  let title: String
+
+  private var label: some View {
+    Text(title)
+      .font(.title.bold())
+      .lineLimit(1)
+      .fixedSize()
+      .accessibilityAddTraits(.isHeader)
+  }
+
+  func body(content: Content) -> some View {
     if #available(iOS 26.0, *) {
-      content
-        .navigationTitle(title)
-        .toolbar {
-          ToolbarItem(placement: .largeTitle) {
-            HStack(alignment: .center, spacing: 10) {
-              Text(title)
-                .font(.largeTitle.bold())
-                .lineLimit(1)
-                .fixedSize()
-                .accessibilityAddTraits(.isHeader)
-              Spacer(minLength: 8)
-              actions()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }
+      content.toolbar {
+        ToolbarItem(placement: .topBarLeading) { label }
+          .sharedBackgroundVisibility(.hidden)
+      }
     } else {
-      content
-        .navigationTitle(title)
-        .toolbar {
-          ToolbarItemGroup(placement: .topBarTrailing) { actions() }
-        }
+      content.toolbar {
+        ToolbarItem(placement: .topBarLeading) { label }
+      }
     }
   }
 }
 
-/// A round icon button for the header row: the same size as the bar's own
-/// glass buttons, so it reads as part of the header.
+/// An icon button for the header: in the bar, iOS draws its round glass.
 struct HeaderIconButton: View {
   let label: String
   let systemImage: String
@@ -53,13 +64,7 @@ struct HeaderIconButton: View {
 
   var body: some View {
     Button(action: action) {
-      Image(systemName: systemImage)
-        .font(.title3.weight(.semibold))
-        .frame(width: 40, height: 40)
-        .background(Circle().fill(Color(.tertiarySystemFill)))
-        .contentShape(Circle())
+      Label(label, systemImage: systemImage)
     }
-    .buttonStyle(.plain)
-    .accessibilityLabel(label)
   }
 }
