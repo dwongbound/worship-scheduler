@@ -33,7 +33,7 @@ struct MySetsView: View {
     NavigationStack {
       content
         .animation(.smooth(duration: 0.3), value: phase)
-        .navigationTitle("My Sets")
+        .pageHeader("My Sets") { EmptyView() }
         .navigationDestination(for: MySets.SetGroup.self) { group in
           SetSeatsView(
             groupID: group.id, groups: groups, act: act,

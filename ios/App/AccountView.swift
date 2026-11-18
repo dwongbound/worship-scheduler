@@ -90,7 +90,7 @@ struct AccountView: View {
         }
       }
       .listStyle(.insetGrouped)
-      .navigationTitle("Account")
+      .pageHeader("Account") { EmptyView() }
       .sheet(isPresented: $deleting) {
         DeleteAccountView()
       }

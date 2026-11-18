@@ -38,19 +38,12 @@ struct CalendarView: View {
         daySection
       }
       .listStyle(.insetGrouped)
-      .navigationTitle("Calendar")
-      .toolbar {
-        ToolbarItem(placement: .topBarTrailing) {
-          Button("Today") { goToToday() }
-        }
+      .pageHeader("Calendar") {
+        Button("Today") { goToToday() }
+          .buttonStyle(.bordered)
+          .buttonBorderShape(.capsule)
         if model.isAdminAnywhere && !model.readOnly {
-          ToolbarItem(placement: .topBarTrailing) {
-            Button {
-              creatingSet = true
-            } label: {
-              Label("New set", systemImage: "plus")
-            }
-          }
+          HeaderIconButton(label: "New set", systemImage: "plus") { creatingSet = true }
         }
       }
       .sheet(isPresented: $creatingSet) {

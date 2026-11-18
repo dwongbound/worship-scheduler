@@ -36,13 +36,10 @@ struct AvailabilityView: View {
     NavigationStack {
       content
         .animation(.smooth(duration: 0.3), value: phase)
-        .navigationTitle("Unavailabilities")
-        .toolbar {
+        .pageHeader("Unavailabilities") {
           if !model.readOnly {
-            ToolbarItem(placement: .topBarTrailing) {
-              Button { adding = true } label: { Label("Add a block", systemImage: "plus") }
-                .disabled(phase != .loaded)
-            }
+            HeaderIconButton(label: "Add a block", systemImage: "plus") { adding = true }
+              .disabled(phase != .loaded)
           }
         }
         .refreshable { await load() }
