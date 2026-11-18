@@ -705,6 +705,23 @@ do {
   print("  ✗ badges threw: \(error)")
 }
 
+section("sign up")
+do {
+  var form = SignUpForm(firstName: " Ann ", lastName: "Lee", email: " Ann@Example.COM ", password: "longenough", orgKey: " key ")
+  check("a complete form passes", form.problem(confirm: "longenough") == nil)
+  check("cleaned like the server", form.cleaned.email == "ann@example.com" && form.cleaned.firstName == "Ann" && form.cleaned.orgKey == "key")
+  check("passwords must match", form.problem(confirm: "different") != nil)
+  form.orgKey = "  "
+  check("the org key is required in the app", form.problem(confirm: "longenough") != nil)
+  check("email shape", SignUpForm.looksLikeEmail("a@b.co") && !SignUpForm.looksLikeEmail("a@b") && !SignUpForm.looksLikeEmail("a b@c.d") && !SignUpForm.looksLikeEmail("@b.co"))
+  let body = String(data: try TapWorship.makeEncoder().encode(SignUpForm(firstName: "A", lastName: "B", email: "a@b.co", password: "x", orgKey: "k")), encoding: .utf8) ?? ""
+  check("sign-up body has the server's field names", body.contains("\"firstName\"") && body.contains("\"orgKey\"") && body.contains("\"allowDuplicateName\":false"))
+  check("signing up is refused in the read-only preview", !ReadOnly.allows(method: "POST", path: "/api/signup"))
+} catch {
+  failures += 1
+  print("  ✗ sign up threw: \(error)")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

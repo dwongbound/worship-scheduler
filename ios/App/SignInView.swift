@@ -39,12 +39,7 @@ struct SignInView: View {
   }
 
   var body: some View {
-    NavigationStack {
       Form {
-        Section {
-          header
-            .listRowBackground(Color.clear)
-        }
 
         Section {
           TextField("Username or email", text: $username)
@@ -149,6 +144,9 @@ struct SignInView: View {
       .animation(.default, value: errorMessage)
       .sensoryFeedback(.error, trigger: errorTick)
       .onAppear { if username.isEmpty { focus = .username } }
+      .safeAreaInset(edge: .top) {
+        if AppConfig.isDevServer { DevServerBadge().padding(.bottom, 4) }
+      }
       .alert(
         "Is this you?",
         isPresented: Binding(get: { conflict != nil }, set: { if !$0 { conflict = nil } }),
@@ -163,30 +161,6 @@ struct SignInView: View {
         let first = pending.accounts.first
         Text("Someone named \(first?.name ?? "this") already has an account (\(first?.email ?? "another address")). If that's you, sign in with it instead so your sets stay in one place.")
       }
-    }
-  }
-
-  private var header: some View {
-    VStack(spacing: 8) {
-      Image("SignInMark")
-        .resizable()
-        .scaledToFit()
-        .frame(width: 72, height: 72)
-        .accessibilityHidden(true)
-      Text("TapWorship")
-        .font(.title.bold())
-      Text("Your sets, your swaps, your team.")
-        .font(.subheadline)
-        .foregroundStyle(.secondary)
-      if AppConfig.isDevServer {
-        // A dev build must never pass for the real thing.
-        Text("Development build · \(AppConfig.baseURL.host ?? "dev server")")
-          .font(.footnote.weight(.medium))
-          .foregroundStyle(.orange)
-      }
-    }
-    .frame(maxWidth: .infinity)
-    .padding(.vertical, 8)
   }
 
   // MARK: Actions
@@ -267,13 +241,44 @@ struct SignInView: View {
   }
 }
 
+
+/// The logo, name and tagline, on the landing screen.
+struct BrandHeader: View {
+  var body: some View {
+    VStack(spacing: 8) {
+      Image("SignInMark")
+        .resizable()
+        .scaledToFit()
+        .frame(width: 72, height: 72)
+        .accessibilityHidden(true)
+      Text("TapWorship")
+        .font(.title.bold())
+      Text("Your sets, your swaps, your team.")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+      if AppConfig.isDevServer { DevServerBadge() }
+    }
+    .frame(maxWidth: .infinity)
+    .padding(.vertical, 8)
+  }
+}
+
+/// A dev or staging build must never pass for the real thing.
+struct DevServerBadge: View {
+  var body: some View {
+    Text("Development build · \(AppConfig.baseURL.host ?? "dev server")")
+      .font(.footnote.weight(.medium))
+      .foregroundStyle(.orange)
+  }
+}
+
 #Preview("Sign in") {
-  SignInView()
+  NavigationStack { SignInView() }
     .environment(AppModel.preview(signedIn: false))
 }
 
 #Preview("Sign in · dark, largest text") {
-  SignInView()
+  NavigationStack { SignInView() }
     .environment(AppModel.preview(signedIn: false))
     .preferredColorScheme(.dark)
     .dynamicTypeSize(.accessibility5)
@@ -284,7 +289,9 @@ struct SignInView: View {
 /// `.borderedProminent` adds its own padding around the label, which made the
 /// password button visibly thicker than Apple's.
 struct SignInButtonStyle: ButtonStyle {
-  enum Kind { case primary, google }
+  /// `outline` is the plain white, outlined button (the landing's Sign in);
+  /// `google` is the same shape, which is Google's own branded style.
+  enum Kind { case primary, google, outline }
   static let height: CGFloat = 50
   let kind: Kind
   @Environment(\.isEnabled) private var isEnabled
@@ -299,7 +306,7 @@ struct SignInButtonStyle: ButtonStyle {
       // Google's button: white with a thin grey outline (#747775), dark
       // (#131314) with #8E918F in dark mode — its sign-in branding guidelines.
       .overlay {
-        if kind == .google { Capsule().strokeBorder(googleBorder, lineWidth: 1) }
+        if kind != .primary { Capsule().strokeBorder(googleBorder, lineWidth: 1) }
       }
       .opacity(configuration.isPressed ? 0.75 : 1)
       .contentShape(Capsule())
@@ -310,14 +317,14 @@ struct SignInButtonStyle: ButtonStyle {
   private var foreground: Color {
     switch kind {
     case .primary: .white
-    case .google: colorScheme == .dark ? Color(white: 0.89) : Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255)
+    case .google, .outline: colorScheme == .dark ? Color(white: 0.89) : Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255)
     }
   }
 
   private var background: Color {
     switch kind {
     case .primary: isEnabled ? .accentColor : Color.secondary.opacity(0.35)
-    case .google: colorScheme == .dark ? Color(red: 0x13 / 255, green: 0x13 / 255, blue: 0x14 / 255) : .white
+    case .google, .outline: colorScheme == .dark ? Color(red: 0x13 / 255, green: 0x13 / 255, blue: 0x14 / 255) : .white
     }
   }
 

@@ -20,7 +20,7 @@ struct RootView: View {
     Group {
       switch model.session {
       case nil:
-        SignInView()
+        WelcomeView()
           .transition(.opacity)
       case let session? where session.user.hasNoOrg:
         JoinOrgView()
