@@ -79,12 +79,8 @@ struct SignInView: View {
                 ProgressView().accessibilityLabel("Signing in")
               }
             }
-            .frame(maxWidth: .infinity, minHeight: 50)
           }
-          // The same full-width, 50pt shape as the Apple and Google buttons
-          // below, rather than a plain list row next to two big buttons.
-          .buttonStyle(.borderedProminent)
-          .buttonBorderShape(.capsule)
+          .buttonStyle(SignInButtonStyle(kind: .primary))
           .listRowInsets(EdgeInsets())
           .listRowBackground(Color.clear)
           .disabled(!canSubmit)
@@ -97,7 +93,7 @@ struct SignInView: View {
             handleApple(result)
           }
           .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-          .frame(height: 50)
+          .frame(height: SignInButtonStyle.height)
           .clipShape(Capsule())
           .listRowInsets(EdgeInsets())
           .disabled(busy != nil)
@@ -115,13 +111,10 @@ struct SignInView: View {
                     .imageScale(.medium)
                     .accessibilityHidden(true)
                 }
-                Text("Sign in with Google").font(.body.weight(.semibold))
+                Text("Sign in with Google")
               }
-              .frame(maxWidth: .infinity, minHeight: 50)
             }
-            .buttonStyle(.bordered)
-            .buttonBorderShape(.capsule)
-            .tint(.primary)
+            .buttonStyle(SignInButtonStyle(kind: .secondary))
             .listRowInsets(EdgeInsets())
             .disabled(busy != nil)
           }
@@ -265,4 +258,30 @@ struct SignInView: View {
     .environment(AppModel.preview(signedIn: false))
     .preferredColorScheme(.dark)
     .dynamicTypeSize(.accessibility5)
+}
+
+/// The sign-in screen's buttons, all exactly the height of Apple's own
+/// Sign in with Apple button so the three stack as one set. A system
+/// `.borderedProminent` adds its own padding around the label, which made the
+/// password button visibly thicker than Apple's.
+struct SignInButtonStyle: ButtonStyle {
+  enum Kind { case primary, secondary }
+  static let height: CGFloat = 50
+  let kind: Kind
+  @Environment(\.isEnabled) private var isEnabled
+
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .font(.body.weight(.semibold))
+      .foregroundStyle(kind == .primary ? Color.white : Color.primary)
+      .frame(maxWidth: .infinity)
+      .frame(height: Self.height)
+      .background(
+        Capsule().fill(kind == .primary
+                       ? (isEnabled ? Color.accentColor : Color.secondary.opacity(0.35))
+                       : Color(.secondarySystemFill))
+      )
+      .opacity(configuration.isPressed ? 0.75 : 1)
+      .contentShape(Capsule())
+  }
 }
