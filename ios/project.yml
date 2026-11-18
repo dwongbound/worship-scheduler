@@ -51,9 +51,13 @@ targets:
           # http://localhost. Release has neither.
           INFOPLIST_FILE: Config/Info-Debug.plist
       base:
-        # CHANGE THIS before you touch App Store Connect — the bundle id is
-        # the app's identity there and can never be reused once registered.
+        # Registered on the team below (2026-11-18). The bundle id is the
+        # app's identity in App Store Connect and can never be reused.
         PRODUCT_BUNDLE_IDENTIFIER: com.tapworship.app
+        # Dylan's Apple Developer Program team (Individual). Automatic signing
+        # with this team registered com.tapworship.app with Sign in with Apple.
+        DEVELOPMENT_TEAM: 7K9BY5Z7B7
+        CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         # iPhone and iPad. The web app already treats a tablet as a phone
