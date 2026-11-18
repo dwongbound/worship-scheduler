@@ -77,7 +77,7 @@ struct CalendarView: View {
     let daySets = byDay[ymd] ?? []
     let mine = daySets.contains { !SetCalendar.seats(of: myID, on: $0).isEmpty }
     return Button {
-      selected = ymd
+      withAnimation(.snappy(duration: 0.25)) { selected = ymd }
     } label: {
       VStack(spacing: 2) {
         DayNumber(date: date, calendar: calendar, isToday: calendar.isDateInToday(date), isSelected: selected == ymd)
@@ -119,7 +119,6 @@ struct CalendarView: View {
           ProgressView()
           Text("Loading sets").foregroundStyle(.secondary)
         }
-        .frame(minHeight: 44)
       case .failed(let message) where loaded[monthKey] == nil:
         VStack(alignment: .leading, spacing: 8) {
           Label("Couldn't load sets", systemImage: "wifi.exclamationmark")
@@ -133,7 +132,6 @@ struct CalendarView: View {
         if daySets.isEmpty {
           Text("No sets this day")
             .foregroundStyle(.secondary)
-            .frame(minHeight: 44)
         } else {
           ForEach(daySets) { set in
             NavigationLink(value: SetLink(id: set.id)) {
@@ -164,8 +162,10 @@ struct CalendarView: View {
     if loaded[key] == nil { phase = .loading }
     do {
       let fresh = try await model.api.sets(from: start, to: end, calendar: calendar)
-      loaded[key] = fresh
-      phase = .loaded
+      withAnimation(.smooth(duration: 0.3)) {
+        loaded[key] = fresh
+        phase = .loaded
+      }
     } catch is CancellationError {
       // The month changed mid-load; the new month's own load is running.
     } catch {

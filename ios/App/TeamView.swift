@@ -22,6 +22,7 @@ struct TeamView: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Team")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { AdminSectionPicker() }
@@ -216,7 +217,6 @@ struct MemberDetailView: View {
         if !model.readOnly {
         Section {
           Button("Remove from Org", role: .destructive) { confirmRemove = true }
-            .frame(minHeight: 44)
             .disabled(isMe)
         } footer: {
           Text(isMe
@@ -277,29 +277,22 @@ struct MemberDetailView: View {
             }
           }
         ))
-        ForEach(team.roles, id: \.key) { role in
-          let plays = membership.roles.contains(role.key)
-          Button {
-            let roles = plays
-              ? membership.roles.filter { $0 != role.key }
-              : team.roles.map(\.key).filter { membership.roles.contains($0) || $0 == role.key }
-            save(MemberPatch(teamRoles: [.init(teamId: team.id, roles: roles)])) {
-              $0.with(team: team.id) { $0.with(roles: roles) }
+        // Every role as a chip in one wrapping row: tap to give or take it.
+        FlowLayout(spacing: 8) {
+          ForEach(team.roles, id: \.key) { role in
+            let plays = membership.roles.contains(role.key)
+            ToggleChip(title: role.label, isOn: plays) {
+              let roles = plays
+                ? membership.roles.filter { $0 != role.key }
+                : team.roles.map(\.key).filter { membership.roles.contains($0) || $0 == role.key }
+              save(MemberPatch(teamRoles: [.init(teamId: team.id, roles: roles)])) {
+                $0.with(team: team.id) { $0.with(roles: roles) }
+              }
             }
-          } label: {
-            HStack {
-              Text(role.label).foregroundStyle(.primary)
-              Spacer()
-              Image(systemName: "checkmark")
-                .fontWeight(.semibold)
-                .opacity(plays ? 1 : 0)
-                .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-            .frame(minHeight: 44)
           }
-          .accessibilityAddTraits(plays ? .isSelected : [])
         }
+        .padding(.vertical, 4)
+        .disabled(model.readOnly)
       }
     } header: {
       Text(team.name)

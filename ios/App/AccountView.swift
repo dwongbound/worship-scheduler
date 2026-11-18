@@ -225,11 +225,13 @@ struct DeleteAccountView: View {
         Section {
           Button(role: .destructive, action: deleteAccount) {
             ZStack {
-              Text("Delete My Account Forever").bold().opacity(working ? 0 : 1)
-              if working { ProgressView().accessibilityLabel("Deleting your account") }
+              Text("Delete My Account Forever").opacity(working ? 0 : 1)
+              if working { ProgressView().tint(.white).accessibilityLabel("Deleting your account") }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
           }
+          .buttonStyle(ActionButtonStyle(kind: .destructive))
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
           .disabled(!armed)
         }
       }

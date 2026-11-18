@@ -23,7 +23,7 @@ struct WelcomeView: View {
           } label: {
             Text("Sign in")
           }
-          .buttonStyle(SignInButtonStyle(kind: .primary))
+          .buttonStyle(ActionButtonStyle(kind: .primary))
 
           OrDivider()
             .padding(.vertical, 4)
@@ -50,7 +50,7 @@ struct WelcomeView: View {
           } label: {
             Text("Sign up")
           }
-          .buttonStyle(SignInButtonStyle(kind: .outline))
+          .buttonStyle(ActionButtonStyle(kind: .outline))
           if model.readOnly {
             Text("Opens tapworship.com. This preview can't create accounts.")
               .font(.footnote)
@@ -160,7 +160,7 @@ struct SignUpView: View {
             if working { ProgressView().tint(.white).accessibilityLabel("Creating your account") }
           }
         }
-        .buttonStyle(SignInButtonStyle(kind: .primary))
+        .buttonStyle(ActionButtonStyle(kind: .primary))
         .disabled(problem != nil || working)
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)

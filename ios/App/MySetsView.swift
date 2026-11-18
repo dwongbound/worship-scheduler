@@ -32,6 +32,7 @@ struct MySetsView: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("My Sets")
         .navigationDestination(for: MySets.SetGroup.self) { group in
           SetSeatsView(
@@ -371,7 +372,6 @@ struct SetSeatsView: View {
                   Spacer()
                   if busy == seat.id { ProgressView() }
                 }
-                .frame(minHeight: 44)
               }
               .disabled(busy != nil)
             }
@@ -379,11 +379,7 @@ struct SetSeatsView: View {
               Button {
                 proposeSwap(seat)
               } label: {
-                HStack {
-                  Text("Swap with someone")
-                  Spacer()
-                }
-                .frame(minHeight: 44)
+                Text("Swap with someone")
               }
               .disabled(busy != nil)
             }
@@ -400,7 +396,6 @@ struct SetSeatsView: View {
                   Spacer()
                   if busy == seat.id { ProgressView() }
                 }
-                .frame(minHeight: 44)
               }
               .disabled(busy != nil)
             }

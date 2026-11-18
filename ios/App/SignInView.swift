@@ -55,7 +55,7 @@ struct SignInView: View {
             if busy { ProgressView().tint(.white).accessibilityLabel("Signing in") }
           }
         }
-        .buttonStyle(SignInButtonStyle(kind: .primary))
+        .buttonStyle(ActionButtonStyle(kind: .primary))
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)
         .disabled(!canSubmit)
@@ -135,7 +135,7 @@ struct SocialSignInButtons: View {
             Text("Sign in with Google")
           }
         }
-        .buttonStyle(SignInButtonStyle(kind: .google))
+        .buttonStyle(ActionButtonStyle(kind: .google))
         .disabled(busy != nil)
       }
 
@@ -145,7 +145,7 @@ struct SocialSignInButtons: View {
         handleApple(result)
       }
       .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
-      .frame(height: SignInButtonStyle.height)
+      .frame(height: ActionButtonStyle.height)
       .clipShape(Capsule())
       .disabled(busy != nil)
       .opacity(busy == .apple ? 0.5 : 1)
@@ -290,14 +290,18 @@ struct DevServerBadge: View {
     .dynamicTypeSize(.accessibility5)
 }
 
-/// The sign-in screen's buttons, all exactly the height of Apple's own
-/// Sign in with Apple button so the three stack as one set. A system
-/// `.borderedProminent` adds its own padding around the label, which made the
-/// password button visibly thicker than Apple's.
-struct SignInButtonStyle: ButtonStyle {
+/// The app's one full-width button, used wherever an action deserves a big
+/// button (sign in, create account, send, delete forever). Always exactly the
+/// height of Apple's own Sign in with Apple button, so every big button in the
+/// app matches. A system `.borderedProminent` adds its own padding around the
+/// label, which made buttons visibly thicker than Apple's.
+///
+/// Everything else (Remove from org, Delete set, Confirm…) is a plain list
+/// row at the system's standard height.
+struct ActionButtonStyle: ButtonStyle {
   /// `outline` is the plain white, outlined button (the landing's Sign in);
   /// `google` is the same shape, which is Google's own branded style.
-  enum Kind { case primary, google, outline }
+  enum Kind { case primary, destructive, google, outline }
   static let height: CGFloat = 50
   let kind: Kind
   @Environment(\.isEnabled) private var isEnabled
@@ -312,7 +316,7 @@ struct SignInButtonStyle: ButtonStyle {
       // Google's button: white with a thin grey outline (#747775), dark
       // (#131314) with #8E918F in dark mode — its sign-in branding guidelines.
       .overlay {
-        if kind != .primary { Capsule().strokeBorder(googleBorder, lineWidth: 1) }
+        if kind == .google || kind == .outline { Capsule().strokeBorder(googleBorder, lineWidth: 1) }
       }
       .opacity(configuration.isPressed ? 0.75 : 1)
       .contentShape(Capsule())
@@ -322,7 +326,7 @@ struct SignInButtonStyle: ButtonStyle {
 
   private var foreground: Color {
     switch kind {
-    case .primary: .white
+    case .primary, .destructive: .white
     case .google, .outline: colorScheme == .dark ? Color(white: 0.89) : Color(red: 0x1F / 255, green: 0x1F / 255, blue: 0x1F / 255)
     }
   }
@@ -330,6 +334,7 @@ struct SignInButtonStyle: ButtonStyle {
   private var background: Color {
     switch kind {
     case .primary: isEnabled ? .accentColor : Color.secondary.opacity(0.35)
+    case .destructive: isEnabled ? .red : Color.secondary.opacity(0.35)
     case .google, .outline: colorScheme == .dark ? Color(red: 0x13 / 255, green: 0x13 / 255, blue: 0x14 / 255) : .white
     }
   }

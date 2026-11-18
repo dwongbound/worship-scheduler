@@ -120,6 +120,7 @@ struct SwapPickerSheet: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Swap \(RoleLabels.label(for: seat.role))")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -172,7 +173,6 @@ struct SwapPickerSheet: View {
                 ProgressView()
                 Spacer()
               }
-              .frame(minHeight: 44)
               .task { await load(reset: false) }
             }
           } header: {
@@ -291,12 +291,11 @@ struct SwapConfirmView: View {
           send()
         } label: {
           ZStack {
-            Text("Send swap request").bold().opacity(sending ? 0 : 1)
-            if sending { ProgressView().accessibilityLabel("Sending") }
+            Text("Send swap request").opacity(sending ? 0 : 1)
+            if sending { ProgressView().tint(.white).accessibilityLabel("Sending") }
           }
-          .frame(maxWidth: .infinity, minHeight: 44)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(ActionButtonStyle(kind: .primary))
         .listRowInsets(EdgeInsets())
         .listRowBackground(Color.clear)
         .disabled(sending)

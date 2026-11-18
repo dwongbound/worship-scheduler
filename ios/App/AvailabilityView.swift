@@ -31,6 +31,7 @@ struct AvailabilityView: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Availability")
         .toolbar {
           if !model.readOnly {
@@ -121,66 +122,69 @@ struct AvailabilityView: View {
       Section {
         ForEach(requests) { request in
           let done = Availability.isSubmitted(request, responses: data.responses)
-          VStack(alignment: .leading, spacing: 8) {
+          // One compact row: what was asked, and a small button on the right.
+          HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-              Text(request.name ?? "Availability request")
-                .font(.headline)
-              Text("\(dayText(request.startDate)) – \(dayText(request.endDate))")
-                .font(.subheadline)
-              if let org = request.org?.name {
-                Text(org).font(.footnote).foregroundStyle(.secondary)
+              HStack(spacing: 6) {
+                Text(request.name ?? "Availability request")
+                  .font(.headline)
+                if done {
+                  Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .accessibilityLabel("Submitted")
+                    .transition(.scale.combined(with: .opacity))
+                }
               }
+              Text([
+                "\(dayText(request.startDate)) – \(dayText(request.endDate))",
+                request.org?.name,
+              ].compactMap { $0 }.joined(separator: " · "))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
-
-            if done {
-              Label("Submitted", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .font(.subheadline.weight(.medium))
-            }
-            if model.readOnly {
-              if !done {
-                Label("Not submitted yet", systemImage: "circle.dashed")
-                  .foregroundStyle(.secondary)
-                  .font(.subheadline.weight(.medium))
+            Spacer(minLength: 0)
+            if !model.readOnly {
+              if done {
+                Button {
+                  Task { await toggle(request, note: nil) }
+                } label: {
+                  compactBusyLabel("Edit", busy: busyRequest == request.id)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .buttonBorderShape(.capsule)
+              } else {
+                Button {
+                  submitting = request
+                } label: {
+                  Text("Submit")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .buttonBorderShape(.capsule)
               }
-            } else if done {
-              Button {
-                Task { await toggle(request, note: nil) }
-              } label: {
-                busyLabel("Change my answer", busy: busyRequest == request.id)
-              }
-              .buttonStyle(.bordered)
-            } else {
-              Button {
-                submitting = request
-              } label: {
-                busyLabel("Review and submit", busy: false)
-              }
-              .buttonStyle(.borderedProminent)
             }
           }
-          .padding(.vertical, 4)
           .disabled(busyRequest != nil)
+          .animation(.smooth, value: done)
         }
       } header: {
         Text("Asked for")
       } footer: {
         Text(model.readOnly
              ? "Read-only preview: block days and submit on tapworship.com."
-             : "Block the days you can't serve in that window, then submit so your admin knows you're done.")
+             : "Block the days you can't serve, then Submit so your admin knows you're done. Edit reopens it.")
       }
     }
   }
 
-  /// A button's words with a spinner laid over them, so the button never
-  /// changes size while it waits.
-  private func busyLabel(_ title: String, busy: Bool) -> some View {
+  /// A small button's word with a spinner laid over it, same width either way.
+  private func compactBusyLabel(_ title: String, busy: Bool) -> some View {
     ZStack {
       Text(title).opacity(busy ? 0 : 1)
-      if busy { ProgressView().accessibilityLabel("Saving") }
+      if busy { ProgressView().controlSize(.mini).accessibilityLabel("Saving") }
     }
-    .frame(maxWidth: .infinity, minHeight: 32)
   }
 
   // MARK: Grid
@@ -270,7 +274,6 @@ struct AvailabilityView: View {
       if rules.isEmpty {
         Text("Nothing repeats yet")
           .foregroundStyle(.secondary)
-          .frame(minHeight: 44)
       }
       ForEach(rules) { rule in
         VStack(alignment: .leading, spacing: 2) {
@@ -279,7 +282,6 @@ struct AvailabilityView: View {
             .font(.subheadline)
             .foregroundStyle(.secondary)
         }
-        .frame(minHeight: 44, alignment: .leading)
         .accessibilityElement(children: .combine)
         .swipeActions(edge: .trailing) {
           if !model.readOnly {
@@ -314,7 +316,6 @@ struct AvailabilityView: View {
               .font(.subheadline)
               .foregroundStyle(.secondary)
           }
-          .frame(minHeight: 44, alignment: .leading)
           .accessibilityElement(children: .combine)
           .swipeActions(edge: .trailing) {
             if !model.readOnly {
@@ -541,42 +542,40 @@ struct AddBlockSheet: View {
     NavigationStack {
       Form {
         Section {
-          Picker("Repeats", selection: $kind) {
+          Picker("Repeats", selection: $kind.animation(.smooth)) {
             ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
           }
           .pickerStyle(.segmented)
+          .listRowBackground(Color.clear)
+          .listRowInsets(EdgeInsets())
         }
 
-        if kind == .weekly {
-          Section("Days") {
-            ForEach(0..<7, id: \.self) { index in
-              Button {
-                if days.contains(index) { days.remove(index) } else { days.insert(index) }
-              } label: {
-                HStack {
-                  Text(Availability.dayNames[index]).foregroundStyle(.primary)
-                  Spacer()
-                  Image(systemName: "checkmark")
-                    .fontWeight(.semibold)
-                    .opacity(days.contains(index) ? 1 : 0)
-                }
-                .frame(minHeight: 32)
-                .contentShape(Rectangle())
-              }
-              .accessibilityAddTraits(days.contains(index) ? .isSelected : [])
-            }
-          }
-        } else {
-          Section {
+        Section {
+          if kind == .weekly {
+            // Seven days in one row, instead of a list row per day.
+            WeekdayPicker(selection: $days)
+              .padding(.vertical, 4)
+          } else {
             DatePicker("Day", selection: $day, in: Date()..., displayedComponents: .date)
           }
+        } header: {
+          Text(kind == .weekly ? "Days" : "Day")
         }
 
         Section {
           Toggle("All day", isOn: $allDay.animation(.smooth))
           if !allDay {
-            DatePicker("From", selection: $from, displayedComponents: .hourAndMinute)
-            DatePicker("To", selection: $to, displayedComponents: .hourAndMinute)
+            // One row: "9:00 AM – 5:00 PM".
+            HStack {
+              Text("Time")
+              Spacer()
+              DatePicker("From", selection: $from, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+              Text("–").foregroundStyle(.secondary)
+              DatePicker("To", selection: $to, displayedComponents: .hourAndMinute)
+                .labelsHidden()
+            }
+            .transition(.opacity.combined(with: .move(edge: .top)))
           }
         } footer: {
           if let problem, !(kind == .weekly && days.isEmpty) {
@@ -613,6 +612,8 @@ struct AddBlockSheet: View {
       }
       .interactiveDismissDisabled(sending)
     }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
   }
 
   private func add() {

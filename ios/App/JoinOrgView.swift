@@ -46,11 +46,13 @@ struct JoinOrgView: View {
         Section {
           Button(action: join) {
             ZStack {
-              Text("Join").bold().opacity(joining ? 0 : 1)
-              if joining { ProgressView().accessibilityLabel("Joining") }
+              Text("Join").opacity(joining ? 0 : 1)
+              if joining { ProgressView().tint(.white).accessibilityLabel("Joining") }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
           }
+          .buttonStyle(ActionButtonStyle(kind: .primary))
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
           .disabled(!canJoin)
         }
       }

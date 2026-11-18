@@ -22,6 +22,7 @@ struct ApprovalsView: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Approvals")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { AdminSectionPicker() }
@@ -223,28 +224,25 @@ struct ApprovalDetailView: View {
           }
         } else {
         Section {
-          Button {
-            Task { await decide(approval, .approve) }
-          } label: {
-            ZStack {
-              Text("Approve").bold().opacity(busy ? 0 : 1)
-              if busy { ProgressView().accessibilityLabel("Saving") }
+          // Side by side, one standard-height button each, rather than two
+          // full-width slabs stacked.
+          HStack(spacing: 12) {
+            Button("Reject", role: .destructive) { askReject(approval) }
+              .buttonStyle(ActionButtonStyle(kind: .outline))
+            Button {
+              Task { await decide(approval, .approve) }
+            } label: {
+              ZStack {
+                Text("Approve").opacity(busy ? 0 : 1)
+                if busy { ProgressView().tint(.white).accessibilityLabel("Saving") }
+              }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .buttonStyle(ActionButtonStyle(kind: .primary))
           }
-          .buttonStyle(.borderedProminent)
-          .tint(.green)
           .listRowInsets(EdgeInsets())
           .listRowBackground(Color.clear)
-
-          Button("Reject", role: .destructive) { askReject(approval) }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .buttonStyle(.bordered)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
         }
         .disabled(busy)
-        .listRowSeparator(.hidden)
         }
       }
       .listStyle(.insetGrouped)
