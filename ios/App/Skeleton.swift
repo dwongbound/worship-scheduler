@@ -14,12 +14,12 @@ extension View {
       .disabled(true)
       .accessibilityElement(children: .ignore)
       .accessibilityLabel(label)
-      .transition(.opacity)
+      .transition(.opacity.animation(.easeInOut(duration: 0.35)))
   }
 
   /// How a loaded screen replaces its skeleton: a quick cross-fade.
   func loadedContent() -> some View {
-    transition(.opacity.animation(.smooth(duration: 0.35)))
+    transition(.opacity.animation(.easeInOut(duration: 0.35)))
   }
 }
 

@@ -218,7 +218,8 @@ struct PracticeFreeView: View {
   private func load() async {
     error = nil
     do {
-      people = try await model.api.practiceAvailability(setId: setId, practiceId: practice.id).sorted
+      let fresh = try await model.api.practiceAvailability(setId: setId, practiceId: practice.id).sorted
+      withAnimation(.easeInOut(duration: 0.35)) { people = fresh }
     } catch {
       self.error = model.handle(error)
     }

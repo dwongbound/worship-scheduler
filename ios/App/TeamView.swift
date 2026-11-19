@@ -107,7 +107,7 @@ struct TeamView: View {
         users = freshUsers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         teams = freshTeams
       }
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
     }

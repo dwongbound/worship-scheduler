@@ -206,7 +206,7 @@ struct MySetsView: View {
         covers = freshCovers
         proposals = freshAsks
       }
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
     }

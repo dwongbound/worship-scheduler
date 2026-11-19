@@ -125,7 +125,7 @@ struct ApprovalsView: View {
       let fresh = try await model.api.approvals(orgId: orgId)
       withAnimation(.smooth) { items = fresh.sorted { $0.firstDate < $1.firstDate } }
       model.pendingApprovals = fresh.count
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
     }

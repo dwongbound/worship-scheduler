@@ -81,6 +81,9 @@ struct BrandedEmpty<Actions: View>: View {
     }
     .padding(32)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // The web's page color: on its own (no List under it) the screen was
+    // the navigation stack's black, banded against the header and tab bar.
+    .background(Color.twPage.ignoresSafeArea())
     .accessibilityElement(children: .contain)
   }
 }

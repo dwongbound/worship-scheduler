@@ -371,7 +371,7 @@ struct AvailabilityView: View {
       // A write still on its way would be undone by this answer.
       guard inFlight == 0 else { return }
       withAnimation(.smooth(duration: 0.2)) { data = fresh }
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error), phase != .loaded { phase = .failed(message) }
     }

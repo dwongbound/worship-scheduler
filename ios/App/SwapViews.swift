@@ -191,7 +191,7 @@ struct SwapPickerSheet: View {
       // row, but re-sorting across pages would move rows under a thumb.
       candidates = reset ? page.items : candidates + page.items.filter { fresh in !candidates.contains { $0.id == fresh.id } }
       hasMore = page.hasMore && !page.items.isEmpty
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error) {
         if reset { phase = .failed(message) } else { hasMore = false }

@@ -163,7 +163,7 @@ struct CalendarView: View {
       let fresh = try await model.api.sets(from: start, to: end, calendar: calendar)
       withAnimation(.smooth(duration: 0.3)) {
         loaded[key] = fresh
-        phase = .loaded
+        withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
       }
     } catch is CancellationError {
       // The month changed mid-load; the new month's own load is running.

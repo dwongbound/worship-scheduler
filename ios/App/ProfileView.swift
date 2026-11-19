@@ -203,7 +203,7 @@ struct ProfileView: View {
     loadError = nil
     do {
       let fresh = try await model.api.profile()
-      profile = fresh
+      withAnimation(.easeInOut(duration: 0.35)) { profile = fresh }
       name = fresh.name ?? ""
       email = fresh.email ?? ""
     } catch {

@@ -81,9 +81,11 @@ struct MainTabView: View {
   /// snaps back to 0 by itself when iOS cancels the drag (a row's own swipe
   /// action, a scroll taking over) — a plain @State never heard about the
   /// cancel and left the page stuck off-screen.
-  /// Snaps back with its own animation, scoped to the pull alone (an
-  /// `.animation` on the TabView also animated whatever the tab switch did).
-  @GestureState(resetTransaction: Transaction(animation: .snappy)) private var pull: CGFloat = 0
+  /// Springs back with its own animation, scoped to the pull alone, on the
+  /// SAME curve as Admin's half-switch: the pull returning to 0 and the page
+  /// moving a width then add up to one glide (a faster spring-back made the
+  /// list lurch backwards before it went).
+  @GestureState(resetTransaction: Transaction(animation: .smooth(duration: 0.3))) private var pull: CGFloat = 0
   /// The slide-out / slide-in after a swipe commits.
   @State private var slideX: CGFloat = 0
   @State private var width: CGFloat = 400
