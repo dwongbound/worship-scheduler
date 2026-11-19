@@ -87,12 +87,20 @@ struct MainTabView: View {
   /// list lurch backwards before it went).
   @GestureState(resetTransaction: Transaction(animation: .smooth(duration: 0.3))) private var pull: CGFloat = 0
   @State private var width: CGFloat = 400
+  @State private var barHeight: CGFloat = 0
 
   var body: some View {
     // Our own glass tab bar at the bottom (see AppTabBar for why).
-    VStack(spacing: 0) {
+    // The bar floats over the pages, so lists scroll on underneath its
+    // glass; each page is padded by the bar's height so its last row and its
+    // + button still clear it.
+    ZStack(alignment: .bottom) {
       pages
       AppTabBar(items: tabItems, selection: $selection, compact: model.tabBarCompact)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { h in
+          // The full-size height, so pages don't re-lay out as it thins.
+          barHeight = max(barHeight, h)
+        }
     }
     // The web's page color behind everything, the clock's strip included.
     .background(Color.twPage.ignoresSafeArea())
@@ -116,7 +124,7 @@ struct MainTabView: View {
     }
     // Pages off to the side stay hidden; the list still runs under the home
     // indicator area above the tab bar.
-    .mask { Rectangle().ignoresSafeArea(edges: .top) }
+    .mask { Rectangle().ignoresSafeArea() }
     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     // Swipe left/right on a tab's main screen to move to the next/previous
     // tab, like the web's SwipePager. Off on pushed screens (a set's page,
@@ -190,6 +198,7 @@ struct MainTabView: View {
   private func page(_ tab: AppTab) -> some View {
     let on = tab == selection
     return tabContent(tab)
+      .safeAreaPadding(.bottom, barHeight)
       .background(Color.twPage)
       .environment(\.tabPull, on && tab == .admin ? innerPull : 0)
       .environment(\.appTab, tab)
