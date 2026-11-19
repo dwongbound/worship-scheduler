@@ -22,7 +22,7 @@ struct SignInView: View {
   }
 
   var body: some View {
-    Form {
+    Form { Group {
       Section {
         TextField("Username or email", text: $username)
           .textContentType(.username)
@@ -61,6 +61,8 @@ struct SignInView: View {
         .disabled(!canSubmit)
       }
     }
+.listRowBackground(Color.twCard)
+}.twList()
     .navigationTitle("Sign in")
     .navigationBarTitleDisplayMode(.inline)
     .animation(.default, value: errorMessage)

@@ -164,7 +164,7 @@ struct PracticeFreeView: View {
           if people.isEmpty {
             ContentUnavailableView("Nobody on the roster yet", systemImage: "person.2.slash")
           } else {
-            List {
+            List { Group {
               let free = people.filter(\.free)
               let busy = people.filter { !$0.free }
               Section("Free · \(free.count)") {
@@ -180,7 +180,10 @@ struct PracticeFreeView: View {
                 }
               }
             }
+.listRowBackground(Color.twCard)
+}
             .listStyle(.insetGrouped)
+            .twList()
           }
         } else if let error {
           ContentUnavailableView {
@@ -191,13 +194,15 @@ struct PracticeFreeView: View {
             Button("Try again") { Task { await load() } }
           }
         } else {
-          List {
+          List { Group {
             Section("Free") {
               ForEach(0..<4, id: \.self) { _ in
                 Label("Firstname Lastname", systemImage: "checkmark.circle.fill")
               }
             }
           }
+.listRowBackground(Color.twCard)
+}
           .skeleton("Loading who's free")
         }
       }

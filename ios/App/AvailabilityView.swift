@@ -82,13 +82,15 @@ struct AvailabilityView: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading:
-      List {
+      List { Group {
         Section {
           MonthGrid(month: .constant(month), calendar: calendar) { date in
             DayNumber(date: date, calendar: calendar).frame(maxWidth: .infinity, minHeight: 44)
           }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .skeleton("Loading your availability")
     case .failed(let message):
       ContentUnavailableView {
@@ -105,7 +107,7 @@ struct AvailabilityView: View {
   }
 
   private var list: some View {
-    List {
+    List { Group {
       requestsSection
 
       Section {
@@ -123,7 +125,10 @@ struct AvailabilityView: View {
       weeklySection
       timedSection
     }
+.listRowBackground(Color.twCard)
+}
     .listStyle(.insetGrouped)
+    .twList()
   }
 
   // MARK: Requests
@@ -475,7 +480,7 @@ struct SubmitAvailabilitySheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           if blocked.isEmpty {
             Label("You're free every day in this window", systemImage: "checkmark.circle")
@@ -518,6 +523,8 @@ struct SubmitAvailabilitySheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Unavailabilities")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -593,7 +600,7 @@ struct DayDrawer: View {
 
   var body: some View {
     NavigationStack {
-      List {
+      List { Group {
         Section {
           Label(status.text, systemImage: status.icon)
             .foregroundStyle(status.color)
@@ -661,7 +668,10 @@ struct DayDrawer: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .navigationTitle(title)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -729,7 +739,7 @@ struct AddBlockSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           Picker("Repeats", selection: $kind.animation(.smooth)) {
             ForEach(Kind.allCases) { Text($0.rawValue).tag($0) }
@@ -792,6 +802,8 @@ struct AddBlockSheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Add a block")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

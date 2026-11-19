@@ -88,7 +88,9 @@ struct MySetsView: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading where groups.isEmpty:
-      List { ForEach(PreviewData.groups) { SetRow(group: $0) } }
+      List { Group { ForEach(PreviewData.groups) { SetRow(group: $0) } }
+.listRowBackground(Color.twCard)
+}
         .skeleton("Loading your sets")
     case .failed(let message) where groups.isEmpty:
       ContentUnavailableView {
@@ -115,7 +117,7 @@ struct MySetsView: View {
   }
 
   private var list: some View {
-    List {
+    List { Group {
       if !proposals.isEmpty {
         Section {
           ForEach(proposals) { proposal in
@@ -190,7 +192,10 @@ struct MySetsView: View {
         }
       }
     }
+.listRowBackground(Color.twCard)
+}
     .listStyle(.insetGrouped)
+    .twList()
   }
 
   private func load() async {
@@ -345,7 +350,7 @@ struct SetSeatsView: View {
 
   var body: some View {
     if let group {
-      List {
+      List { Group {
         Section {
           LabeledContent("Date", value: group.set.startsAt.formatted(.dateTime.weekday(.wide).month(.wide).day()))
           LabeledContent("Time", value: "\(group.set.startsAt.formatted(date: .omitted, time: .shortened)) – \(group.set.endsAt.formatted(date: .omitted, time: .shortened))")
@@ -413,7 +418,10 @@ struct SetSeatsView: View {
           canPost: !model.readOnly && (group.seats.contains { $0.role == "WORSHIP_LEADER" } || model.isAdmin(of: group.set.org?.id))
         )
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .navigationTitle(group.set.label ?? "Set")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -462,7 +470,7 @@ struct RequestCoverSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           TextField("Optional, e.g. \"Out of town that weekend\"", text: $reason, axis: .vertical)
             .lineLimit(3...6)
@@ -473,6 +481,8 @@ struct RequestCoverSheet: View {
           Text("Everyone who plays \(RoleLabels.label(for: seat.role)) on your team is asked to take this seat.")
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Request cover")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

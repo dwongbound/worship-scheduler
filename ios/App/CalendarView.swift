@@ -26,7 +26,7 @@ struct CalendarView: View {
 
   var body: some View {
     NavigationStack {
-      List {
+      List { Group {
         Section {
           MonthGrid(month: $month, calendar: calendar) { date in
             dayCell(date)
@@ -37,7 +37,10 @@ struct CalendarView: View {
         }
         daySection
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .pageHeader("Calendar") {
         Button("Today") { goToToday() }
         if model.isAdminAnywhere && !model.readOnly {
@@ -266,7 +269,7 @@ struct SetDetailView: View {
       // Everything below that writes is an admin's, so a read-only preview
       // simply doesn't count anyone as one here.
       let isAdmin = model.isAdmin(of: set.org?.id) && !model.readOnly
-      List {
+      List { Group {
         Section {
           LabeledContent("Date", value: set.startsAt.formatted(.dateTime.weekday(.wide).month(.wide).day()))
           LabeledContent("Time", value: "\(set.startsAt.formatted(date: .omitted, time: .shortened)) – \(set.endsAt.formatted(date: .omitted, time: .shortened))")
@@ -361,7 +364,10 @@ struct SetDetailView: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .navigationTitle(set.label ?? "Set")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

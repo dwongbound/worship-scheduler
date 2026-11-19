@@ -98,7 +98,7 @@ struct SignUpView: View {
   private var problem: String? { form.problem(confirm: confirm) }
 
   var body: some View {
-    Form {
+    Form { Group {
       Section {
         TextField("First name", text: $firstName)
           .textContentType(.givenName)
@@ -171,6 +171,8 @@ struct SignUpView: View {
         }
       }
     }
+.listRowBackground(Color.twCard)
+}.twList()
     .navigationTitle("Sign up")
     .navigationBarTitleDisplayMode(.inline)
     .safeAreaInset(edge: .top) {

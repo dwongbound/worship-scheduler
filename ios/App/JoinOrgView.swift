@@ -15,7 +15,7 @@ struct JoinOrgView: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           VStack(alignment: .leading, spacing: 6) {
             Text("Join your team")
@@ -56,6 +56,8 @@ struct JoinOrgView: View {
           .disabled(!canJoin)
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Welcome")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

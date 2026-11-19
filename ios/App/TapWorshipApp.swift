@@ -74,6 +74,8 @@ struct MainTabView: View {
       TopTabBar(items: tabItems, selection: $selection)
       pages
     }
+    // The web's page color behind everything, the clock's strip included.
+    .background(Color.twPage.ignoresSafeArea())
   }
 
   private var pages: some View {
@@ -164,6 +166,7 @@ struct MainTabView: View {
     // Admin moves only its list (its header stays put), so it gets the pull
     // to apply itself; every other page moves as a whole.
     content
+      .background(Color.twPage)
       .offset(x: tab == selection && tab != .admin ? offsetX : 0)
       .environment(\.tabPull, tab == selection && tab == .admin ? offsetX : 0)
       .environment(\.appTab, tab)

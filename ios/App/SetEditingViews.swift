@@ -22,7 +22,7 @@ struct SetlistEditorSheet: View {
 
   var body: some View {
     NavigationStack {
-      List {
+      List { Group {
         Section {
           ForEach($songs) { $song in
             HStack(spacing: 12) {
@@ -52,6 +52,8 @@ struct SetlistEditorSheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .environment(\.editMode, .constant(.active))
       .navigationTitle("Setlist")
       .navigationBarTitleDisplayMode(.inline)
@@ -173,7 +175,7 @@ struct RosterEditorSheet: View {
   }
 
   private var list: some View {
-    List {
+    List { Group {
       ForEach(roles) { role in
         let inRole = seats.filter { $0.role == role.key && $0.guestTeamId == nil }
         Section {
@@ -238,7 +240,10 @@ struct RosterEditorSheet: View {
         }
       }
     }
+.listRowBackground(Color.twCard)
+}
     .listStyle(.insetGrouped)
+    .twList()
   }
 
   private func choose(_ candidate: RosterEditing.Candidate, for pick: Pick) {
@@ -292,7 +297,7 @@ struct CandidatePicker: View {
 
   var body: some View {
     NavigationStack {
-      List {
+      List { Group {
         if candidates.isEmpty {
           ContentUnavailableView(
             "Nobody else plays \(role.label)",
@@ -316,6 +321,8 @@ struct CandidatePicker: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .searchable(text: $query, prompt: "Search")
       .navigationTitle(role.label)
       .navigationBarTitleDisplayMode(.inline)
@@ -355,7 +362,7 @@ struct AddPracticeSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           DatePicker("Starts", selection: $start)
           DatePicker("Ends", selection: $end, in: start...)
@@ -369,6 +376,8 @@ struct AddPracticeSheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Add practice")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -436,7 +445,7 @@ struct NewSetSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           TextField("Name (optional)", text: $label)
           if let teams {
@@ -461,6 +470,8 @@ struct NewSetSheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("New set")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

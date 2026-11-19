@@ -69,6 +69,8 @@ targets:
         # as a wall of errors on the first build.
         SWIFT_VERSION: "5.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The web's brand teal (Assets: AccentColor), for every tint in the app.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: TapWorship
         INFOPLIST_KEY_UILaunchScreen_Generation: YES

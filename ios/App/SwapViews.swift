@@ -160,7 +160,7 @@ struct SwapPickerSheet: View {
           Text("Nobody else on your team is playing \(RoleLabels.label(for: seat.role)) on an upcoming set. You can request cover instead.")
         }
       } else {
-        List {
+        List { Group {
           Section {
             ForEach(candidates) { candidate in
               NavigationLink(value: candidate) {
@@ -179,7 +179,10 @@ struct SwapPickerSheet: View {
             Text("Your \(seat.set.startsAt.formatted(.dateTime.weekday(.abbreviated).month().day())) set for…")
           }
         }
+.listRowBackground(Color.twCard)
+}
         .listStyle(.insetGrouped)
+        .twList()
       }
     }
   }
@@ -266,7 +269,7 @@ struct SwapConfirmView: View {
   @State private var problem: String?
 
   var body: some View {
-    Form {
+    Form { Group {
       Section {
         LabeledContent("You give up", value: when(seat.set.startsAt, seat.set.label))
         LabeledContent("You take", value: when(candidate.set.startsAt, candidate.set.label))
@@ -305,6 +308,8 @@ struct SwapConfirmView: View {
         }
       }
     }
+.listRowBackground(Color.twCard)
+}.twList()
     .navigationTitle("Send request")
     .navigationBarTitleDisplayMode(.inline)
     .navigationBarBackButtonHidden(sending)

@@ -40,7 +40,7 @@ struct ProfileView: View {
         }
       } else {
         // The profile's own shape, greyed and shimmering, while it loads.
-        Form {
+        Form { Group {
           Section("Name and email") {
             Text("Firstname Lastname")
             Text("someone@example.com")
@@ -51,6 +51,8 @@ struct ProfileView: View {
           }
           Section { Text("Morning summary") }
         }
+.listRowBackground(Color.twCard)
+}.twList()
         .skeleton("Loading your profile")
       }
     }
@@ -63,7 +65,7 @@ struct ProfileView: View {
   }
 
   private func form(_ me: ApiProfile) -> some View {
-    Form {
+    Form { Group {
       Section {
         TextField("Name", text: $name)
           .textContentType(.name)
@@ -174,6 +176,8 @@ struct ProfileView: View {
         Text("Linking Slack, choosing which calendar invites land in, and access keys are on the web.")
       }
     }
+.listRowBackground(Color.twCard)
+}.twList()
     .toolbar {
       ToolbarItem(placement: .confirmationAction) {
         if saving {
@@ -276,7 +280,7 @@ struct ChangePasswordSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           SecureField("New password", text: $password)
             .textContentType(.newPassword)
@@ -293,6 +297,8 @@ struct ChangePasswordSheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Change password")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

@@ -61,7 +61,9 @@ struct ApprovalsView: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading where items.isEmpty:
-      List { ForEach(AdminPreviewData.approvals) { ApprovalRow(approval: $0) } }
+      List { Group { ForEach(AdminPreviewData.approvals) { ApprovalRow(approval: $0) } }
+.listRowBackground(Color.twCard)
+}
         .skeleton("Loading approvals")
     case .failed(let message) where items.isEmpty:
       ContentUnavailableView {
@@ -80,7 +82,7 @@ struct ApprovalsView: View {
           Text("When someone covers a set or two people trade, it waits here for you.")
         }
       } else {
-        List {
+        List { Group {
           Section {
             ForEach(items) { approval in
               NavigationLink(value: approval.id) {
@@ -105,7 +107,10 @@ struct ApprovalsView: View {
             Text("Swipe right to approve, left to reject.")
           }
         }
+.listRowBackground(Color.twCard)
+}
         .listStyle(.insetGrouped)
+        .twList()
       }
     }
   }
@@ -194,7 +199,7 @@ struct ApprovalDetailView: View {
 
   var body: some View {
     if let approval {
-      List {
+      List { Group {
         Section {
           Text(approval.summary).font(.headline)
           LabeledContent("Role", value: RoleLabels.label(for: approval.role))
@@ -243,7 +248,10 @@ struct ApprovalDetailView: View {
         .disabled(busy)
         }
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .navigationTitle(approval.kind == "swap" ? "Swap" : "Cover")
       .navigationBarTitleDisplayMode(.inline)
     } else {
@@ -293,7 +301,7 @@ struct AdminView: View {
       // home indicator like any list (a plain clip stopped it short).
       .mask { Rectangle().ignoresSafeArea(edges: .bottom) }
     }
-    .background(Color(.systemGroupedBackground))
+    .background(Color.twPage)
   }
 }
 

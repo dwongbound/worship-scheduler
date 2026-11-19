@@ -49,11 +49,13 @@ struct TeamView: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading where users.isEmpty:
-      List {
+      List { Group {
         Section("Band") {
           ForEach(AdminPreviewData.users) { MemberRow(user: $0, teamID: "t1") }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .skeleton("Loading your team")
     case .failed(let message) where users.isEmpty:
       ContentUnavailableView {
@@ -74,7 +76,7 @@ struct TeamView: View {
       } else if sections.isEmpty {
         ContentUnavailableView.search(text: query)
       } else {
-        List {
+        List { Group {
           ForEach(sections, id: \.title) { section in
             Section {
               ForEach(section.members) { user in
@@ -91,7 +93,10 @@ struct TeamView: View {
             }
           }
         }
+.listRowBackground(Color.twCard)
+}
         .listStyle(.insetGrouped)
+        .twList()
         .animation(.smooth, value: query)
       }
     }
@@ -190,7 +195,7 @@ struct MemberDetailView: View {
 
   var body: some View {
     if let user {
-      Form {
+      Form { Group {
         Section {
           LabeledContent("Username", value: user.username)
           if !model.readOnly {
@@ -228,6 +233,8 @@ struct MemberDetailView: View {
         }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .disabled(model.readOnly)
       .navigationTitle(user.name)
       .navigationBarTitleDisplayMode(.inline)
@@ -457,6 +464,6 @@ private struct TeamSearchField: View {
     .background(Capsule().fill(Color(.tertiarySystemFill)))
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
-    .background(Color(.systemGroupedBackground))
+    .background(Color.twPage)
   }
 }

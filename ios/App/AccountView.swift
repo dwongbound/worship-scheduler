@@ -13,7 +13,7 @@ struct AccountView: View {
 
   var body: some View {
     NavigationStack {
-      List {
+      List { Group {
         if let user = model.session?.user {
           Section {
             LabeledContent("Name", value: user.name ?? "—")
@@ -89,7 +89,10 @@ struct AccountView: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .pageHeader("Account") { EmptyView() }
       .sheet(isPresented: $deleting) {
         DeleteAccountView()
@@ -118,7 +121,7 @@ struct JoinAnotherOrgSheet: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           TextField("Organization key", text: $key)
             .textInputAutocapitalization(.never)
@@ -135,6 +138,8 @@ struct JoinAnotherOrgSheet: View {
           }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Join another org")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -196,7 +201,7 @@ struct DeleteAccountView: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           VStack(alignment: .leading, spacing: 10) {
             Label {
@@ -249,6 +254,8 @@ struct DeleteAccountView: View {
           .disabled(!armed)
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Delete account")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
