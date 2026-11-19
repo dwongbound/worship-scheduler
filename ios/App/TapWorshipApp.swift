@@ -86,48 +86,37 @@ struct MainTabView: View {
   /// moving a width then add up to one glide (a faster spring-back made the
   /// list lurch backwards before it went).
   @GestureState(resetTransaction: Transaction(animation: .smooth(duration: 0.3))) private var pull: CGFloat = 0
-  /// The slide-out / slide-in after a swipe commits.
-  @State private var slideX: CGFloat = 0
   @State private var width: CGFloat = 400
 
-  private var offsetX: CGFloat { pull + slideX }
-
   var body: some View {
-    // The tabs live in a strip across the top, with the pages below it; the
-    // bottom of the screen belongs to each page's action buttons.
     // Our own glass tab bar at the bottom (see AppTabBar for why).
     VStack(spacing: 0) {
       pages
       AppTabBar(items: tabItems, selection: $selection, compact: model.tabBarCompact)
     }
-    .background(Color.twPage.ignoresSafeArea())
     // The web's page color behind everything, the clock's strip included.
     .background(Color.twPage.ignoresSafeArea())
   }
 
+  /// All the tabs side by side, as one strip: the one on screen and its
+  /// neighbours are real, already-loaded pages, so a swipe drags the next tab
+  /// in under your finger and release glides the strip one width over. (It
+  /// used to swap tabs at release and slide the new one in, which is the
+  /// little jump at the end.)
   private var pages: some View {
-    TabView(selection: $selection) {
-      page(CalendarView(), .calendar)
-        .tabItem { Label("Calendar", systemImage: "calendar") }
-        .tag(AppTab.calendar)
-      page(MySetsView(), .mySets)
-        .tabItem { Label("My Sets", systemImage: "music.note.list") }
-        .badge(model.swapBadge)
-        .tag(AppTab.mySets)
-      page(AvailabilityView(), .availability)
-        .tabItem { Label("Unavailabilities", systemImage: "calendar.badge.clock") }
-        .badge(model.availabilityBadge)
-        .tag(AppTab.availability)
-      if model.isAdminAnywhere {
-        page(AdminView(), .admin)
-          .tabItem { Label("Admin", systemImage: "checkmark.seal") }
-          .badge(model.pendingApprovals)
-          .tag(AppTab.admin)
+    GeometryReader { proxy in
+      let w = proxy.size.width
+      let index = CGFloat(tabs.firstIndex(of: selection) ?? 0)
+      HStack(spacing: 0) {
+        ForEach(tabs, id: \.self) { tab in
+          page(tab).frame(width: w)
+        }
       }
-      page(AccountView(), .account)
-        .tabItem { Label("Account", systemImage: "person.crop.circle") }
-        .tag(AppTab.account)
+      .offset(x: -index * w + outerPull)
     }
+    // Pages off to the side stay hidden; the list still runs under the home
+    // indicator area above the tab bar.
+    .mask { Rectangle().ignoresSafeArea(edges: .top) }
     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     // Swipe left/right on a tab's main screen to move to the next/previous
     // tab, like the web's SwipePager. Off on pushed screens (a set's page,
@@ -176,8 +165,6 @@ struct MainTabView: View {
     }
     // Badges follow what you just did on a tab, and catch up on return.
     .onChange(of: selection) {
-      // Belt and braces: whatever changed the tab, the page ends up in place.
-      if slideX != 0 && abs(slideX) > width * 0.5 { slideX = 0 }
       // A new tab starts at its top, so the bar starts full size.
       model.tabBarCompact = false
       Task { await model.refreshBadges() }
@@ -187,20 +174,36 @@ struct MainTabView: View {
     }
   }
 
-  /// One tab's content, moved by the swipe. Only the tab on screen moves:
-  /// every page used to share the offset (and a fade), so a tab switched to
-  /// mid-slide could appear already pushed aside and dimmed, which read as a
-  /// black screen. Nothing fades now; the page only slides.
-  private func page<V: View>(_ content: V, _ tab: AppTab) -> some View {
-    // Admin moves only its list (its header stays put), so it gets the pull
-    // to apply itself; every other page moves as a whole.
-    content
-      .background(Color.twPage)
-      .offset(x: tab == selection && tab != .admin ? offsetX : 0)
-      .environment(\.tabPull, tab == selection && tab == .admin ? offsetX : 0)
-      .environment(\.appTab, tab)
-      .toolbar(.hidden, for: .tabBar)
+  @ViewBuilder private func tabContent(_ tab: AppTab) -> some View {
+    switch tab {
+    case .calendar: CalendarView()
+    case .mySets: MySetsView()
+    case .availability: AvailabilityView()
+    case .admin: AdminView()
+    case .account: AccountView()
+    }
   }
+
+  /// One tab in the strip. Only the tab on screen takes touches and is read
+  /// by VoiceOver. Admin gets the pull itself while it's switching between
+  /// its own halves, so its header can stay put.
+  private func page(_ tab: AppTab) -> some View {
+    let on = tab == selection
+    return tabContent(tab)
+      .background(Color.twPage)
+      .environment(\.tabPull, on && tab == .admin ? innerPull : 0)
+      .environment(\.appTab, tab)
+      .allowsHitTesting(on)
+      .accessibilityHidden(!on)
+  }
+
+  /// The pull goes to Admin's own pager while it has a half to move to in
+  /// that direction; otherwise the whole strip moves.
+  private var pullsAdminInside: Bool {
+    selection == .admin && pull != 0 && adminStep(pull < 0 ? 1 : -1) != nil
+  }
+  private var innerPull: CGFloat { pullsAdminInside ? pull : 0 }
+  private var outerPull: CGFloat { pullsAdminInside ? 0 : pull }
 
   private var tabItems: [AppTabBar.Item] {
     tabs.map { tab in
@@ -226,15 +229,10 @@ struct MainTabView: View {
   /// didn't fire (a second swipe, a tab tap mid-slide) the page was left
   /// parked off-screen and the tab looked black. Now nothing waits: the new
   /// page is placed a little to the side and always animates to 0.
+  /// The strip glides to the next tab from wherever the finger let go; the
+  /// pull springs back on the same curve, so the two add up to one motion.
   private func slide(step: Int, change: () -> Void) {
-    let entry: CGFloat = (step > 0 ? 1 : -1) * min(width * 0.35, 140)
-    var still = Transaction()
-    still.disablesAnimations = true
-    withTransaction(still) {
-      change()
-      slideX = entry
-    }
-    withAnimation(.smooth(duration: 0.3)) { slideX = 0 }
+    withAnimation(.smooth(duration: 0.3)) { change() }
   }
 
   /// The Admin half a swipe moves to before leaving the tab, if any.

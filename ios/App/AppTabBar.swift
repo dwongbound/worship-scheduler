@@ -23,7 +23,7 @@ struct AppTabBar: View {
       ForEach(items) { item in
         let on = item.tab == selection
         Button {
-          withAnimation(.smooth(duration: 0.25)) { selection = item.tab }
+          withAnimation(.smooth(duration: 0.3)) { selection = item.tab }
         } label: {
           VStack(spacing: 2) {
             Image(systemName: item.systemImage)
