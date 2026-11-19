@@ -31,11 +31,7 @@ struct ProfileView: View {
       if let profile {
         form(profile).loadedContent()
       } else if let loadError {
-        ContentUnavailableView {
-          Label("Couldn't load your profile", systemImage: "wifi.exclamationmark")
-        } description: {
-          Text(loadError)
-        } actions: {
+        BrandedEmpty(title: "Couldn't load your profile", systemImage: "wifi.exclamationmark", message: loadError) {
           Button("Try again") { Task { await load() } }
         }
       } else {
@@ -105,21 +101,21 @@ struct ProfileView: View {
         ForEach(me.teams) { team in
           VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-              Text(team.name).font(.headline)
+              Text(team.name).font(TW.headline)
               if me.memberships.count > 1, let org = me.orgName(for: team) {
-                Text(org).font(.caption).foregroundStyle(.secondary)
+                Text(org).font(TW.caption).foregroundStyle(.secondary)
               }
               Spacer()
               if !team.active {
                 Text("Paused")
-                  .font(.caption.weight(.semibold))
+                  .font(TW.caption.weight(.semibold))
                   .padding(.horizontal, 8).padding(.vertical, 2)
                   .background(.gray.opacity(0.15), in: Capsule())
                   .foregroundStyle(.secondary)
               }
             }
             Text(team.roleLabels.isEmpty ? "No roles yet" : team.roleLabels.joined(separator: ", "))
-              .font(.subheadline)
+              .font(TW.subheadline)
               .foregroundStyle(.secondary)
           }
           .padding(.vertical, 2)

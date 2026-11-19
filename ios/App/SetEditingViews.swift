@@ -126,11 +126,7 @@ struct RosterEditorSheet: View {
         if users != nil {
           list
         } else if let loadError {
-          ContentUnavailableView {
-            Label("Couldn't load the team", systemImage: "wifi.exclamationmark")
-          } description: {
-            Text(loadError)
-          } actions: {
+          BrandedEmpty(title: "Couldn't load the team", systemImage: "wifi.exclamationmark", message: loadError) {
             Button("Try again") { Task { await load() } }
           }
         } else {
@@ -315,7 +311,7 @@ struct CandidatePicker: View {
                 .foregroundStyle(Color.primary)
               Spacer()
               if candidate.inactive {
-                Text("Paused").font(.caption).foregroundStyle(.secondary)
+                Text("Paused").font(TW.caption).foregroundStyle(.secondary)
               }
             }
           }

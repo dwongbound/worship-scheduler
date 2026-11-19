@@ -93,23 +93,15 @@ struct MySetsView: View {
 }
         .skeleton("Loading your sets")
     case .failed(let message) where groups.isEmpty:
-      ContentUnavailableView {
-        Label("Couldn't load your sets", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load your sets", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load() } }
           .buttonStyle(.borderedProminent)
       }
     default:
       if groups.isEmpty && covers.isEmpty && proposals.isEmpty {
-        ContentUnavailableView {
-          Label("No upcoming sets", systemImage: "calendar")
-        } description: {
-          Text(model.session?.user.hasNoOrg == true
+        BrandedEmpty(title: "No upcoming sets", systemImage: "calendar", message: model.session?.user.hasNoOrg == true
                ? "You're not in an org yet. Join one with its key on tapworship.com."
                : "When you're scheduled on a set, it shows up here.")
-        }
       } else {
         list.loadedContent()
       }
@@ -285,25 +277,26 @@ struct SetRow: View {
   let group: MySets.SetGroup
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(group.set.startsAt, format: .dateTime.weekday(.wide).month().day())
-        .font(.headline)
-      Text("\(group.set.startsAt.formatted(date: .omitted, time: .shortened)) · \(group.set.label ?? "Set")")
-        .font(.subheadline)
-      if let org = group.set.org?.name {
-        Text(org)
-          .font(.footnote)
+    HStack(alignment: .top, spacing: 12) {
+      DateTile(date: group.set.startsAt)
+      VStack(alignment: .leading, spacing: 6) {
+        Text(group.set.label ?? "Worship Set")
+          .font(TW.headline)
+        Text([
+          "\(group.set.startsAt.formatted(date: .omitted, time: .shortened)) – \(group.set.endsAt.formatted(date: .omitted, time: .shortened))",
+          group.set.org?.name,
+        ].compactMap { $0 }.joined(separator: " · "))
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
-      }
-      ForEach(group.seats) { seat in
-        HStack(spacing: 6) {
-          Text(RoleLabels.label(for: seat.role))
-            .font(.footnote.weight(.medium))
-          StatusPill(status: seat.status)
+        FlowLayout(spacing: 6) {
+          ForEach(group.seats) { seat in
+            RoleChip(text: RoleLabels.label(for: seat.role))
+            StatusPill(status: seat.status)
+          }
         }
       }
     }
-    .padding(.vertical, 4)
+    .padding(.vertical, 6)
     .accessibilityElement(children: .combine)
   }
 }
@@ -324,9 +317,9 @@ struct StatusPill: View {
 
   var body: some View {
     Text(MySets.statusLabel(status))
-      .font(.caption.weight(.medium))
+      .font(TW.caption.weight(.semibold))
       .padding(.horizontal, 8)
-      .padding(.vertical, 2)
+      .padding(.vertical, 3)
       .foregroundStyle(tint)
       .background(tint.opacity(0.15), in: Capsule())
   }
@@ -359,7 +352,7 @@ struct SetSeatsView: View {
         ForEach(group.seats) { seat in
           Section {
             HStack {
-              Text(RoleLabels.label(for: seat.role)).font(.headline)
+              Text(RoleLabels.label(for: seat.role)).font(TW.headline)
               Spacer()
               StatusPill(status: seat.status)
             }
@@ -405,7 +398,7 @@ struct SetSeatsView: View {
             }
             if let note = MySets.frozenNote(seat) {
               Text(note)
-                .font(.footnote)
+                .font(TW.footnote)
                 .foregroundStyle(.secondary)
             }
           }
@@ -444,7 +437,7 @@ struct SetSeatsView: View {
         Text("You'll be back on this set, and you'll still need to confirm it.")
       }
     } else {
-      ContentUnavailableView("This set is no longer on your list", systemImage: "calendar.badge.minus")
+      BrandedEmpty(title: "This set is no longer on your list", systemImage: "calendar.badge.minus")
     }
   }
 

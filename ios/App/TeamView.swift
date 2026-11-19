@@ -58,21 +58,13 @@ struct TeamView: View {
 }
       .skeleton("Loading your team")
     case .failed(let message) where users.isEmpty:
-      ContentUnavailableView {
-        Label("Couldn't load the team", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load the team", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load() } }
           .buttonStyle(.borderedProminent)
       }
     default:
       if users.isEmpty {
-        ContentUnavailableView {
-          Label("No one here yet", systemImage: "person.3")
-        } description: {
-          Text("People join with your org key, then show up here.")
-        }
+        BrandedEmpty(title: "No one here yet", systemImage: "person.3", message: "People join with your org key, then show up here.")
       } else if sections.isEmpty {
         ContentUnavailableView.search(text: query)
       } else {
@@ -134,18 +126,18 @@ struct MemberRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 6) {
-        Text(user.name).font(.body.weight(.medium))
+        Text(user.name).font(TW.body.weight(.medium))
         if user.isAdmin { MemberTag("Admin", tint: .indigo) }
         if user.isMD { MemberTag("MD", tint: .purple) }
         if membership?.active == false { MemberTag("Inactive", tint: .gray) }
       }
       if let membership {
         Text(membership.roles.isEmpty ? "No roles yet" : membership.roles.map { RoleLabels.label(for: $0) }.joined(separator: ", "))
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
       } else {
         Text("@\(user.username)")
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
       }
     }
@@ -165,7 +157,7 @@ struct MemberTag: View {
 
   var body: some View {
     Text(text)
-      .font(.caption2.weight(.semibold))
+      .font(TW.caption2.weight(.semibold))
       .padding(.horizontal, 6)
       .padding(.vertical, 2)
       .foregroundStyle(tint)
@@ -266,8 +258,7 @@ struct MemberDetailView: View {
         Button("OK") { error = nil }
       }, message: { Text(error ?? "") })
     } else {
-      ContentUnavailableView("Not in this org", systemImage: "person.crop.circle.badge.questionmark",
-                             description: Text("They may have been removed."))
+      BrandedEmpty(title: "Not in this org", systemImage: "person.crop.circle.badge.questionmark", message: "They may have been removed.")
     }
   }
 

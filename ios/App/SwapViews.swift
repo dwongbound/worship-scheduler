@@ -13,18 +13,18 @@ struct OpenCoverRow: View {
     VStack(alignment: .leading, spacing: 8) {
       VStack(alignment: .leading, spacing: 4) {
         Text("\(cover.user.name) needs cover on \(RoleLabels.label(for: cover.role))")
-          .font(.headline)
+          .font(TW.headline)
         Text(cover.set.startsAt, format: .dateTime.weekday(.wide).month().day())
-          .font(.subheadline)
+          .font(TW.subheadline)
         Text("\(cover.set.startsAt.formatted(date: .omitted, time: .shortened)) · \(cover.set.label ?? "Set")")
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
         if let org = cover.set.org?.name {
-          Text(org).font(.footnote).foregroundStyle(.secondary)
+          Text(org).font(TW.footnote).foregroundStyle(.secondary)
         }
         if let reason = cover.reason, !reason.isEmpty {
           Text("“\(reason)”")
-            .font(.footnote)
+            .font(TW.footnote)
             .foregroundStyle(.secondary)
         }
       }
@@ -46,16 +46,16 @@ struct SwapProposalRow: View {
     VStack(alignment: .leading, spacing: 8) {
       VStack(alignment: .leading, spacing: 4) {
         Text("\(proposal.requestedBy.name) wants to swap \(RoleLabels.label(for: proposal.role))")
-          .font(.headline)
+          .font(TW.headline)
         LabeledContent("You give up", value: when(proposal.giveUp))
         LabeledContent("You take", value: when(proposal.receive))
         if let reason = proposal.reason, !reason.isEmpty {
           Text("“\(reason)”")
-            .font(.footnote)
+            .font(TW.footnote)
             .foregroundStyle(.secondary)
         }
       }
-      .font(.subheadline)
+      .font(TW.subheadline)
       .accessibilityElement(children: .combine)
 
       AnswerButtons(yes: "Accept", no: "Decline", busy: busy, onYes: { answer(.accept) }, onNo: { answer(.reject) })
@@ -144,21 +144,13 @@ struct SwapPickerSheet: View {
       ProgressView("Finding sets you could trade for")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     case .failed(let message):
-      ContentUnavailableView {
-        Label("Couldn't load sets to swap with", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load sets to swap with", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load(reset: true) } }
           .buttonStyle(.borderedProminent)
       }
     case .loaded:
       if candidates.isEmpty {
-        ContentUnavailableView {
-          Label("No one to swap with", systemImage: "arrow.left.arrow.right")
-        } description: {
-          Text("Nobody else on your team is playing \(RoleLabels.label(for: seat.role)) on an upcoming set. You can request cover instead.")
-        }
+        BrandedEmpty(title: "No one to swap with", systemImage: "arrow.left.arrow.right", message: "Nobody else on your team is playing \(RoleLabels.label(for: seat.role)) on an upcoming set. You can request cover instead.")
       } else {
         List { Group {
           Section {
@@ -214,11 +206,11 @@ struct SwapCandidateRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       Text(candidate.set.startsAt, format: .dateTime.weekday(.wide).month().day())
-        .font(.headline)
+        .font(TW.headline)
       Text("\(candidate.set.startsAt.formatted(date: .omitted, time: .shortened)) · \(candidate.set.label ?? "Set")")
-        .font(.subheadline)
+        .font(TW.subheadline)
       Text("With \(candidate.counterparty.name)")
-        .font(.subheadline)
+        .font(TW.subheadline)
         .foregroundStyle(.secondary)
       ForEach(Swaps.warnings(for: candidate)) { warning in
         SwapWarningLabel(warning: warning)
@@ -236,7 +228,7 @@ struct SwapWarningLabel: View {
 
   var body: some View {
     Label(warning.text, systemImage: icon)
-      .font(.footnote)
+      .font(TW.footnote)
       .foregroundStyle(color)
   }
 

@@ -4,10 +4,18 @@ import SwiftUI
 struct TapWorshipApp: App {
   @State private var model = AppModel()
 
+  init() { TW.install() }
+
   var body: some Scene {
     WindowGroup {
       RootView()
         .environment(model)
+        // Figtree for every Text that doesn't pick its own style.
+        .font(TW.body)
+        // The brand teal, stated outright: touching UIKit's appearance
+        // proxies at launch (TW.install) stops the asset-catalog accent from
+        // reaching the window on its own.
+        .tint(Color("AccentColor"))
         .modifier(ThemedWindow())
     }
   }
@@ -16,8 +24,23 @@ struct TapWorshipApp: App {
 /// Signed out → sign-in. Signed in → the tabs. Nothing else decides which.
 struct RootView: View {
   @Environment(AppModel.self) private var model
+  /// The brand splash, once per launch, while the first screen loads under it.
+  @State private var splash = true
 
   var body: some View {
+    content
+      .overlay {
+        if splash {
+          SplashView().transition(.opacity)
+        }
+      }
+      .task {
+        try? await Task.sleep(for: .milliseconds(1100))
+        withAnimation(.smooth(duration: 0.4)) { splash = false }
+      }
+  }
+
+  private var content: some View {
     Group {
       switch model.session {
       case nil:

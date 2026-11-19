@@ -52,7 +52,7 @@ struct HeaderIconButton: View {
   var body: some View {
     Button(action: action) {
       Image(systemName: systemImage)
-        .font(.title2.weight(.semibold))
+        .font(TW.title2.weight(.semibold))
         .frame(width: 32, height: 32)
     }
     .modifier(Prominent())
@@ -78,7 +78,7 @@ private struct LeadingTitle: ViewModifier {
 
   private var label: some View {
     Text(title)
-      .font(.title.bold())
+      .font(TW.title.bold())
       .lineLimit(1)
       .fixedSize()
       .accessibilityAddTraits(.isHeader)

@@ -47,7 +47,7 @@ struct SetNotesSection: View {
               if sending {
                 ProgressView()
               } else {
-                Image(systemName: "arrow.up.circle.fill").font(.title2)
+                Image(systemName: "arrow.up.circle.fill").font(TW.title2)
               }
             }
             .buttonStyle(.borderless)
@@ -57,7 +57,7 @@ struct SetNotesSection: View {
         }
         if let error {
           Label(error, systemImage: "exclamationmark.circle")
-            .font(.footnote)
+            .font(TW.footnote)
             .foregroundStyle(.red)
         }
         if log.isEmpty {
@@ -71,7 +71,7 @@ struct SetNotesSection: View {
           VStack(alignment: .leading, spacing: 4) {
             Text(SetNotes.text(fromDetail: entry.detail))
             Text("\(entry.actor?.name ?? "Someone") · \(entry.createdAt.formatted(.relative(presentation: .named)))")
-              .font(.footnote)
+              .font(TW.footnote)
               .foregroundStyle(.secondary)
           }
           .accessibilityElement(children: .combine)
@@ -123,15 +123,15 @@ struct PracticeRow: View {
         VStack(alignment: .leading, spacing: 2) {
           Text(practice.startsAt, format: .dateTime.weekday(.wide).month().day())
           Text("\(practice.startsAt.formatted(date: .omitted, time: .shortened)) – \(practice.endsAt.formatted(date: .omitted, time: .shortened))")
-            .font(.subheadline)
+            .font(TW.subheadline)
             .foregroundStyle(.secondary)
         }
         Spacer()
         Text("Who's free")
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.tint)
         Image(systemName: "chevron.right")
-          .font(.footnote.weight(.semibold))
+          .font(TW.footnote.weight(.semibold))
           .foregroundStyle(.tertiary)
       }
     }
@@ -162,7 +162,7 @@ struct PracticeFreeView: View {
       Group {
         if let people {
           if people.isEmpty {
-            ContentUnavailableView("Nobody on the roster yet", systemImage: "person.2.slash")
+            BrandedEmpty(title: "Nobody on the roster yet", systemImage: "person.2.slash")
           } else {
             List { Group {
               let free = people.filter(\.free)
@@ -186,11 +186,7 @@ struct PracticeFreeView: View {
             .twList()
           }
         } else if let error {
-          ContentUnavailableView {
-            Label("Couldn't load", systemImage: "wifi.exclamationmark")
-          } description: {
-            Text(error)
-          } actions: {
+          BrandedEmpty(title: "Couldn't load", systemImage: "wifi.exclamationmark", message: error) {
             Button("Try again") { Task { await load() } }
           }
         } else {
@@ -239,7 +235,7 @@ struct PracticeFreeView: View {
           Text(person.name)
           if !person.roles.isEmpty {
             Text(person.roles.map { RoleLabels.label(for: $0) }.joined(separator: ", "))
-              .font(.footnote)
+              .font(TW.footnote)
               .foregroundStyle(.secondary)
           }
         }

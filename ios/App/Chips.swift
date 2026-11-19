@@ -61,12 +61,12 @@ struct ToggleChip: View {
       HStack(spacing: 4) {
         if isOn {
           Image(systemName: "checkmark")
-            .font(.caption.weight(.bold))
+            .font(TW.caption.weight(.bold))
             .transition(.scale.combined(with: .opacity))
         }
         Text(title)
       }
-      .font(.subheadline.weight(isOn ? .semibold : .regular))
+      .font(TW.subheadline.weight(isOn ? .semibold : .regular))
       .padding(.horizontal, 12)
       .frame(minHeight: 34)
       .foregroundStyle(isOn ? Color.white : Color.primary)
@@ -93,7 +93,7 @@ struct WeekdayPicker: View {
           if on { selection.remove(index) } else { selection.insert(index) }
         } label: {
           Text(String(Availability.dayNames[index].prefix(1)))
-            .font(.subheadline.weight(.semibold))
+            .font(TW.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity)
             .frame(height: 40)
             .foregroundStyle(on ? Color.white : Color.primary)

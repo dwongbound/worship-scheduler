@@ -41,7 +41,7 @@ struct SignInView: View {
         if let errorMessage {
           Label(errorMessage, systemImage: "exclamationmark.circle")
             .foregroundStyle(.red)
-            .font(.footnote)
+            .font(TW.footnote)
             .transition(.opacity)
         }
       }
@@ -158,7 +158,7 @@ struct SocialSignInButtons: View {
 
       if let errorMessage {
         Label(errorMessage, systemImage: "exclamationmark.circle")
-          .font(.footnote)
+          .font(TW.footnote)
           .foregroundStyle(.red)
           .transition(.opacity)
       }
@@ -246,7 +246,7 @@ struct OrDivider: View {
     HStack(spacing: 12) {
       VStack { Divider() }
       Text("or")
-        .font(.subheadline)
+        .font(TW.subheadline)
         .foregroundStyle(.secondary)
       VStack { Divider() }
     }
@@ -264,9 +264,9 @@ struct BrandHeader: View {
         .frame(width: 72, height: 72)
         .accessibilityHidden(true)
       Text("TapWorship")
-        .font(.title.bold())
+        .font(TW.title.bold())
       Text("Your sets, your swaps, your team.")
-        .font(.subheadline)
+        .font(TW.subheadline)
         .foregroundStyle(.secondary)
       if AppConfig.isDevServer { DevServerBadge() }
     }
@@ -279,7 +279,7 @@ struct BrandHeader: View {
 struct DevServerBadge: View {
   var body: some View {
     Text("Development build · \(AppConfig.baseURL.host ?? "dev server")")
-      .font(.footnote.weight(.medium))
+      .font(TW.footnote.weight(.medium))
       .foregroundStyle(.orange)
   }
 }
@@ -314,7 +314,7 @@ struct ActionButtonStyle: ButtonStyle {
 
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
-      .font(.body.weight(.semibold))
+      .font(TW.body.weight(.semibold))
       .foregroundStyle(foreground)
       .frame(maxWidth: .infinity)
       .frame(height: Self.height)

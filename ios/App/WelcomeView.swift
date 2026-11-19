@@ -37,7 +37,7 @@ struct WelcomeView: View {
         // New here? Sign up sits apart at the bottom, as the less common path.
         VStack(spacing: 6) {
           Text("New to TapWorship?")
-            .font(.subheadline)
+            .font(TW.subheadline)
             .foregroundStyle(.secondary)
           Button {
             if model.readOnly {
@@ -53,7 +53,7 @@ struct WelcomeView: View {
           .buttonStyle(ActionButtonStyle(kind: .outline))
           if model.readOnly {
             Text("Opens tapworship.com. This preview can't create accounts.")
-              .font(.footnote)
+              .font(TW.footnote)
               .foregroundStyle(.secondary)
               .multilineTextAlignment(.center)
           }

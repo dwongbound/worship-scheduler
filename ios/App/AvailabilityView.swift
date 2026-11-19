@@ -93,11 +93,7 @@ struct AvailabilityView: View {
 }
       .skeleton("Loading your availability")
     case .failed(let message):
-      ContentUnavailableView {
-        Label("Couldn't load your availability", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load your availability", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load() } }
           .buttonStyle(.borderedProminent)
       }
@@ -144,7 +140,7 @@ struct AvailabilityView: View {
             VStack(alignment: .leading, spacing: 2) {
               HStack(spacing: 6) {
                 Text(request.name ?? "Availability request")
-                  .font(.headline)
+                  .font(TW.headline)
                 if done {
                   Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -156,7 +152,7 @@ struct AvailabilityView: View {
                 "\(dayText(request.startDate)) – \(dayText(request.endDate))",
                 request.org?.name,
               ].compactMap { $0 }.joined(separator: " · "))
-                .font(.subheadline)
+                .font(TW.subheadline)
                 .foregroundStyle(.secondary)
             }
             .accessibilityElement(children: .combine)
@@ -219,7 +215,7 @@ struct AvailabilityView: View {
     } label: {
       VStack(spacing: 2) {
         Text("\(calendar.component(.day, from: date))")
-          .font(.body.weight(ymd == today ? .bold : .regular))
+          .font(TW.body.weight(ymd == today ? .bold : .regular))
           .monospacedDigit()
           .foregroundStyle(level == .full ? Color.white : Color.primary)
           .frame(width: 32, height: 32)
@@ -295,7 +291,7 @@ struct AvailabilityView: View {
         VStack(alignment: .leading, spacing: 2) {
           Text(Availability.weeklyTitle(rule))
           Text(weeklyDetail(rule))
-            .font(.subheadline)
+            .font(TW.subheadline)
             .foregroundStyle(.secondary)
         }
         .accessibilityElement(children: .combine)
@@ -330,7 +326,7 @@ struct AvailabilityView: View {
           VStack(alignment: .leading, spacing: 2) {
             Text(timedTitle(block))
             Text(block.fromGoogle == true ? "\(Availability.windowLabel(block)) · from Google Calendar" : Availability.windowLabel(block))
-              .font(.subheadline)
+              .font(TW.subheadline)
               .foregroundStyle(.secondary)
           }
           .accessibilityElement(children: .combine)
@@ -424,7 +420,7 @@ struct AvailabilityLegend: View {
       Text("Part of the day")
     }
     HStack(spacing: 4) {
-      Image(systemName: "repeat").font(.caption2)
+      Image(systemName: "repeat").font(TW.caption2)
       Text("Weekly")
     }
   }
@@ -504,12 +500,12 @@ struct SubmitAvailabilitySheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                   Text(run.days == 1 ? dayText(run.first) : "\(dayText(run.first)) – \(dayText(run.last))")
                   if run.days > 1 {
-                    Text("\(run.days) days").font(.footnote).foregroundStyle(.secondary)
+                    Text("\(run.days) days").font(TW.footnote).foregroundStyle(.secondary)
                   }
                 }
                 Spacer()
                 Text(run.level == .full ? "All day" : "Part of the day")
-                  .font(.subheadline)
+                  .font(TW.subheadline)
                   .foregroundStyle(run.level == .full ? .red : .orange)
               }
               .accessibilityElement(children: .combine)
@@ -604,7 +600,7 @@ struct DayDrawer: View {
         Section {
           Label(status.text, systemImage: status.icon)
             .foregroundStyle(status.color)
-            .font(.headline)
+            .font(TW.headline)
           ForEach(blocks) { block in
             LabeledContent {
               Text(source(block))

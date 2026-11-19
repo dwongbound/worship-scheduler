@@ -66,21 +66,13 @@ struct ApprovalsView: View {
 }
         .skeleton("Loading approvals")
     case .failed(let message) where items.isEmpty:
-      ContentUnavailableView {
-        Label("Couldn't load approvals", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load approvals", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load() } }
           .buttonStyle(.borderedProminent)
       }
     default:
       if items.isEmpty {
-        ContentUnavailableView {
-          Label("Nothing to approve", systemImage: "checkmark.seal")
-        } description: {
-          Text("When someone covers a set or two people trade, it waits here for you.")
-        }
+        BrandedEmpty(title: "Nothing to approve", systemImage: "checkmark.seal", message: "When someone covers a set or two people trade, it waits here for you.")
       } else {
         List { Group {
           Section {
@@ -169,13 +161,13 @@ struct ApprovalRow: View {
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 4) {
         Text(approval.summary)
-          .font(.headline)
+          .font(TW.headline)
         Text(approval.firstDate, format: .dateTime.weekday(.abbreviated).month().day().hour().minute())
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
         if let reason = approval.reason, !reason.isEmpty {
           Text("“\(reason)”")
-            .font(.footnote)
+            .font(TW.footnote)
             .foregroundStyle(.secondary)
             .lineLimit(2)
         }
@@ -201,7 +193,7 @@ struct ApprovalDetailView: View {
     if let approval {
       List { Group {
         Section {
-          Text(approval.summary).font(.headline)
+          Text(approval.summary).font(TW.headline)
           LabeledContent("Role", value: RoleLabels.label(for: approval.role))
           if let reason = approval.reason, !reason.isEmpty {
             LabeledContent("Reason") { Text(reason) }
@@ -256,8 +248,7 @@ struct ApprovalDetailView: View {
       .navigationBarTitleDisplayMode(.inline)
     } else {
       // Decided (here or on the web) while this screen was open.
-      ContentUnavailableView("Already handled", systemImage: "checkmark.circle",
-                             description: Text("This one has been approved or rejected."))
+      BrandedEmpty(title: "Already handled", systemImage: "checkmark.circle", message: "This one has been approved or rejected.")
     }
   }
 }
@@ -268,9 +259,9 @@ struct SetRefRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(set.startsAt, format: .dateTime.weekday(.wide).month().day())
-        .font(.body.weight(.medium))
+        .font(TW.body.weight(.medium))
       Text("\(set.startsAt.formatted(date: .omitted, time: .shortened)) · \(set.label ?? "Set")")
-        .font(.subheadline)
+        .font(TW.subheadline)
         .foregroundStyle(.secondary)
     }
     .accessibilityElement(children: .combine)

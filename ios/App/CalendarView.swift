@@ -111,9 +111,9 @@ struct CalendarView: View {
       case .loading where loaded[monthKey] == nil:
         ForEach(0..<2, id: \.self) { _ in
           VStack(alignment: .leading, spacing: 4) {
-            Text("Sunday Morning Worship").font(.headline)
-            Text("9:00 – 10:30").font(.subheadline)
-            Text("Sunday Team").font(.footnote)
+            Text("Sunday Morning Worship").font(TW.headline)
+            Text("9:00 – 10:30").font(TW.subheadline)
+            Text("Sunday Team").font(TW.footnote)
           }
           .padding(.vertical, 2)
         }
@@ -121,7 +121,7 @@ struct CalendarView: View {
       case .failed(let message) where loaded[monthKey] == nil:
         VStack(alignment: .leading, spacing: 8) {
           Label("Couldn't load sets", systemImage: "wifi.exclamationmark")
-            .font(.headline)
+            .font(TW.headline)
           Text(message).foregroundStyle(.secondary)
           Button("Try Again") { Task { await load() } }
             .buttonStyle(.borderedProminent)
@@ -196,7 +196,7 @@ struct CalendarLegend: View {
       HStack(spacing: 12) { items }
       VStack(alignment: .leading, spacing: 4) { items }
     }
-    .font(.footnote)
+    .font(TW.footnote)
     .accessibilityElement(children: .combine)
   }
 
@@ -220,29 +220,38 @@ struct CalendarSetRow: View {
 
   var body: some View {
     let status = SetCalendar.status(set)
-    VStack(alignment: .leading, spacing: 4) {
-      Text(set.label ?? "Set")
-        .font(.headline)
-      Text("\(set.startsAt.formatted(date: .omitted, time: .shortened)) – \(set.endsAt.formatted(date: .omitted, time: .shortened))")
-        .font(.subheadline)
-      if let place = [set.team?.name, set.org?.name].compactMap({ $0 }).first {
-        Text(place)
-          .font(.footnote)
-          .foregroundStyle(.secondary)
+    HStack(alignment: .top, spacing: 12) {
+      // The time, where My Sets has the date: the day is already chosen.
+      VStack(spacing: 0) {
+        Text(set.startsAt.formatted(.dateTime.hour(.defaultDigits(amPM: .omitted)).minute()))
+          .font(TW.headline)
+          .monospacedDigit()
+        Text(set.startsAt.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated))).filter(\.isLetter))
+          .font(TW.caption2.weight(.bold))
+          .foregroundStyle(Color.accentColor)
       }
-      HStack(spacing: 6) {
-        Circle().fill(SetStatusStyle.color(status)).frame(width: 8, height: 8)
-        Text(status.label)
-          .font(.footnote)
+      .frame(width: 52, height: 52)
+      .background(Color.twAccentSoft, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+      .accessibilityHidden(true)
+
+      VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 6) {
+          Circle().fill(SetStatusStyle.color(status)).frame(width: 8, height: 8)
+          Text(set.label ?? "Worship Set")
+            .font(TW.headline)
+        }
+        Text("\(set.startsAt.formatted(date: .omitted, time: .shortened)) – \(set.endsAt.formatted(date: .omitted, time: .shortened)) · \(status.label)")
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
-      }
-      if !mySeats.isEmpty {
-        Text("You: \(mySeats.map { RoleLabels.label(for: $0.role, in: set.team?.roles) }.joined(separator: ", "))")
-          .font(.footnote.weight(.medium))
-          .foregroundStyle(.tint)
+        FlowLayout(spacing: 6) {
+          if let team = set.team?.name { TeamPill(text: team) }
+          ForEach(mySeats, id: \.id) { seat in
+            RoleChip(text: "You · \(RoleLabels.label(for: seat.role, in: set.team?.roles))")
+          }
+        }
       }
     }
-    .padding(.vertical, 4)
+    .padding(.vertical, 6)
     .accessibilityElement(children: .combine)
   }
 }
@@ -391,7 +400,7 @@ struct SetDetailView: View {
         Text("Everyone on the set gets a calendar cancellation.")
       }
     } else {
-      ContentUnavailableView("This set is no longer on the calendar", systemImage: "calendar.badge.minus")
+      BrandedEmpty(title: "This set is no longer on the calendar", systemImage: "calendar.badge.minus")
     }
   }
 
@@ -419,7 +428,7 @@ struct SectionHeader: View {
       Spacer()
       if let action {
         Button(action.0, action: action.1)
-          .font(.subheadline.weight(.semibold))
+          .font(TW.subheadline.weight(.semibold))
           .textCase(nil)
       }
     }
@@ -436,12 +445,12 @@ struct RosterRowView: View {
       // "mobile" above a number), so role and person never read as one line.
       HStack(alignment: .firstTextBaseline, spacing: 6) {
         Text(row.label)
-          .font(.caption.weight(.semibold))
+          .font(TW.caption.weight(.semibold))
           .textCase(.uppercase)
           .foregroundStyle(.secondary)
         if let guest = row.guestTeam {
           Text("· \(guest)")
-            .font(.caption)
+            .font(TW.caption)
             .foregroundStyle(.tertiary)
         }
       }
@@ -454,7 +463,7 @@ struct RosterRowView: View {
       }
       if row.open > 0 {
         Text(row.open == 1 ? "1 open seat" : "\(row.open) open seats")
-          .font(.footnote)
+          .font(TW.footnote)
           .foregroundStyle(.red)
       }
     }

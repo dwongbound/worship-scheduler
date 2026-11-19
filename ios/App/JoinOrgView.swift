@@ -19,11 +19,11 @@ struct JoinOrgView: View {
         Section {
           VStack(alignment: .leading, spacing: 6) {
             Text("Join your team")
-              .font(.title2.bold())
+              .font(TW.title2.bold())
             Text(model.readOnly
                  ? "This read-only preview can't join an org. Join with your org's key on tapworship.com, then sign in here again."
                  : "Ask your worship team's admin for your organization's key, then enter it here.")
-              .font(.subheadline)
+              .font(TW.subheadline)
               .foregroundStyle(.secondary)
           }
           .padding(.vertical, 4)

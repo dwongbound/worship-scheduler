@@ -206,13 +206,13 @@ struct DeleteAccountView: View {
           VStack(alignment: .leading, spacing: 10) {
             Label {
               Text("This can't be undone.")
-                .font(.title3.bold())
+                .font(TW.title3.bold())
             } icon: {
               Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
             }
             Text("There's no way to get your account back, and no one, admins included, can restore it.")
-              .font(.subheadline)
+              .font(TW.subheadline)
           }
           .padding(.vertical, 4)
         }
@@ -272,7 +272,7 @@ struct DeleteAccountView: View {
 
   private func bullet(_ symbol: String, _ text: String) -> some View {
     Label(text, systemImage: symbol)
-      .font(.subheadline)
+      .font(TW.subheadline)
   }
 
   private func deleteAccount() {

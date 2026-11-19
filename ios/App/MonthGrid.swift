@@ -46,7 +46,7 @@ struct MonthGrid<Cell: View>: View {
         .accessibilityLabel("Previous month")
         Spacer()
         Text(title)
-          .font(.headline)
+          .font(TW.headline)
           .accessibilityAddTraits(.isHeader)
         Spacer()
         Button { step(1) } label: {
@@ -61,7 +61,7 @@ struct MonthGrid<Cell: View>: View {
       LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 7), spacing: 2) {
         ForEach(Array(weekdays.enumerated()), id: \.offset) { _, day in
           Text(day.short)
-            .font(.caption.weight(.semibold))
+            .font(TW.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
             .accessibilityLabel(day.full)
@@ -100,7 +100,7 @@ struct DayNumber: View {
 
   var body: some View {
     Text("\(calendar.component(.day, from: date))")
-      .font(.body.weight(isToday ? .bold : .regular))
+      .font(TW.body.weight(isToday ? .bold : .regular))
       .monospacedDigit()
       .foregroundStyle(isSelected ? Color.white : (isToday ? Color.accentColor : Color.primary))
       .frame(width: 32, height: 32)
