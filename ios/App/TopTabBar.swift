@@ -42,13 +42,13 @@ struct TopTabBar: View {
               .lineLimit(1)
               .minimumScaleFactor(0.75)
           }
-          .foregroundStyle(on ? Color.accentColor : Color.secondary)
+          .foregroundStyle(on ? Color.accentColor : Color.primary)
           .frame(maxWidth: .infinity)
-          .padding(.vertical, 6)
+          .padding(.vertical, 7)
           .background {
             if on {
               Capsule()
-                .fill(Color.accentColor.opacity(0.15))
+                .fill(Color.primary.opacity(0.1))
                 .matchedGeometryEffect(id: "tab", in: highlight)
             }
           }
@@ -59,10 +59,25 @@ struct TopTabBar: View {
         .accessibilityAddTraits(on ? [.isSelected, .isButton] : .isButton)
       }
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 4)
-    .background(.bar, ignoresSafeAreaEdges: .top)
-    .overlay(alignment: .bottom) { Divider() }
+    .padding(4)
+    // The same floating glass capsule as iOS's own tab bar, just at the top.
+    .modifier(GlassCapsule())
+    .padding(.horizontal, 12)
+    .padding(.top, 2)
+    .padding(.bottom, 6)
     .sensoryFeedback(.selection, trigger: selection)
+  }
+}
+
+private struct GlassCapsule: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.glassEffect(.regular, in: Capsule())
+    } else {
+      content
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+    }
   }
 }

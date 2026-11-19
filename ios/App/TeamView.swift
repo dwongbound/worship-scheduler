@@ -25,8 +25,7 @@ struct TeamView: View {
         .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Team")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { AdminSectionPicker() }
-        .toolbar { AdminOrgPicker() }
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: String.self) { id in
           MemberDetailView(
             userID: id,
@@ -35,7 +34,13 @@ struct TeamView: View {
           )
           .pausesTabSwipe()
         }
-        .searchable(text: $query, prompt: "Name or username")
+        // The bar is hidden at the root (Admin's switch sits above both
+        // halves), so the search box lives at the top of the page instead.
+        .safeAreaInset(edge: .top, spacing: 0) {
+          if phase == .loaded && !users.isEmpty {
+            TeamSearchField(query: $query)
+          }
+        }
         .refreshable { await load() }
         .task(id: model.adminOrgID) { await load() }
     }
@@ -426,4 +431,32 @@ private struct MemberPreview: View {
   MemberPreview(id: "u1")
     .environment(AppModel.adminPreview())
     .dynamicTypeSize(.accessibility5)
+}
+
+/// Search box for the Team list: the system's look, without needing a bar.
+private struct TeamSearchField: View {
+  @Binding var query: String
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+      TextField("Name or username", text: $query)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .submitLabel(.search)
+      if !query.isEmpty {
+        Button { query = "" } label: {
+          Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear search")
+      }
+    }
+    .padding(.horizontal, 12)
+    .frame(minHeight: 40)
+    .background(Capsule().fill(Color(.tertiarySystemFill)))
+    .padding(.horizontal, 16)
+    .padding(.vertical, 8)
+    .background(Color(.systemGroupedBackground))
+  }
 }

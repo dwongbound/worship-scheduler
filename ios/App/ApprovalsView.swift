@@ -25,8 +25,7 @@ struct ApprovalsView: View {
         .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Approvals")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar { AdminSectionPicker() }
-        .toolbar { AdminOrgPicker() }
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: String.self) { id in
           ApprovalDetailView(
             approval: items.first { $0.id == id },
@@ -270,14 +269,40 @@ struct SetRefRow: View {
   }
 }
 
-/// Approvals · Team, in the navigation bar where the title would be. Both
-/// halves of the Admin tab carry it, so it stays put while the list under it
-/// changes.
-struct AdminSectionPicker: ToolbarContent {
+/// Approvals and Team as one tab, so the app stays at five. The switch (and
+/// the org menu, for someone who looks after several) sits in a fixed header;
+/// only the page under it changes. Both halves stay loaded side by side, so a
+/// switch slides the list over instead of rebuilding it, and a tab swipe's
+/// pull moves the list while the header stays still.
+struct AdminView: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.tabPull) private var pull
+
+  var body: some View {
+    VStack(spacing: 0) {
+      AdminHeader()
+      GeometryReader { proxy in
+        let width = proxy.size.width
+        HStack(spacing: 0) {
+          ApprovalsView().frame(width: width)
+          TeamView().frame(width: width)
+        }
+        .offset(x: (model.adminSection == .approvals ? 0 : -width) + pull)
+      }
+      // Hide the other half off to the side, but let the list run under the
+      // home indicator like any list (a plain clip stopped it short).
+      .mask { Rectangle().ignoresSafeArea(edges: .bottom) }
+    }
+    .background(Color(.systemGroupedBackground))
+  }
+}
+
+/// Approvals · Team, plus the org menu when there's more than one org.
+private struct AdminHeader: View {
   @Environment(AppModel.self) private var model
 
-  var body: some ToolbarContent {
-    ToolbarItem(placement: .principal) {
+  var body: some View {
+    HStack(spacing: 10) {
       Picker("Section", selection: Binding(
         get: { model.adminSection },
         set: { section in withAnimation(.smooth(duration: 0.3)) { model.adminSection = section } }
@@ -288,37 +313,8 @@ struct AdminSectionPicker: ToolbarContent {
         }
       }
       .pickerStyle(.segmented)
-      .frame(maxWidth: 260)
-    }
-  }
-}
+      .frame(maxWidth: 280)
 
-/// Approvals and Team as one tab, so the app stays at five. The two halves
-/// sit side by side as pages and both stay loaded, so switching (picker or
-/// swipe) slides the other one in instead of building it from scratch; a
-/// tab swipe's pull drags the real neighbour into view.
-struct AdminView: View {
-  @Environment(AppModel.self) private var model
-
-  var body: some View {
-    GeometryReader { proxy in
-      let width = proxy.size.width
-      HStack(spacing: 0) {
-        ApprovalsView().frame(width: width)
-        TeamView().frame(width: width)
-      }
-      .offset(x: model.adminSection == .approvals ? 0 : -width)
-    }
-  }
-}
-
-/// The org switcher both admin tabs share. Hidden with one org, since a menu
-/// of one choice is noise.
-struct AdminOrgPicker: ToolbarContent {
-  @Environment(AppModel.self) private var model
-
-  var body: some ToolbarContent {
-    ToolbarItem(placement: .topBarTrailing) {
       if let orgs = model.adminOrgs, orgs.count > 1 {
         Menu {
           Picker("Org", selection: Binding(get: { model.adminOrgID }, set: { model.adminOrgID = $0 })) {
@@ -326,11 +322,16 @@ struct AdminOrgPicker: ToolbarContent {
           }
         } label: {
           Label(model.adminOrg?.orgName ?? "Org", systemImage: "building.2")
-            .labelStyle(.titleAndIcon)
+            .labelStyle(.iconOnly)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color(.tertiarySystemFill)))
         }
         .accessibilityLabel("Org: \(model.adminOrg?.orgName ?? "none")")
       }
     }
+    .frame(maxWidth: .infinity)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 8)
   }
 }
 

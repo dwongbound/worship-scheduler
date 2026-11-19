@@ -159,8 +159,11 @@ struct MainTabView: View {
   /// mid-slide could appear already pushed aside and dimmed, which read as a
   /// black screen. Nothing fades now; the page only slides.
   private func page<V: View>(_ content: V, _ tab: AppTab) -> some View {
+    // Admin moves only its list (its header stays put), so it gets the pull
+    // to apply itself; every other page moves as a whole.
     content
-      .offset(x: tab == selection ? offsetX : 0)
+      .offset(x: tab == selection && tab != .admin ? offsetX : 0)
+      .environment(\.tabPull, tab == selection && tab == .admin ? offsetX : 0)
       .environment(\.appTab, tab)
       .toolbar(.hidden, for: .tabBar)
   }
@@ -245,6 +248,8 @@ struct OwnsSideSwipe: ViewModifier {
 extension EnvironmentValues {
   /// Which tab a view lives in (nil outside the tab bar, e.g. in a sheet).
   @Entry var appTab: AppTab? = nil
+  /// The tab swipe's sideways pull, for a page that moves only part of itself.
+  @Entry var tabPull: CGFloat = 0
 }
 
 extension View {
