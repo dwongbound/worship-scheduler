@@ -122,6 +122,9 @@ struct MainTabView: View {
         .tabItem { Label("Account", systemImage: "person.crop.circle") }
         .tag(AppTab.account)
     }
+    // Shrinks to a compact glass pill while you scroll down, and comes back
+    // when you scroll up, like Apple's own apps (iOS 26).
+    .modifier(MinimizingTabBar())
     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     // Swipe left/right on a tab's main screen to move to the next/previous
     // tab, like the web's SwipePager. Off on pushed screens (a set's page,
@@ -347,5 +350,15 @@ struct ThemedWindow: ViewModifier {
     content
       .preferredColorScheme(theme.colorScheme)
       .animation(.smooth(duration: 0.3), value: theme)
+  }
+}
+
+private struct MinimizingTabBar: ViewModifier {
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.tabBarMinimizeBehavior(.onScrollDown)
+    } else {
+      content
+    }
   }
 }
