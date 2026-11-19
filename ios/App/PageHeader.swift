@@ -1,9 +1,8 @@
 import SwiftUI
 
-// A tab's main page. The tab strip across the top already names the page, so
-// the page has no title bar of its own (its title is still set, for VoiceOver
-// and for the Back button of anything pushed from it). Its action buttons —
-// + and friends — float at the bottom right, where a thumb reaches them.
+// A tab's main page: its title at the top left of the bar, and its action
+// buttons (+ and friends) floating at the bottom right, just above the tab
+// bar, where a thumb reaches them.
 
 extension View {
   func pageHeader<Actions: View>(_ title: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
@@ -18,7 +17,11 @@ struct PageHeader<Actions: View>: ViewModifier {
   func body(content: Content) -> some View {
     content
       .navigationTitle(title)
-      .toolbar(.hidden, for: .navigationBar)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
+      }
+      .modifier(LeadingTitle(title: title))
       .safeAreaInset(edge: .bottom, alignment: .trailing, spacing: 0) {
         HStack(spacing: 10) { actions() }
           .modifier(FloatingButtonStyle())
@@ -63,6 +66,33 @@ struct HeaderIconButton: View {
         content.buttonStyle(.glassProminent)
       } else {
         content.buttonStyle(.borderedProminent)
+      }
+    }
+  }
+}
+
+/// The title as the bar's leading item, without the glass capsule iOS 26
+/// draws behind bar items.
+private struct LeadingTitle: ViewModifier {
+  let title: String
+
+  private var label: some View {
+    Text(title)
+      .font(.title.bold())
+      .lineLimit(1)
+      .fixedSize()
+      .accessibilityAddTraits(.isHeader)
+  }
+
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.toolbar {
+        ToolbarItem(placement: .topBarLeading) { label }
+          .sharedBackgroundVisibility(.hidden)
+      }
+    } else {
+      content.toolbar {
+        ToolbarItem(placement: .topBarLeading) { label }
       }
     }
   }

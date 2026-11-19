@@ -70,10 +70,8 @@ struct MainTabView: View {
   var body: some View {
     // The tabs live in a strip across the top, with the pages below it; the
     // bottom of the screen belongs to each page's action buttons.
-    VStack(spacing: 0) {
-      TopTabBar(items: tabItems, selection: $selection)
-      pages
-    }
+    // iOS's own glass tab bar at the bottom.
+    pages
     // The web's page color behind everything, the clock's strip included.
     .background(Color.twPage.ignoresSafeArea())
   }
@@ -170,19 +168,6 @@ struct MainTabView: View {
       .offset(x: tab == selection && tab != .admin ? offsetX : 0)
       .environment(\.tabPull, tab == selection && tab == .admin ? offsetX : 0)
       .environment(\.appTab, tab)
-      .toolbar(.hidden, for: .tabBar)
-  }
-
-  private var tabItems: [TopTabBar.Item] {
-    tabs.map { tab in
-      switch tab {
-      case .calendar: TopTabBar.Item(tab: tab, title: "Calendar", systemImage: "calendar", badge: 0)
-      case .mySets: TopTabBar.Item(tab: tab, title: "My Sets", systemImage: "music.note.list", badge: model.swapBadge)
-      case .availability: TopTabBar.Item(tab: tab, title: "Unavailabilities", systemImage: "calendar.badge.clock", badge: model.availabilityBadge)
-      case .admin: TopTabBar.Item(tab: tab, title: "Admin", systemImage: "checkmark.seal", badge: model.pendingApprovals)
-      case .account: TopTabBar.Item(tab: tab, title: "Account", systemImage: "person.crop.circle", badge: 0)
-      }
-    }
   }
 
   private func neighbour(_ step: Int) -> AppTab? {
