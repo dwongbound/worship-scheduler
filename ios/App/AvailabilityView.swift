@@ -207,6 +207,8 @@ struct AvailabilityView: View {
     let repeating = Availability.isRepeating(data.entries, on: ymd, calendar: calendar)
     let past = ymd < today
     return Button {
+      // A swipe between tabs ending over the grid isn't a tap on a day.
+      guard !model.justSwiped else { return }
       taps += 1
       openDay = OpenDay(ymd: ymd, date: date)
     } label: {

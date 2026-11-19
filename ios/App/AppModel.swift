@@ -123,6 +123,12 @@ final class AppModel {
   var tabSwipePauses = 0
   /// Where rows with their own swipe actions sit on screen, per tab. A tab
   /// swipe that starts inside one belongs to the row, not the tab bar.
+  /// When a sideways tab swipe last moved. The finger lifting at the end of a
+  /// swipe can land as a tap on whatever is under it on the new page (a day
+  /// on the Unavailabilities grid opened its drawer); taps that soon after a
+  /// swipe are ignored.
+  @ObservationIgnored var tabSwipeAt: Date?
+  var justSwiped: Bool { tabSwipeAt.map { Date().timeIntervalSince($0) < 0.6 } ?? false }
   @ObservationIgnored var sideSwipeZones: [String: (tab: AppTab, frame: CGRect)] = [:]
   /// Matched on height only: the frame is the row's content, but a list row
   /// (and its swipe) spans the screen's width. The padding covers the row's

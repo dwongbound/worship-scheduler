@@ -110,6 +110,7 @@ struct MainTabView: View {
                 !model.ownsSideSwipe(at: value.startLocation, on: selection, width: width),
                 TabSwipe.isSideways(start: value.startLocation, translation: value.translation)
           else { return }
+          model.tabSwipeAt = Date()
           // Resist at the ends, where there's nothing to go to.
           let dx = value.translation.width
           let step = dx < 0 ? 1 : -1
@@ -124,6 +125,7 @@ struct MainTabView: View {
                   predicted: value.predictedEndTranslation
                 )
           else { return }
+          model.tabSwipeAt = Date()
           // Inside Admin, Approvals and Team come before the next tab.
           if let section = adminStep(step) {
             // Both halves are already laid out side by side: just glide
