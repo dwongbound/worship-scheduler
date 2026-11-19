@@ -168,6 +168,11 @@ public struct APIClient: Sendable {
     do {
       (data, response) = try await transport(request)
     } catch {
+      // A load abandoned on purpose (the page reloaded with a new key, or
+      // went away) isn't a failure, and mustn't flash an error.
+      if error is CancellationError || (error as? URLError)?.code == .cancelled {
+        throw CancellationError()
+      }
       throw APIError.network(error.localizedDescription)
     }
     let status = (response as? HTTPURLResponse)?.statusCode ?? 0

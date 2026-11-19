@@ -13,6 +13,7 @@ extension View {
 struct PageHeader<Actions: View>: ViewModifier {
   let title: String
   let actions: () -> Actions
+  @Environment(\.tabBarHeight) private var barHeight
 
   func body(content: Content) -> some View {
     content
@@ -26,7 +27,7 @@ struct PageHeader<Actions: View>: ViewModifier {
         HStack(spacing: 10) { actions() }
           .modifier(FloatingButtonStyle())
           .padding(.trailing, 16)
-          .padding(.bottom, 12)
+          .padding(.bottom, 12 + barHeight)
       }
   }
 }

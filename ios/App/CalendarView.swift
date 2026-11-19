@@ -26,21 +26,34 @@ struct CalendarView: View {
 
   var body: some View {
     NavigationStack {
-      List { Group {
-        Section {
-          MonthGrid(month: $month, calendar: calendar) { date in
-            dayCell(date)
+      Group {
+        if phase == .loading && loaded[monthKey] == nil {
+          // Nothing of this month is known yet: the whole page as a
+          // skeleton, so the grid's dots and the day's sets arrive together
+          // instead of popping in one after the other.
+          List { Group {
+            Section {
+              MonthGrid(month: .constant(month), calendar: calendar) { date in
+                DayNumber(date: date, calendar: calendar).frame(maxWidth: .infinity, minHeight: 44)
+              }
+              .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+            }
+            Section {
+              ForEach(0..<2, id: \.self) { _ in
+                CalendarSetRow.placeholder
+              }
+            }
           }
-          .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-        } footer: {
-          CalendarLegend()
+          .listRowBackground(Color.twCard)
+          }
+          .listStyle(.insetGrouped)
+          .twList()
+          .skeleton("Loading the calendar")
+        } else {
+          loadedList.loadedContent()
         }
-        daySection
       }
-.listRowBackground(Color.twCard)
-}
-      .listStyle(.insetGrouped)
-      .twList()
+      .animation(.easeInOut(duration: 0.35), value: phase == .loading && loaded[monthKey] == nil)
       .pageHeader("Calendar") {
         Button("Today") { goToToday() }
         if model.isAdminAnywhere && !model.readOnly {
@@ -64,6 +77,24 @@ struct CalendarView: View {
         selected = today.hasPrefix(String(key.prefix(7))) ? today : key
       }
     }
+  }
+
+  private var loadedList: some View {
+      List { Group {
+        Section {
+          MonthGrid(month: $month, calendar: calendar) { date in
+            dayCell(date)
+          }
+          .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+        } footer: {
+          CalendarLegend()
+        }
+        daySection
+      }
+.listRowBackground(Color.twCard)
+}
+      .listStyle(.insetGrouped)
+      .twList()
   }
 
   private func dayCell(_ date: Date) -> some View {
@@ -108,16 +139,6 @@ struct CalendarView: View {
     let daySets = byDay[selected] ?? []
     Section {
       switch phase {
-      case .loading where loaded[monthKey] == nil:
-        ForEach(0..<2, id: \.self) { _ in
-          VStack(alignment: .leading, spacing: 4) {
-            Text("Sunday Morning Worship").font(TW.headline)
-            Text("9:00 – 10:30").font(TW.subheadline)
-            Text("Sunday Team").font(TW.footnote)
-          }
-          .padding(.vertical, 2)
-        }
-        .skeleton("Loading sets")
       case .failed(let message) where loaded[monthKey] == nil:
         VStack(alignment: .leading, spacing: 8) {
           Label("Couldn't load sets", systemImage: "wifi.exclamationmark")
@@ -161,9 +182,19 @@ struct CalendarView: View {
     if loaded[key] == nil { phase = .loading }
     do {
       let fresh = try await model.api.sets(from: start, to: end, calendar: calendar)
-      withAnimation(.smooth(duration: 0.3)) {
+      withAnimation(.easeInOut(duration: 0.35)) {
         loaded[key] = fresh
-        withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
+        phase = .loaded
+      }
+      // The months either side, quietly, so flipping to them is instant.
+      for step in [-1, 1] {
+        guard let other = calendar.date(byAdding: .month, value: step, to: start) else { continue }
+        let otherKey = SetCalendar.ymd(other, calendar: calendar)
+        guard loaded[otherKey] == nil,
+              let otherEnd = calendar.date(byAdding: DateComponents(month: 1, day: -1), to: other),
+              let sets = try? await model.api.sets(from: other, to: otherEnd, calendar: calendar)
+        else { continue }
+        loaded[otherKey] = sets
       }
     } catch is CancellationError {
       // The month changed mid-load; the new month's own load is running.
@@ -217,6 +248,19 @@ struct CalendarLegend: View {
 struct CalendarSetRow: View {
   let set: ApiSet
   let mySeats: [ApiAssignment]
+
+  /// The row's shape, for the loading skeleton.
+  static var placeholder: some View {
+    HStack(alignment: .top, spacing: 12) {
+      RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.twAccentSoft).frame(width: 52, height: 52)
+      VStack(alignment: .leading, spacing: 6) {
+        Text("Sunday Morning Worship").font(TW.headline)
+        Text("9:00 AM – 10:30 AM · Confirmed").font(TW.subheadline)
+        Text("Sunday Team").font(TW.caption)
+      }
+    }
+    .padding(.vertical, 6)
+  }
 
   var body: some View {
     let status = SetCalendar.status(set)

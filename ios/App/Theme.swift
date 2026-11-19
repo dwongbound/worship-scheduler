@@ -46,6 +46,7 @@ extension View {
       .scrollContentBackground(.hidden)
       .background(Color.twPage)
       .modifier(ReportsScroll())
+      .modifier(ClearsTabBar())
   }
 }
 
@@ -62,5 +63,14 @@ private struct ReportsScroll: ViewModifier {
     } else {
       content
     }
+  }
+}
+
+/// Room at the end of a list for the floating tab bar, so its last row can
+/// scroll clear of it (the list still runs underneath the glass).
+private struct ClearsTabBar: ViewModifier {
+  @Environment(\.tabBarHeight) private var barHeight
+  func body(content: Content) -> some View {
+    content.contentMargins(.bottom, barHeight, for: .scrollContent)
   }
 }

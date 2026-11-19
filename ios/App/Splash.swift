@@ -6,6 +6,9 @@ import SwiftUI
 struct SplashView: View {
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var on = false
+  /// The mark and name fade up over the launch screen's plain color, rather
+  /// than appearing in one frame.
+  @State private var shown = false
 
   var body: some View {
     ZStack {
@@ -21,10 +24,13 @@ struct SplashView: View {
           .opacity(on || reduceMotion ? 1 : 0.55)
         Equalizer(animating: !reduceMotion)
       }
+      .opacity(shown ? 1 : 0)
+      .scaleEffect(shown || reduceMotion ? 1 : 0.96)
     }
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("TapWorship is loading")
     .onAppear {
+      withAnimation(.easeOut(duration: 0.35)) { shown = true }
       guard !reduceMotion else { return }
       withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { on = true }
     }

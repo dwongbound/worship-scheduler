@@ -198,7 +198,7 @@ struct MainTabView: View {
   private func page(_ tab: AppTab) -> some View {
     let on = tab == selection
     return tabContent(tab)
-      .safeAreaPadding(.bottom, barHeight)
+      .environment(\.tabBarHeight, barHeight)
       .background(Color.twPage)
       .environment(\.tabPull, on && tab == .admin ? innerPull : 0)
       .environment(\.appTab, tab)
@@ -289,6 +289,9 @@ struct OwnsSideSwipe: ViewModifier {
 extension EnvironmentValues {
   /// Which tab a view lives in (nil outside the tab bar, e.g. in a sheet).
   @Entry var appTab: AppTab? = nil
+  /// How tall the floating tab bar is: lists leave that much room at their
+  /// end, and a page's + buttons sit just above it.
+  @Entry var tabBarHeight: CGFloat = 0
   /// The tab swipe's sideways pull, for a page that moves only part of itself.
   @Entry var tabPull: CGFloat = 0
 }

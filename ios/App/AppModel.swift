@@ -208,6 +208,8 @@ final class AppModel {
   /// Every screen routes its errors through here. Returns the words to show,
   /// or nil when the error was a sign-out (the screen is about to go away).
   func handle(_ error: Error) -> String? {
+    // A cancelled load says nothing; whatever replaced it reports for itself.
+    if error is CancellationError { return nil }
     let apiError = (error as? APIError) ?? .network(error.localizedDescription)
     if apiError == .unauthorized {
       signOut()

@@ -60,10 +60,18 @@ struct SetNotesSection: View {
             .font(TW.footnote)
             .foregroundStyle(.red)
         }
-        if log.isEmpty {
+        if !loaded {
+          // The log's shape until it arrives, so the current note doesn't
+          // show and then get replaced by the log.
+          VStack(alignment: .leading, spacing: 4) {
+            Text("A note for the team about this set")
+            Text("Someone · 2 days ago").font(TW.footnote)
+          }
+          .skeleton("Loading notes")
+        } else if log.isEmpty {
           if let notes = currentNotes, !notes.isEmpty {
             Text(notes)
-          } else if loaded {
+          } else {
             Text("No notes yet").foregroundStyle(.secondary)
           }
         }
@@ -85,12 +93,15 @@ struct SetNotesSection: View {
 
   private func load() async {
     do {
-      log = try await model.api.noteLog(setId: setId)
+      let fresh = try await model.api.noteLog(setId: setId)
+      withAnimation(.easeInOut(duration: 0.35)) { log = fresh }
+    } catch is CancellationError {
+      return
     } catch {
       // The log is extra; the current note still shows without it.
       _ = model.handle(error)
     }
-    loaded = true
+    withAnimation(.easeInOut(duration: 0.35)) { loaded = true }
   }
 
   private func send() async {

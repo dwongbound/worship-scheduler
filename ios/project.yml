@@ -50,6 +50,8 @@ targets:
           # and the one ATS allowance that lets the simulator reach
           # http://localhost. Release has neither.
           INFOPLIST_FILE: Config/Info-Debug.plist
+        Release:
+          INFOPLIST_FILE: Config/Info-Release.plist
       base:
         # Registered on the team below (2026-11-18). The bundle id is the
         # app's identity in App Store Connect and can never be reused.
@@ -73,7 +75,6 @@ targets:
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: TapWorship
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         # iPad multitasking needs every orientation, or App Store upload fails.
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"

@@ -141,8 +141,24 @@ struct SwapPickerSheet: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading:
-      ProgressView("Finding sets you could trade for")
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      // The list's own shape while it loads, not a spinner.
+      List { Group {
+        Section {
+          ForEach(0..<4, id: \.self) { _ in
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Sunday, November 22").font(TW.headline)
+              Text("9:00 AM · Sunday Morning").font(TW.subheadline)
+              Text("Firstname Lastname").font(TW.footnote)
+            }
+            .padding(.vertical, 4)
+          }
+        }
+      }
+      .listRowBackground(Color.twCard)
+      }
+      .listStyle(.insetGrouped)
+      .twList()
+      .skeleton("Finding sets you could trade for")
     case .failed(let message):
       BrandedEmpty(title: "Couldn't load sets to swap with", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load(reset: true) } }
