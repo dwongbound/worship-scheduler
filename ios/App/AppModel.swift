@@ -121,6 +121,17 @@ final class AppModel {
 
   /// How many pushed screens are showing; tab swipes are off while any is.
   var tabSwipePauses = 0
+  /// The tab bar's thin, icons-only look while the page scrolls down.
+  var tabBarCompact = false
+  /// Follows any list's scroll: down shrinks the bar, up or the top grows it.
+  func scrolled(from old: CGFloat, to new: CGFloat) {
+    let compact: Bool
+    if new < 24 { compact = false }
+    else if new - old > 4 { compact = true }
+    else if old - new > 4 { compact = false }
+    else { return }
+    if compact != tabBarCompact { tabBarCompact = compact }
+  }
   /// Where rows with their own swipe actions sit on screen, per tab. A tab
   /// swipe that starts inside one belongs to the row, not the tab bar.
   /// When a sideways tab swipe last moved. The finger lifting at the end of a

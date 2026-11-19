@@ -45,5 +45,22 @@ extension View {
     self
       .scrollContentBackground(.hidden)
       .background(Color.twPage)
+      .modifier(ReportsScroll())
+  }
+}
+
+/// Tells the tab bar which way this list is scrolling (iOS 18+).
+private struct ReportsScroll: ViewModifier {
+  @Environment(AppModel.self) private var model
+  func body(content: Content) -> some View {
+    if #available(iOS 18.0, *) {
+      content.onScrollGeometryChange(for: CGFloat.self) { geo in
+        geo.contentOffset.y + geo.contentInsets.top
+      } action: { old, new in
+        model.scrolled(from: old, to: new)
+      }
+    } else {
+      content
+    }
   }
 }

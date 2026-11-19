@@ -93,8 +93,12 @@ struct MainTabView: View {
   var body: some View {
     // The tabs live in a strip across the top, with the pages below it; the
     // bottom of the screen belongs to each page's action buttons.
-    // iOS's own glass tab bar at the bottom.
-    pages
+    // Our own glass tab bar at the bottom (see AppTabBar for why).
+    VStack(spacing: 0) {
+      pages
+      AppTabBar(items: tabItems, selection: $selection, compact: model.tabBarCompact)
+    }
+    .background(Color.twPage.ignoresSafeArea())
     // The web's page color behind everything, the clock's strip included.
     .background(Color.twPage.ignoresSafeArea())
   }
@@ -122,9 +126,6 @@ struct MainTabView: View {
         .tabItem { Label("Account", systemImage: "person.crop.circle") }
         .tag(AppTab.account)
     }
-    // Shrinks to a compact glass pill while you scroll down, and comes back
-    // when you scroll up, like Apple's own apps (iOS 26).
-    .modifier(MinimizingTabBar())
     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     // Swipe left/right on a tab's main screen to move to the next/previous
     // tab, like the web's SwipePager. Off on pushed screens (a set's page,
@@ -175,6 +176,8 @@ struct MainTabView: View {
     .onChange(of: selection) {
       // Belt and braces: whatever changed the tab, the page ends up in place.
       if slideX != 0 && abs(slideX) > width * 0.5 { slideX = 0 }
+      // A new tab starts at its top, so the bar starts full size.
+      model.tabBarCompact = false
       Task { await model.refreshBadges() }
     }
     .onChange(of: scenePhase) { _, phase in
@@ -194,6 +197,19 @@ struct MainTabView: View {
       .offset(x: tab == selection && tab != .admin ? offsetX : 0)
       .environment(\.tabPull, tab == selection && tab == .admin ? offsetX : 0)
       .environment(\.appTab, tab)
+      .toolbar(.hidden, for: .tabBar)
+  }
+
+  private var tabItems: [AppTabBar.Item] {
+    tabs.map { tab in
+      switch tab {
+      case .calendar: AppTabBar.Item(tab: tab, title: "Calendar", systemImage: "calendar", badge: 0)
+      case .mySets: AppTabBar.Item(tab: tab, title: "My Sets", systemImage: "music.note.list", badge: model.swapBadge)
+      case .availability: AppTabBar.Item(tab: tab, title: "Unavailabilities", systemImage: "calendar.badge.clock", badge: model.availabilityBadge)
+      case .admin: AppTabBar.Item(tab: tab, title: "Admin", systemImage: "checkmark.seal", badge: model.pendingApprovals)
+      case .account: AppTabBar.Item(tab: tab, title: "Account", systemImage: "person.crop.circle", badge: 0)
+      }
+    }
   }
 
   private func neighbour(_ step: Int) -> AppTab? {
@@ -350,15 +366,5 @@ struct ThemedWindow: ViewModifier {
     content
       .preferredColorScheme(theme.colorScheme)
       .animation(.smooth(duration: 0.3), value: theme)
-  }
-}
-
-private struct MinimizingTabBar: ViewModifier {
-  func body(content: Content) -> some View {
-    if #available(iOS 26.0, *) {
-      content.tabBarMinimizeBehavior(.onScrollDown)
-    } else {
-      content
-    }
   }
 }
