@@ -73,3 +73,8 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: TapWorship
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # iPad multitasking needs every orientation, or App Store upload fails.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        # Only standard HTTPS: exempt from export paperwork, so TestFlight
+        # doesn't ask on every build.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
