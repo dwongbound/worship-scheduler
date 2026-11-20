@@ -295,7 +295,7 @@ struct SwapConfirmView: View {
       } header: {
         Text("Note for \(candidate.counterparty.name)")
       } footer: {
-        Text("\(candidate.counterparty.name) accepts or declines, then an admin approves the trade.")
+        Text("Needs \(candidate.counterparty.name) and an admin to agree.")
       }
       Section {
         Button {

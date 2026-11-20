@@ -384,7 +384,7 @@ struct SetDetailView: View {
             Text("Practices")
           } footer: {
             if isAdmin && !practices.isEmpty {
-              Text("Swipe left on a practice to cancel it.")
+              EmptyView()
             }
           }
         }

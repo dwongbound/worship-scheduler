@@ -80,7 +80,7 @@ struct TeamView: View {
               Text(section.title)
             } footer: {
               if section.title == TeamList.noTeamTitle {
-                Text("People on no team are never scheduled. Tap one to add them to a team.")
+                Text("Not scheduled until added to a team.")
               }
             }
           }
@@ -209,9 +209,7 @@ struct MemberDetailView: View {
           Text("Account")
         } footer: {
           if model.readOnly {
-            Text("Read-only preview: change access, teams and roles on tapworship.com.")
-          } else {
-            Text("The display name is what everyone sees on rosters and in messages. Changing it doesn't change how \(user.name) signs in.")
+            Text("Read-only preview: make changes on tapworship.com.")
           }
         }
 
@@ -220,9 +218,7 @@ struct MemberDetailView: View {
             .disabled(isMe)
           Toggle("Musical director", isOn: binding(user.isMD) { MemberPatch(isMD: $0) } apply: { $0.with(isMD: $1) })
         } footer: {
-          Text(isMe
-               ? "You can't change your own admin access here, so an org is never left without one."
-               : "Admins can schedule sets and see this tab. Musical directors can lead a set.")
+          if isMe { Text("You can't change your own admin access.") }
         }
 
         ForEach(teams) { team in
@@ -234,9 +230,7 @@ struct MemberDetailView: View {
           Button("Remove from Org", role: .destructive) { confirmRemove = true }
             .disabled(isMe)
         } footer: {
-          Text(isMe
-               ? "To leave this org, ask another admin to remove you."
-               : "Takes \(user.name) off every team and upcoming set in this org. Their account stays.")
+          Text(isMe ? "Ask another admin to remove you." : "Their account stays.")
         }
         }
       }
@@ -258,7 +252,7 @@ struct MemberDetailView: View {
           .disabled(ProfileRules.cleanName(newName) == nil)
         Button("Close", role: .cancel) {}
       } message: {
-        Text("What everyone sees for \(user.name), in every org they're in. How they sign in stays the same.")
+        Text("Doesn't change how they sign in.")
       }
       .confirmationDialog("Remove \(user.name) from this org?", isPresented: $confirmRemove, titleVisibility: .visible) {
         Button("Remove from Org", role: .destructive) { Task { await remove(user) } }
@@ -314,7 +308,7 @@ struct MemberDetailView: View {
       Text(team.name)
     } footer: {
       if membership?.active == false {
-        Text("Paused here: auto schedule skips them and availability requests don't ask them. You can still pick them by hand.")
+        Text("Paused: not auto-scheduled or asked for availability.")
       }
     }
     .animation(.smooth, value: membership != nil)

@@ -124,7 +124,7 @@ struct ProfileView: View {
       } header: {
         Text("My teams")
       } footer: {
-        Text("Your org admin sets which teams you're on and what you play. Paused means you won't be scheduled automatically on that team.")
+        Text("Set by your org admin.")
       }
 
       if me.email != nil {
@@ -145,9 +145,9 @@ struct ProfileView: View {
           Text("Google Calendar")
         } footer: {
           if me.calendarInvites, let address = me.inviteAddress {
-            Text("Invites go to \(address). To send them to a different calendar, use your profile on the web.")
+            Text("Invites go to \(address).")
           } else {
-            Text("You'll still be on the roster; you just won't get calendar invites.")
+            Text("You stay on the roster, without invites.")
           }
         }
       }
@@ -159,7 +159,7 @@ struct ProfileView: View {
         ))
         .disabled(model.readOnly)
       } footer: {
-        Text("A message each morning when you're on a set that week.")
+        EmptyView()
       }
 
       Section {
@@ -169,7 +169,7 @@ struct ProfileView: View {
           Label("Slack and more on the web", systemImage: "safari")
         }
       } footer: {
-        Text("Linking Slack, choosing which calendar invites land in, and access keys are on the web.")
+        EmptyView()
       }
     }
 .listRowBackground(Color.twCard)

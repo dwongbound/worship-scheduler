@@ -113,7 +113,7 @@ struct AvailabilityView: View {
         .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
       } footer: {
         VStack(alignment: .leading, spacing: 6) {
-          Text("Tap a day to see what's blocked, and to block or free it.")
+          EmptyView()
           AvailabilityLegend()
         }
       }
@@ -185,9 +185,7 @@ struct AvailabilityView: View {
       } header: {
         Text("Asked for")
       } footer: {
-        Text(model.readOnly
-             ? "Read-only preview: block days and submit on tapworship.com."
-             : "Block the days you can't serve, then Submit so your admin knows you're done. Edit reopens it.")
+        if model.readOnly { Text("Read-only preview: submit on tapworship.com.") }
       }
     }
   }
@@ -305,7 +303,7 @@ struct AvailabilityView: View {
     } header: {
       Text("Every week")
     } footer: {
-      if !rules.isEmpty && !model.readOnly { Text("Swipe left on a block to delete it.") }
+      EmptyView()
     }
   }
 
@@ -515,7 +513,7 @@ struct SubmitAvailabilitySheet: View {
 
         if !blocked.isEmpty {
           Section {} footer: {
-            Text("Something missing? Close this and tap the day on the calendar.")
+            EmptyView()
           }
         }
       }
@@ -659,7 +657,7 @@ struct DayDrawer: View {
             }
           } footer: {
             if blocks.contains(where: { $0.type == .recurring }) && !blocks.isEmpty {
-              Text("Freeing a day only skips it; your weekly block keeps repeating.")
+              Text("Your weekly block keeps repeating.")
             }
           }
         }
@@ -758,7 +756,7 @@ struct AddBlockSheet: View {
           Text(kind == .weekly ? "Days" : "Dates")
         } footer: {
           if kind == .dates {
-            Text("For one day, leave From and Through on the same date.")
+            EmptyView()
           }
         }
         .onChange(of: day) { _, first in

@@ -187,7 +187,7 @@ struct PracticeFreeView: View {
                 } header: {
                   Text("Busy · \(busy.count)")
                 } footer: {
-                  Text("Busy means their availability blocks this time.")
+                  EmptyView()
                 }
               }
             }

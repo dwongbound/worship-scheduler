@@ -141,7 +141,7 @@ struct MySetsView: View {
         } header: {
           Text("Cover needed")
         } footer: {
-          Text("These are in a role you play.")
+          EmptyView()
         }
       }
       if !needsAnswer.isEmpty {
@@ -173,7 +173,7 @@ struct MySetsView: View {
         } header: {
           Text("Needs your answer")
         } footer: {
-          Text(model.readOnly ? "Read-only preview: confirm on tapworship.com." : "Swipe right on a set to confirm it.")
+          if model.readOnly { Text("Read-only preview: confirm on tapworship.com.") }
         }
       }
       if !upcoming.isEmpty {
@@ -471,7 +471,7 @@ struct RequestCoverSheet: View {
         } header: {
           Text("Note for your team")
         } footer: {
-          Text("Everyone who plays \(RoleLabels.label(for: seat.role)) on your team is asked to take this seat.")
+          Text("Everyone who plays \(RoleLabels.label(for: seat.role)) is asked.")
         }
       }
 .listRowBackground(Color.twCard)

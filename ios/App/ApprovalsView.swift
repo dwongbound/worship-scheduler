@@ -96,7 +96,7 @@ struct ApprovalsView: View {
               .disabled(busy.contains(approval.id))
             }
           } footer: {
-            Text("Swipe right to approve, left to reject.")
+            EmptyView()
           }
         }
 .listRowBackground(Color.twCard)

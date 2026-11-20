@@ -48,7 +48,7 @@ struct SetlistEditorSheet: View {
           if let error {
             Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red)
           } else {
-            Text("Drag to reorder, swipe left to remove. Everyone on the set sees the changes.")
+            EmptyView()
           }
         }
       }
@@ -224,7 +224,7 @@ struct RosterEditorSheet: View {
         } header: {
           Text("Borrowed from other teams")
         } footer: {
-          Text("Swipe to remove. Adding people from another team is on the web.")
+          EmptyView()
         }
       }
       Section {
@@ -232,7 +232,7 @@ struct RosterEditorSheet: View {
         if let error {
           Label(error, systemImage: "exclamationmark.circle").foregroundStyle(.red)
         } else if !diff.isEmpty {
-          Text("\(RosterEditing.summary(diff)). Saving tells the people affected.")
+          Text(RosterEditing.summary(diff))
         }
       }
     }

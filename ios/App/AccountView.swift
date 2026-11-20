@@ -28,7 +28,7 @@ struct AccountView: View {
             Label("Profile", systemImage: "person.text.rectangle")
           }
         } footer: {
-          Text("Name, email, password, your teams, calendar invites and the morning summary.")
+          EmptyView()
         }
         if model.readOnly {
           Section {
@@ -48,7 +48,7 @@ struct AccountView: View {
           if let joinedName {
             Text("You've joined \(joinedName).")
           } else {
-            Text("Got a key from another church or ministry? Enter it to join their team too.")
+            EmptyView()
           }
         }
         }
@@ -56,7 +56,7 @@ struct AccountView: View {
           Section {
             LabeledContent("Server", value: AppConfig.baseURL.absoluteString)
           } footer: {
-            Text("This is a development build. It isn't talking to tapworship.com.")
+            Text("Development build.")
           }
         }
         Section {
@@ -69,7 +69,7 @@ struct AccountView: View {
         } header: {
           Text("Appearance")
         } footer: {
-          Text("Device follows your iPhone's Light or Dark setting.")
+          EmptyView()
         }
 
         // Plain List rows: a List row is already at least 44pt, so an extra
@@ -85,7 +85,7 @@ struct AccountView: View {
           Section {
             Button("Delete account", role: .destructive) { deleting = true }
           } footer: {
-            Text("Permanently deletes your account and everything on it.")
+            Text("This can't be undone.")
           }
         }
       }
