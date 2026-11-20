@@ -12,6 +12,7 @@ import { DUPLICATE_NAME_COOKIE, nameConflictRedirect } from "./nameConflict";
 import { findNameConflicts } from "./nameConflictStore";
 import { parseBearer, readMobileToken } from "./mobileToken";
 import { linkSlackIdForUser } from "./slack";
+import { recordGoogleSignIn } from "./googleSignIn";
 import { prisma } from "./prisma";
 
 // Google sign-in is optional: it's only enabled when its OAuth credentials
@@ -92,6 +93,7 @@ export const authOptions: NextAuthOptions = {
             username: email.toLowerCase(),
             passwordHash: "", // OAuth account — no usable password
             instruments: [],
+            googleSignInAt: new Date(),
           },
         });
         return true;
@@ -106,6 +108,9 @@ export const authOptions: NextAuthOptions = {
           name: existing.name || user.name || undefined,
         });
       }
+      // Remember they use Google: their row may also have a username and
+      // password, and nothing else would tell the Team page.
+      await recordGoogleSignIn(existing.id);
       return true;
     },
     async jwt({ token, user, account, trigger, session }) {

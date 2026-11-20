@@ -71,7 +71,7 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   targets = no Slack DM, no red dot, no row to fill in (`lib/availabilityTargets.ts`
   `targetsUser`/`membersTargetedBy`). The Create tab's status panel still lists
   them, last and marked "inactive", so a short chase list reads as deliberate.
-- **User** — username/passwordHash/name, `isMD` (musical director; global
+- **User** — username/passwordHash/name, `googleSignInAt` (last Google sign-in, web or app — Google is matched by email so nothing else records it; `lib/signInMethod.ts` turns it + `appleSub` + an empty password into the Team page's "Signed in with Google / Apple") ✅tested, `isMD` (musical director; global
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).

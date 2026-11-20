@@ -363,6 +363,14 @@ model User {
   // signed in with Apple. See lib/socialSignIn.ts.
   appleSub String? @unique
 
+  // When this person last signed in with Google (web or iOS app). Google is
+  // matched by email, so an account that ALSO has a username and password
+  // looked exactly like a password-only one; this is how the Team page can say
+  // "Signed in with Google". Null = never seen signing in with Google since
+  // this was added (accounts with no password at all are Google by origin and
+  // were backfilled by the migration).
+  googleSignInAt DateTime?
+
   // True for an account created by an admin IMPORT (the availability form
   // roster) rather than by the person themselves — a stand-in that holds their
   // org membership and availability until they first sign in. Email is the

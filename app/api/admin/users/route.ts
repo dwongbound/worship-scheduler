@@ -2,6 +2,7 @@
 // they've finished entering availability (the "scheduling completed" log).
 // Org comes from the x-org-id header; NOTHING cross-org leaks out of here —
 // team chips, responses, and the isAdmin flag are all scoped to that org.
+import { signInMethod } from "@/lib/signInMethod";
 import { NextRequest, NextResponse } from "next/server";
 import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
@@ -25,6 +26,7 @@ export async function GET(req: NextRequest) {
       // Google / Apple" instead of a username nobody typed.
       passwordHash: true,
       appleSub: true,
+      googleSignInAt: true,
       // The caller's org's membership row — its isAdmin is what the Team
       // page's checkbox reads/toggles; slackUserId (set once the person links
       // Slack in THIS org) drives the Team page's "connected" badge.
@@ -77,9 +79,9 @@ export async function GET(req: NextRequest) {
   // Flatten the single-org membership row into the isAdmin boolean the client
   // has always consumed, plus slackConnected (Slack linked in THIS org).
   return NextResponse.json(
-    users.map(({ memberships, teamMembers, passwordHash, appleSub, ...u }) => ({
+    users.map(({ memberships, teamMembers, passwordHash, appleSub, googleSignInAt, ...u }) => ({
       ...u,
-      signInWith: appleSub ? "apple" : passwordHash ? null : "google",
+      signInWith: signInMethod({ appleSub, googleSignInAt, passwordHash }),
       isAdmin: memberships[0]?.isAdmin ?? false,
       slackConnected: memberships[0]?.slackUserId != null,
       slackUserId: memberships[0]?.slackUserId ?? null,
