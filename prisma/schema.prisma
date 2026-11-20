@@ -192,9 +192,10 @@ model OrgMembership {
   // it lives here, per membership, rather than once on User.
   slackUserId String?
 
-  // When true, this person is added to EVERY Slack group chat created for this
-  // org's sets — even sets they aren't assigned to (e.g. a ministry lead who
-  // wants to be in every set's chat). Best-effort: needs a linked slackUserId.
+  // DEPRECATED, read by nothing: replaced by SetTemplateChatMember (extra
+  // group-chat people PER recurring set, not for every chat in the org). The
+  // migration copied each flagged person onto every weekly set time in their
+  // org; drop this column in a follow-up once that's confirmed on prod.
   alwaysInGroupChats Boolean @default(false)
 
   // This membership's open DM channel (D…) with the bot, cached after the first
@@ -418,6 +419,7 @@ model User {
   mdSets          Set[]             @relation("SetMD")
   // Personal access keys this person made on /profile (see AccessKey).
   accessKeys      AccessKey[]
+  templateChats   SetTemplateChatMember[]
 
   // Daily Slack summary of what needs this person's attention (lib/digest.ts).
   // Opt-out only: the send time is fixed at DIGEST_SEND_MINUTE, so on/off is
@@ -884,6 +886,10 @@ model SetTemplate {
   // SetTemplatePractice. An empty list = no practices.
   practices SetTemplatePractice[]
 
+  // People added to the Slack group chat of EVERY set of this recurring type,
+  // on top of whoever is on the set — see SetTemplateChatMember.
+  chatMembers SetTemplateChatMember[]
+
   // The org this template (and its expanded sets) belongs to.
   org   Org    @relation(fields: [orgId], references: [id], onDelete: Cascade)
   orgId String
@@ -895,6 +901,25 @@ model SetTemplate {
   createdAt DateTime @default(now())
 
   @@map("set_templates")
+}
+
+// Someone added to the Slack group chat of every set of one recurring type —
+// a ministry lead who wants to be in every Sunday 10 AM chat without being on
+// those sets. Read when the channel is CREATED (lib/slack.ts
+// messageSetTeamOnSlack), matching the set back to its weekly time with
+// `templateIdOf`, so a change here reaches every upcoming set of that type,
+// including ones generated before the person was added. Best-effort: someone
+// with no linked Slack in the org is skipped, like anyone else.
+model SetTemplateChatMember {
+  template   SetTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  templateId String
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+
+  createdAt DateTime @default(now())
+
+  @@id([templateId, userId])
+  @@map("set_template_chat_members")
 }
 
 // One practice on a weekly SetTemplate — a WEEKDAY and a time window, the way

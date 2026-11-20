@@ -261,6 +261,9 @@ export interface ApiSetTemplate {
   // none, and its LENGTH is the "+2" badge after the time in the Create tab's
   // list.
   practices: ApiTemplatePractice[];
+  // People added to the Slack group chat of every set of this recurring set,
+  // on top of whoever is on the set (SetTemplateChatMember).
+  chatMemberIds?: string[];
 }
 
 // One practice on a weekly set time — a weekday and a window, because a weekly

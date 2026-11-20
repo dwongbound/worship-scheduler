@@ -235,6 +235,16 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   is read off that, never guessed client-side.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
+  **SetTemplateChatMember** (`templateId`+`userId`) = extra people added to the
+  Slack group chat of EVERY set of that recurring set, on top of who's on it.
+  Read at channel creation (`lib/slack.ts messageSetTeamOnSlack` →
+  `templateIdOf` → the list; union in `lib/groupChatMembers.ts`), never copied
+  onto sets, so a change reaches existing sets of that type too. Edited in the
+  weekly set time form (`components/GroupChatPeoplePicker.tsx`); the templates
+  API takes `chatMemberIds` (replaces the list; absent = leave it). It REPLACED
+  the org-wide `OrgMembership.alwaysInGroupChats`, now unread — the migration
+  copied each flagged person onto every template in their org; the column's
+  drop is a follow-up. ✅tested
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
   org's "active" request. **AvailabilityResponse** (one per user+request;
   `@@unique([userId, requestId])`) records completion: a row with
