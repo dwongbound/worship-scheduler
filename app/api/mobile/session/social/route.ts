@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { MOBILE_TOKEN_MAX_AGE_S, mintMobileToken } from "@/lib/mobileToken";
 import { prisma } from "@/lib/prisma";
 import { resolveSocialUser } from "@/lib/socialSignIn";
+import { recordGoogleSignIn } from "@/lib/googleSignIn";
 import { audiencesFor, verifySocialToken, type SocialProvider } from "@/lib/socialToken";
 
 const PROVIDERS: SocialProvider[] = ["google", "apple"];
@@ -54,6 +55,8 @@ export async function POST(req: NextRequest) {
       { status: 409 }
     );
   }
+
+  if (identity.provider === "google") await recordGoogleSignIn(result.user.id);
 
   const memberships = await prisma.orgMembership.findMany({
     where: { userId: result.user.id },

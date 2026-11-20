@@ -16,5 +16,13 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<!-- The launch screen is the app's page color (light or dark), the same
+	     color the splash and every page sit on, so opening the app doesn't
+	     flash white first. -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 </dict>
 </plist>

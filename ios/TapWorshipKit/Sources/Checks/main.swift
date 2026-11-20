@@ -465,6 +465,15 @@ let inWindow = Availability.blockedDays([everyTuesday, trip, morning], from: new
 check("blocked days inside a request's window", inWindow.map(\.ymd) == ["2026-11-10", "2026-11-12", "2026-11-13", "2026-11-14", "2026-11-17", "2026-11-20"])
 check("with their levels", inWindow.last?.level == .partial && inWindow.first?.level == .full)
 
+check("a range lists every day", Availability.ymds(from: laDay("2026-11-29"), through: laDay("2026-12-02"), calendar: la) == ["2026-11-29", "2026-11-30", "2026-12-01", "2026-12-02"])
+check("a backwards range is empty", Availability.ymds(from: laDay("2026-12-02"), through: laDay("2026-11-29"), calendar: la).isEmpty)
+check("range problems", Availability.rangeProblem(from: laDay("2026-12-02"), through: laDay("2026-11-29"), startMinute: 0, endMinute: 1440, calendar: la) != nil
+      && Availability.rangeProblem(from: laDay("2026-01-01"), through: laDay("2026-06-01"), startMinute: 0, endMinute: 1440, calendar: la) != nil
+      && Availability.rangeProblem(from: laDay("2026-11-29"), through: laDay("2026-11-29"), startMinute: 0, endMinute: 1440, calendar: la) == nil)
+let runs = Availability.runs(inWindow, calendar: la)
+check("back-to-back days fold into runs", runs.map(\.days) == [1, 3, 1, 1] && runs[1].level == .full)
+check("a different level starts a new run", Availability.runs(inWindow, calendar: la).last?.level == .partial)
+check("day details put all-day first", Availability.dayDetails([tuesdayEvenings, everyTuesday], on: "2026-11-10", calendar: la).map(\.id) == ["r1", "r2"])
 check("times read like the web's", Availability.timeLabel(18 * 60) == "6 PM" && Availability.timeLabel(9 * 60 + 30) == "9:30 AM" && Availability.timeLabel(0) == "12 AM" && Availability.timeLabel(12 * 60) == "12 PM")
 check("window words", Availability.windowLabel(everyTuesday) == "All day" && Availability.windowLabel(tuesdayEvenings) == "6 PM – 9 PM")
 check("weekly rules sort by day then time", Availability.weeklyRules([tuesdayEvenings, trip, everyTuesday]).map(\.id) == ["r1", "r2"])
@@ -576,6 +585,184 @@ check("blank or unset stays on production", DevServer.url("") == nil && DevServe
 check("not a URL", DevServer.url("localhost:3000") == nil && DevServer.url("ftp://localhost") == nil)
 check("client id", DevServer.clientID(" 123-abc.apps.googleusercontent.com ") == "123-abc.apps.googleusercontent.com")
 check("an unfilled build setting is no client id", DevServer.clientID("$(GOOGLE_IOS_CLIENT_ID)") == nil && DevServer.clientID("") == nil)
+
+section("set page extras")
+do {
+  let api = APIClient(baseURL: URL(string: "https://tapworship.com")!, token: { "t" })
+  let note = try api.makeRequest("PATCH", "/api/sets/s1", body: ["notes": "Bring cables"])
+  check("a note is a PATCH of the set's notes", note.httpMethod == "PATCH" && note.url?.path == "/api/sets/s1"
+    && String(data: note.httpBody ?? Data(), encoding: .utf8)?.contains("Bring cables") == true)
+  check("blank note isn't sent", SetNotes.ready("  \n ") == nil && SetNotes.ready(" hi ") == "hi")
+  let setJSON = #"{"id":"s1","label":null,"startsAt":"2026-11-01T17:00:00.000Z","durationMinutes":90,"notes":null,"requiresMD":false,"isPrivate":false,"mdUserId":null,"slotCapacities":null,"groupChatLeadDays":null,"teamId":null,"team":null,"org":null,"assignments":[{"id":"a1","role":"WORSHIP_LEADER","status":"PENDING","user":{"id":"u1","name":"Paul"},"guestTeamId":null,"pendingFromUser":null}],"songs":[],"spotifyPlaylistUrl":null,"practices":[],"guestTeams":[]}"#
+  let set = try TapWorship.makeDecoder().decode(ApiSet.self, from: Data(setJSON.utf8))
+  check("the worship leader may post", SetNotes.canPost(on: set, userId: "u1", isOrgAdmin: false))
+  check("someone else may not, an admin may", !SetNotes.canPost(on: set, userId: "u2", isOrgAdmin: false) && SetNotes.canPost(on: set, userId: "u2", isOrgAdmin: true))
+  let avail = try TapWorship.makeDecoder().decode(PracticeAvailability.self, from: Data(#"{"people":[{"userId":"b","name":"Zed","roles":["BASS"],"free":true,"blockedBy":[]},{"userId":"a","name":"Amy","roles":["KEYS"],"free":false,"blockedBy":[{"type":"RECURRING"}]},{"userId":"c","name":"Bo","roles":[],"free":true,"blockedBy":[]}]}"#.utf8))
+  check("practice: free first, then by name", avail.sorted.map(\.name) == ["Bo", "Zed", "Amy"])
+  let log = try TapWorship.makeDecoder().decode([ApiSetHistoryEvent].self, from: Data(#"[{"id":"h1","type":"NOTES_CHANGED","role":null,"detail":"added a note","createdAt":"2026-11-02T10:00:00.000Z","actor":{"id":"u1","name":"Paul"},"targetUser":null,"previousUser":null}]"#.utf8))
+  check("note text from a log line", SetNotes.text(fromDetail: #"added a note: "Bring "the" cables""#) == #"Bring "the" cables"#
+    && SetNotes.text(fromDetail: "cleared the notes") == "cleared the notes")
+  check("note log decodes", log.first?.actor?.name == "Paul" && log.first?.detail == "added a note")
+} catch {
+  failures += 1
+  print("  ✗ set page extras threw: \(error)")
+}
+
+section("profile")
+do {
+  let meJSON = #"{"username":"bob","name":"Bob Baker","email":"bob@example.com","dailyDigest":true,"calendarInvites":true,"calendarInviteEmails":false,"calendarInviteEmail":null,"hasPassword":true,"memberships":[{"orgId":"o1","orgName":"Sunday Church","isAdmin":false,"slackUserId":null,"orgSlackConnected":false}],"teams":[{"id":"t1","name":"Sunday Team","orgId":"o1","roles":["DRUMS","WORSHIP_LEADER","GONE"],"catalog":[{"key":"WORSHIP_LEADER","label":"Worship Leader","defaultCount":1,"adminOnly":false,"order":0},{"key":"DRUMS","label":"Drums","defaultCount":1,"adminOnly":false,"order":3}],"active":false}]}"#
+  let me = try TapWorship.makeDecoder().decode(ApiProfile.self, from: Data(meJSON.utf8))
+  check("/api/me decodes", me.name == "Bob Baker" && me.hasPassword && me.teams.first?.active == false)
+  check("my roles in the team's order, a deleted one still named", me.teams[0].roleLabels.prefix(2) == ["Worship Leader", "Drums"] && me.teams[0].roleLabels.count == 3)
+  check("invites go to the email unless overridden", me.inviteAddress == "bob@example.com")
+  check("team's org by name", me.orgName(for: me.teams[0]) == "Sunday Church")
+  var update = ProfileUpdate(keeping: me)
+  update.dailyDigest = false
+  let body = String(data: try TapWorship.makeEncoder().encode(update), encoding: .utf8) ?? ""
+  check("a switch save keeps name and email, sends only that switch",
+        body.contains("\"name\":\"Bob Baker\"") && body.contains("bob@example.com") && body.contains("\"dailyDigest\":false") && !body.contains("calendarInvites") && !body.contains("password"))
+  var noEmail = update; noEmail.email = nil
+  let nullBody = String(data: try TapWorship.makeEncoder().encode(noEmail), encoding: .utf8) ?? ""
+  check("no email is sent as null, not left out", nullBody.contains("\"email\":null"))
+  check("password rules", ProfileRules.passwordProblem("short", confirm: "short") != nil
+        && ProfileRules.passwordProblem("longenough", confirm: "different") != nil
+        && ProfileRules.passwordProblem("longenough", confirm: "longenough") == nil)
+  check("blank name refused, blank email is none", ProfileRules.cleanName("  ") == nil && ProfileRules.cleanEmail(" ") == nil && ProfileRules.cleanName(" Bob ") == "Bob")
+} catch {
+  failures += 1
+  print("  ✗ profile threw: \(error)")
+}
+
+section("set editing")
+do {
+  let setJSON = #"{"id":"s1","label":"Sunday","startsAt":"2026-11-01T17:00:00.000Z","durationMinutes":90,"notes":null,"requiresMD":false,"isPrivate":false,"mdUserId":null,"slotCapacities":null,"groupChatLeadDays":null,"teamId":"t1","team":null,"org":null,"assignments":[{"id":"a1","role":"BASS","status":"PENDING","user":{"id":"u1","name":"Dave"},"guestTeamId":null,"pendingFromUser":null},{"id":"a2","role":"KEYS","status":"CONFIRMED","user":{"id":"u2","name":"Ivy"},"guestTeamId":null,"pendingFromUser":null}],"songs":[{"id":"x2","title":"Second","key":"G","order":1},{"id":"x1","title":"First","key":null,"order":0}],"spotifyPlaylistUrl":null,"practices":[],"guestTeams":[]}"#
+  let set = try TapWorship.makeDecoder().decode(ApiSet.self, from: Data(setJSON.utf8))
+  check("anyone on the set may edit its setlist", Setlist.canEdit(set, userId: "u1", isOrgAdmin: false) && !Setlist.canEdit(set, userId: "zz", isOrgAdmin: false))
+  let drafts = Setlist.drafts(from: set.songs)
+  check("setlist opens in its saved order", drafts.map(\.title) == ["First", "Second"])
+  check("an untouched setlist isn't a change", !Setlist.changed(drafts, from: set.songs))
+  var edited = drafts + [Setlist.Draft(title: "   ", key: nil), Setlist.Draft(title: " Third ", key: "H#")]
+  edited.swapAt(0, 1)
+  check("blank songs dropped, titles trimmed, bad keys cleared", Setlist.body(edited) == [.init(title: "Second", key: "G"), .init(title: "First", key: nil), .init(title: "Third", key: nil)])
+  check("a reorder is a change", Setlist.changed(edited, from: set.songs))
+
+  var seats = RosterEditing.seats(of: set)
+  check("no edit, no diff", RosterEditing.diff(original: set, edited: seats).isEmpty)
+  seats.removeAll { $0.assignmentId == "a2" }
+  seats[0].userId = "u9"; seats[0].name = "Zed"
+  seats.append(SeatDraft(assignmentId: nil, role: "DRUMS", userId: "u3", name: "Ruth", guestTeamId: nil))
+  let diff = RosterEditing.diff(original: set, edited: seats)
+  check("diff: removed, reassigned, added", diff.removed == ["a2"] && diff.reassigned == [.init(id: "a1", userId: "u9")] && diff.added == [.init(role: "DRUMS", userId: "u3", guestTeamId: nil)])
+  check("diff summary", RosterEditing.summary(diff) == "1 added, 1 changed, 1 removed")
+
+  let users = [
+    ApiAdminUser(id: "u1", name: "Dave", username: "dave", isMD: false, isAdmin: false, teams: [.init(id: "t1", name: "Sunday", roles: ["BASS"], active: true)]),
+    ApiAdminUser(id: "u4", name: "Abe", username: "abe", isMD: false, isAdmin: false, teams: [.init(id: "t1", name: "Sunday", roles: ["BASS"], active: false)]),
+    ApiAdminUser(id: "u5", name: "Bea", username: "bea", isMD: false, isAdmin: false, teams: [.init(id: "t2", name: "Youth", roles: ["BASS"], active: true)]),
+    ApiAdminUser(id: "u6", name: "Cy", username: "cy", isMD: false, isAdmin: false, teams: [.init(id: "t1", name: "Sunday", roles: ["BASS"], active: true)]),
+  ]
+  let options = RosterEditing.candidates(users: users, role: "BASS", teamId: "t1", taken: ["u1"])
+  check("candidates: this team's players, not already seated, paused last", options.map(\.name) == ["Cy", "Abe"] && options.last?.inactive == true)
+  check("a set with no team draws on every team", RosterEditing.candidates(users: users, role: "BASS", teamId: nil, taken: []).count == 4)
+
+  let start = Date(timeIntervalSince1970: 1_800_000_000)
+  check("a new set's duration comes from its end", NewSet(label: "  ", startsAt: start, endsAt: start.addingTimeInterval(5400), teamId: "t1").durationMinutes == 90)
+  check("a blank label is none, a backwards set is refused", NewSet(label: " ", startsAt: start, endsAt: start, teamId: "t1").label == nil && NewSet(label: nil, startsAt: start, endsAt: start, teamId: "t1").problem != nil)
+  check("practice must end after it starts", PracticeRules.problem(start: start, end: start) != nil && PracticeRules.problem(start: start, end: start.addingTimeInterval(60)) == nil)
+  let body = String(data: try TapWorship.makeEncoder().encode(NewSet(label: "Easter", startsAt: start, endsAt: start.addingTimeInterval(3600), teamId: "t1")), encoding: .utf8) ?? ""
+  check("a new set's start is sent as an ISO date", body.contains("\"startsAt\":\"2027-01-15T08:00:00"))
+} catch {
+  failures += 1
+  print("  ✗ set editing threw: \(error)")
+}
+
+section("read-only preview")
+check("reads pass", ReadOnly.allows(method: "GET", path: "/api/sets?from=x") && ReadOnly.allows(method: "get", path: "/api/me"))
+check("signing in passes", ReadOnly.allows(method: "POST", path: "/api/mobile/session") && ReadOnly.allows(method: "POST", path: "/api/mobile/session/social"))
+check("every write is refused", !ReadOnly.allows(method: "PATCH", path: "/api/assignments/a1") && !ReadOnly.allows(method: "DELETE", path: "/api/me")
+      && !ReadOnly.allows(method: "PUT", path: "/api/me") && !ReadOnly.allows(method: "POST", path: "/api/orgs/join")
+      && !ReadOnly.allows(method: "POST", path: "/api/mobile/session/other"))
+do {
+  final class Box: @unchecked Sendable { var hits = 0 }
+  let box = Box()
+  let api = APIClient(baseURL: URL(string: "https://tapworship.com")!, readOnly: true, token: { "t" }) { request in
+    box.hits += 1
+    return (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+  }
+  let semaphore = DispatchSemaphore(value: 0)
+  final class Result: @unchecked Sendable { var error: APIError? }
+  let result = Result()
+  Task {
+    do { try await api.deleteAccount(confirm: "DELETE") } catch let e as APIError { result.error = e } catch {}
+    semaphore.signal()
+  }
+  semaphore.wait()
+  check("a refused write never reaches the network", result.error == .readOnly && box.hits == 0)
+}
+
+section("badges")
+do {
+  let json = #"{"swapCount":2,"availability":{"items":[{"request":{"id":"r1"},"needsResponse":true},{"request":{"id":"r2"},"needsResponse":false}],"needsResponse":true},"needsRoles":false,"teamless":[],"approvalCount":3}"#
+  let n = try TapWorship.makeDecoder().decode(ApiNotifications.self, from: Data(json.utf8))
+  check("badges decode", n.swapCount == 2 && n.approvalCount == 3 && !n.needsRoles)
+  check("availability badge counts requests still owed", n.availabilityOwed == 1)
+  let api = APIClient(baseURL: URL(string: "https://tapworship.com")!, token: { "t" })
+  let badgeRequest = try api.makeRequest("GET", "/api/notifications?orgId=o1")
+  check("badge request names the admin org", badgeRequest.url?.query == "orgId=o1")
+} catch {
+  failures += 1
+  print("  ✗ badges threw: \(error)")
+}
+
+section("sign up")
+do {
+  var form = SignUpForm(firstName: " Ann ", lastName: "Lee", email: " Ann@Example.COM ", password: "longenough", orgKey: " key ")
+  check("a complete form passes", form.problem(confirm: "longenough") == nil)
+  check("cleaned like the server", form.cleaned.email == "ann@example.com" && form.cleaned.firstName == "Ann" && form.cleaned.orgKey == "key")
+  check("passwords must match", form.problem(confirm: "different") != nil)
+  form.orgKey = "  "
+  check("the org key is required in the app", form.problem(confirm: "longenough") != nil)
+  check("email shape", SignUpForm.looksLikeEmail("a@b.co") && !SignUpForm.looksLikeEmail("a@b") && !SignUpForm.looksLikeEmail("a b@c.d") && !SignUpForm.looksLikeEmail("@b.co"))
+  let body = String(data: try TapWorship.makeEncoder().encode(SignUpForm(firstName: "A", lastName: "B", email: "a@b.co", password: "x", orgKey: "k")), encoding: .utf8) ?? ""
+  check("sign-up body has the server's field names", body.contains("\"firstName\"") && body.contains("\"orgKey\"") && body.contains("\"allowDuplicateName\":false"))
+  check("signing up is refused in the read-only preview", !ReadOnly.allows(method: "POST", path: "/api/signup"))
+} catch {
+  failures += 1
+  print("  ✗ sign up threw: \(error)")
+}
+
+do {
+  let wire = #"[{"id":"u1","name":"Jo","username":"jo@example.com","isMD":false,"isAdmin":false,"teams":[],"signInWith":"google"},{"id":"u2","name":"Al","username":"al","isMD":false,"isAdmin":true,"teams":[],"signInWith":null}]"#
+  let people = try TapWorship.makeDecoder().decode([ApiAdminUser].self, from: Data(wire.utf8))
+  check("members carry how they sign in", people[0].signInWith == "google" && people[1].signInWith == nil)
+} catch { check("members carry how they sign in", false) }
+
+// Week view
+do {
+  let evening = ApiUnavailability(id: "w1", type: .specific, startMinute: 18 * 60, endMinute: 21 * 60, startDate: laDay("2026-11-24"))
+  let overlap = ApiUnavailability(id: "w2", type: .specific, startMinute: 19 * 60, endMinute: 20 * 60, startDate: laDay("2026-11-24"))
+  let later = ApiUnavailability(id: "w3", type: .specific, startMinute: 21 * 60, endMinute: 22 * 60, startDate: laDay("2026-11-24"))
+  let blocks = WeekView.dayBlocks([evening, overlap, later], on: "2026-11-24", calendar: la)
+  check("week: overlapping blocks share lanes", blocks.first { $0.id == "w1" }?.lanes == 2 && blocks.first { $0.id == "w2" }?.lane == 1)
+  check("week: a block after the cluster gets the full width", blocks.first { $0.id == "w3" }?.lanes == 1)
+  let g1 = ApiUnavailability(id: "g1", type: .specific, startMinute: 600, endMinute: 720, startDate: laDay("2026-11-24"), fromGoogle: true)
+  let g2 = ApiUnavailability(id: "g2", type: .specific, startMinute: 700, endMinute: 800, startDate: laDay("2026-11-24"), fromGoogle: true)
+  let imported = WeekView.dayBlocks([g1, g2], on: "2026-11-24", calendar: la)
+  check("week: overlapping imports merge", imported.count == 1 && imported[0].endMinute == 800 && imported[0].kind == .google)
+  check("week: weekly repeats are their own kind", WeekView.dayBlocks([everyTuesday], on: "2026-11-24", calendar: la).first?.kind == .recurring)
+  let clipped = WeekView.clipped(WeekView.dayBlocks([everyTuesday], on: "2026-11-24", calendar: la))
+  check("week: all day clips to the view's hours", clipped.first?.top == 360 && clipped.first?.bottom == 1320)
+  check("week: starts on Sunday", SetCalendar.ymd(WeekView.weekStart(laDay("2026-11-26"), calendar: la), calendar: la) == "2026-11-22")
+}
+
+// Google import
+check("import: reads the return status", GoogleImport.returnStatus(URL(string: "tapworship://gcal-import?status=connected")!) == "connected"
+      && GoogleImport.returnStatus(URL(string: "https://x.com/gcal-import?status=connected")!) == nil)
+check("import: preview grouped by day in order", GoogleImport.byDay([
+  .init(ymd: "2026-11-25", startMinute: 600, endMinute: 660),
+  .init(ymd: "2026-11-24", startMinute: 900, endMinute: 960),
+  .init(ymd: "2026-11-24", startMinute: 540, endMinute: 600),
+]).map { "\($0.ymd):\($0.windows.map(\.startMinute))" } == ["2026-11-24:[540, 900]", "2026-11-25:[600]"])
 
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")

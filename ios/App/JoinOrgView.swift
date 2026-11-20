@@ -11,17 +11,19 @@ struct JoinOrgView: View {
   @State private var errorTick = 0
   @FocusState private var focused: Bool
 
-  private var canJoin: Bool { !key.trimmingCharacters(in: .whitespaces).isEmpty && !joining }
+  private var canJoin: Bool { !key.trimmingCharacters(in: .whitespaces).isEmpty && !joining && !model.readOnly }
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           VStack(alignment: .leading, spacing: 6) {
             Text("Join your team")
-              .font(.title2.bold())
-            Text("Ask your worship team's admin for your organization's key, then enter it here.")
-              .font(.subheadline)
+              .font(TW.title2.bold())
+            Text(model.readOnly
+                 ? "This read-only preview can't join an org. Join with your org's key on tapworship.com, then sign in here again."
+                 : "Ask your worship team's admin for your organization's key, then enter it here.")
+              .font(TW.subheadline)
               .foregroundStyle(.secondary)
           }
           .padding(.vertical, 4)
@@ -44,14 +46,18 @@ struct JoinOrgView: View {
         Section {
           Button(action: join) {
             ZStack {
-              Text("Join").bold().opacity(joining ? 0 : 1)
-              if joining { ProgressView().accessibilityLabel("Joining") }
+              Text("Join").opacity(joining ? 0 : 1)
+              if joining { ProgressView().tint(.white).accessibilityLabel("Joining") }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
           }
+          .buttonStyle(ActionButtonStyle(kind: .primary))
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
           .disabled(!canJoin)
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Welcome")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {

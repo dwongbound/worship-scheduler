@@ -1338,6 +1338,7 @@ function CreateView() {
         open={templateModalOpen}
         template={editingTemplate}
         teams={teams}
+        users={users}
         onClose={() => {
           setTemplateModalOpen(false);
           setEditingTemplate(null);

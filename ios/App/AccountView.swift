@@ -5,13 +5,15 @@ import TapWorshipKit
 /// lives on the web's /profile for now — linked rather than half-copied.
 struct AccountView: View {
   @Environment(AppModel.self) private var model
-  @Environment(\.openURL) private var openURL
   @State private var confirmSignOut = false
   @State private var deleting = false
+  @State private var joining = false
+  @AppStorage(AppTheme.storageKey) private var theme = AppTheme.system
+  @State private var joinedName: String?
 
   var body: some View {
     NavigationStack {
-      List {
+      List { Group {
         if let user = model.session?.user {
           Section {
             LabeledContent("Name", value: user.name ?? "—")
@@ -19,41 +21,161 @@ struct AccountView: View {
           }
         }
         Section {
-          Button {
-            openURL(AppConfig.baseURL.appending(path: "profile"))
+          NavigationLink {
+            ProfileView()
+              .pausesTabSwipe()
           } label: {
-            Label("Edit profile on the web", systemImage: "safari")
+            Label("Profile", systemImage: "person.text.rectangle")
           }
         } footer: {
-          Text("Calendar invites, Slack and your password are managed on the web for now.")
+          EmptyView()
+        }
+        if model.readOnly {
+          Section {
+            LabeledContent("Mode", value: "Read-only preview")
+          } footer: {
+            Text("This build can look at everything on tapworship.com but can't change anything. Make changes on the website for now.")
+          }
+        }
+        if !model.readOnly {
+        Section {
+          Button {
+            joining = true
+          } label: {
+            Label("Join another org", systemImage: "person.badge.key")
+          }
+        } footer: {
+          if let joinedName {
+            Text("You've joined \(joinedName).")
+          } else {
+            EmptyView()
+          }
+        }
         }
         if AppConfig.isDevServer {
           Section {
             LabeledContent("Server", value: AppConfig.baseURL.absoluteString)
           } footer: {
-            Text("This is a development build. It isn't talking to tapworship.com.")
+            Text("Development build.")
           }
         }
         Section {
-          Button("Sign out", role: .destructive) { confirmSignOut = true }
-            .frame(minHeight: 44)
-        }
-        Section {
-          Button("Delete account", role: .destructive) { deleting = true }
-            .frame(minHeight: 44)
+          Picker("Appearance", selection: $theme) {
+            ForEach(AppTheme.allCases) { Text($0.title).tag($0) }
+          }
+          .pickerStyle(.segmented)
+          .listRowBackground(Color.clear)
+          .listRowInsets(EdgeInsets())
+        } header: {
+          Text("Appearance")
         } footer: {
-          Text("Permanently deletes your account and everything on it.")
+          EmptyView()
+        }
+
+        // Plain List rows: a List row is already at least 44pt, so an extra
+        // minHeight frame here only made these two rows taller than the rest.
+        Section {
+          Button("Sign out", role: .destructive) { confirmSignOut = true }
+            // On the button, so the dialog points at it rather than the list.
+            .confirmationDialog("Sign out of TapWorship?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+              Button("Sign out", role: .destructive) { model.signOut() }
+            }
+        }
+        if !model.readOnly {
+          Section {
+            Button("Delete account", role: .destructive) { deleting = true }
+          } footer: {
+            Text("This can't be undone.")
+          }
         }
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
-      .navigationTitle("Account")
-      .confirmationDialog("Sign out of TapWorship?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-        Button("Sign out", role: .destructive) { model.signOut() }
-      }
+      .twList()
+      .pageHeader("Account") { EmptyView() }
       .sheet(isPresented: $deleting) {
         DeleteAccountView()
       }
+      .sheet(isPresented: $joining) {
+        JoinAnotherOrgSheet { joinedName = $0 }
+      }
     }
+  }
+}
+
+/// Account → Join another org: the web's /orgs "Add an org…" for someone
+/// who's already in one.
+struct JoinAnotherOrgSheet: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.dismiss) private var dismiss
+  let joined: (String) -> Void
+
+  @State private var key = ""
+  @State private var working = false
+  @State private var errorMessage: String?
+  @State private var errorTick = 0
+  @FocusState private var focused: Bool
+
+  private var trimmed: String { key.trimmingCharacters(in: .whitespaces) }
+
+  var body: some View {
+    NavigationStack {
+      Form { Group {
+        Section {
+          TextField("Organization key", text: $key)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .submitLabel(.join)
+            .focused($focused)
+            .onSubmit { Task { await join() } }
+        } footer: {
+          if let errorMessage {
+            Label(errorMessage, systemImage: "exclamationmark.circle")
+              .foregroundStyle(.red)
+          } else {
+            Text("Ask that team's admin for their organization's key.")
+          }
+        }
+      }
+.listRowBackground(Color.twCard)
+}.twList()
+      .navigationTitle("Join another org")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Close") { dismiss() }.disabled(working)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          if working {
+            ProgressView()
+          } else {
+            Button("Join") { Task { await join() } }.disabled(trimmed.isEmpty)
+          }
+        }
+      }
+      .sensoryFeedback(.error, trigger: errorTick)
+      .onAppear { focused = true }
+    }
+    .presentationDetents([.medium])
+  }
+
+  private func join() async {
+    guard !trimmed.isEmpty, !working else { return }
+    working = true
+    errorMessage = nil
+    do {
+      let org = try await model.joinOrg(key: trimmed)
+      await model.refreshAdminOrgs()
+      joined(org.name)
+      dismiss()
+    } catch {
+      if let message = model.handle(error) {
+        errorMessage = message
+        errorTick += 1
+      }
+    }
+    working = false
   }
 }
 
@@ -79,18 +201,18 @@ struct DeleteAccountView: View {
 
   var body: some View {
     NavigationStack {
-      Form {
+      Form { Group {
         Section {
           VStack(alignment: .leading, spacing: 10) {
             Label {
               Text("This can't be undone.")
-                .font(.title3.bold())
+                .font(TW.title3.bold())
             } icon: {
               Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
             }
             Text("There's no way to get your account back, and no one, admins included, can restore it.")
-              .font(.subheadline)
+              .font(TW.subheadline)
           }
           .padding(.vertical, 4)
         }
@@ -122,14 +244,18 @@ struct DeleteAccountView: View {
         Section {
           Button(role: .destructive, action: deleteAccount) {
             ZStack {
-              Text("Delete My Account Forever").bold().opacity(working ? 0 : 1)
-              if working { ProgressView().accessibilityLabel("Deleting your account") }
+              Text("Delete My Account Forever").opacity(working ? 0 : 1)
+              if working { ProgressView().tint(.white).accessibilityLabel("Deleting your account") }
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
           }
+          .buttonStyle(ActionButtonStyle(kind: .destructive))
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
           .disabled(!armed)
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
       .navigationTitle("Delete account")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -146,7 +272,7 @@ struct DeleteAccountView: View {
 
   private func bullet(_ symbol: String, _ text: String) -> some View {
     Label(text, systemImage: symbol)
-      .font(.subheadline)
+      .font(TW.subheadline)
   }
 
   private func deleteAccount() {

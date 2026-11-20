@@ -93,7 +93,8 @@ export async function importableRequest(userId: string, requestId: string) {
 export function importAuthorizeUrl(
   userId: string,
   requestId: string | null,
-  email: string | null
+  email: string | null,
+  mobile = false
 ): string {
   const params = new URLSearchParams({
     client_id: clientId() ?? "",
@@ -105,7 +106,7 @@ export function importAuthorizeUrl(
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: "true",
-    state: signImportState(userId, requestId),
+    state: signImportState(userId, requestId, 600, mobile),
   });
   // Most people signed in with Google already; this skips the account picker.
   if (email) params.set("login_hint", email);

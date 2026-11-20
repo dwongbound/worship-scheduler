@@ -32,6 +32,9 @@ vi.mock("@/lib/slack", () => ({
   notifySetChange: vi.fn(),
   notifyRosterChanges: vi.fn(),
 }));
+// Calendar sync runs in Next's `after`, which newer Next refuses outside a real
+// request; the sync itself isn't what these tests are about.
+vi.mock("@/lib/googleCalendar", () => ({ syncSetsAfterResponse: vi.fn() }));
 vi.mock("@/lib/teamRoleStore", () => ({
   getTeamCatalog: vi.fn(async () => [
     { key: "KEYS", label: "Keys", defaultCount: 1, adminOnly: false, order: 0 },

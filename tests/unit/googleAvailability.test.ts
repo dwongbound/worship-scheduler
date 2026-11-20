@@ -134,8 +134,12 @@ describe("importAuthorizeUrl", () => {
   });
   it("signs a state only the import flow accepts", () => {
     const state = new URL(importAuthorizeUrl("u1", "req1", null)).searchParams.get("state")!;
-    expect(verifyImportState(state)).toEqual({ userId: "u1", requestId: "req1" });
+    expect(verifyImportState(state)).toEqual({ userId: "u1", requestId: "req1", mobile: false });
     expect(verifyState(state)).toBeNull();
+  });
+  it("marks a state started from the iOS app, so the callback returns to it", () => {
+    const state = new URL(importAuthorizeUrl("u1", "req1", null, true)).searchParams.get("state")!;
+    expect(verifyImportState(state)).toEqual({ userId: "u1", requestId: "req1", mobile: true });
   });
 });
 

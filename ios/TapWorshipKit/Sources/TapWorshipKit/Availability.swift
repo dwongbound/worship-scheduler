@@ -259,6 +259,65 @@ public enum Availability {
     return out
   }
 
+  /// Every day from `start` through `end`, as "YYYY-MM-DD" on `calendar`.
+  /// Empty when the range runs backwards; capped so a slip can't spin.
+  public static func ymds(from start: Date, through end: Date, calendar: Calendar, limit: Int = 366) -> [String] {
+    var out: [String] = []
+    var cursor = day(start, calendar: calendar)
+    let last = day(end, calendar: calendar)
+    while cursor <= last, out.count < limit {
+      out.append(SetCalendar.ymd(cursor, calendar: calendar))
+      guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+      cursor = next
+    }
+    return out
+  }
+
+  /// The most days one "Dates" block may cover from the app (a part-day
+  /// range is one write per day).
+  public static let maxRangeDays = 60
+
+  /// Why a date range can't be saved yet, or nil when it can.
+  public static func rangeProblem(from start: Date, through end: Date, startMinute: Int, endMinute: Int, calendar: Calendar) -> String? {
+    if day(end, calendar: calendar) < day(start, calendar: calendar) { return "The last day has to be on or after the first." }
+    if ymds(from: start, through: end, calendar: calendar, limit: maxRangeDays + 1).count > maxRangeDays {
+      return "Pick \(maxRangeDays) days or fewer at a time."
+    }
+    if startMinute >= endMinute { return "The end time has to be after the start." }
+    return nil
+  }
+
+  /// A stretch of back-to-back days blocked the same way: how the submit
+  /// sheet reads a long list ("Nov 12 – Nov 14 · All day").
+  public struct BlockedRun: Sendable, Equatable {
+    public let first: Date
+    public let last: Date
+    public let level: Level
+    public let days: Int
+  }
+
+  /// Folds an ordered day list (from `blockedDays`) into runs.
+  public static func runs(_ days: [(ymd: String, date: Date, level: Level)], calendar: Calendar) -> [BlockedRun] {
+    var out: [BlockedRun] = []
+    for d in days {
+      if let prev = out.last, prev.level == d.level,
+         let next = calendar.date(byAdding: .day, value: 1, to: day(prev.last, calendar: calendar)),
+         SetCalendar.ymd(next, calendar: calendar) == d.ymd {
+        out[out.count - 1] = BlockedRun(first: prev.first, last: d.date, level: d.level, days: prev.days + 1)
+      } else {
+        out.append(BlockedRun(first: d.date, last: d.date, level: d.level, days: 1))
+      }
+    }
+    return out
+  }
+
+  /// One day's blocks for the day drawer: all-day ones first, then by time.
+  public static func dayDetails(_ entries: [ApiUnavailability], on ymd: String, calendar: Calendar) -> [ApiUnavailability] {
+    blocks(on: ymd, in: entries, calendar: calendar).sorted {
+      ($0.isAllDay ? 0 : 1, $0.startMinute ?? 0, $0.id) < ($1.isAllDay ? 0 : 1, $1.startMinute ?? 0, $1.id)
+    }
+  }
+
   // MARK: Words
 
   public static let dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]

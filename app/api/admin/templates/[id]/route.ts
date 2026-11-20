@@ -7,6 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/lib/generated/prisma/client";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 import { validateTemplatePractices } from "@/lib/practices";
+import { parseChatMemberIds } from "@/lib/groupChatMembers";
+import { allInOrg } from "../orgMembers";
 
 // Edit one weekly time in place — the same fields POST takes, minus the
 // multi-day batch (a row IS one day, so editing swaps which day it recurs on).
@@ -38,6 +40,7 @@ export async function PATCH(
     groupChatLeadDays,
     teamId,
     practices,
+    chatMemberIds,
   } = await req.json();
   if (
     typeof label !== "string" || label.trim().length === 0 ||
@@ -69,6 +72,14 @@ export async function PATCH(
     practices === undefined ? null : validateTemplatePractices(practices);
   if (practiceCheck && "error" in practiceCheck) {
     return NextResponse.json({ error: practiceCheck.error }, { status: 400 });
+  }
+
+  // The recurring set's extra group-chat people replace the whole list, like
+  // practices; omitting the field leaves them alone. Read when each set's
+  // channel is created, so a change reaches existing sets of this type too.
+  const chatIds = chatMemberIds === undefined ? null : parseChatMemberIds(chatMemberIds);
+  if (chatMemberIds !== undefined && (chatIds === null || !(await allInOrg(chatIds, existing.orgId)))) {
+    return NextResponse.json({ error: "Invalid group chat people" }, { status: 400 });
   }
 
   // The template can be moved between teams, but only within its own org.
@@ -104,15 +115,20 @@ export async function PATCH(
             },
           }
         : {}),
+      ...(chatIds
+        ? { chatMembers: { deleteMany: {}, create: chatIds.map((userId) => ({ userId })) } }
+        : {}),
     },
     include: {
       practices: {
         select: { id: true, dayOfWeek: true, startMinute: true, endMinute: true },
         orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
       },
+      chatMembers: { select: { userId: true } },
     },
   });
-  return NextResponse.json(template);
+  const { chatMembers, ...rest } = template;
+  return NextResponse.json({ ...rest, chatMemberIds: chatMembers.map((m) => m.userId) });
 }
 
 export async function DELETE(

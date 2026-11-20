@@ -34,10 +34,15 @@ import {
 async function importCallback(
   base: string,
   params: URLSearchParams,
-  imported: { userId: string; requestId: string | null }
+  imported: { userId: string; requestId: string | null; mobile: boolean }
 ): Promise<NextResponse> {
   const back = (status: string, detail?: string) => {
     if (detail) console.error(`[gimport] ${status} — ${detail}`);
+    // Started in the iOS app: hand the result back to it. Its sign-in
+    // sheet closes on this scheme and reopens the import screen.
+    if (imported.mobile) {
+      return NextResponse.redirect(`${MOBILE_IMPORT_RETURN}?status=${status}`);
+    }
     if (!imported.requestId) {
       return NextResponse.redirect(`${base}/profile?gcalPicker=${status}`);
     }
@@ -48,9 +53,14 @@ async function importCallback(
   if (refused) return back("denied", refused);
   const code = params.get("code");
   if (!code) return back("error", "no code on the callback");
-  // The state names who started it; whoever finishes it must be them.
-  const user = await getSessionUser();
-  if (!user || user.id !== imported.userId) return back("error", "signed-in user changed mid-import");
+  // The state names who started it; whoever finishes it must be them. The
+  // app's sign-in sheet carries no web session, so for it the signed,
+  // ten-minute state (minted only for a bearer-authenticated caller) is the
+  // proof instead.
+  if (!imported.mobile) {
+    const user = await getSessionUser();
+    if (!user || user.id !== imported.userId) return back("error", "signed-in user changed mid-import");
+  }
   const result = await rememberAccessFromCode(
     imported.userId,
     code,
@@ -59,6 +69,9 @@ async function importCallback(
   if (!result.ok) return back("error", result.error);
   return back("connected");
 }
+
+/** Where an import started in the iOS app comes back to (its URL scheme). */
+const MOBILE_IMPORT_RETURN = "tapworship://gcal-import";
 
 // The backfill makes one Google call per upcoming set.
 export const maxDuration = 300;

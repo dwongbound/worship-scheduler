@@ -154,3 +154,68 @@ public enum GoogleOAuth {
       .replacingOccurrences(of: "=", with: "")
   }
 }
+
+// MARK: Sign up
+
+/// POST /api/signup — a new account with a password (the web's "Sign up").
+/// The email doubles as the username. `orgKey` also lets the server hand over
+/// an account an admin already made for this email.
+public struct SignUpForm: Encodable, Equatable, Sendable {
+  public var firstName: String
+  public var lastName: String
+  public var email: String
+  public var password: String
+  public var orgKey: String
+  public var allowDuplicateName = false
+
+  public init(firstName: String, lastName: String, email: String, password: String, orgKey: String) {
+    self.firstName = firstName
+    self.lastName = lastName
+    self.email = email
+    self.password = password
+    self.orgKey = orgKey
+  }
+
+  /// Trimmed, the email lowercased, as the server stores them.
+  public var cleaned: SignUpForm {
+    var copy = self
+    copy.firstName = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+    copy.lastName = lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+    copy.email = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    copy.orgKey = orgKey.trimmingCharacters(in: .whitespacesAndNewlines)
+    return copy
+  }
+
+  /// Why the form can't be sent yet, or nil. The app asks for the org key up
+  /// front: an account with no org can't see anything.
+  public func problem(confirm: String) -> String? {
+    let f = cleaned
+    if f.firstName.isEmpty || f.lastName.isEmpty { return "Enter your first and last name." }
+    if !SignUpForm.looksLikeEmail(f.email) { return "Enter a valid email." }
+    if let p = ProfileRules.passwordProblem(password, confirm: confirm) { return p }
+    if f.orgKey.isEmpty { return "Enter your organization's key. Your team's admin has it." }
+    return nil
+  }
+
+  /// The server's own check (lib: EMAIL_RE): something@something.something.
+  public static func looksLikeEmail(_ s: String) -> Bool {
+    let parts = s.split(separator: "@", omittingEmptySubsequences: false)
+    guard parts.count == 2, !parts[0].isEmpty, !s.contains(" ") else { return false }
+    let domain = parts[1].split(separator: ".", omittingEmptySubsequences: false)
+    return domain.count >= 2 && domain.allSatisfy { !$0.isEmpty }
+  }
+}
+
+/// What /api/signup answered: a new account, or an existing one claimed.
+public struct SignUpResult: Decodable, Equatable, Sendable {
+  public let ok: Bool
+  /// True when the key handed over an account an admin had already made, which
+  /// is already in that org.
+  public let claimed: Bool?
+}
+
+extension APIClient {
+  public func signUp(_ form: SignUpForm) async throws -> SignUpResult {
+    try await send("POST", "/api/signup", body: form.cleaned, authorized: false)
+  }
+}

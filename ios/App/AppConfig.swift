@@ -17,7 +17,7 @@ enum AppConfig {
   /// `123-abc.apps.googleusercontent.com`. Not a secret: it ships in every
   /// copy of the app. The server must list the same id in
   /// `GOOGLE_IOS_CLIENT_ID`. Nil hides the Google button.
-  static let releaseGoogleIOSClientID: String? = nil
+  static let releaseGoogleIOSClientID: String? = "949911152393-hmgacu1hs1ssr0dbakbe8khafa4v4kqq.apps.googleusercontent.com"
 
   /// A debug build uses the one `./use-env` copied out of the env file, so a
   /// dev server and the app agree without editing this file.
@@ -64,4 +64,18 @@ enum AppConfig {
   /// True when this build isn't talking to production: the sign-in screen
   /// says so, so a dev build is never mistaken for the real thing.
   static var isDevServer: Bool { baseURL != productionURL }
+
+  /// Flip to true when the app is ready to change things on tapworship.com.
+  /// Until then a build pointed at production is a read-only preview: the
+  /// API client refuses every write (TapWorshipKit `ReadOnly`) and the
+  /// screens hide the buttons that would make one. Dev servers are unaffected.
+  static let allowProductionWrites = false
+
+  static var readOnly: Bool {
+    #if DEBUG
+    // Try the preview against a dev server: TAPWORSHIP_READ_ONLY=1 on the scheme.
+    if ProcessInfo.processInfo.environment["TAPWORSHIP_READ_ONLY"] == "1" { return true }
+    #endif
+    return !isDevServer && !allowProductionWrites
+  }
 }
