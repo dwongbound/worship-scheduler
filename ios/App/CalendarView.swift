@@ -54,8 +54,13 @@ struct CalendarView: View {
         }
       }
       .animation(.easeInOut(duration: 0.35), value: phase == .loading && loaded[monthKey] == nil)
+      .toolbar {
+        // Top right, across from the title, like Apple's Calendar.
+        ToolbarItem(placement: .topBarTrailing) {
+          Button("Today") { goToToday() }
+        }
+      }
       .pageHeader("Calendar") {
-        Button("Today") { goToToday() }
         if model.isAdminAnywhere && !model.readOnly {
           HeaderIconButton(label: "New set", systemImage: "plus") { creatingSet = true }
         }
