@@ -166,14 +166,18 @@ public struct ApiAdminUser: Codable, Hashable, Identifiable, Sendable {
   public let isMD: Bool
   public let isAdmin: Bool
   public let teams: [ApiMemberTeam]
+  /// "google" or "apple" for someone who signs in that way (no username of
+  /// their own); nil for a username + password account, or an older server.
+  public let signInWith: String?
 
-  public init(id: String, name: String, username: String, isMD: Bool, isAdmin: Bool, teams: [ApiMemberTeam]) {
+  public init(id: String, name: String, username: String, isMD: Bool, isAdmin: Bool, teams: [ApiMemberTeam], signInWith: String? = nil) {
     self.id = id
     self.name = name
     self.username = username
     self.isMD = isMD
     self.isAdmin = isAdmin
     self.teams = teams
+    self.signInWith = signInWith
   }
 
   /// On no team = scheduled for nothing — worth flagging to an admin.

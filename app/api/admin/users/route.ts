@@ -19,6 +19,12 @@ export async function GET(req: NextRequest) {
       name: true,
       username: true,
       isMD: true,
+      // How they sign in, worked out below and never sent as-is: Google
+      // accounts have no password (and their username is just their email),
+      // Apple ones carry Apple's id. The iOS Team page shows "Signed in with
+      // Google / Apple" instead of a username nobody typed.
+      passwordHash: true,
+      appleSub: true,
       // The caller's org's membership row — its isAdmin is what the Team
       // page's checkbox reads/toggles; slackUserId (set once the person links
       // Slack in THIS org) drives the Team page's "connected" badge.
@@ -71,8 +77,9 @@ export async function GET(req: NextRequest) {
   // Flatten the single-org membership row into the isAdmin boolean the client
   // has always consumed, plus slackConnected (Slack linked in THIS org).
   return NextResponse.json(
-    users.map(({ memberships, teamMembers, ...u }) => ({
+    users.map(({ memberships, teamMembers, passwordHash, appleSub, ...u }) => ({
       ...u,
+      signInWith: appleSub ? "apple" : passwordHash ? null : "google",
       isAdmin: memberships[0]?.isAdmin ?? false,
       slackConnected: memberships[0]?.slackUserId != null,
       slackUserId: memberships[0]?.slackUserId ?? null,

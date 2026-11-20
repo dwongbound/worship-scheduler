@@ -731,6 +731,12 @@ do {
   print("  ✗ sign up threw: \(error)")
 }
 
+do {
+  let wire = #"[{"id":"u1","name":"Jo","username":"jo@example.com","isMD":false,"isAdmin":false,"teams":[],"signInWith":"google"},{"id":"u2","name":"Al","username":"al","isMD":false,"isAdmin":true,"teams":[],"signInWith":null}]"#
+  let people = try TapWorship.makeDecoder().decode([ApiAdminUser].self, from: Data(wire.utf8))
+  check("members carry how they sign in", people[0].signInWith == "google" && people[1].signInWith == nil)
+} catch { check("members carry how they sign in", false) }
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

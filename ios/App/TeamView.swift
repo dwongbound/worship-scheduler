@@ -136,9 +136,7 @@ struct MemberRow: View {
           .font(TW.subheadline)
           .foregroundStyle(.secondary)
       } else {
-        Text("@\(user.username)")
-          .font(TW.subheadline)
-          .foregroundStyle(.secondary)
+        SignInMethod(user: user, compact: true)
       }
     }
     .padding(.vertical, 2)
@@ -189,15 +187,32 @@ struct MemberDetailView: View {
     if let user {
       Form { Group {
         Section {
-          LabeledContent("Username", value: user.username)
-          if !model.readOnly {
-            Button("Rename") {
-              newName = user.name
-              renaming = true
+          // The name everyone sees, with its own Edit: it's the display
+          // name being changed, not how they sign in.
+          LabeledContent {
+            HStack(spacing: 10) {
+              Text(user.name)
+              if !model.readOnly {
+                Button("Edit") {
+                  newName = user.name
+                  renaming = true
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Edit display name")
+              }
             }
+          } label: {
+            Text("Display name")
           }
+          SignInMethod(user: user, compact: false)
+        } header: {
+          Text("Account")
         } footer: {
-          if model.readOnly { Text("Read-only preview: change access, teams and roles on tapworship.com.") }
+          if model.readOnly {
+            Text("Read-only preview: change access, teams and roles on tapworship.com.")
+          } else {
+            Text("The display name is what everyone sees on rosters and in messages. Changing it doesn't change how \(user.name) signs in.")
+          }
         }
 
         Section {
@@ -236,14 +251,14 @@ struct MemberDetailView: View {
         }
       }
       .sensoryFeedback(.success, trigger: saved)
-      .alert("Rename \(user.name)", isPresented: $renaming) {
-        TextField("Name", text: $newName)
+      .alert("Change display name", isPresented: $renaming) {
+        TextField("Display name", text: $newName)
           .textContentType(.name)
         Button("Save") { Task { await rename() } }
           .disabled(ProfileRules.cleanName(newName) == nil)
         Button("Close", role: .cancel) {}
       } message: {
-        Text("Their name changes everywhere, in every org they're in.")
+        Text("What everyone sees for \(user.name), in every org they're in. How they sign in stays the same.")
       }
       .confirmationDialog("Remove \(user.name) from this org?", isPresented: $confirmRemove, titleVisibility: .visible) {
         Button("Remove from Org", role: .destructive) { Task { await remove(user) } }
@@ -352,7 +367,7 @@ struct MemberDetailView: View {
     do {
       try await model.api.renameMember(userID, name: name, orgId: orgId)
       let old = users[index]
-      users[index] = ApiAdminUser(id: old.id, name: name, username: old.username, isMD: old.isMD, isAdmin: old.isAdmin, teams: old.teams)
+      users[index] = ApiAdminUser(id: old.id, name: name, username: old.username, isMD: old.isMD, isAdmin: old.isAdmin, teams: old.teams, signInWith: old.signInWith)
       if isMe { model.renameSession(to: name) }
       saved += 1
     } catch {
@@ -377,7 +392,7 @@ struct MemberDetailView: View {
 private extension ApiAdminUser {
   func with(isAdmin: Bool? = nil, isMD: Bool? = nil, teams: [ApiMemberTeam]? = nil) -> ApiAdminUser {
     ApiAdminUser(id: id, name: name, username: username, isMD: isMD ?? self.isMD,
-                 isAdmin: isAdmin ?? self.isAdmin, teams: teams ?? self.teams)
+                 isAdmin: isAdmin ?? self.isAdmin, teams: teams ?? self.teams, signInWith: signInWith)
   }
 
   func with(team id: String, _ change: (ApiMemberTeam) -> ApiMemberTeam) -> ApiAdminUser {
@@ -456,5 +471,42 @@ private struct TeamSearchField: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(Color.twPage)
+  }
+}
+
+/// How a person signs in: their username, or "Signed in with Google / Apple"
+/// with that company's logo (a Google or Apple account has no username of its
+/// own; the one on file is just their email).
+struct SignInMethod: View {
+  let user: ApiAdminUser
+  let compact: Bool
+
+  var body: some View {
+    switch user.signInWith {
+    case "google":
+      label("Signed in with Google") {
+        Image("GoogleG").resizable().scaledToFit()
+      }
+    case "apple":
+      label("Signed in with Apple") {
+        Image(systemName: "apple.logo").resizable().scaledToFit()
+      }
+    default:
+      if compact {
+        Text("@\(user.username)").font(TW.subheadline).foregroundStyle(.secondary)
+      } else {
+        LabeledContent("Username", value: user.username)
+      }
+    }
+  }
+
+  private func label<Icon: View>(_ text: String, @ViewBuilder icon: () -> Icon) -> some View {
+    HStack(spacing: 8) {
+      icon().frame(width: compact ? 13 : 18, height: compact ? 13 : 18)
+      Text(text)
+        .font(compact ? TW.subheadline : TW.body)
+        .foregroundStyle(compact ? .secondary : .primary)
+    }
+    .accessibilityElement(children: .combine)
   }
 }
