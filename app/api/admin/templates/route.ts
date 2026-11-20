@@ -10,6 +10,8 @@ import { requireOrgAdmin } from "@/lib/org";
 import { prisma } from "@/lib/prisma";
 import { validateSlotCapacities, parseGroupChatLeadDays } from "@/lib/constants";
 import { validateTemplatePractices } from "@/lib/practices";
+import { parseChatMemberIds } from "@/lib/groupChatMembers";
+import { allInOrg } from "./orgMembers";
 
 export async function GET(req: NextRequest) {
   const admin = await requireOrgAdmin(req);
@@ -28,10 +30,14 @@ export async function GET(req: NextRequest) {
         select: { id: true, dayOfWeek: true, startMinute: true, endMinute: true },
         orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
       },
+      // Who's added to every group chat of this recurring set.
+      chatMembers: { select: { userId: true } },
     },
     orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }],
   });
-  return NextResponse.json(templates);
+  return NextResponse.json(
+    templates.map(({ chatMembers, ...t }) => ({ ...t, chatMemberIds: chatMembers.map((m) => m.userId) }))
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -51,6 +57,7 @@ export async function POST(req: NextRequest) {
     groupChatLeadDays,
     teamId,
     practices,
+    chatMemberIds,
   } = await req.json();
   // One day or several — the batch form is the only difference between them.
   const isBatch = Array.isArray(daysOfWeek);
@@ -86,6 +93,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: practiceCheck.error }, { status: 400 });
   }
 
+  // Extra group-chat people: optional, and only people in this org.
+  const chatIds = chatMemberIds === undefined ? [] : parseChatMemberIds(chatMemberIds);
+  if (chatIds === null || !(await allInOrg(chatIds, admin.orgId))) {
+    return NextResponse.json({ error: "Invalid group chat people" }, { status: 400 });
+  }
+
   // Every template targets a team in THIS org; its generated sets inherit it.
   if (typeof teamId !== "string" || teamId.length === 0) {
     return NextResponse.json({ error: "Team is required" }, { status: 400 });
@@ -108,16 +121,21 @@ export async function POST(req: NextRequest) {
 
   // Nested creates rather than a createMany + a second write: a template and
   // its practices arrive as one gesture, so they commit as one.
-  const withPractices =
-    practiceCheck.practices.length > 0
-      ? { practices: { create: practiceCheck.practices } }
-      : {};
+  const withPractices = {
+    ...(practiceCheck.practices.length > 0 ? { practices: { create: practiceCheck.practices } } : {}),
+    ...(chatIds.length > 0 ? { chatMembers: { create: chatIds.map((userId) => ({ userId })) } } : {}),
+  };
   const include = {
     practices: {
       select: { id: true, dayOfWeek: true, startMinute: true, endMinute: true },
       orderBy: [{ dayOfWeek: "asc" as const }, { startMinute: "asc" as const }],
     },
+    chatMembers: { select: { userId: true } },
   };
+  const shape = <T extends { chatMembers: { userId: string }[] }>({ chatMembers, ...t }: T) => ({
+    ...t,
+    chatMemberIds: chatMembers.map((m) => m.userId),
+  });
 
   // The single-day form answers with the row it created, as it always has.
   if (!isBatch) {
@@ -125,7 +143,7 @@ export async function POST(req: NextRequest) {
       data: { ...shared, ...withPractices, dayOfWeek: days[0] as number },
       include,
     });
-    return NextResponse.json(template, { status: 201 });
+    return NextResponse.json(shape(template), { status: 201 });
   }
   // One row per checked day, each with its own copy of the practices, in one
   // transaction — the same all-or-nothing the multi-day form already had.
@@ -137,5 +155,5 @@ export async function POST(req: NextRequest) {
       })
     )
   );
-  return NextResponse.json(templates, { status: 201 });
+  return NextResponse.json(templates.map(shape), { status: 201 });
 }

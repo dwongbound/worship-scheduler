@@ -40,11 +40,26 @@ targets:
       properties:
         com.apple.developer.applesignin:
           - Default
+    # Debug only: where the API lives while developing (`./use-env dev`).
+    configFiles:
+      Debug: Config/Debug.xcconfig
     settings:
+      configs:
+        Debug:
+          # Merged with the generated Info.plist. Carries the dev server's URL
+          # and the one ATS allowance that lets the simulator reach
+          # http://localhost. Release has neither.
+          INFOPLIST_FILE: Config/Info-Debug.plist
+        Release:
+          INFOPLIST_FILE: Config/Info-Release.plist
       base:
-        # CHANGE THIS before you touch App Store Connect — the bundle id is
-        # the app's identity there and can never be reused once registered.
+        # Registered on the team below (2026-11-18). The bundle id is the
+        # app's identity in App Store Connect and can never be reused.
         PRODUCT_BUNDLE_IDENTIFIER: com.tapworship.app
+        # Dylan's Apple Developer Program team (Individual). Automatic signing
+        # with this team registered com.tapworship.app with Sign in with Apple.
+        DEVELOPMENT_TEAM: 7K9BY5Z7B7
+        CODE_SIGN_STYLE: Automatic
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         # iPhone and iPad. The web app already treats a tablet as a phone
@@ -56,7 +71,13 @@ targets:
         # as a wall of errors on the first build.
         SWIFT_VERSION: "5.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        # The web's brand teal (Assets: AccentColor), for every tint in the app.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: TapWorship
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        # iPad multitasking needs every orientation, or App Store upload fails.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        # Only standard HTTPS: exempt from export paperwork, so TestFlight
+        # doesn't ask on every build.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO

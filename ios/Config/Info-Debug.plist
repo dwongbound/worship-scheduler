@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Debug builds only (project.yml points Debug's INFOPLIST_FILE here; the
+	     rest of the Info.plist is still generated and merged in). Release
+	     builds carry none of these keys. -->
+	<key>TapWorshipAPIURL</key>
+	<string>$(TAPWORSHIP_API_URL)</string>
+	<key>TapWorshipGoogleClientID</key>
+	<string>$(GOOGLE_IOS_CLIENT_ID)</string>
+	<!-- Lets the simulator reach `npm run dev` on http://localhost. Covers
+	     localhost, .local names and LAN addresses only, never the internet. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<!-- The launch screen is the app's page color (light or dark), the same
+	     color the splash and every page sit on, so opening the app doesn't
+	     flash white first. -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
+</dict>
+</plist>

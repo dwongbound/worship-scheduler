@@ -67,10 +67,26 @@ public enum MySets {
   /// pending, and Request cover everywhere except on a seat already asking —
   /// where it becomes Cancel cover.
   public static func actions(for status: AssignmentStatus) -> [AssignmentAction] {
+    // Frozen mid-handoff, as on the web: nothing to press until it settles.
+    if status == .pendingSwap || status == .pendingApproval { return [] }
     var out: [AssignmentAction] = []
     if status == .pending { out.append(.confirm) }
     out.append(status == .swapRequested ? .cancelSwap : .requestSwap)
     return out
+  }
+
+  /// Why a frozen seat has no buttons, in the web's words.
+  public static func frozenNote(_ seat: ApiMyAssignment) -> String? {
+    switch seat.status {
+    case .pendingApproval: "Waiting for admin approval"
+    case .pendingSwap: seat.pendingSwap?.isRequester == true ? "Waiting for their answer" : "Answer this swap on My Sets"
+    default: nil
+    }
+  }
+
+  /// A seat I can offer in a trade: mine, and not already mid-handoff.
+  public static func canProposeSwap(_ status: AssignmentStatus) -> Bool {
+    status == .pending || status == .confirmed
   }
 
   /// Needs the person's answer: the same rows the web's "Unconfirmed first"

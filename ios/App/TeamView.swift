@@ -22,16 +22,25 @@ struct TeamView: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Team")
-        .toolbar { AdminOrgPicker() }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: String.self) { id in
           MemberDetailView(
             userID: id,
             users: $users,
             teams: teams
           )
+          .pausesTabSwipe()
         }
-        .searchable(text: $query, prompt: "Name or username")
+        // The bar is hidden at the root (Admin's switch sits above both
+        // halves), so the search box lives at the top of the page instead.
+        .safeAreaInset(edge: .top, spacing: 0) {
+          if phase == .loaded && !users.isEmpty {
+            TeamSearchField(query: $query)
+          }
+        }
         .refreshable { await load() }
         .task(id: model.adminOrgID) { await load() }
     }
@@ -40,34 +49,26 @@ struct TeamView: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading where users.isEmpty:
-      List {
+      List { Group {
         Section("Band") {
           ForEach(AdminPreviewData.users) { MemberRow(user: $0, teamID: "t1") }
         }
       }
-      .redacted(reason: .placeholder)
-      .disabled(true)
-      .accessibilityLabel("Loading your team")
+.listRowBackground(Color.twCard)
+}
+      .skeleton("Loading your team")
     case .failed(let message) where users.isEmpty:
-      ContentUnavailableView {
-        Label("Couldn't load the team", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load the team", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load() } }
           .buttonStyle(.borderedProminent)
       }
     default:
       if users.isEmpty {
-        ContentUnavailableView {
-          Label("No one here yet", systemImage: "person.3")
-        } description: {
-          Text("People join with your org key, then show up here.")
-        }
+        BrandedEmpty(title: "No one here yet", systemImage: "person.3", message: "People join with your org key, then show up here.")
       } else if sections.isEmpty {
         ContentUnavailableView.search(text: query)
       } else {
-        List {
+        List { Group {
           ForEach(sections, id: \.title) { section in
             Section {
               ForEach(section.members) { user in
@@ -79,12 +80,15 @@ struct TeamView: View {
               Text(section.title)
             } footer: {
               if section.title == TeamList.noTeamTitle {
-                Text("People on no team are never scheduled. Tap one to add them to a team.")
+                Text("Not scheduled until added to a team.")
               }
             }
           }
         }
+.listRowBackground(Color.twCard)
+}
         .listStyle(.insetGrouped)
+        .twList()
         .animation(.smooth, value: query)
       }
     }
@@ -103,7 +107,7 @@ struct TeamView: View {
         users = freshUsers.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         teams = freshTeams
       }
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
     }
@@ -122,19 +126,17 @@ struct MemberRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 6) {
-        Text(user.name).font(.body.weight(.medium))
+        Text(user.name).font(TW.body.weight(.medium))
         if user.isAdmin { MemberTag("Admin", tint: .indigo) }
         if user.isMD { MemberTag("MD", tint: .purple) }
         if membership?.active == false { MemberTag("Inactive", tint: .gray) }
       }
       if let membership {
         Text(membership.roles.isEmpty ? "No roles yet" : membership.roles.map { RoleLabels.label(for: $0) }.joined(separator: ", "))
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
       } else {
-        Text("@\(user.username)")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
+        SignInMethod(user: user, compact: true)
       }
     }
     .padding(.vertical, 2)
@@ -153,7 +155,7 @@ struct MemberTag: View {
 
   var body: some View {
     Text(text)
-      .font(.caption2.weight(.semibold))
+      .font(TW.caption2.weight(.semibold))
       .padding(.horizontal, 6)
       .padding(.vertical, 2)
       .foregroundStyle(tint)
@@ -175,15 +177,40 @@ struct MemberDetailView: View {
   @State private var error: String?
   @State private var confirmRemove = false
   @State private var saved = 0
+  @State private var renaming = false
+  @State private var newName = ""
 
   private var user: ApiAdminUser? { users.first { $0.id == userID } }
   private var isMe: Bool { userID == model.session?.user.id }
 
   var body: some View {
     if let user {
-      Form {
+      Form { Group {
         Section {
-          LabeledContent("Username", value: user.username)
+          // The name everyone sees, with its own Edit: it's the display
+          // name being changed, not how they sign in.
+          LabeledContent {
+            HStack(spacing: 10) {
+              Text(user.name)
+              if !model.readOnly {
+                Button("Edit") {
+                  newName = user.name
+                  renaming = true
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Edit display name")
+              }
+            }
+          } label: {
+            Text("Display name")
+          }
+          SignInMethod(user: user, compact: false)
+        } header: {
+          Text("Account")
+        } footer: {
+          if model.readOnly {
+            Text("Read-only preview: make changes on tapworship.com.")
+          }
         }
 
         Section {
@@ -191,25 +218,25 @@ struct MemberDetailView: View {
             .disabled(isMe)
           Toggle("Musical director", isOn: binding(user.isMD) { MemberPatch(isMD: $0) } apply: { $0.with(isMD: $1) })
         } footer: {
-          Text(isMe
-               ? "You can't change your own admin access here, so an org is never left without one."
-               : "Admins can schedule sets and see this tab. Musical directors can lead a set.")
+          if isMe { Text("You can't change your own admin access.") }
         }
 
         ForEach(teams) { team in
           teamSection(team, user: user)
         }
 
+        if !model.readOnly {
         Section {
           Button("Remove from Org", role: .destructive) { confirmRemove = true }
-            .frame(minHeight: 44)
             .disabled(isMe)
         } footer: {
-          Text(isMe
-               ? "To leave this org, ask another admin to remove you."
-               : "Takes \(user.name) off every team and upcoming set in this org. Their account stays.")
+          Text(isMe ? "Ask another admin to remove you." : "Their account stays.")
+        }
         }
       }
+.listRowBackground(Color.twCard)
+}.twList()
+      .disabled(model.readOnly)
       .navigationTitle(user.name)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -218,6 +245,15 @@ struct MemberDetailView: View {
         }
       }
       .sensoryFeedback(.success, trigger: saved)
+      .alert("Change display name", isPresented: $renaming) {
+        TextField("Display name", text: $newName)
+          .textContentType(.name)
+        Button("Save") { Task { await rename() } }
+          .disabled(ProfileRules.cleanName(newName) == nil)
+        Button("Close", role: .cancel) {}
+      } message: {
+        Text("Doesn't change how they sign in.")
+      }
       .confirmationDialog("Remove \(user.name) from this org?", isPresented: $confirmRemove, titleVisibility: .visible) {
         Button("Remove from Org", role: .destructive) { Task { await remove(user) } }
         Button("Close", role: .cancel) {}
@@ -231,8 +267,7 @@ struct MemberDetailView: View {
         Button("OK") { error = nil }
       }, message: { Text(error ?? "") })
     } else {
-      ContentUnavailableView("Not in this org", systemImage: "person.crop.circle.badge.questionmark",
-                             description: Text("They may have been removed."))
+      BrandedEmpty(title: "Not in this org", systemImage: "person.crop.circle.badge.questionmark", message: "They may have been removed.")
     }
   }
 
@@ -252,35 +287,28 @@ struct MemberDetailView: View {
             }
           }
         ))
-        ForEach(team.roles, id: \.key) { role in
-          let plays = membership.roles.contains(role.key)
-          Button {
-            let roles = plays
-              ? membership.roles.filter { $0 != role.key }
-              : team.roles.map(\.key).filter { membership.roles.contains($0) || $0 == role.key }
-            save(MemberPatch(teamRoles: [.init(teamId: team.id, roles: roles)])) {
-              $0.with(team: team.id) { $0.with(roles: roles) }
+        // Every role as a chip in one wrapping row: tap to give or take it.
+        FlowLayout(spacing: 8) {
+          ForEach(team.roles, id: \.key) { role in
+            let plays = membership.roles.contains(role.key)
+            ToggleChip(title: role.label, isOn: plays) {
+              let roles = plays
+                ? membership.roles.filter { $0 != role.key }
+                : team.roles.map(\.key).filter { membership.roles.contains($0) || $0 == role.key }
+              save(MemberPatch(teamRoles: [.init(teamId: team.id, roles: roles)])) {
+                $0.with(team: team.id) { $0.with(roles: roles) }
+              }
             }
-          } label: {
-            HStack {
-              Text(role.label).foregroundStyle(.primary)
-              Spacer()
-              Image(systemName: "checkmark")
-                .fontWeight(.semibold)
-                .opacity(plays ? 1 : 0)
-                .accessibilityHidden(true)
-            }
-            .contentShape(Rectangle())
-            .frame(minHeight: 44)
           }
-          .accessibilityAddTraits(plays ? .isSelected : [])
         }
+        .padding(.vertical, 4)
+        .disabled(model.readOnly)
       }
     } header: {
       Text(team.name)
     } footer: {
       if membership?.active == false {
-        Text("Paused here: auto schedule skips them and availability requests don't ask them. You can still pick them by hand.")
+        Text("Paused: not auto-scheduled or asked for availability.")
       }
     }
     .animation(.smooth, value: membership != nil)
@@ -324,6 +352,23 @@ struct MemberDetailView: View {
     }
   }
 
+  private func rename() async {
+    guard let orgId = model.adminOrgID, let name = ProfileRules.cleanName(newName),
+          let index = users.firstIndex(where: { $0.id == userID }), users[index].name != name
+    else { return }
+    saving = true
+    defer { saving = false }
+    do {
+      try await model.api.renameMember(userID, name: name, orgId: orgId)
+      let old = users[index]
+      users[index] = ApiAdminUser(id: old.id, name: name, username: old.username, isMD: old.isMD, isAdmin: old.isAdmin, teams: old.teams, signInWith: old.signInWith)
+      if isMe { model.renameSession(to: name) }
+      saved += 1
+    } catch {
+      self.error = model.handle(error)
+    }
+  }
+
   private func remove(_ user: ApiAdminUser) async {
     guard let orgId = model.adminOrgID else { return }
     saving = true
@@ -341,7 +386,7 @@ struct MemberDetailView: View {
 private extension ApiAdminUser {
   func with(isAdmin: Bool? = nil, isMD: Bool? = nil, teams: [ApiMemberTeam]? = nil) -> ApiAdminUser {
     ApiAdminUser(id: id, name: name, username: username, isMD: isMD ?? self.isMD,
-                 isAdmin: isAdmin ?? self.isAdmin, teams: teams ?? self.teams)
+                 isAdmin: isAdmin ?? self.isAdmin, teams: teams ?? self.teams, signInWith: signInWith)
   }
 
   func with(team id: String, _ change: (ApiMemberTeam) -> ApiMemberTeam) -> ApiAdminUser {
@@ -393,4 +438,69 @@ private struct MemberPreview: View {
   MemberPreview(id: "u1")
     .environment(AppModel.adminPreview())
     .dynamicTypeSize(.accessibility5)
+}
+
+/// Search box for the Team list: the system's look, without needing a bar.
+private struct TeamSearchField: View {
+  @Binding var query: String
+
+  var body: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+      TextField("Name or username", text: $query)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .submitLabel(.search)
+      if !query.isEmpty {
+        Button { query = "" } label: {
+          Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear search")
+      }
+    }
+    .padding(.horizontal, 12)
+    .frame(minHeight: 40)
+    .background(Capsule().fill(Color(.tertiarySystemFill)))
+    .padding(.horizontal, 16)
+    .padding(.vertical, 8)
+    .background(Color.twPage)
+  }
+}
+
+/// How a person signs in: their username, or "Signed in with Google / Apple"
+/// with that company's logo (a Google or Apple account has no username of its
+/// own; the one on file is just their email).
+struct SignInMethod: View {
+  let user: ApiAdminUser
+  let compact: Bool
+
+  var body: some View {
+    switch user.signInWith {
+    case "google":
+      label("Signed in with Google") {
+        Image("GoogleG").resizable().scaledToFit()
+      }
+    case "apple":
+      label("Signed in with Apple") {
+        Image(systemName: "apple.logo").resizable().scaledToFit()
+      }
+    default:
+      if compact {
+        Text("@\(user.username)").font(TW.subheadline).foregroundStyle(.secondary)
+      } else {
+        LabeledContent("Username", value: user.username)
+      }
+    }
+  }
+
+  private func label<Icon: View>(_ text: String, @ViewBuilder icon: () -> Icon) -> some View {
+    HStack(spacing: 8) {
+      icon().frame(width: compact ? 13 : 18, height: compact ? 13 : 18)
+      Text(text)
+        .font(compact ? TW.subheadline : TW.body)
+        .foregroundStyle(compact ? .secondary : .primary)
+    }
+    .accessibilityElement(children: .combine)
+  }
 }

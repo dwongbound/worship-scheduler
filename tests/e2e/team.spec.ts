@@ -262,7 +262,21 @@ test("admin reorders a team's roles by dragging, and the order sticks", async ({
   await dragOnto(before[0], before[1]);
   await expect.poll(orderNow).toEqual(swapped);
 
-  await modal.getByRole("button", { name: "Save roles" }).click();
+  // Save, and wait for the PUT itself. Clicked and awaited as ONE retried unit:
+  // in CI the press landing straight after the drop fired no request (the
+  // drag sensor is still settling then), so one click can't be trusted. Pressing again is safe — the button only exists
+  // while there are unsaved edits — and a save that genuinely fails still
+  // fails, on the response check.
+  await expect(async () => {
+    const put = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/api/teams/${team.id}/roles`) &&
+        r.request().method() === "PUT",
+      { timeout: 5000 }
+    );
+    await modal.getByRole("button", { name: "Save roles" }).click({ timeout: 2000 });
+    expect((await put).ok()).toBeTruthy();
+  }).toPass({ timeout: 20_000 });
   await expect.poll(savedOrder).toEqual(swapped);
 
   // Put the seed order back for the rest of the suite. Done through the API,

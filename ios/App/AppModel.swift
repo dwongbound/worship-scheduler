@@ -7,6 +7,13 @@ import TapWorshipKit
 /// A 401 from ANY request lands in `handle(_:)`, which signs out — the token
 /// expired, was revoked by a secret rotation, or its account is gone, and in
 /// every case the only way forward is the sign-in screen.
+/// The two things an admin does from a phone, as one tab.
+enum AdminSection: String, CaseIterable, Identifiable {
+  case approvals = "Approvals"
+  case team = "Team"
+  var id: String { rawValue }
+}
+
 @MainActor
 @Observable
 final class AppModel {
@@ -22,7 +29,7 @@ final class AppModel {
     self.session = live
     // The client reads the token through the store rather than capturing it,
     // so signing in or out never needs a new client.
-    self.api = APIClient(baseURL: baseURL, token: { store.load()?.token })
+    self.api = APIClient(baseURL: baseURL, readOnly: AppConfig.readOnly, token: { store.load()?.token })
   }
 
   /// For previews: a model that is already signed in and never touches the
@@ -56,9 +63,23 @@ final class AppModel {
 
   /// Redeem an org key. The token's memberships are only hints, so the new
   /// one is added to the saved session here rather than minting a new token.
-  func joinOrg(key: String) async throws {
-    let org = try await api.joinOrg(key: key)
+  /// After a name change on Profile, so Account shows it without signing in
+  /// again (the token's name is only a hint; the server already has it).
+  func renameSession(to name: String) {
     guard let current = session else { return }
+    let updated = MobileSession(
+      token: current.token,
+      expiresAt: current.expiresAt,
+      user: SessionUser(id: current.user.id, name: name, email: current.user.email, memberships: current.user.memberships)
+    )
+    store.save(updated)
+    session = updated
+  }
+
+  @discardableResult
+  func joinOrg(key: String) async throws -> ApiOrgRef {
+    let org = try await api.joinOrg(key: key)
+    guard let current = session else { return org }
     var memberships = current.user.memberships
     if !memberships.contains(where: { $0.orgId == org.id }) {
       memberships.append(SessionMembership(orgId: org.id, isAdmin: false))
@@ -70,6 +91,7 @@ final class AppModel {
     )
     store.save(updated)
     session = updated
+    return org
   }
 
   /// Gone for good. Signs out only once the server has said yes.
@@ -84,6 +106,9 @@ final class AppModel {
     adminOrgs = nil
     adminOrgID = nil
     pendingApprovals = 0
+    swapBadge = 0
+    availabilityBadge = 0
+    adminSection = .approvals
   }
 
   // MARK: Admin
@@ -91,12 +116,55 @@ final class AppModel {
   /// The orgs I administer, by name, from GET /api/me. nil until loaded; the
   /// token's own `isAdmin` hints decide the tabs until then, so they don't
   /// pop in a beat after launch.
+  /// A read-only preview of production: screens hide what would write.
+  var readOnly: Bool { api.readOnly }
+
+  /// How many pushed screens are showing; tab swipes are off while any is.
+  var tabSwipePauses = 0
+  /// The tab bar's thin, icons-only look while the page scrolls down.
+  var tabBarCompact = false
+  /// Follows any list's scroll: down shrinks the bar, up or the top grows it.
+  func scrolled(from old: CGFloat, to new: CGFloat) {
+    let compact: Bool
+    if new < 24 { compact = false }
+    else if new - old > 4 { compact = true }
+    else if old - new > 4 { compact = false }
+    else { return }
+    if compact != tabBarCompact { tabBarCompact = compact }
+  }
+  /// Where rows with their own swipe actions sit on screen, per tab. A tab
+  /// swipe that starts inside one belongs to the row, not the tab bar.
+  /// When a sideways tab swipe last moved. The finger lifting at the end of a
+  /// swipe can land as a tap on whatever is under it on the new page (a day
+  /// on the Unavailabilities grid opened its drawer); taps that soon after a
+  /// swipe are ignored.
+  @ObservationIgnored var tabSwipeAt: Date?
+  var justSwiped: Bool { tabSwipeAt.map { Date().timeIntervalSince($0) < 0.6 } ?? false }
+  @ObservationIgnored var sideSwipeZones: [String: (tab: AppTab, frame: CGRect)] = [:]
+  /// Matched on height only: the frame is the row's content, but a list row
+  /// (and its swipe) spans the screen's width. The padding covers the row's
+  /// own insets above and below its content.
+  /// Rows parked off to the side (Admin's other half) don't count.
+  func ownsSideSwipe(at point: CGPoint, on tab: AppTab, width: CGFloat) -> Bool {
+    sideSwipeZones.values.contains {
+      $0.tab == tab && $0.frame.maxX > 0 && $0.frame.minX < width
+        && point.y >= $0.frame.minY - 12 && point.y <= $0.frame.maxY + 12
+    }
+  }
+  var tabSwipePaused: Bool { tabSwipePauses > 0 }
+
   private(set) var adminOrgs: [ApiMyOrg]?
   /// Which org the admin tabs are looking at. Shared, so switching on one
   /// tab switches the other — two tabs on two orgs would read as a bug.
   var adminOrgID: String?
-  /// The Approvals tab's badge.
+  /// The Admin tab's badge.
   var pendingApprovals = 0
+  /// My Sets' badge: open covers in a role I play + swap requests to me.
+  var swapBadge = 0
+  /// Availability's badge: requests I still owe an answer to.
+  var availabilityBadge = 0
+  /// Which half of the Admin tab is showing.
+  var adminSection = AdminSection.approvals
 
   var isAdminAnywhere: Bool {
     if let adminOrgs { return !adminOrgs.isEmpty }
@@ -110,6 +178,15 @@ final class AppModel {
   func currentAdminOrgID() async -> String? {
     if adminOrgs == nil { await refreshAdminOrgs() }
     return adminOrgID
+  }
+
+  /// Every tab badge in one request (the web navbar's dots). Quiet on
+  /// failure: a badge is a hint, and each tab shows its own errors.
+  func refreshBadges() async {
+    guard session != nil, let badges = try? await api.notifications(orgId: adminOrgID) else { return }
+    swapBadge = badges.swapCount
+    availabilityBadge = badges.availabilityOwed
+    if adminOrgID != nil { pendingApprovals = badges.approvalCount }
   }
 
   /// Refreshes the org list. A failure keeps what we had: the admin tabs
@@ -131,6 +208,8 @@ final class AppModel {
   /// Every screen routes its errors through here. Returns the words to show,
   /// or nil when the error was a sign-out (the screen is about to go away).
   func handle(_ error: Error) -> String? {
+    // A cancelled load says nothing; whatever replaced it reports for itself.
+    if error is CancellationError { return nil }
     let apiError = (error as? APIError) ?? .network(error.localizedDescription)
     if apiError == .unauthorized {
       signOut()

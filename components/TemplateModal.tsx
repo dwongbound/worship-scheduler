@@ -13,16 +13,18 @@ import TemplatePracticesEditor, {
   toPracticeDrafts,
   type PracticeDraft,
 } from "./TemplatePracticesEditor";
+import GroupChatPeoplePicker from "./GroupChatPeoplePicker";
 import { useOrgs } from "./OrgProvider";
 import { DAY_INITIALS, DAY_LABELS } from "@/lib/constants";
 import { minutesToTimeInput, timeStringToMinutes } from "@/lib/dates";
 import { orgHeaders } from "@/lib/api";
-import type { ApiSetTemplate, ApiTeam } from "@/lib/types";
+import type { ApiAdminUser, ApiSetTemplate, ApiTeam } from "@/lib/types";
 
 export default function TemplateModal({
   open,
   template,
   teams,
+  users,
   onClose,
   onCreated,
 }: {
@@ -34,6 +36,8 @@ export default function TemplateModal({
   // sections, so asking for it again here was a second request for a list
   // sitting one component up. null while the page is still loading them.
   teams: ApiTeam[] | null;
+  // The org's members, for the group-chat people picker (the page holds them).
+  users: ApiAdminUser[] | null;
   onClose: () => void;
   onCreated: () => void | Promise<void>;
 }) {
@@ -49,6 +53,8 @@ export default function TemplateModal({
   // state rather than part of SetFormState, which CreateSetModal shares — a
   // practice on a concrete set is a date, not a weekday.
   const [practices, setPractices] = useState<PracticeDraft[]>([]);
+  // Extra people in every group chat of this recurring set.
+  const [chatMemberIds, setChatMemberIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   // Reset each time the modal opens — to the edited row's values, or to a
   // blank form, with the team picker defaulting to the first team.
@@ -58,6 +64,7 @@ export default function TemplateModal({
     if (!open || !adminOrgId) return;
     setDays(template ? [template.dayOfWeek] : []);
     setPractices(toPracticeDrafts(template?.practices));
+    setChatMemberIds(template?.chatMemberIds ?? []);
     setForm(
       template
         ? {
@@ -121,6 +128,8 @@ export default function TemplateModal({
         // is removed. (The API only leaves them alone when the field is absent
         // entirely, which is for callers that predate practices.)
         practices: payload.practices,
+        // Always sent: an empty list is how the last person comes off.
+        chatMemberIds,
       };
       if (template) {
         // Edit: one row, one day. `slotCapacities: null` is sent explicitly so
@@ -244,6 +253,15 @@ export default function TemplateModal({
           onChange={setPractices}
           disabled={busy}
         />
+
+        {users && users.length > 0 && (
+          <GroupChatPeoplePicker
+            users={users}
+            selectedIds={chatMemberIds}
+            onChange={setChatMemberIds}
+            disabled={busy}
+          />
+        )}
       </form>
     </Modal>
   );

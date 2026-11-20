@@ -71,54 +71,6 @@ test("an org admin can change and rotate the org join key", async ({ page }) => 
   await expect(page.getByLabel("Join key")).toHaveValue(original);
 });
 
-test("an org admin includes a member in all group chats and it persists", async ({
-  page,
-}) => {
-  await login(page, "admin"); // Alice administers org 1
-  await page.goto("/orgs");
-  await openTab(page, "Teams");
-
-  const savePatch = () =>
-    page.waitForResponse(
-      (r) =>
-        r.url().includes("/api/admin/users/") &&
-        r.request().method() === "PATCH"
-    );
-  // "Include in all group chats" lists only the people who ARE included, as
-  // chips; everyone else is reached through a type-ahead, so the org's whole
-  // roster is never rendered here.
-  const bobChip = () => page.getByLabel("Remove Bob Baker");
-  await expect(bobChip()).toHaveCount(0);
-  await expect(page.getByText("Bob Baker")).toHaveCount(0);
-
-  // Add him through the dashed "+ Add person" chip.
-  await page.getByRole("button", { name: "+ Add person" }).click();
-  const search = page.getByLabel("Add someone to every group chat");
-  await search.fill("Bob");
-  await Promise.all([
-    savePatch(),
-    page.getByRole("button", { name: /^Bob Baker/ }).click(),
-  ]);
-  await expect(bobChip()).toBeVisible();
-
-  // Persisted server-side.
-  await page.reload();
-  await openTab(page, "Teams");
-  await expect(bobChip()).toBeVisible();
-
-  // Restore shared seed state — the chip's ✕ takes him back out.
-  //
-  // Click and assertion retried as ONE unit (the same idiom pickSingleDay
-  // uses): this click lands moments after the reload above, where it can be
-  // swallowed by the re-render and fire no request at all. Pressing again is
-  // safe — taking out someone already out is a no-op — and a removal that
-  // genuinely doesn't work still fails, just after a few tries instead of one.
-  await expect(async () => {
-    await bobChip().click();
-    await expect(bobChip()).toHaveCount(0, { timeout: 2000 });
-  }).toPass({ timeout: 15_000 });
-});
-
 test("changing data retention asks first, and says what it would delete", async ({
   page,
 }) => {

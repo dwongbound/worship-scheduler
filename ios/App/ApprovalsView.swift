@@ -22,8 +22,10 @@ struct ApprovalsView: View {
   var body: some View {
     NavigationStack {
       content
+        .animation(.smooth(duration: 0.3), value: phase)
         .navigationTitle("Approvals")
-        .toolbar { AdminOrgPicker() }
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .navigationDestination(for: String.self) { id in
           ApprovalDetailView(
             approval: items.first { $0.id == id },
@@ -31,6 +33,7 @@ struct ApprovalsView: View {
             decide: decide,
             askReject: { confirmReject = $0 }
           )
+          .pausesTabSwipe()
         }
         .refreshable { await load() }
         .task(id: model.adminOrgID) { await load() }
@@ -58,48 +61,48 @@ struct ApprovalsView: View {
   @ViewBuilder private var content: some View {
     switch phase {
     case .loading where items.isEmpty:
-      List { ForEach(AdminPreviewData.approvals) { ApprovalRow(approval: $0) } }
-        .redacted(reason: .placeholder)
-        .disabled(true)
-        .accessibilityLabel("Loading approvals")
+      List { Group { ForEach(AdminPreviewData.approvals) { ApprovalRow(approval: $0) } }
+.listRowBackground(Color.twCard)
+}
+        .skeleton("Loading approvals")
     case .failed(let message) where items.isEmpty:
-      ContentUnavailableView {
-        Label("Couldn't load approvals", systemImage: "wifi.exclamationmark")
-      } description: {
-        Text(message)
-      } actions: {
+      BrandedEmpty(title: "Couldn't load approvals", systemImage: "wifi.exclamationmark", message: message) {
         Button("Try Again") { Task { await load() } }
           .buttonStyle(.borderedProminent)
       }
     default:
       if items.isEmpty {
-        ContentUnavailableView {
-          Label("Nothing to approve", systemImage: "checkmark.seal")
-        } description: {
-          Text("When someone covers a set or two people trade, it waits here for you.")
-        }
+        BrandedEmpty(title: "Nothing to approve", systemImage: "checkmark.seal", message: "When someone covers a set or two people trade, it waits here for you.")
       } else {
-        List {
+        List { Group {
           Section {
             ForEach(items) { approval in
               NavigationLink(value: approval.id) {
                 ApprovalRow(approval: approval, busy: busy.contains(approval.id))
               }
               .swipeActions(edge: .leading) {
-                Button("Approve") { Task { await decide(approval, .approve) } }
-                  .tint(.green)
+                if !model.readOnly {
+                  Button("Approve") { Task { await decide(approval, .approve) } }
+                    .tint(.green)
+                }
               }
               .swipeActions(edge: .trailing) {
-                Button("Reject") { confirmReject = approval }
-                  .tint(.red)
+                if !model.readOnly {
+                  Button("Reject") { confirmReject = approval }
+                    .tint(.red)
+                }
               }
+              .ownsSideSwipe(!model.readOnly)
               .disabled(busy.contains(approval.id))
             }
           } footer: {
-            Text("Swipe right to approve, left to reject.")
+            EmptyView()
           }
         }
+.listRowBackground(Color.twCard)
+}
         .listStyle(.insetGrouped)
+        .twList()
       }
     }
   }
@@ -122,7 +125,7 @@ struct ApprovalsView: View {
       let fresh = try await model.api.approvals(orgId: orgId)
       withAnimation(.smooth) { items = fresh.sorted { $0.firstDate < $1.firstDate } }
       model.pendingApprovals = fresh.count
-      phase = .loaded
+      withAnimation(.easeInOut(duration: 0.35)) { phase = .loaded }
     } catch {
       if let message = model.handle(error) { phase = .failed(message) }
     }
@@ -158,13 +161,13 @@ struct ApprovalRow: View {
         .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 4) {
         Text(approval.summary)
-          .font(.headline)
+          .font(TW.headline)
         Text(approval.firstDate, format: .dateTime.weekday(.abbreviated).month().day().hour().minute())
-          .font(.subheadline)
+          .font(TW.subheadline)
           .foregroundStyle(.secondary)
         if let reason = approval.reason, !reason.isEmpty {
           Text("“\(reason)”")
-            .font(.footnote)
+            .font(TW.footnote)
             .foregroundStyle(.secondary)
             .lineLimit(2)
         }
@@ -180,6 +183,7 @@ struct ApprovalRow: View {
 /// One handoff in full, with the two answers as real buttons for anyone who
 /// doesn't swipe.
 struct ApprovalDetailView: View {
+  @Environment(AppModel.self) private var model
   let approval: ApiApproval?
   let busy: Bool
   let decide: (ApiApproval, ApprovalDecision) async -> Void
@@ -187,9 +191,9 @@ struct ApprovalDetailView: View {
 
   var body: some View {
     if let approval {
-      List {
+      List { Group {
         Section {
-          Text(approval.summary).font(.headline)
+          Text(approval.summary).font(TW.headline)
           LabeledContent("Role", value: RoleLabels.label(for: approval.role))
           if let reason = approval.reason, !reason.isEmpty {
             LabeledContent("Reason") { Text(reason) }
@@ -208,37 +212,43 @@ struct ApprovalDetailView: View {
           Section("\(recipient.name) takes") { SetRefRow(set: receive) }
           Section("\(requester.name) takes") { SetRefRow(set: giveUp) }
         }
-        Section {
-          Button {
-            Task { await decide(approval, .approve) }
-          } label: {
-            ZStack {
-              Text("Approve").bold().opacity(busy ? 0 : 1)
-              if busy { ProgressView().accessibilityLabel("Saving") }
-            }
-            .frame(maxWidth: .infinity, minHeight: 44)
+        if model.readOnly {
+          Section {
+          } footer: {
+            Text("Read-only preview: approve or reject on tapworship.com.")
           }
-          .buttonStyle(.borderedProminent)
-          .tint(.green)
+        } else {
+        Section {
+          // Side by side, one standard-height button each, rather than two
+          // full-width slabs stacked.
+          HStack(spacing: 12) {
+            Button("Reject", role: .destructive) { askReject(approval) }
+              .buttonStyle(ActionButtonStyle(kind: .outline))
+            Button {
+              Task { await decide(approval, .approve) }
+            } label: {
+              ZStack {
+                Text("Approve").opacity(busy ? 0 : 1)
+                if busy { ProgressView().tint(.white).accessibilityLabel("Saving") }
+              }
+            }
+            .buttonStyle(ActionButtonStyle(kind: .primary))
+          }
           .listRowInsets(EdgeInsets())
           .listRowBackground(Color.clear)
-
-          Button("Reject", role: .destructive) { askReject(approval) }
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .buttonStyle(.bordered)
-            .listRowInsets(EdgeInsets())
-            .listRowBackground(Color.clear)
         }
         .disabled(busy)
-        .listRowSeparator(.hidden)
+        }
       }
+.listRowBackground(Color.twCard)
+}
       .listStyle(.insetGrouped)
+      .twList()
       .navigationTitle(approval.kind == "swap" ? "Swap" : "Cover")
       .navigationBarTitleDisplayMode(.inline)
     } else {
       // Decided (here or on the web) while this screen was open.
-      ContentUnavailableView("Already handled", systemImage: "checkmark.circle",
-                             description: Text("This one has been approved or rejected."))
+      BrandedEmpty(title: "Already handled", systemImage: "checkmark.circle", message: "This one has been approved or rejected.")
     }
   }
 }
@@ -249,22 +259,61 @@ struct SetRefRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 2) {
       Text(set.startsAt, format: .dateTime.weekday(.wide).month().day())
-        .font(.body.weight(.medium))
+        .font(TW.body.weight(.medium))
       Text("\(set.startsAt.formatted(date: .omitted, time: .shortened)) · \(set.label ?? "Set")")
-        .font(.subheadline)
+        .font(TW.subheadline)
         .foregroundStyle(.secondary)
     }
     .accessibilityElement(children: .combine)
   }
 }
 
-/// The org switcher both admin tabs share. Hidden with one org, since a menu
-/// of one choice is noise.
-struct AdminOrgPicker: ToolbarContent {
+/// Approvals and Team as one tab, so the app stays at five. The switch (and
+/// the org menu, for someone who looks after several) sits in a fixed header;
+/// only the page under it changes. Both halves stay loaded side by side, so a
+/// switch slides the list over instead of rebuilding it, and a tab swipe's
+/// pull moves the list while the header stays still.
+struct AdminView: View {
+  @Environment(AppModel.self) private var model
+  @Environment(\.tabPull) private var pull
+
+  var body: some View {
+    VStack(spacing: 0) {
+      AdminHeader()
+      GeometryReader { proxy in
+        let width = proxy.size.width
+        HStack(spacing: 0) {
+          ApprovalsView().frame(width: width)
+          TeamView().frame(width: width)
+        }
+        .offset(x: (model.adminSection == .approvals ? 0 : -width) + pull)
+      }
+      // Hide the other half off to the side, but let the list run under the
+      // home indicator like any list (a plain clip stopped it short).
+      .mask { Rectangle().ignoresSafeArea(edges: .bottom) }
+    }
+    .background(Color.twPage)
+  }
+}
+
+/// Approvals · Team, plus the org menu when there's more than one org.
+private struct AdminHeader: View {
   @Environment(AppModel.self) private var model
 
-  var body: some ToolbarContent {
-    ToolbarItem(placement: .topBarTrailing) {
+  var body: some View {
+    HStack(spacing: 10) {
+      Picker("Section", selection: Binding(
+        get: { model.adminSection },
+        set: { section in withAnimation(.smooth(duration: 0.3)) { model.adminSection = section } }
+      )) {
+        ForEach(AdminSection.allCases) { section in
+          Text(section == .approvals && model.pendingApprovals > 0 ? "Approvals (\(model.pendingApprovals))" : section.rawValue)
+            .tag(section)
+        }
+      }
+      .pickerStyle(.segmented)
+      .frame(maxWidth: 280)
+
       if let orgs = model.adminOrgs, orgs.count > 1 {
         Menu {
           Picker("Org", selection: Binding(get: { model.adminOrgID }, set: { model.adminOrgID = $0 })) {
@@ -272,12 +321,22 @@ struct AdminOrgPicker: ToolbarContent {
           }
         } label: {
           Label(model.adminOrg?.orgName ?? "Org", systemImage: "building.2")
-            .labelStyle(.titleAndIcon)
+            .labelStyle(.iconOnly)
+            .frame(width: 36, height: 36)
+            .background(Circle().fill(Color(.tertiarySystemFill)))
         }
         .accessibilityLabel("Org: \(model.adminOrg?.orgName ?? "none")")
       }
     }
+    .frame(maxWidth: .infinity)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 8)
   }
+}
+
+#Preview("Admin tab") {
+  AdminView()
+    .environment(AppModel.adminPreview())
 }
 
 #Preview("Approvals") {

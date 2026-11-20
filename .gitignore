@@ -68,6 +68,8 @@ prisma/data/
 # spec is what's committed and the .xcodeproj is not: it's machine-written
 # state that conflicts on every branch and whose diffs nobody can read.
 ios/*.xcodeproj
+# written by ios/use-env from env/<name>.env
+ios/Config/Local.xcconfig
 ios/**/.build/
 ios/**/xcuserdata/
 ios/DerivedData/

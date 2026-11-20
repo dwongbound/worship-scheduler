@@ -18,6 +18,8 @@
 //
 // This module is server-only (it imports prisma). The client talks to it via the
 // API routes, never by importing it directly.
+import { templateIdOf } from "./schedulingRules";
+import { groupChatUserIds } from "./groupChatMembers";
 import { prisma } from "./prisma";
 import { membersTargetedBy } from "./availabilityTargets";
 import { orderedRoles, roleLabel, type TeamRoleDef } from "./teamRoles";
@@ -1000,6 +1002,32 @@ export async function notifyRosterChanges(
 }
 
 /**
+ * The extra group-chat people for a set: its recurring set's (weekly time's)
+ * chat list. A one-off set, or one whose time no longer matches a template,
+ * has none.
+ */
+async function templateChatMemberIds(set: {
+  orgId: string;
+  label: string | null;
+  teamId: string | null;
+  startsAt: Date;
+}): Promise<string[]> {
+  const templates = await prisma.setTemplate.findMany({
+    where: { orgId: set.orgId },
+    select: {
+      id: true,
+      label: true,
+      teamId: true,
+      dayOfWeek: true,
+      startMinute: true,
+      chatMembers: { select: { userId: true } },
+    },
+  });
+  const id = templateIdOf(set, templates);
+  return templates.find((t) => t.id === id)?.chatMembers.map((m) => m.userId) ?? [];
+}
+
+/**
  * Create (or reuse) a set's PRIVATE Slack channel, invite its team, and post
  * the roster. Backs both the manual "Message Team on Slack" button and the
  * auto group-chat cron. The channel id is persisted on the set so the archive
@@ -1019,6 +1047,7 @@ export async function messageSetTeamOnSlack(
       label: true,
       startsAt: true,
       orgId: true,
+      teamId: true,
       groupChatChannelId: true,
       // The team's catalog, so the roster reads in this team's own role names
       // and order rather than the built-in ones.
@@ -1042,18 +1071,17 @@ export async function messageSetTeamOnSlack(
   }
 
   // Per-org member ids (workspace-scoped) for everyone who should be in the
-  // channel: the set's assigned people, PLUS anyone in the org flagged
-  // "alwaysInGroupChats" (e.g. a ministry lead who wants to be in every set's
-  // chat, even sets they aren't on). People without a linked Slack are silently
-  // excluded (slackUserId filter); duplicates are de-duped.
+  // channel: the set's assigned people, PLUS the extra people on this set's
+  // RECURRING SET (its weekly time's chat list, e.g. a ministry lead who wants
+  // to be in every Sunday 10 AM chat). Looked up now, not copied onto sets, so
+  // a change to the list reaches every set of that type, existing ones too.
+  // People without a linked Slack are silently excluded; duplicates de-duped.
+  const extraIds = await templateChatMemberIds(set);
   const linked = await prisma.orgMembership.findMany({
     where: {
       orgId: set.orgId,
       slackUserId: { not: null },
-      OR: [
-        { userId: { in: set.assignments.map((a) => a.userId) } },
-        { alwaysInGroupChats: true },
-      ],
+      userId: { in: groupChatUserIds(set.assignments.map((a) => a.userId), extraIds) },
     },
     select: { slackUserId: true },
   });

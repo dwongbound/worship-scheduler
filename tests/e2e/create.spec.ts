@@ -498,3 +498,42 @@ test("the workspace opens straight onto a skeleton, never the empty state", asyn
   expect(Math.abs(loadedBox!.width - loadingBox!.width)).toBeLessThan(2);
   expect(Math.abs(loadedBox!.height - loadingBox!.height)).toBeLessThan(2);
 });
+
+test("a weekly set time adds people to its group chat, and it persists", async ({
+  page,
+}) => {
+  await login(page, "admin");
+  // Its own weekly time, at a slot no other spec uses. Extra chat members are
+  // per recurring set now (they replaced the org-wide "every group chat" list).
+  const label = "Chat Members Weekly";
+  await seedOwnSetTime(page, { label, dayOfWeek: 6, startMinute: 5 * 60 + 45 });
+  await page.goto("/create");
+
+  const openEdit = async () => {
+    await page.locator("tr").filter({ hasText: label }).getByRole("button", { name: "Edit" }).click();
+    return page.getByRole("dialog");
+  };
+  const bobChip = () => page.getByRole("dialog").getByLabel("Remove Bob Baker");
+
+  let form = await openEdit();
+  await expect(bobChip()).toHaveCount(0);
+  // Add him through the dashed "+ Add person" chip; the type-ahead only lists
+  // people once something is typed.
+  await form.getByRole("button", { name: "+ Add person" }).click();
+  await form.getByLabel("Add someone to this set's group chat").fill("Bob");
+  await form.getByRole("button", { name: /^Bob Baker/ }).click();
+  await expect(bobChip()).toBeVisible();
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Persisted server-side: a fresh page still shows him on this time.
+  await page.reload();
+  form = await openEdit();
+  await expect(bobChip()).toBeVisible();
+
+  // Take him back out and save, so the slot ends as it began.
+  await bobChip().click();
+  await expect(bobChip()).toHaveCount(0);
+  await form.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});

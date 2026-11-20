@@ -71,7 +71,7 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   targets = no Slack DM, no red dot, no row to fill in (`lib/availabilityTargets.ts`
   `targetsUser`/`membersTargetedBy`). The Create tab's status panel still lists
   them, last and marked "inactive", so a short chase list reads as deliberate.
-- **User** — username/passwordHash/name, `isMD` (musical director; global
+- **User** — username/passwordHash/name, `googleSignInAt` (last Google sign-in, web or app — Google is matched by email so nothing else records it; `lib/signInMethod.ts` turns it + `appleSub` + an empty password into the Team page's "Signed in with Google / Apple") ✅tested, `isMD` (musical director; global
   per person, like `instruments`), `memberships: OrgMembership[]`,
   `teams: Team[]`, `slackUserId`. Completion is tracked per-request via
   `AvailabilityResponse` (no global flag on User).
@@ -235,6 +235,16 @@ Next **16** (App Router) · React **19** · TypeScript **6** · Tailwind **4**
   is read off that, never guessed client-side.
 - **SetTemplate** — weekly recurrence (dayOfWeek+startMinute+duration) with
   `orgId`; the generate endpoint expands these into Sets.
+  **SetTemplateChatMember** (`templateId`+`userId`) = extra people added to the
+  Slack group chat of EVERY set of that recurring set, on top of who's on it.
+  Read at channel creation (`lib/slack.ts messageSetTeamOnSlack` →
+  `templateIdOf` → the list; union in `lib/groupChatMembers.ts`), never copied
+  onto sets, so a change reaches existing sets of that type too. Edited in the
+  weekly set time form (`components/GroupChatPeoplePicker.tsx`); the templates
+  API takes `chatMemberIds` (replaces the list; absent = leave it). It REPLACED
+  the org-wide `OrgMembership.alwaysInGroupChats`, now unread — the migration
+  copied each flagged person onto every template in their org; the column's
+  drop is a follow-up. ✅tested
 - **AvailabilityRequest** — has `orgId`; most-recent row PER ORG is that
   org's "active" request. **AvailabilityResponse** (one per user+request;
   `@@unique([userId, requestId])`) records completion: a row with
@@ -374,7 +384,7 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   nothing and lands on `/schedule?gcalImport=connected` to REOPEN the modal;
   POST `{requestId, calendarIds}` = the import, answering `{blocks}`). A denied
   or failed consent still lands on `?gcalImport=denied|error`. Shared guard in
-  `import/guard.ts`. `google-calendar/my-calendars` is the same consent read
+  `import/guard.ts`. `/import/authorize` (GET → `{url}`) is the iOS app's consent trip: a bearer token can't ride a browser sheet, so it fetches the URL and the state is marked mobile (`signImportState`'s `mobile`), which makes the callback return to `tapworship://gcal-import?status=` and skip the cookie-session match — the signed ten-minute state is the proof there. `google-calendar/my-calendars` is the same consent read
   for a different reason — /profile's invite picker — so the signed import
   state's `requestId` is OPTIONAL and the shared callback lands on
   `/profile?gcalPicker=...` when there is none. `?connect=1` is the consent trip;
