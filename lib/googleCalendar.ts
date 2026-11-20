@@ -158,18 +158,22 @@ type ImportState = {
   userId: string;
   requestId?: string | null;
   exp: number;
+  /** Started from the iOS app: the callback returns to the app's URL scheme. */
+  m?: 1;
 };
 
 export function signImportState(
   userId: string,
   requestId: string | null,
-  ttlSec = 600
+  ttlSec = 600,
+  mobile = false
 ): string {
   const body: ImportState = {
     p: "gimport",
     userId,
     requestId,
     exp: Math.floor(Date.now() / 1000) + ttlSec,
+    ...(mobile ? { m: 1 as const } : {}),
   };
   const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
   return `${payload}.${sign(payload, "gimport-state")}`;
@@ -177,13 +181,13 @@ export function signImportState(
 
 export function verifyImportState(
   token: string
-): { userId: string; requestId: string | null } | null {
+): { userId: string; requestId: string | null; mobile: boolean } | null {
   try {
     const [payload, sig] = token.split(".");
     if (!payload || !sig || !safeEqual(sig, sign(payload, "gimport-state"))) return null;
     const body = JSON.parse(Buffer.from(payload, "base64url").toString()) as ImportState;
     if (body.p !== "gimport" || body.exp < Math.floor(Date.now() / 1000)) return null;
-    return { userId: body.userId, requestId: body.requestId ?? null };
+    return { userId: body.userId, requestId: body.requestId ?? null, mobile: body.m === 1 };
   } catch {
     return null;
   }

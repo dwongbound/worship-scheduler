@@ -23,6 +23,8 @@ struct AvailabilityView: View {
   @State private var inFlight = 0
   @State private var taps = 0
   @State private var adding = false
+  @State private var importingFrom: ApiAvailabilityRequest?
+  @State private var addMenuOpen = false
   @State private var submitting: ApiAvailabilityRequest?
   @State private var busyRequest: String?
   /// The day whose drawer is open.
@@ -33,6 +35,11 @@ struct AvailabilityView: View {
   enum Phase: Equatable { case loading, loaded, failed(String) }
 
   private var calendar: Calendar { AppConfig.appCalendar }
+  /// An import writes its blocks against a request, so it needs one open.
+  /// The newest active one; none = no Google option in the menu.
+  private var importRequest: ApiAvailabilityRequest? {
+    Availability.activeRequests(data.requests).first
+  }
   private var today: String { SetCalendar.ymd(Date(), calendar: calendar) }
 
   var body: some View {
@@ -41,12 +48,22 @@ struct AvailabilityView: View {
         .animation(.smooth(duration: 0.3), value: phase)
         .pageHeader("Unavailabilities") {
           if !model.readOnly {
-            HeaderIconButton(label: "Add a block", systemImage: "plus") { adding = true }
-              .disabled(phase != .loaded)
+            AddMenuButton(
+              open: $addMenuOpen,
+              options: [
+                .init(title: "Add manually", systemImage: "square.and.pencil") { adding = true },
+              ] + (importRequest.map { request in
+                [.init(title: "Import from Google Calendar", systemImage: "calendar.badge.plus") { importingFrom = request }]
+              } ?? [])
+            )
+            .disabled(phase != .loaded)
           }
         }
         .refreshable { await load() }
         .task { if phase == .loading { await load() } }
+        .sheet(item: $importingFrom) { request in
+          GoogleImportView(request: request) { await load() }
+        }
         .sheet(isPresented: $adding) {
           AddBlockSheet { await write($0) }
         }

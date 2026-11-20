@@ -755,6 +755,15 @@ do {
   check("week: starts on Sunday", SetCalendar.ymd(WeekView.weekStart(laDay("2026-11-26"), calendar: la), calendar: la) == "2026-11-22")
 }
 
+// Google import
+check("import: reads the return status", GoogleImport.returnStatus(URL(string: "tapworship://gcal-import?status=connected")!) == "connected"
+      && GoogleImport.returnStatus(URL(string: "https://x.com/gcal-import?status=connected")!) == nil)
+check("import: preview grouped by day in order", GoogleImport.byDay([
+  .init(ymd: "2026-11-25", startMinute: 600, endMinute: 660),
+  .init(ymd: "2026-11-24", startMinute: 900, endMinute: 960),
+  .init(ymd: "2026-11-24", startMinute: 540, endMinute: 600),
+]).map { "\($0.ymd):\($0.windows.map(\.startMinute))" } == ["2026-11-24:[540, 900]", "2026-11-25:[600]"])
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {

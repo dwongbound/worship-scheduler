@@ -56,9 +56,15 @@ struct HeaderIconButton: View {
         .font(TW.title2.weight(.semibold))
         .frame(width: 32, height: 32)
     }
-    .modifier(Prominent())
-    .buttonBorderShape(.circle)
+    .modifier(ProminentRoundButton())
     .accessibilityLabel(label)
+  }
+}
+
+/// The page's main action look: a round tinted button (glass on iOS 26).
+struct ProminentRoundButton: ViewModifier {
+  func body(content: Content) -> some View {
+    content.modifier(Prominent()).buttonBorderShape(.circle)
   }
 
   private struct Prominent: ViewModifier {

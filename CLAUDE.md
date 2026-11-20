@@ -374,7 +374,7 @@ visitor — vercel/next.js#63121), which is why it's in the middleware.
   nothing and lands on `/schedule?gcalImport=connected` to REOPEN the modal;
   POST `{requestId, calendarIds}` = the import, answering `{blocks}`). A denied
   or failed consent still lands on `?gcalImport=denied|error`. Shared guard in
-  `import/guard.ts`. `google-calendar/my-calendars` is the same consent read
+  `import/guard.ts`. `/import/authorize` (GET → `{url}`) is the iOS app's consent trip: a bearer token can't ride a browser sheet, so it fetches the URL and the state is marked mobile (`signImportState`'s `mobile`), which makes the callback return to `tapworship://gcal-import?status=` and skip the cookie-session match — the signed ten-minute state is the proof there. `google-calendar/my-calendars` is the same consent read
   for a different reason — /profile's invite picker — so the signed import
   state's `requestId` is OPTIONAL and the shared callback lands on
   `/profile?gcalPicker=...` when there is none. `?connect=1` is the consent trip;
