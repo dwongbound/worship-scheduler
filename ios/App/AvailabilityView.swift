@@ -14,6 +14,9 @@ struct AvailabilityView: View {
   @State private var data = ApiAvailability.empty
   @State private var phase: Phase = .loading
   @State private var month = SetCalendar.monthStart(Date(), calendar: AppConfig.appCalendar)
+  /// Week first, like the web's toggle defaults here.
+  @State private var mode = AvailabilityMode.week
+  @State private var weekStart = WeekView.weekStart(Date(), calendar: AppConfig.appCalendar)
   @State private var actionError: String?
   /// Writes still on their way. A reload that lands while one is in flight
   /// would undo what the grid just showed, so it waits for the last one.
@@ -107,15 +110,28 @@ struct AvailabilityView: View {
       requestsSection
 
       Section {
-        MonthGrid(month: $month, calendar: calendar) { date in
-          dayCell(date)
+        if mode == .week {
+          AvailabilityWeekGrid(entries: data.entries, weekStart: $weekStart, calendar: calendar) { day in
+            guard !model.justSwiped else { return }
+            taps += 1
+            openDay = OpenDay(ymd: SetCalendar.ymd(day, calendar: calendar), date: day)
+          }
+          .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 12))
+        } else {
+          MonthGrid(month: $month, calendar: calendar) { date in
+            dayCell(date)
+          }
+          .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
         }
-        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+      } header: {
+        Picker("View", selection: $mode.animation(.smooth(duration: 0.25))) {
+          ForEach(AvailabilityMode.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .textCase(nil)
+        .padding(.bottom, 4)
       } footer: {
-        VStack(alignment: .leading, spacing: 6) {
-          EmptyView()
-          AvailabilityLegend()
-        }
+        if mode == .month { AvailabilityLegend() }
       }
 
       weeklySection

@@ -737,6 +737,24 @@ do {
   check("members carry how they sign in", people[0].signInWith == "google" && people[1].signInWith == nil)
 } catch { check("members carry how they sign in", false) }
 
+// Week view
+do {
+  let evening = ApiUnavailability(id: "w1", type: .specific, startMinute: 18 * 60, endMinute: 21 * 60, startDate: laDay("2026-11-24"))
+  let overlap = ApiUnavailability(id: "w2", type: .specific, startMinute: 19 * 60, endMinute: 20 * 60, startDate: laDay("2026-11-24"))
+  let later = ApiUnavailability(id: "w3", type: .specific, startMinute: 21 * 60, endMinute: 22 * 60, startDate: laDay("2026-11-24"))
+  let blocks = WeekView.dayBlocks([evening, overlap, later], on: "2026-11-24", calendar: la)
+  check("week: overlapping blocks share lanes", blocks.first { $0.id == "w1" }?.lanes == 2 && blocks.first { $0.id == "w2" }?.lane == 1)
+  check("week: a block after the cluster gets the full width", blocks.first { $0.id == "w3" }?.lanes == 1)
+  let g1 = ApiUnavailability(id: "g1", type: .specific, startMinute: 600, endMinute: 720, startDate: laDay("2026-11-24"), fromGoogle: true)
+  let g2 = ApiUnavailability(id: "g2", type: .specific, startMinute: 700, endMinute: 800, startDate: laDay("2026-11-24"), fromGoogle: true)
+  let imported = WeekView.dayBlocks([g1, g2], on: "2026-11-24", calendar: la)
+  check("week: overlapping imports merge", imported.count == 1 && imported[0].endMinute == 800 && imported[0].kind == .google)
+  check("week: weekly repeats are their own kind", WeekView.dayBlocks([everyTuesday], on: "2026-11-24", calendar: la).first?.kind == .recurring)
+  let clipped = WeekView.clipped(WeekView.dayBlocks([everyTuesday], on: "2026-11-24", calendar: la))
+  check("week: all day clips to the view's hours", clipped.first?.top == 360 && clipped.first?.bottom == 1320)
+  check("week: starts on Sunday", SetCalendar.ymd(WeekView.weekStart(laDay("2026-11-26"), calendar: la), calendar: la) == "2026-11-22")
+}
+
 // ── Result ──────────────────────────────────────────────────────────────
 print("\n\(ran - failures)/\(ran) checks passed")
 if failures > 0 {
