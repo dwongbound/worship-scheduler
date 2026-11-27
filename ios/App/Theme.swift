@@ -19,6 +19,17 @@ extension Color {
   /// Teal tint behind a selected item: indigo-50 / indigo-900 at the web.
   static let twAccentSoft = Color(light: 0xF1F8F9, dark: 0x2B4C56)
 
+  /// The Admin tab's amber, as the web's navbar draws its Admin menu:
+  /// amber-600 / amber-400, deepening to amber-700 / amber-300 when selected.
+  static let twAdmin = Color(light: 0xD97706, dark: 0xFBBF24)
+  static let twAdminActive = Color(light: 0xB45309, dark: 0xFCD34D)
+  /// The selected Admin tab's fill: amber-50 / amber-900 at 40%.
+  static let twAdminSoft = Color(UIColor { traits in
+    traits.userInterfaceStyle == .dark
+      ? UIColor(hex: 0x78350F).withAlphaComponent(0.4)
+      : UIColor(hex: 0xFFFBEB)
+  })
+
   init(light: UInt32, dark: UInt32) {
     self.init(UIColor { traits in
       UIColor(hex: traits.userInterfaceStyle == .dark ? dark : light)

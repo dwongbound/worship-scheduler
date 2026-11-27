@@ -22,6 +22,8 @@ struct AppTabBar: View {
     HStack(spacing: 2) {
       ForEach(items) { item in
         let on = item.tab == selection
+        // Admin is amber everywhere, like the web navbar's Admin menu.
+        let admin = item.tab == .admin
         Button {
           withAnimation(.smooth(duration: 0.3)) { selection = item.tab }
         } label: {
@@ -48,13 +50,16 @@ struct AppTabBar: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: .top)))
             }
           }
-          .foregroundStyle(on ? Color.accentColor : Color.primary)
+          .foregroundStyle(
+            admin ? (on ? Color.twAdminActive : Color.twAdmin)
+              : (on ? Color.accentColor : Color.primary)
+          )
           .frame(maxWidth: .infinity)
           .padding(.vertical, compact ? 6 : 7)
           .background {
             if on {
               Capsule()
-                .fill(Color.primary.opacity(0.1))
+                .fill(admin ? Color.twAdminSoft : Color.primary.opacity(0.1))
                 .matchedGeometryEffect(id: "tab", in: highlight)
             }
           }
